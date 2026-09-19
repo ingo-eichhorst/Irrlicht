@@ -2,12 +2,12 @@
   "scenario_id": "task-estimate-marker",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "full",
+    "daemon_capability": "bug",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+bf97ac6",
-    "confidence": 0.8,
-    "notes": "DSH loads seeded AGENTS.md instructions and stores assistant text. The driver now seeds before launch. Gemma 4 is the local model candidate for repeated progress markers."
+    "confidence": 0.96,
+    "notes": "Known failing: live DSH websocket frames carry task_estimate and task_completion_eta while ready. The factory verifies markers and state, but cannot assert these metric fields."
   },
   "details": {
     "assessment": {
@@ -15,16 +15,18 @@
       "scenario_id": "task-estimate-marker",
       "agent": "deepseek-harness",
       "agent_supports": "yes",
-      "daemon_capability": "full",
+      "daemon_capability": "bug",
       "driver_capability": "ready",
-      "confidence": 0.8,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Evidence\n\nThe installed dsh-agent-instructions package loads project AGENTS.md on the first request and injects its content into the model. The DSH adapter scans full assistant text for irrlicht-eta markers before display truncation. The metrics adapter projects task_completion_eta from the parsed estimate. The driver now executes seed_instruction before its first TUI boot.\n\nTwo live qwen/qwen3.5-9b runs on 2026-09-19 did not produce the full marker sequence: the first timed out after 28 tool steps, and the second emitted 0/4 but omitted later markers. The staged transcript of the second run shows 0/4 in the first assistant reply and no marker in replies for phases 1 through 3. These runs do not support declaring the cell recorded.\n\nThe installed LM Studio model list includes google/gemma-4-26b-a4b. Two direct chat-completion probes on 2026-09-19 returned exact parseable 1/4 and 2/4 HTML comments in consecutive turns. This supports one bounded live recording attempt with that model; only the DSH recording can establish the full five-turn acceptance criteria. The recipe keeps five turns, 12-second inter-turn waits, and a 30-second final settle.",
+      "confidence": 0.96,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Evidence\n\nThe installed dsh-agent-instructions package loads project AGENTS.md on the first request and injects its content into the model. The DSH adapter scans full assistant text for irrlicht-eta markers before display truncation. The metrics adapter projects task_completion_eta from the parsed estimate. The driver now executes seed_instruction before its first TUI boot.\n\nTwo live qwen/qwen3.5-9b runs on 2026-09-19 did not produce the full marker sequence: the first timed out after 28 tool steps, and the second emitted 0/4 but omitted later markers. The staged transcript of the second run shows 0/4 in the first assistant reply and no marker in replies for phases 1 through 3. These runs do not support declaring the cell recorded.\n\nThe installed LM Studio model list includes google/gemma-4-26b-a4b. Two direct chat-completion probes on 2026-09-19 returned exact parseable 1/4 and 2/4 HTML comments in consecutive turns. This supports one bounded live recording attempt with that model; only the DSH recording can establish the full five-turn acceptance criteria. The recipe keeps five turns, 12-second inter-turn waits, and a 30-second final settle.\n\n## Live websocket backflow (2026-09-19, issue #1986)\n\nA second live DSH run used the same five-turn recipe and an isolated daemon on 127.0.0.1:7840. A Node 22 built-in WebSocket client subscribed to /api/v1/sessions/stream from before turn 1 and printed session_updated messages for the run cwd. The exact decoded projection of the first ready frame was {\"type\":\"session_updated\",\"seq\":514,\"state\":\"ready\",\"updated_at\":1789787210,\"estimate\":{\"total_rounds\":4,\"completed_rounds\":0,\"updated_at\":1789787210,\"source\":\"marker\"},\"eta\":1789788170}. A final ready frame at seq 1001 retained 4/4 and eta 1789787357. Ready frames for 1/4, 2/4, and 3/4 also retained both fields. The ETA values decreased 1789788170 -> 1789787887 -> 1789787611 -> 1789787470 -> 1789787357, and updated_at advanced. Working frames in later turns carried the previous prior marker. The scenario requires task_estimate and task_completion_eta absent at ready, so the daemon is bugged against this scenario even though transcript and lifecycle checks pass. The web client hides the chip at ready; that presentation rule does not remove the fields from the API.\n\nReproduce the capture by starting IRRLICHT_ONBOARD_HOME=/tmp/irr-onb-1986-5-8-probe IRRLICHT_ONBOARD_BIND_ADDR=127.0.0.1:7840 IRRLICHT_PERMISSION_MODE=grant-all go run ./tools/onboarding-factory/cmd/of record run --agent deepseek-harness --scenario task-estimate-marker, then subscribe with Node 22 WebSocket to ws://127.0.0.1:7840/api/v1/sessions/stream before the first turn. For each JSON frame with session.adapter == dsh and session.cwd containing task-estimate-marker, print type, seq, session.state, session.metrics.task_estimate, and session.metrics.task_completion_eta. No existing factory recording artifact stores these websocket metric frames; the committed recording proves marker emission and lifecycle only.",
       "caveats": [
         "Vacuous-pass condition: the cell would not prove that the seeded project rule loaded if another applicable $DSH_HOME/AGENTS.md, ancestor AGENTS.md/CLAUDE.md, or a prompt already supplied the marker format. At record time, confirm that the seeded $RUN_CWD/AGENTS.md is the only applicable instruction file containing irrlicht-eta. The recipe prompts intentionally omit the marker syntax, and transcript assertions require exact 0/4 through 4/4 comments.",
         "Repeated emission remains model-discretion. Direct Gemma chat probes produced 1/4 and 2/4, but only a live DSH recording can confirm all five markers in transcript-visible text.",
         "The driver now seeds AGENTS.md before boot_slot. The earlier driver-gap analysis is historical; the live recording must confirm this pre-launch order.",
         "LM Studio at http://127.0.0.1:1234/v1 with google/gemma-4-26b-a4b available is load-bearing. The local route has no required non-zero cost.",
-        "State-only phases would prove only lifecycle. The transcript assertions are load-bearing because they require each exact parseable marker from completed_rounds 0 through 4. The recipe verify checks the derived estimate and ETA semantics that the lifecycle phase DSL cannot express."
+        "State-only phases would prove only lifecycle. The transcript assertions are load-bearing because they require each exact parseable marker from completed_rounds 0 through 4. The recipe verify checks the derived estimate and ETA semantics that the lifecycle phase DSL cannot express.",
+        "LIVE KNOWN FAILURE: websocket session_updated seq 514 exposed 0/4 task_estimate and ETA 1789788170 while state was ready; seq 1001 exposed 4/4 and ETA 1789787357 while ready. The scenario requires both fields absent at ready.",
+        "Factory verify checks 12 lifecycle phases, 5 transcript markers, model, and token use, but it has no task_estimate/task_completion_eta websocket assertion. A green 12/12 fixture does not prove the metric acceptance rules. The second live capture is documented in the assessment body; no unvalidated websocket file was added under replaydata/."
       ],
       "sources": [
         {
@@ -81,6 +83,16 @@
           "kind": "url",
           "ref": "http://127.0.0.1:1234/v1/chat/completions",
           "note": "Local LM Studio probes on 2026-09-19 produced exact 1/4 and 2/4 markers with google/gemma-4-26b-a4b. This endpoint is machine-local and the live recording remains the durable proof."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "SessionMetrics serializes task_estimate and task_completion_eta with omitempty, without a state gate; the live websocket capture showed them present at ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/websocket/hub.go",
+          "note": "The websocket hub sends typed session state update messages, which the live Node 22 subscriber decoded."
         }
       ]
     },
@@ -174,9 +186,10 @@
         "task_completion_eta is present after progress is measurable and a later projection is not later than an earlier projection.",
         "The user-visible task estimate and ETA are present only while working and are suppressed after the final ready state.",
         "The one DSH session follows ready -> working -> ready and finishes ready without a waiting transition.",
-        "The recording reports agent deepseek-harness, model google/gemma-4-26b-a4b, non-zero tokens, and no required non-zero cost."
+        "The recording reports agent deepseek-harness, model google/gemma-4-26b-a4b, non-zero tokens, and no required non-zero cost.",
+        "Known failing in the live websocket capture: task_estimate and task_completion_eta remained on ready-state session_updated frames (seq 514 through 1001). Existing of record verify does not check these metric fields."
       ],
-      "scope_note": "Two qwen/qwen3.5-9b staged runs failed to complete the five-marker sequence. A direct Gemma 4 local endpoint probe returned exact 1/4 and 2/4 comments across two turns. The live run remains necessary. The 12-second inter-turn and 30-second final sleeps match conservative recorded siblings."
+      "scope_note": "Two qwen/qwen3.5-9b staged runs failed to complete the five-marker sequence. A direct Gemma 4 local endpoint probe returned exact 1/4 and 2/4 comments across two turns. The live run remains necessary. The 12-second inter-turn and 30-second final sleeps match conservative recorded siblings. The second live run observed ready-state API metric leakage on websocket seq 514 through 1001. The run was not promoted because the first complete marker fixture is already committed and the branch HEAD moved during the second run. This known failure is documented in the assessment and spec."
     }
   }
 }
