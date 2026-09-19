@@ -339,7 +339,7 @@ func (p *prereqFlag) Set(v string) error { *p = append(*p, v); return nil }
 
 const agentUsage = `usage: of agent add    --id i --name n --provider p [--min-version v] [--transcript-extension ext] [--prereq p]...
        of agent update --id i [--name n] [--provider p] [--min-version v] [--transcript-extension ext] [--prereq p]... [--add-prereq p]...
-                       [--maturity planned|alpha|beta|stable] [--capability trait=absent|untraced|traced]...`
+                       [--maturity planned|alpha|beta|stable] [--capability trait=absent|untraced|traced]... [--pin-traced trait]...`
 
 func runAgent(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -427,9 +427,12 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 // or --transcript-extension is passed, for the same reason.
 func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent update")
-	var prereqs, addPrereqs prereqFlag
+	var prereqs, addPrereqs, pinTraced prereqFlag
 	caps := capabilityFlag{}
 	fs.Var(caps, "capability", "trait=state (absent|untraced|traced); traced removes the declaration")
+	fs.Var(&pinTraced, "pin-traced", "trait id: store an explicit \"traced\" instead of relying on the default "+
+		"(repeatable) — for a trait whose scenario recorded agent_supports:{yes,partial} and "+
+		"daemon_capability:unknown, an open question `of validate` refuses to leave on the default (#2004)")
 	var (
 		id            = fs.String("id", "", "agent id (kebab slug)")
 		name          = fs.String("name", "", "display name")
@@ -460,9 +463,10 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	// calls "the worse outcome" for --provider, arriving through the front
 	// door instead. --repo-root and --id are not mutations; every other flag
 	// is.
-	if !agentUpdateHasMutation(fs, addPrereqs, caps) {
+	if !agentUpdateHasMutation(fs, addPrereqs, caps, pinTraced) {
 		fmt.Fprintf(stderr, "of agent update: %s — nothing to do; pass at least one of "+
-			"--name, --provider, --prereq, --add-prereq, --min-version, --transcript-extension, --maturity, --capability\n", *id)
+			"--name, --provider, --prereq, --add-prereq, --min-version, --transcript-extension, --maturity, "+
+			"--capability, --pin-traced\n", *id)
 		return exitUsage
 	}
 	// TWO FILES, TWO REGISTRIES — and this verb writes to both (#1803).
@@ -512,8 +516,8 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 			return rc
 		}
 	}
-	if flagPassed(fs, "maturity") || len(caps) > 0 {
-		if err := setAdapterModel(*repoRoot, *id, *maturity, caps); err != nil {
+	if flagPassed(fs, "maturity") || len(caps) > 0 || len(pinTraced) > 0 {
+		if err := setAdapterModel(*repoRoot, *id, *maturity, caps, pinTraced); err != nil {
 			fmt.Fprintf(stderr, "of agent update: capability model: %v\n", err)
 			return exitUsage
 		}
@@ -836,13 +840,13 @@ func marshalNoEscape(v any) ([]byte, error) {
 // flag.Value accumulators, so "passed but empty" is not a state they can be in
 // — and flagPassed would report true for a `--capability` that failed to
 // parse into an entry.
-func agentUpdateHasMutation(fs *flag.FlagSet, addPrereqs prereqFlag, caps capabilityFlag) bool {
+func agentUpdateHasMutation(fs *flag.FlagSet, addPrereqs prereqFlag, caps capabilityFlag, pinTraced prereqFlag) bool {
 	for _, name := range []string{"name", "provider", "prereq", "min-version", "transcript-extension", "maturity"} {
 		if flagPassed(fs, name) {
 			return true
 		}
 	}
-	return len(addPrereqs) > 0 || len(caps) > 0
+	return len(addPrereqs) > 0 || len(caps) > 0 || len(pinTraced) > 0
 }
 
 // loadAgentMetaForUpdate resolves the per-agent metadata.json for an update,

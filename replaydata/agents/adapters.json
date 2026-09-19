@@ -49,6 +49,7 @@
         "overload_terminal": "untraced",
         "permission_prompt": "untraced",
         "plan_mode": "untraced",
+        "quota_exhaustion": "traced",
         "session_reset": "absent",
         "structured_question": "untraced",
         "subscription_signal": "absent",
@@ -210,7 +211,8 @@
         "architect_editor": "absent",
         "burndown_progression": "untraced",
         "cloud_agent": "absent",
-        "provider_failover": "absent"
+        "provider_failover": "absent",
+        "subscription_signal": "traced"
       }
     },
     "opencode": {

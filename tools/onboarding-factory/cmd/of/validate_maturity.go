@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // The three #1369 gates, kept in one file because they gate one mechanism:
@@ -50,12 +52,13 @@ func validateMaturityModel(repoRoot string, names map[string]bool, add func(path
 	// The other two gates need the assembled matrix, not just the files. A
 	// load failure is reported rather than skipped: a matrix that will not
 	// load is exactly when the maturity claims are least trustworthy.
-	m, err := matrix.LoadRepo(absRoot(repoRoot))
+	root := absRoot(repoRoot)
+	m, err := matrix.LoadRepo(root)
 	if err != nil {
 		add(capModelRelPath, fmt.Sprintf("cannot load the matrix to check maturity/capabilities: %v", err))
 		return
 	}
-	validateCapModel(m, names, add)
+	validateCapModel(root, m, names, add)
 	validateMaturity(m, add)
 }
 
@@ -119,7 +122,7 @@ func validateCoreSet(names map[string]bool, add func(path, msg string)) {
 // recording, not a statement about the adapter's capabilities, and conflating
 // the two would have the model assert (for example) that codex has no file
 // transcript.
-func validateCapModel(m *matrix.Matrix, names map[string]bool, add func(path, msg string)) {
+func validateCapModel(repoRoot string, m *matrix.Matrix, names map[string]bool, add func(path, msg string)) {
 	caps := m.Capabilities()
 	if !caps.Loaded() {
 		add(capModelRelPath, "capability model is missing — every adapter column needs a maturity claim")
@@ -150,13 +153,13 @@ func validateCapModel(m *matrix.Matrix, names map[string]bool, add func(path, ms
 	}
 
 	for _, a := range caps.AdapterNames() {
-		validateCapModelAdapter(m, caps, a, add)
+		validateCapModelAdapter(repoRoot, m, caps, a, add)
 	}
 }
 
 // validateCapModelAdapter runs the vocabulary and per-cell agreement checks
 // for one adapter.
-func validateCapModelAdapter(m *matrix.Matrix, caps *matrix.CapabilityModel, a string, add func(path, msg string)) {
+func validateCapModelAdapter(repoRoot string, m *matrix.Matrix, caps *matrix.CapabilityModel, a string, add func(path, msg string)) {
 	entry := caps.Adapters[a]
 	if !matrix.IsValidMaturity(entry.Maturity) {
 		add(capModelRelPath, fmt.Sprintf("adapters.%s.maturity is %q (allowed: %s)",
@@ -182,28 +185,81 @@ func validateCapModelAdapter(m *matrix.Matrix, caps *matrix.CapabilityModel, a s
 
 	// Agreement, cell by cell, over every scenario a trait covers.
 	for _, t := range matrix.Traits {
-		{
-			s := t.Scenario
-			c, hasCell := m.Cell(a, s)
-			derived, structural := caps.StructuralState(a, s)
-			switch {
-			case structural && !hasCell:
-				// Nothing on disk and the model says dead — the synthesized
-				// case. Load builds the cell, so reaching here means the pair
-				// is not even in the catalog; the FK check above covers it.
-			case structural && c.DisplayState != derived:
-				add(capModelRelPath, fmt.Sprintf(
-					"adapters.%s.capabilities.%s = %q derives %q for scenario %q, but the cell is %q — "+
-						"the declaration and the cell's axes disagree; fix whichever is wrong",
-					a, t.ID, caps.CapabilityState(a, t.ID), derived, s, c.DisplayState))
-			case !structural && hasCell && isStructurallyDead(c.DisplayState) && recordBlockedReason(c) == "":
-				add(capModelRelPath, fmt.Sprintf(
-					"scenario %q is %q for adapter %s, but adapters.%s.capabilities.%s is %q — "+
-						"declare the trait absent/untraced, or document a record_blocked reason on the cell",
-					s, c.DisplayState, a, a, t.ID, caps.CapabilityState(a, t.ID)))
-			}
+		s := t.Scenario
+		c, hasCell := m.Cell(a, s)
+		derived, structural := caps.StructuralState(a, s)
+		_, explicit := caps.Adapters[a].Capabilities[t.ID]
+		switch {
+		case structural && !hasCell:
+			// Nothing on disk and the model says dead — the synthesized
+			// case. Load builds the cell, so reaching here means the pair
+			// is not even in the catalog; the FK check above covers it.
+		case structural && c.DisplayState != derived:
+			add(capModelRelPath, fmt.Sprintf(
+				"adapters.%s.capabilities.%s = %q derives %q for scenario %q, but the cell is %q — "+
+					"the declaration and the cell's axes disagree; fix whichever is wrong",
+				a, t.ID, caps.CapabilityState(a, t.ID), derived, s, c.DisplayState))
+		case !structural && hasCell && isStructurallyDead(c.DisplayState) && recordBlockedReason(c) == "":
+			add(capModelRelPath, fmt.Sprintf(
+				"scenario %q is %q for adapter %s, but adapters.%s.capabilities.%s is %q — "+
+					"declare the trait absent/untraced, or document a record_blocked reason on the cell",
+				s, c.DisplayState, a, a, t.ID, caps.CapabilityState(a, t.ID)))
+		case !structural && hasCell && !explicit && isAssessedOpenQuestion(c):
+			// #2004: the cell's own assessment recorded a real agent_supports
+			// value (yes/partial) alongside daemon_capability:"unknown" — an
+			// assessor's OPEN question, not an unassessed cell. DisplayState
+			// collapses both into "unknown" (vocabulary.go: "not assessed, or
+			// assessed with empty axes"), which is why isStructurallyDead
+			// above cannot see this; this case reads the raw assessment axes
+			// instead. Relying on the trait's omission default
+			// (CapabilityTraced) then reads as a settled "no gap" claim over
+			// a question the assessor left open — Muse's subscription_signal
+			// shape. Confirmed: `go run ./tools/onboarding-factory/cmd/of
+			// validate` on unmodified replaydata at 238d2054a passes clean,
+			// because the case above only fires on n/a/unobservable, not on
+			// unknown. Names both files: the declaration and the cell that
+			// contradicts relying on it.
+			add(capModelRelPath, fmt.Sprintf(
+				"adapters.%s has no %s entry, so scenario %q defaults to %q — but its own assessment records "+
+					"agent_supports:%q and daemon_capability:%q, an assessor's OPEN question rather than an "+
+					"unassessed cell; pin the trait explicitly (`of agent update --id %s --pin-traced %s`) so "+
+					"the omission cannot be misread as a settled claim",
+				a, t.ID, s, matrix.CapabilityTraced, c.Assessment.AgentSupports, c.Assessment.DaemonCapability, a, t.ID))
+			add(cellMetadataRelPath(repoRoot, a, s), fmt.Sprintf(
+				"daemon_capability:%q is an open question recorded here, but adapters.%s.capabilities has no "+
+					"%s entry to carry that — see replaydata/agents/adapters.json",
+				c.Assessment.DaemonCapability, a, t.ID))
 		}
 	}
+}
+
+// isAssessedOpenQuestion reports whether c's own assessment recorded a real
+// agent_supports value (yes/partial — not empty/unknown, which means "never
+// really assessed") alongside daemon_capability:unknown: an assessor looked
+// and explicitly left the daemon axis open, as opposed to a cell nobody
+// assessed at all. Both shapes collapse to DisplayState "unknown"
+// (vocabulary.go: "not assessed, or assessed with empty axes"), so this
+// reads the raw assessment axes rather than the derived display state.
+//
+// agent_supports:"no" is deliberately excluded: DeriveDisplayState returns
+// StateNotApplicable for it regardless of the daemon axis, so that shape is
+// already structurally dead and caught by isStructurallyDead above.
+func isAssessedOpenQuestion(c matrix.CellState) bool {
+	if c.Assessment == nil || c.Assessment.DaemonCapability != matrix.DaemonUnknown {
+		return false
+	}
+	supports := c.Assessment.AgentSupports
+	return supports == matrix.SupportsYes || supports == matrix.SupportsPartial
+}
+
+// cellMetadataRelPath locates one (adapter, scenario) cell's metadata.json
+// for a finding message, resolving the on-disk folder the same way `of cell
+// write` and this file's other cell-level checks do — a cell in a
+// variant-named folder (e.g. codex's 2-20_interrupted-turn for
+// user-esc-interrupt) still resolves to where its metadata actually lives.
+func cellMetadataRelPath(repoRoot, adapter, scenario string) string {
+	folder := shard.AgentFolderForScenario(repoRoot, adapter, scenario)
+	return filepath.ToSlash(filepath.Join("replaydata", "agents", adapter, "scenarios", folder, "metadata.json"))
 }
 
 // isStructurallyDead reports whether a display state is one the capability
