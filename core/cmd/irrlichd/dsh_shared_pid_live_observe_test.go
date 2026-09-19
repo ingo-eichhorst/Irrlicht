@@ -171,21 +171,39 @@ func readDSHLiveEvents(t *testing.T, stateDir string) map[string][]lifecycle.Eve
 
 func assertDSHLiveArc(t *testing.T, id string, events []lifecycle.Event) {
 	t.Helper()
-	working, readyAfterWorking, exited := false, false, 0
+	arc := summarizeDSHLiveArc(events)
+	if arc.complete() {
+		return
+	}
+	t.Errorf("session %s: working=%v ready_after_working=%v process_exited=%d", id, arc.working, arc.readyAfterWorking, arc.exited)
+}
+
+type dshLiveArc struct {
+	working, readyAfterWorking bool
+	exited                     int
+}
+
+func (arc dshLiveArc) complete() bool {
+	if !arc.working || !arc.readyAfterWorking {
+		return false
+	}
+	return arc.exited == 1
+}
+
+func summarizeDSHLiveArc(events []lifecycle.Event) dshLiveArc {
+	var arc dshLiveArc
 	for _, event := range events {
 		switch event.Kind {
 		case lifecycle.KindStateTransition:
 			if event.NewState == "working" {
-				working = true
+				arc.working = true
 			}
-			if event.NewState == "ready" && working {
-				readyAfterWorking = true
+			if event.NewState == "ready" && arc.working {
+				arc.readyAfterWorking = true
 			}
 		case lifecycle.KindProcessExited:
-			exited++
+			arc.exited++
 		}
 	}
-	if !working || !readyAfterWorking || exited != 1 {
-		t.Errorf("session %s: working=%v ready_after_working=%v process_exited=%d", id, working, readyAfterWorking, exited)
-	}
+	return arc
 }

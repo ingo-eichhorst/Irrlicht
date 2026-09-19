@@ -28,27 +28,7 @@ func TestDSHWebSharedPIDLive(t *testing.T) {
 	}
 	model, modelCalls := newDSHLiveModel(t)
 	stateDir, dshHome, projectDir := t.TempDir(), t.TempDir(), t.TempDir()
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		_ = filepath.WalkDir(filepath.Join(dshHome, "sessions"), func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				t.Logf("DSH home walk: %v", err)
-				return nil
-			}
-			if !entry.IsDir() {
-				info, _ := entry.Info()
-				t.Logf("DSH file: %s (%d bytes)", strings.TrimPrefix(path, dshHome), info.Size())
-			}
-			return nil
-		})
-		files, _ := filepath.Glob(filepath.Join(stateDir, "recordings", "*.jsonl"))
-		for _, file := range files {
-			data, _ := os.ReadFile(file)
-			t.Logf("daemon recording: %d bytes", len(data))
-		}
-	})
+	t.Cleanup(func() { logDSHLiveArtifacts(t, dshHome, stateDir) })
 	grants := permission.Set{"dsh": {"transcripts": permission.StateGranted}}
 	if err := filesystem.NewPermissionStore(stateDir).Save(grants); err != nil {
 		t.Fatal(err)
@@ -80,6 +60,29 @@ func TestDSHWebSharedPIDLive(t *testing.T) {
 	observer.waitAbsent(t, secondID, 15*time.Second)
 	daemon.shutdown(t)
 	assertDSHLiveArcs(t, stateDir, firstID, secondID)
+}
+
+func logDSHLiveArtifacts(t *testing.T, dshHome, stateDir string) {
+	t.Helper()
+	if !t.Failed() {
+		return
+	}
+	_ = filepath.WalkDir(filepath.Join(dshHome, "sessions"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			t.Logf("DSH home walk: %v", err)
+			return nil
+		}
+		if !entry.IsDir() {
+			info, _ := entry.Info()
+			t.Logf("DSH file: %s (%d bytes)", strings.TrimPrefix(path, dshHome), info.Size())
+		}
+		return nil
+	})
+	files, _ := filepath.Glob(filepath.Join(stateDir, "recordings", "*.jsonl"))
+	for _, file := range files {
+		data, _ := os.ReadFile(file)
+		t.Logf("daemon recording: %d bytes", len(data))
+	}
 }
 
 type dshLiveFixture struct {

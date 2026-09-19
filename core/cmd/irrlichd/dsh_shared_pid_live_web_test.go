@@ -206,10 +206,21 @@ func (web *dshLiveWeb) rpc(t *testing.T, method string, request map[string]any) 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("%s response: %v", method, err)
 	}
-	if resp.StatusCode != http.StatusOK || result.RPCID != rpcID || !result.Result.OK {
-		t.Fatalf("%s failed: status=%d response=%+v", method, resp.StatusCode, result)
-	}
+	result.assert(t, method, rpcID, resp.StatusCode)
 	return result
+}
+
+func (result dshLiveRPCResult) assert(t *testing.T, method, rpcID string, status int) {
+	t.Helper()
+	if status != http.StatusOK {
+		t.Fatalf("%s returned status %d: %+v", method, status, result)
+	}
+	if result.RPCID != rpcID {
+		t.Fatalf("%s returned RPC ID %q, want %q", method, result.RPCID, rpcID)
+	}
+	if !result.Result.OK {
+		t.Fatalf("%s returned an error: %+v", method, result)
+	}
 }
 
 func dshLiveSessionID(t *testing.T, result dshLiveRPCResult) string {

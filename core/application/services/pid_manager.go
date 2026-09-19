@@ -2347,6 +2347,14 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 	}
 }
 
+type periodicPIDVictim struct {
+	state         *session.SessionState
+	winner        string
+	winnerAdapter string
+	claim         sharedPIDClaim
+	pid           int
+}
+
 // dedupeByPIDPeriodic retires a real-UUID duplicate root session sharing a
 // live PID with a newer sibling, minted after startup (issue #1992 — the
 // real-UUID sibling of #645's proc-* gap). dedupeByPID only ever runs once,
@@ -2381,46 +2389,50 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 // admitNewSession) from letting a late event for the deleted duplicate's
 // frozen transcript re-mint it.
 func (pm *PIDManager) dedupeByPIDPeriodic() {
+	for _, victim := range pm.snapshotPeriodicPIDVictims() {
+		pm.retireUnprovenPIDVictim(victim)
+	}
+}
+
+func (pm *PIDManager) snapshotPeriodicPIDVictims() []periodicPIDVictim {
 	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
 	states, err := pm.repo.ListAll()
 	if err != nil {
-		pm.assignMu.Unlock()
-		return
+		return nil
 	}
 	newestByPID := make(map[int]*session.SessionState)
 	for _, state := range states {
 		pm.trackNewestByPID(state, newestByPID)
 	}
-	type victim struct {
-		state         *session.SessionState
-		winner        string
-		winnerAdapter string
-		claim         sharedPIDClaim
-		pid           int
-	}
-	var victims []victim
+	return selectPeriodicPIDVictims(states, newestByPID)
+}
+
+func selectPeriodicPIDVictims(states []*session.SessionState, newestByPID map[int]*session.SessionState) []periodicPIDVictim {
+	var victims []periodicPIDVictim
 	for pid, winner := range newestByPID {
 		for _, state := range states {
-			if isDedupDeleteCandidate(state, pid, winner) {
-				victims = append(victims, victim{
-					state: state, winner: winner.SessionID,
-					winnerAdapter: winner.Adapter, claim: sharedPIDClaimOf(state), pid: pid,
-				})
+			if !isDedupDeleteCandidate(state, pid, winner) {
+				continue
 			}
+			victims = append(victims, periodicPIDVictim{
+				state: state, winner: winner.SessionID,
+				winnerAdapter: winner.Adapter, claim: sharedPIDClaimOf(state), pid: pid,
+			})
 		}
 	}
-	pm.assignMu.Unlock()
+	return victims
+}
 
-	for _, v := range victims {
-		if pm.confirmsSharedPID(v.claim, v.winnerAdapter, v.pid) {
-			continue
-		}
-		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
-			continue
-		}
-		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
-			fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", v.state.PID, v.winner), "")
+func (pm *PIDManager) retireUnprovenPIDVictim(victim periodicPIDVictim) {
+	if pm.confirmsSharedPID(victim.claim, victim.winnerAdapter, victim.pid) {
+		return
 	}
+	if state, _ := pm.repo.Load(victim.state.SessionID); state == nil {
+		return
+	}
+	pm.removeSessionUntracked(logComponentSessionDetector, victim.state,
+		fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", victim.state.PID, victim.winner), "")
 }
 
 // preSessionCWDGuardPasses implements the #113 guard for the matchCWD path: a
