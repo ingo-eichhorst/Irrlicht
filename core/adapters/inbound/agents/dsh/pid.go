@@ -17,6 +17,16 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 	return processlifecycle.DiscoverPIDByTranscriptWriter(lockPath)
 }
 
+// OwnsSharedPID confirms ownership through this transcript's sibling lock.
+// A missing lock or unreadable writer does not confirm ownership.
+func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	owner, err := DiscoverPID(cwd, transcriptPath, nil)
+	return err == nil && owner == pid
+}
+
 func sessionLockPath(transcriptPath string) string {
 	dir := filepath.Dir(transcriptPath)
 	if dir == "" || dir == "." {

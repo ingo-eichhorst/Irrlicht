@@ -225,6 +225,44 @@ func TestSessionDetector_Removed_TranscriptRelocation_StaysAlive(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_Removed_DSHDoesNotRelocateToSiblingSession(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "session-first", "session.v3.jsonl.zstd")
+	second := filepath.Join(root, "session-second", "session.v3.jsonl.zstd")
+	for _, path := range []string{first, second} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "dsh"})
+	repo := newMockRepo()
+	repo.states["session-second"] = &session.SessionState{
+		SessionID: "session-second", Adapter: "dsh", State: session.StateWorking,
+		TranscriptPath: second, UpdatedAt: time.Now().Unix(),
+	}
+	det := newDetector(tw, newMockProcessWatcher(), repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	tw.ch <- agent.Event{
+		Type: agent.EventRemoved, SessionID: "session-second",
+		TranscriptPath: second,
+	}
+	waitForCondition(func() bool {
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		return repo.lastSavedState["session-second"] != ""
+	}, time.Second)
+	cancel()
+	<-done
+	if got := repo.transcriptPathOf("session-second"); got != second {
+		t.Fatalf("DSH transcript changed to sibling: got %q, want %q", got, second)
+	}
+}
+
 // The companion to the relocation test above: when the transcript is really
 // gone — no surviving copy under any sibling slug — onRemoved must take the
 // normal removal path and flip the session to ready.

@@ -70,6 +70,13 @@ func TestPIDDiscoverers_coversAllAdapters(t *testing.T) {
 	}
 }
 
+func TestSharedPIDOwners_OnlyDSHOptsIn(t *testing.T) {
+	m := agents.SharedPIDOwners(append(testAgents(), dsh.Agent()))
+	if len(m) != 1 || m[dsh.AdapterName] == nil {
+		t.Fatalf("shared PID owners = %v, want only %s", m, dsh.AdapterName)
+	}
+}
+
 func TestProcessNames_matchesConfigShape(t *testing.T) {
 	got := agents.ProcessNames(testAgents())
 	want := map[string]string{

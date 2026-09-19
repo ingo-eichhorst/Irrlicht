@@ -27,6 +27,19 @@ func TestAgentProcessDeclaration(t *testing.T) {
 	if a.Process.PIDForSession == nil {
 		t.Error("PIDForSession is nil")
 	}
+	if a.Process.SharedPIDOwner == nil {
+		t.Error("SharedPIDOwner is nil")
+	}
+}
+
+func TestSharedPIDOwnerRejectsMissingLock(t *testing.T) {
+	transcript := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
+	if OwnsSharedPID("", transcript, os.Getpid()) {
+		t.Fatal("missing session.lock confirmed PID ownership")
+	}
+	if OwnsSharedPID("", transcript, 0) {
+		t.Fatal("missing session.lock confirmed a zero PID")
+	}
 }
 
 func TestAgentSourceDeclaration(t *testing.T) {

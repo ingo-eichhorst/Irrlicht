@@ -5,3 +5,7 @@ package agent
 // for Codex/Pi). The disambiguate callback selects one PID when multiple
 // candidates match.
 type PIDDiscoverFunc func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)
+
+// SharedPIDOwnerFunc confirms that one session still owns a PID that another
+// root session also uses. An inconclusive read must return false.
+type SharedPIDOwnerFunc func(cwd, transcriptPath string, pid int) bool
