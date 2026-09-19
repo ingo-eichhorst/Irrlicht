@@ -979,16 +979,23 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string, confirmed map[s
 	// still cleanly retired, in the correct direction, by
 	// sweepSupersededPreSessionsPeriodic's PID-match branch on the next
 	// SweepDeadPIDs tick (matchPID: "always safe, no grace period").
+	return state, stalePIDHolders(states, pid, state, confirmed)
+}
+
+func stalePIDHolders(states []*session.SessionState, pid int, winner *session.SessionState, confirmed map[string]sharedPIDClaim) []*session.SessionState {
 	var stale []*session.SessionState
 	for _, old := range states {
-		if isDedupDeleteCandidate(old, pid, state) {
-			if claim, ok := confirmed[old.SessionID]; ok && old.Adapter == state.Adapter && sharedPIDClaimStillMatches(old, claim) {
-				continue
-			}
-			stale = append(stale, old)
+		if !isDedupDeleteCandidate(old, pid, winner) || confirmedSharedPIDHolder(old, winner, confirmed) {
+			continue
 		}
+		stale = append(stale, old)
 	}
-	return state, stale
+	return stale
+}
+
+func confirmedSharedPIDHolder(old, winner *session.SessionState, confirmed map[string]sharedPIDClaim) bool {
+	claim, ok := confirmed[old.SessionID]
+	return ok && old.Adapter == winner.Adapter && sharedPIDClaimStillMatches(old, claim)
 }
 
 // ConsumePendingPID returns and removes a pending PID for the given session.
