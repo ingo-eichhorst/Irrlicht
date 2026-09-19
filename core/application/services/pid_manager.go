@@ -845,6 +845,18 @@ type sharedPIDClaim struct {
 func (pm *PIDManager) snapshotSharedPIDClaims(pid int, sessionID string) []sharedPIDClaim {
 	pm.assignMu.Lock()
 	defer pm.assignMu.Unlock()
+	winner := pm.sharedPIDClaimWinnerLocked(sessionID)
+	if winner == nil {
+		return nil
+	}
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return nil
+	}
+	return collectSharedPIDClaimsLocked(states, pid, winner)
+}
+
+func (pm *PIDManager) sharedPIDClaimWinnerLocked(sessionID string) *session.SessionState {
 	winner, err := pm.repo.Load(sessionID)
 	if err != nil {
 		return nil
@@ -858,10 +870,10 @@ func (pm *PIDManager) snapshotSharedPIDClaims(pid int, sessionID string) []share
 	if pm.sharedPIDOwners[winner.Adapter] == nil {
 		return nil
 	}
-	states, err := pm.repo.ListAll()
-	if err != nil {
-		return nil
-	}
+	return winner
+}
+
+func collectSharedPIDClaimsLocked(states []*session.SessionState, pid int, winner *session.SessionState) []sharedPIDClaim {
 	var claims []sharedPIDClaim
 	for _, old := range states {
 		if old.Adapter != winner.Adapter {
