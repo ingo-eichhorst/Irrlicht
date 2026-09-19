@@ -1,0 +1,15 @@
+{
+  "id": "no-paths-source",
+  "name": "Fixture Missing-inspected_paths Source",
+  "repo": "example/no-paths-source",
+  "repo_url": "https://github.com/example/no-paths-source",
+  "revision": "0000000000000000000000000000000000000e",
+  "check_url": "https://api.github.com/repos/example/no-paths-source/commits/0000000000000000000000000000000000000e",
+  "kind": "provider-list",
+  "license": {"spdx": "MIT", "url": "https://raw.githubusercontent.com/example/no-paths-source/0000000000000000000000000000000000000e/LICENSE", "notice_required": true},
+  "evidence_date": "2026-09-20",
+  "notes": "Fixture for tools/lib/provider-census_test.sh's missing-inspected_paths regression (found in code review of #2006): deliberately omits inspected_paths, which pre-fix schema validation did not require even though --markdown unconditionally dereferences it.",
+  "entries": [
+    {"id": "eta", "name": "Eta"}
+  ]
+}

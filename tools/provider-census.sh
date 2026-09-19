@@ -97,7 +97,7 @@ while [[ $# -gt 0 ]]; do
     --markdown)
       MARKDOWN=1; shift ;;
     -h|--help)
-      sed -n '2,70p' "$0"; exit 0 ;;
+      sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d'; exit 0 ;;
     *)
       echo "provider-census: unrecognized argument '$1'" >&2; exit 1 ;;
   esac
@@ -139,7 +139,7 @@ fi
 # ---- pass 1: schema + content validation (no network) ---------------------
 declare -a IDS=() KINDS=() COUNTS=() REVISIONS=() CHECK_URLS=() NAMES=()
 rc=0
-REQUIRED_FIELDS='["id","name","repo","revision","kind","check_url","license","evidence_date","entries"]'
+REQUIRED_FIELDS='["id","name","repo","revision","kind","check_url","license","evidence_date","entries","inspected_paths"]'
 for f in "${FILES[@]}"; do
   # One jq call finds the first missing required field (in declared order),
   # rather than the nine separate `has($f)` calls this replaced — same

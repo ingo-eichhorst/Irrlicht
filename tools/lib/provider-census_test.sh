@@ -5,7 +5,7 @@
 # against, so it owes a deliberate mutation instead, and a fixture must
 # assert it actually hit its target rather than trusting a changed number.
 #
-# Four cases, each pinned to the exit code tools/provider-census.sh's own
+# Five cases, each pinned to the exit code tools/provider-census.sh's own
 # header documents:
 #   the "good" fixture (offline)         — two small provider-list sources,
 #                                           5 entries total: exit 0.
@@ -38,6 +38,18 @@
 #                                           and again no "TOTAL" line — the
 #                                           second, distinct way an empty
 #                                           list must not render as success.
+#   missing inspected_paths (offline)    — found in code review of #2006:
+#                                           --markdown dereferences
+#                                           .inspected_paths unconditionally,
+#                                           but it was not a required field,
+#                                           so a source missing it crashed
+#                                           that jq call silently (exit 0).
+#                                           Red-first against the actual
+#                                           pre-fix commit (6b7a89f51, read
+#                                           via `git show`, not hand-
+#                                           reimplemented), then green
+#                                           against the fix: exit 3, naming
+#                                           the source and the field.
 #
 # Plus two vacuity guards: the real six-source docs/providers/sources/ must
 # itself validate (exit 0, offline), and the count docs/providers/catalog.md
@@ -130,6 +142,43 @@ elif [[ "$out" == *"TOTAL"* ]]; then
   fail "empty-entries fixture: output contains a TOTAL line — an empty imported list must never render as '0 providers found' alongside a total — output: $out"
 else
   pass "a provider-list source with an empty entries array fails loudly (exit 3), distinct from the unreachable case (exit 4), and prints no TOTAL line"
+fi
+
+# --- case 5: missing inspected_paths (found in code review of #2006) -------
+# `--markdown` unconditionally dereferences `.inspected_paths`, but the
+# pre-fix REQUIRED_FIELDS list at commit 6b7a89f51 did not require it: a
+# provider-list source missing that field passed schema validation and then
+# crashed the per-file jq call inside the markdown loop — silently, because
+# nothing checked that jq call's exit status, so the run still printed a
+# (truncated) table and exited 0. Red-first evidence: the PRE-FIX script,
+# read directly from that commit rather than re-implemented by hand, is
+# shown here to actually reproduce the bug against this fixture, before
+# proving the current script refuses it loudly instead.
+PRE_FIX_SHA=6b7a89f51
+PRE_FIX_SCRIPT=$(mktemp -t irrlicht-provider-census-prefix) || PRE_FIX_SCRIPT=""
+if [[ -n "$PRE_FIX_SCRIPT" ]] && git show "$PRE_FIX_SHA:tools/provider-census.sh" > "$PRE_FIX_SCRIPT" 2>/dev/null; then
+  pre_out=$(bash "$PRE_FIX_SCRIPT" --offline --markdown --dir "$FIXTURES/missing-inspected-paths" 2>&1)
+  pre_rc=$?
+  if [[ "$pre_rc" -ne 0 || "$pre_out" != *"jq: error"* ]]; then
+    fail "red-first check: expected the PRE-FIX script ($PRE_FIX_SHA) to reproduce the bug (exit 0 with a swallowed jq error) against the missing-inspected_paths fixture, got exit $pre_rc — output: $pre_out — if this no longer reproduces, the fixture or the pre-fix reference no longer demonstrates what this test claims"
+  else
+    pass "red-first: the PRE-FIX script ($PRE_FIX_SHA) really does crash silently (jq error swallowed, exit 0) on a provider-list source missing inspected_paths"
+  fi
+  rm -f "$PRE_FIX_SCRIPT"
+else
+  fail "could not read tools/provider-census.sh from $PRE_FIX_SHA to run the red-first check"
+fi
+
+out=$(bash "$CENSUS" --offline --markdown --dir "$FIXTURES/missing-inspected-paths" 2>&1)
+got=$?
+if [[ "$got" -ne 3 ]]; then
+  fail "missing-inspected_paths fixture: expected exit 3 from the fixed script, got $got — output: $out"
+elif [[ "$out" != *"no-paths-source"* || "$out" != *"inspected_paths"* ]]; then
+  fail "missing-inspected_paths fixture: exit 3 but output does not name the source id and the missing field — output: $out"
+elif [[ "$out" == *"jq: error"* ]]; then
+  fail "missing-inspected_paths fixture: still leaking a raw jq crash — output: $out"
+else
+  pass "green: the fixed script refuses a provider-list source missing inspected_paths loudly (exit 3, naming the field) instead of crashing silently inside --markdown"
 fi
 
 # --- vacuity guard 1: the real six sources validate, offline ---------------
