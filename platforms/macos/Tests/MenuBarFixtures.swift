@@ -104,14 +104,17 @@ enum MenuBarFixtures {
     /// of the icon has something to draw. Same shape `QuotaMenuBarRendererTests`
     /// uses.
     ///
-    /// `adapter` selects which provider the snapshot buckets under —
-    /// `RateLimitInfo.providerKey(adapter:)` maps `claude-code` to `anthropic`
-    /// and `codex` to `openai`. The parameters exist for #1955's ordered
-    /// provider slots, which need TWO providers that render DIFFERENTLY: with
-    /// identical fills the two slots produce identical pixels, and an
-    /// ordering assertion over them would pass whatever the order was. The
-    /// `claude-code` defaults reproduce the fixture exactly as it stood before
-    /// #1955, so every existing caller keeps its numbers.
+    /// `adapter` selects which provider the snapshot buckets under. Since
+    /// #1995 that is the daemon's confirmed `provider`/`attributionQuality`
+    /// fields, not an inference from `adapter` — so this fixture stamps them
+    /// itself, matching exactly what `claudecode/statusline.go` and
+    /// `codex/parser.go` stamp in production for these two adapters. The
+    /// parameters exist for #1955's ordered provider slots, which need TWO
+    /// providers that render DIFFERENTLY: with identical fills the two slots
+    /// produce identical pixels, and an ordering assertion over them would
+    /// pass whatever the order was. The `claude-code` defaults reproduce the
+    /// fixture exactly as it stood before #1955, so every existing caller
+    /// keeps its numbers.
     static func sessionWithQuota(
         adapter: String = "claude-code",
         fiveHourPercent: Double = 20,
@@ -123,6 +126,7 @@ enum MenuBarFixtures {
         // caller remembering to vary them.
         let project = adapter == "claude-code" ? "quota" : "quota-\(adapter)"
         let id = adapter == "claude-code" ? "sess_quota" : "sess_quota_\(adapter)"
+        let provider = adapter == "claude-code" ? "anthropic" : "openai"
         let metrics = SessionMetrics(
             elapsedSeconds: 0,
             totalTokens: 0,
@@ -145,7 +149,9 @@ enum MenuBarFixtures {
                         resetsAt: now.addingTimeInterval(3 * 86400)
                     ),
                 ],
-                sampledAt: now
+                sampledAt: now,
+                provider: provider,
+                attributionQuality: RateLimitInfo.attributionQualityConfirmed
             )
         )
         return SessionState(

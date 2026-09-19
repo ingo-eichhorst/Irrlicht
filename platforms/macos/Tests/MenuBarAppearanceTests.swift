@@ -1575,6 +1575,40 @@ final class MenuBarAppearanceTests: XCTestCase {
         }
     }
 
+    /// New for #1995: the migration itself carries no new logic (it moves a
+    /// raw string between two keys, agnostic to what the string means), but
+    /// #1995 changed what a stored key like "anthropic" is CHECKED AGAINST —
+    /// `providerKey(adapter:)` now requires a confirmed `provider` field
+    /// rather than inferring one from `planType`/`adapter`. This connects the
+    /// two: a migrated key must still resolve a REAL, confirmed session's
+    /// snapshot through `QuotaMenuBarRenderer.selectedSnapshot`, not just
+    /// decode back out of `UserDefaults`.
+    ///
+    /// Mutation-proved (run, not merely described): stamping the fixture
+    /// session with `attributionQuality: nil` instead of `.confirmed` —
+    /// simulating an unconfirmed identity — reddened this test (`selected`
+    /// came back nil) while leaving `testTheProviderMigrationSatisfiesItsContract`
+    /// green, since that contract never looks past `UserDefaults`. Reverted
+    /// after confirming red.
+    func testAMigratedProviderKeyStillSelectsAConfirmedSnapshot() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set("anthropic", forKey: MenuBarQuotaProvider.storageKey)
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacySingleProvider(in: defaults),
+                      "the legacy single provider must be carried over")
+        let migratedKey = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first,
+                                        "the migration produced no provider key")
+        XCTAssertEqual(migratedKey, "anthropic")
+
+        let confirmedSession = MenuBarFixtures.sessionWithQuota()
+        let selected = QuotaMenuBarRenderer.selectedSnapshot(
+            sessions: [confirmedSession], providerKey: migratedKey
+        )
+        XCTAssertEqual(selected?.windows.first?.usedPercent,
+                       confirmedSession.metrics?.rateLimit?.windows.first?.usedPercent,
+                       "the migrated key \"\(migratedKey)\" did not select the confirmed Anthropic "
+                       + "session's own snapshot")
+    }
+
     /// The delimited-`String` encoding is a serializer, so AGENTS.md asks for a
     /// property test over generated input rather than only hand-written cases.
     ///

@@ -423,15 +423,24 @@ final class QuotaMenuBarRendererTests: XCTestCase {
     /// RateLimitInfo directly and go through `sessionState` instead, so
     /// this stays at 4 arguments rather than growing a resetsInPast flag
     /// nobody but one test needed (CodeScene: excess function arguments).
+    ///
+    /// Stamps a confirmed `provider` matching what `claudecode/statusline.go`
+    /// / `codex/parser.go` actually stamp for these two adapters (#1995) —
+    /// `providerKey(adapter:)` no longer infers identity from the adapter
+    /// name, so a test that filters by provider key needs the fixture to
+    /// carry it explicitly.
     private func makeSession(
         id: String,
         adapter: String,
         usedPercent: Double,
         sampledSecondsAgo: TimeInterval
     ) -> SessionState {
+        let provider = adapter == "codex" ? "openai" : "anthropic"
         let rateLimit = RateLimitInfo(
             windows: [RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: 300, resetsAt: now.addingTimeInterval(3600))],
-            sampledAt: now.addingTimeInterval(-sampledSecondsAgo)
+            sampledAt: now.addingTimeInterval(-sampledSecondsAgo),
+            provider: provider,
+            attributionQuality: RateLimitInfo.attributionQualityConfirmed
         )
         return sessionState(id: id, adapter: adapter, rateLimit: rateLimit)
     }
