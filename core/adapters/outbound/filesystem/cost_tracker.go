@@ -44,18 +44,32 @@ const (
 // snapshotRow is the on-disk JSON shape for one cost-tracker line. One row
 // per line (JSONL).
 type snapshotRow struct {
-	TS        int64   `json:"ts"`
-	Project   string  `json:"project,omitempty"`  // raw SessionState.ProjectName (filename is sanitized)
-	Branch    string  `json:"branch,omitempty"`   // SessionState.GitBranch ("" = detached/unknown); see #750
-	Provider  string  `json:"provider,omitempty"` // "anthropic", "openai", or "" (unknown); see providerForSession
-	Model     string  `json:"model,omitempty"`    // Metrics.ModelName, falling back to SessionState.Model ("" = unknown)
-	Session   string  `json:"session"`
-	Cost      float64 `json:"cost"`
-	CO2Grams  float64 `json:"co2,omitempty"` // cumulative estimated CO2e grams (issue #829); rows written before this field existed read back as 0
-	CumIn     int64   `json:"cum_in,omitempty"`
-	CumOut    int64   `json:"cum_out,omitempty"`
-	CumRead   int64   `json:"cum_read,omitempty"`
-	CumCreate int64   `json:"cum_create,omitempty"`
+	TS       int64  `json:"ts"`
+	Project  string `json:"project,omitempty"`  // raw SessionState.ProjectName (filename is sanitized)
+	Branch   string `json:"branch,omitempty"`   // SessionState.GitBranch ("" = detached/unknown); see #750
+	Provider string `json:"provider,omitempty"` // "anthropic", "openai", or "" (unknown); see providerForSession
+	// AttributionQuality records the confidence in Provider for THIS row,
+	// added additively the same way CO2Grams was (issue #1996; see that
+	// field's comment below for the precedent). Holds
+	// session.AttributionQualityConfirmed when providerOf resolved Provider
+	// from session-specific evidence at write time
+	// (attributionQualityForProvider below); empty for every row written
+	// before this field existed —
+	// including a pre-#1994 row whose Provider was populated by the old
+	// adapter-name guess, which never had evidence behind it. Read via
+	// rowAttributionQuality, never re-derived from Provider or Model: a row
+	// with no quality field reads back as guessed, never as confirmed, and
+	// is never backfilled from a model catalog even when one names a
+	// provider for that row's model.
+	AttributionQuality string  `json:"attribution_quality,omitempty"`
+	Model              string  `json:"model,omitempty"` // Metrics.ModelName, falling back to SessionState.Model ("" = unknown)
+	Session            string  `json:"session"`
+	Cost               float64 `json:"cost"`
+	CO2Grams           float64 `json:"co2,omitempty"` // cumulative estimated CO2e grams (issue #829); rows written before this field existed read back as 0
+	CumIn              int64   `json:"cum_in,omitempty"`
+	CumOut             int64   `json:"cum_out,omitempty"`
+	CumRead            int64   `json:"cum_read,omitempty"`
+	CumCreate          int64   `json:"cum_create,omitempty"`
 }
 
 // providerForSession resolves the billing provider whose subscription/usage
@@ -72,8 +86,10 @@ type snapshotRow struct {
 // Anthropic. A session with no snapshot, or one whose AttributionQuality
 // isn't "confirmed" (including every row written before this field
 // existed, which reads back as "" — the zero value), records "" (unknown).
-// Such rows are excluded from the per-provider rollup but still counted in
-// the per-project totals.
+// Such rows land in the per-provider rollup's reserved "unattributed" bucket
+// (issue #1996 — see providerCostsByProvider in core/cmd/irrlichd/
+// handlers.go) rather than being dropped from it, and are still counted in
+// the per-project totals as before.
 func providerForSession(state *session.SessionState) string {
 	if state == nil || state.Metrics == nil || state.Metrics.RateLimit == nil {
 		return ""
@@ -83,6 +99,55 @@ func providerForSession(state *session.SessionState) string {
 		return ""
 	}
 	return rl.Provider
+}
+
+// attributionQualityGuessed is rowAttributionQuality's answer for a row that
+// carries a Provider with no confirmation behind it — the shape a pre-#1994
+// row has, since the adapter-name guess populated Provider without ever
+// setting a quality stamp. Distinct from session.AttributionQualityEstimated
+// (a future heuristic source; nothing sets it yet) — "guessed" names a
+// specific historical cause (issue #1996), not a present quality tier.
+const attributionQualityGuessed = "guessed"
+
+// attributionQualityForProvider derives the AttributionQuality to persist on
+// a NEW row from providerOf's resolved provider: session.
+// AttributionQualityConfirmed whenever a provider was resolved, empty
+// (nothing to grade — the row is unattributed, not guessed) otherwise.
+//
+// This is correct only as long as providerOf never returns a non-empty
+// provider without evidence behind it — true today for providerForSession
+// (the default) and, per SetProviderResolver's comment above, for the
+// daemon's injected resolver too (issue #1994). A future resolver that
+// returns a non-empty *guessed* provider would need this function widened to
+// consult more than the resolver's return value alone.
+func attributionQualityForProvider(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	return session.AttributionQualityConfirmed
+}
+
+// rowAttributionQuality reports the confidence in row's Provider, read from
+// the row's own AttributionQuality field only — never re-derived from
+// Provider or Model, and never backfilled from a model catalog (issue
+// #1996). Three outcomes: "" when Provider itself is empty (unattributed —
+// there is no attribution to grade); session.AttributionQualityConfirmed
+// when the row's own field says so; attributionQualityGuessed for
+// everything else — most importantly a legacy row written before this field
+// existed, which decodes with AttributionQuality == "" while still carrying
+// a non-empty Provider from the pre-#1994 adapter-name guess. That legacy
+// shape must never read back as confirmed just because Provider is
+// populated; this function is the one place that rule is enforced — see
+// TestRowAttributionQuality_LegacyRowReadsAsGuessed and the tools/mutate.sh
+// run against the guard's default branch, in that test's own comment.
+func rowAttributionQuality(r snapshotRow) string {
+	if r.Provider == "" {
+		return ""
+	}
+	if r.AttributionQuality == session.AttributionQualityConfirmed {
+		return session.AttributionQualityConfirmed
+	}
+	return attributionQualityGuessed
 }
 
 // CostTracker persists per-session cost snapshots in append-only JSONL files,
@@ -168,19 +233,21 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	}
 	m := state.Metrics
 
+	provider := t.providerOf(state)
 	row := snapshotRow{
-		TS:        time.Now().Unix(),
-		Project:   state.ProjectName,
-		Branch:    state.GitBranch,
-		Provider:  t.providerOf(state),
-		Model:     modelForRow(state),
-		Session:   state.SessionID,
-		Cost:      m.EstimatedCostUSD,
-		CO2Grams:  m.EstimatedCO2Grams,
-		CumIn:     m.CumInputTokens,
-		CumOut:    m.CumOutputTokens,
-		CumRead:   m.CumCacheReadTokens,
-		CumCreate: m.CumCacheCreationTokens,
+		TS:                 time.Now().Unix(),
+		Project:            state.ProjectName,
+		Branch:             state.GitBranch,
+		Provider:           provider,
+		AttributionQuality: attributionQualityForProvider(provider),
+		Model:              modelForRow(state),
+		Session:            state.SessionID,
+		Cost:               m.EstimatedCostUSD,
+		CO2Grams:           m.EstimatedCO2Grams,
+		CumIn:              m.CumInputTokens,
+		CumOut:             m.CumOutputTokens,
+		CumRead:            m.CumCacheReadTokens,
+		CumCreate:          m.CumCacheCreationTokens,
 	}
 
 	t.mu.Lock()
@@ -249,19 +316,21 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	if ts == 0 {
 		ts = time.Now().Unix()
 	}
+	provider := t.providerOf(state)
 	row := snapshotRow{
-		TS:        ts,
-		Project:   state.ProjectName,
-		Branch:    state.GitBranch,
-		Provider:  t.providerOf(state),
-		Model:     modelForRow(state),
-		Session:   state.SessionID,
-		Cost:      m.EstimatedCostUSD,
-		CO2Grams:  m.EstimatedCO2Grams,
-		CumIn:     m.CumInputTokens,
-		CumOut:    m.CumOutputTokens,
-		CumRead:   m.CumCacheReadTokens,
-		CumCreate: m.CumCacheCreationTokens,
+		TS:                 ts,
+		Project:            state.ProjectName,
+		Branch:             state.GitBranch,
+		Provider:           provider,
+		AttributionQuality: attributionQualityForProvider(provider),
+		Model:              modelForRow(state),
+		Session:            state.SessionID,
+		Cost:               m.EstimatedCostUSD,
+		CO2Grams:           m.EstimatedCO2Grams,
+		CumIn:              m.CumInputTokens,
+		CumOut:             m.CumOutputTokens,
+		CumRead:            m.CumCacheReadTokens,
+		CumCreate:          m.CumCacheCreationTokens,
 	}
 
 	t.mu.Lock()
@@ -329,13 +398,17 @@ func (t *CostTracker) ProviderCostsInWindows(windowSeconds map[string]int64) (ma
 // CostsInWindows returns per-timeframe cost maps bucketed by project AND by
 // provider in a single pass over each cost file: byProject keys each inner map
 // by project name (falling back to the filename when a row carries no
-// project); byProvider keys by billing provider ("anthropic"/"openai"),
-// excluding rows with no known provider (pre-schema rows, unattributed
-// wrappers). A project can mix providers, so the provider axis can't be
-// re-derived from the project map client-side without double-counting — and
-// the sessions handler needs both for one response, so computing them together
-// halves the I/O vs. two separate scans. O(files × rows) once, regardless of
-// how many windows are requested.
+// project); byProvider keys by billing provider ("anthropic"/"openai") or ""
+// for a session with no confirmed attribution (pre-schema rows, unattributed
+// wrappers) — every session contributes to byProvider now (issue #1996);
+// nothing is dropped here. The handler (core/cmd/irrlichd/handlers.go's
+// providerCostsByProvider) is what relabels the empty key into its reserved
+// "unattributed" bucket rather than displaying a raw "". A project can mix
+// providers, so the provider axis can't be re-derived from the project map
+// client-side without double-counting — and the sessions handler needs both
+// for one response, so computing them together halves the I/O vs. two
+// separate scans. O(files × rows) once, regardless of how many windows are
+// requested.
 func (t *CostTracker) CostsInWindows(windowSeconds map[string]int64) (byProject, byProvider map[string]map[string]float64, err error) {
 	byProject = newWindowMap(windowSeconds)
 	byProvider = newWindowMap(windowSeconds)
@@ -367,7 +440,10 @@ func (t *CostTracker) CostsInWindows(windowSeconds map[string]int64) (byProject,
 // foldSessionWindows folds one file's per-session window aggregates into the
 // project and provider rollups: byProject is keyed by project (falling back
 // to fallback when a session's rows carried no project); byProvider is keyed
-// by billing provider and only receives sessions with a known provider.
+// by billing provider, or "" for a session with no confirmed attribution.
+// Every session contributes to both maps (issue #1996) — byProvider no
+// longer drops a session just because it has no provider; see
+// CostsInWindows' doc comment for who relabels the empty key.
 func foldSessionWindows(agg map[string]*sessionWindows, fallback string, byProject, byProvider map[string]map[string]float64) {
 	for _, s := range agg {
 		projectKey := s.project
@@ -375,9 +451,7 @@ func foldSessionWindows(agg map[string]*sessionWindows, fallback string, byProje
 			projectKey = fallback
 		}
 		addContributions(s, projectKey, byProject)
-		if s.provider != "" {
-			addContributions(s, s.provider, byProvider)
-		}
+		addContributions(s, s.provider, byProvider)
 	}
 }
 
