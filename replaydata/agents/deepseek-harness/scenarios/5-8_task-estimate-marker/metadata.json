@@ -3,7 +3,7 @@
   "metadata": {
     "agent_supports": "yes",
     "daemon_capability": "full",
-    "driver_capability": "gap:seed_instruction",
+    "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+bf97ac6",
     "confidence": 0.84,
@@ -16,7 +16,7 @@
       "agent": "deepseek-harness",
       "agent_supports": "yes",
       "daemon_capability": "full",
-      "driver_capability": "gap:seed_instruction",
+      "driver_capability": "ready",
       "confidence": 0.84,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:seed_instruction\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 explicitly supports the required persistent instruction surface. Its installed `@deepseek-ai/dsh-agent-instructions` package states that `dsh-base` enables workspace instructions by default, loads project `AGENTS.md` and `CLAUDE.md` candidates on the first request, and injects each message into the model verbatim. The active TUI profile composes `dsh-base` and includes the `agent-instructions` plugin with a 65,536-byte budget. This is direct evidence that a fenced marker rule in the run cwd's `AGENTS.md` reaches the model. Actual repeated marker emission remains model-discretion and must be settled by the recording.\n\nThe DSH adapter has the complete daemon path. `parseAssistantMessage` joins every assistant text block into full text and calls `tailer.ScanTaskEstimate` before display truncation. The shared scanner selects the most recent valid `irrlicht-eta` HTML comment and stamps it with the durable event time. The tailer retains the first and latest estimates. The metrics adapter converts the estimate to the domain form and calls `ForecastTaskCompletion`; the web client suppresses the ETA presentation outside `working`. DSH `turn/start` and completed `turn/end` records also produce the required single-session ready-to-working-to-ready lifecycle. No spec-required signal lacks a producing path, so daemon capability is full.\n\nThe recipe requires a `seed_instruction` step because the scenario requires a persistent instruction-file rule. The current DeepSeek Harness driver declares and dispatches send, slash, wait_turn, sleep, interrupt, keys, reset_session, restart, resume, sigkill, exit_clean, start_session, and session, but not `seed_instruction`. It also boots the first TUI slot before entering its script loop. Record must therefore port a pre-launch seed pass that writes the recipe's `AGENTS.md` under `$RUN_CWD` before `boot_slot`. This is a driver tooling gap, not an observability limit.\n\nThe recipe uses five driven turns. The seeded rule is the only place that contains the marker format. Turn zero reports 0/4 without doing a phase. Four later turns complete one phase each and reach 4/4. A 12-second delay follows each intermediate turn and a 30-second final delay matches the conservative sibling timing for this scenario. The model and endpoint are pinned by the existing driver settings, and the live `/v1/models` probe on 2026-09-19 confirmed `qwen/qwen3.5-9b` is available.",
       "caveats": [
