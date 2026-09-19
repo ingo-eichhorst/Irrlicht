@@ -325,8 +325,11 @@ func taskListTranscriptLines(t *testing.T, recordingDir string) ([][]byte, int) 
 		lines = append(lines, append([]byte(nil), line...))
 		return nil
 	})
-	if err != nil || turnEnds != 7 || finalTurnEnd < 0 {
-		t.Fatalf("source transcript must contain seven completed turns: count=%d err=%v", turnEnds, err)
+	if err != nil {
+		t.Fatalf("scan source transcript: %v", err)
+	}
+	if turnEnds != 7 {
+		t.Fatalf("source transcript must contain seven completed turns: count=%d", turnEnds)
 	}
 	return lines, finalTurnEnd
 }

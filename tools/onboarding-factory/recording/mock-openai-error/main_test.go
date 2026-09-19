@@ -1,11 +1,41 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestStreamHappyPathEscapesContentInEveryChunk(t *testing.T) {
+	content := "quoted \"text\"\n\ndata: injected"
+	rec := httptest.NewRecorder()
+	streamHappyPath(rec, content)
+	frames := strings.Split(strings.TrimSpace(rec.Body.String()), "\n\n")
+	if len(frames) != 4 || frames[3] != "data: [DONE]" {
+		t.Fatalf("unexpected stream frames: %q", frames)
+	}
+	for i, frame := range frames[:3] {
+		var chunk struct {
+			Choices []struct {
+				Delta map[string]string `json:"delta"`
+			} `json:"choices"`
+		}
+		if !strings.HasPrefix(frame, "data: ") {
+			t.Fatalf("frame %d is not an SSE data frame: %q", i, frame)
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(frame, "data: ")), &chunk); err != nil {
+			t.Fatalf("frame %d is not JSON: %v", i, err)
+		}
+		if len(chunk.Choices) != 1 {
+			t.Fatalf("frame %d has %d choices, want one", i, len(chunk.Choices))
+		}
+		if i == 1 && chunk.Choices[0].Delta["content"] != content {
+			t.Fatalf("content was changed: %q", chunk.Choices[0].Delta["content"])
+		}
+	}
+}
 
 func TestHandleChatCompletionsFailsFirstNThenSucceeds(t *testing.T) {
 	cfg := &failureConfig{

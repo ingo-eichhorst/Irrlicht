@@ -231,13 +231,30 @@ func streamHappyPath(w http.ResponseWriter, content string) {
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
-	encodedContent, err := json.Marshal(content)
-	if err != nil {
-		log.Printf("marshal success content: %v", err)
-		return
+	writeChunk := func(delta map[string]string, finishReason any, usage map[string]int) {
+		chunk := map[string]any{
+			"id":      "chatcmpl-mock-001",
+			"object":  "chat.completion.chunk",
+			"created": 0,
+			"model":   modelID,
+			"choices": []any{map[string]any{
+				"index": 0, "delta": delta, "finish_reason": finishReason,
+			}},
+		}
+		if usage != nil {
+			chunk["usage"] = usage
+		}
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			log.Printf("marshal success chunk: %v", err)
+			return
+		}
+		write(string(encoded))
 	}
-	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`, modelID))
-	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`, modelID, encodedContent))
-	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":1,"total_tokens":13}}`, modelID))
+	writeChunk(map[string]string{"role": "assistant", "content": ""}, nil, nil)
+	writeChunk(map[string]string{"content": content}, nil, nil)
+	writeChunk(map[string]string{}, "stop", map[string]int{
+		"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13,
+	})
 	write("[DONE]")
 }
