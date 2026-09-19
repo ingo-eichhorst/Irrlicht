@@ -955,6 +955,20 @@ struct SessionListView: View {
     /// windowed zero is honest (matches the project cost display), so there's
     /// no separate em-dash zero-state.
     ///
+    /// `provider_costs` can now carry a reserved `"unattributed"` key (issue
+    /// #1996) for cost rows with no confirmed billing attribution. This
+    /// lookup is a plain dictionary read (`sessionManager.providerCosts[d.id]`)
+    /// with no filtering, so it would resolve that key fine — but `d.id`
+    /// only ever takes values `quotaChipData` buckets sessions under
+    /// (real provider keys, or its own no-evidence fallback), never
+    /// `"unattributed"` (that bucket has no session-level identity to key a
+    /// chip on). So no code changed here: this function was already generic
+    /// over the key, and nothing today builds a chip that would ask it for
+    /// the unattributed bucket. Read (not edited) `quotaChipData` above and
+    /// #1995's own triage decision before concluding a chip should exist for
+    /// it — that is #1995's territory (chip identity/bucketing), not this
+    /// ticket's; see #1996's report for the full audit.
+    ///
     /// A `minWidth: 88` matches the subscription chip's row width
     /// (label + 40pt bar + percent) so a usage chip with a short
     /// headline doesn't collapse to an icon-only sliver next to a
