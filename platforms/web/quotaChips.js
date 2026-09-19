@@ -39,7 +39,7 @@ const PROVIDER_ICON_SVG = {
 };
 function providerIconHTML(key) { return PROVIDER_ICON_SVG[key] || ''; }
 
-function providerKeyFor(snap, adapter) {
+export function providerKeyFor(snap, adapter) {
   if (!snap) return null;
   switch (snap.plan_type) {
     case 'max':
@@ -264,7 +264,7 @@ function subscriptionForecastLine(chip) {
 
 // usageCreditsLine returns the credits sub-line for usage-mode chips, or
 // null when there's nothing worth reporting.
-function usageCreditsLine(c) {
+export function usageCreditsLine(c) {
   if (!c) return null;
   if (c.unlimited === true) return 'Credits: unlimited';
   if (typeof c.balance === 'number') return 'Credits balance: $' + c.balance.toFixed(2);
