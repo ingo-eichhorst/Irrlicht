@@ -48,7 +48,10 @@ need() {
 }
 
 # Indents captured output so it reads as a quoted block under its FAIL line.
-quote_output() { sed 's/^/      | /'; }
+quote_output() {
+  sed 's/^/      | /'
+  return 0
+}
 need go
 need git
 
