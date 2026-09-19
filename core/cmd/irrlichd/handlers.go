@@ -246,9 +246,43 @@ func collectProjectNames(g *session.AgentGroup) map[string]struct{} {
 	return out
 }
 
+// providerUnattributedKey is the reserved provider_costs bucket for cost
+// rows whose session had no confirmed billing attribution (issue #1996).
+// CostsInWindows/foldSessionWindows (core/adapters/outbound/filesystem/
+// cost_tracker.go) retain such rows under the empty string "" instead of
+// dropping them — see foldSessionWindows' doc comment — and this is the key
+// providerCostsByProvider below relabels "" to, so that spend stays visible
+// in the per-provider view instead of disappearing from it. The
+// client-facing display label is "Unattributed" (deliberately not "unknown",
+// which reads as a failure rather than as a state of knowledge — #1996's
+// design decision); no wire field carries that label today, only this key —
+// see #1996's report for which client surfaces do and do not render it.
+//
+// Must never equal a real provider ID: init() below panics at process
+// startup if it ever does, so a future provider literally named
+// "unattributed" fails the build loudly instead of silently merging its
+// spend into this bucket. Verified with tools/mutate.sh, temporarily setting
+// this constant to session.ProviderAnthropic: the package's test binary
+// panicked during init before a single test ran (output pasted in #1996's
+// PR/report), then the file was restored byte-for-byte.
+const providerUnattributedKey = "unattributed"
+
+func init() {
+	if providerUnattributedKey == session.ProviderAnthropic || providerUnattributedKey == session.ProviderOpenAI {
+		panic(fmt.Sprintf("providerUnattributedKey %q collides with a real provider ID — see its doc comment in handlers.go", providerUnattributedKey))
+	}
+}
+
 // providerCostsByProvider inverts the tracker's timeframe→provider→USD map
 // into the response shape providerKey→timeframe→USD (e.g.
-// {"anthropic": {"day": 0.5, ...}}). Empty-provider buckets are dropped.
+// {"anthropic": {"day": 0.5, ...}}). A row with no confirmed billing
+// attribution folds under providerUnattributedKey instead of being dropped
+// (issue #1996): CostsInWindows/foldSessionWindows now retain such rows
+// under the empty-string key precisely so this function can relabel rather
+// than lose them. The project total (attachGroupCosts, driven by byProject)
+// already counts this spend, so the per-provider total returned here must
+// sum to the same figure for every timeframe — see
+// TestProviderCostsByProvider_UnattributedBucketPreservesTotal.
 // Returns nil when there's nothing to report so the field is omitted.
 func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[string]float64 {
 	if byTf == nil {
@@ -257,13 +291,14 @@ func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[
 	out := make(map[string]map[string]float64)
 	for tf, perProvider := range byTf {
 		for provider, v := range perProvider {
-			if provider == "" {
-				continue
+			key := provider
+			if key == "" {
+				key = providerUnattributedKey
 			}
-			m := out[provider]
+			m := out[key]
 			if m == nil {
 				m = make(map[string]float64, len(costTimeframeSeconds))
-				out[provider] = m
+				out[key] = m
 			}
 			m[tf] = v
 		}
