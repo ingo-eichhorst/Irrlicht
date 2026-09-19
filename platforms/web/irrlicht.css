@@ -375,6 +375,11 @@
       cursor: default;
     }
     .quota-stale { opacity: 0.5; }
+    /* Same dimming treatment as .quota-stale, for the other
+       observation-quality results issue #1995 §1.3 asks to distinguish
+       (unconfirmed identity, denied, failed, unsupported) — reusing the
+       idiom rather than inventing a second visual language. */
+    .quota-chip--attention { opacity: 0.6; }
 
     /* Aggregated state icons — up to 3 per-session glyphs colored by state,
        or "N sessions" text when there are more. Mirrors `sessionIconsView` in

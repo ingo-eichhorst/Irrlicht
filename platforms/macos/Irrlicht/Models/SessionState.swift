@@ -123,9 +123,24 @@ struct CreditsInfo: Codable, Hashable {
     let unlimited: Bool?
     let balance: Double?
 
+    /// True when a `balance` was actually observed, including a real zero.
+    /// `balance`'s own `omitempty` on the wire drops a genuine zero exactly
+    /// like an absent value (core/domain/session/rate_limit.go), so this is
+    /// the only field that survives the round trip to tell "observed zero"
+    /// from "never observed". Additive (issue #1994/#1995); false for a
+    /// legacy row, which reads as "not observed" for those rows too.
+    let balanceObserved: Bool?
+
+    /// The explicit currency or credit-unit label for `balance` (e.g.
+    /// "USD", "CNY"), or nil for an unlabeled/legacy balance. Verified
+    /// against DeepSeek's balance API — see the Go field's doc comment.
+    let currency: String?
+
     enum CodingKeys: String, CodingKey {
         case hasCredits = "has_credits"
         case unlimited, balance
+        case balanceObserved = "balance_observed"
+        case currency
     }
 }
 
@@ -194,22 +209,79 @@ struct RateLimitInfo: Codable, Hashable {
     let reachedType: String?
     let sampledAt: Date
 
+    // --- Additive billing-identity fields (issue #1994/#1995 / epic #1977
+    // §7). Mirrors session.RateLimitSnapshot's own additive fields
+    // (core/domain/session/rate_limit.go) — see that file's doc comment for
+    // the full rationale. Populated today only by claudecode/statusline.go
+    // and codex/parser.go; nil for a legacy row or an unstamped snapshot,
+    // which reads as "not recorded" rather than "confirmed empty".
+
+    /// The confirmed billing provider this snapshot is evidence for
+    /// ("anthropic"/"openai"), or nil when unstamped. `providerKey(adapter:)`
+    /// below is the only thing that should read this directly — everything
+    /// else asks that method instead of switching on this field itself.
+    let provider: String?
+
+    /// Confidence in `provider` above — see `AttributionQuality.confirmed`'s
+    /// doc. Only `"confirmed"` is trusted evidence; anything else (including
+    /// nil, a legacy row's zero value) is treated as no resolvable identity.
+    let attributionQuality: String?
+
+    /// What established `provider` — e.g. "claude_code_statusline" or
+    /// "codex_transcript_rate_limits". Decoded for forward compatibility;
+    /// no client surface renders it yet.
+    let attributionEvidence: String?
+
+    /// The mechanism that produced this snapshot — "hook", "transcript",
+    /// "store", "account_api", "browser_backed_api", or "calculation".
+    /// Decoded for forward compatibility; no client surface renders it yet.
+    let observationSource: String?
+
+    /// Classifies the most recent failed retrieval attempt (e.g.
+    /// "auth_expired", "rate_limited", "network"), when one occurred.
+    /// Provider-defined vocabulary, not an enum — see the Go field's doc.
+    let retrievalFailure: String?
+
     enum CodingKeys: String, CodingKey {
         case windows
         case planType = "plan_type"
         case credits
         case reachedType = "reached_type"
         case sampledAt = "sampled_at"
+        case provider
+        case attributionQuality = "attribution_quality"
+        case attributionEvidence = "attribution_evidence"
+        case observationSource = "observation_source"
+        case retrievalFailure = "retrieval_failure"
     }
 
+    /// The only value `attributionQuality` treats as resolvable evidence —
+    /// mirrors `session.AttributionQualityConfirmed`
+    /// (core/domain/session/rate_limit.go:26). Hardcoded rather than shared
+    /// because Swift can't import a Go constant; kept as one named value
+    /// rather than a bare literal so every read site says what it means.
+    static let attributionQualityConfirmed = "confirmed"
+
     /// Explicit memberwise initializer for tests — see RateLimitWindowInfo's
-    /// for why one isn't synthesized.
-    init(windows: [RateLimitWindowInfo], planType: String? = nil, credits: CreditsInfo? = nil, reachedType: String? = nil, sampledAt: Date) {
+    /// for why one isn't synthesized. The new identity fields default to nil
+    /// (unstamped) so every existing call site keeps compiling.
+    init(
+        windows: [RateLimitWindowInfo], planType: String? = nil, credits: CreditsInfo? = nil,
+        reachedType: String? = nil, sampledAt: Date,
+        provider: String? = nil, attributionQuality: String? = nil,
+        attributionEvidence: String? = nil, observationSource: String? = nil,
+        retrievalFailure: String? = nil
+    ) {
         self.windows = windows
         self.planType = planType
         self.credits = credits
         self.reachedType = reachedType
         self.sampledAt = sampledAt
+        self.provider = provider
+        self.attributionQuality = attributionQuality
+        self.attributionEvidence = attributionEvidence
+        self.observationSource = observationSource
+        self.retrievalFailure = retrievalFailure
     }
 
     init(from decoder: Decoder) throws {
@@ -220,6 +292,11 @@ struct RateLimitInfo: Codable, Hashable {
         reachedType = try c.decodeIfPresent(String.self, forKey: .reachedType)
         let epoch = try c.decode(Double.self, forKey: .sampledAt)
         sampledAt = Date(timeIntervalSince1970: epoch)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider)
+        attributionQuality = try c.decodeIfPresent(String.self, forKey: .attributionQuality)
+        attributionEvidence = try c.decodeIfPresent(String.self, forKey: .attributionEvidence)
+        observationSource = try c.decodeIfPresent(String.self, forKey: .observationSource)
+        retrievalFailure = try c.decodeIfPresent(String.self, forKey: .retrievalFailure)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -229,6 +306,11 @@ struct RateLimitInfo: Codable, Hashable {
         try c.encodeIfPresent(credits, forKey: .credits)
         try c.encodeIfPresent(reachedType, forKey: .reachedType)
         try c.encode(sampledAt.timeIntervalSince1970, forKey: .sampledAt)
+        try c.encodeIfPresent(provider, forKey: .provider)
+        try c.encodeIfPresent(attributionQuality, forKey: .attributionQuality)
+        try c.encodeIfPresent(attributionEvidence, forKey: .attributionEvidence)
+        try c.encodeIfPresent(observationSource, forKey: .observationSource)
+        try c.encodeIfPresent(retrievalFailure, forKey: .retrievalFailure)
     }
 
     /// The window with the highest UsedPercent — the natural "next to hit
@@ -253,26 +335,26 @@ struct RateLimitInfo: Codable, Hashable {
         }
     }
 
-    /// Provider identity inferred from planType (when populated) or the
-    /// adapter that produced this snapshot. The bucket is account-scoped
-    /// at the subscription provider, not the CLI — multiple agents (Claude
-    /// Code + Pi(anthropic) + OpenCode(anthropic-oauth)) share a single
-    /// Anthropic subscription, so the chip should brand by provider.
+    /// Provider identity — the daemon's confirmed `provider` field is the
+    /// only source (issue #1995 / epic #1977 §9). `planType` and `adapter`
+    /// are deliberately NOT consulted: `pro`/`max`/`plus` are generic tier
+    /// names several providers reuse (a GitHub Copilot Pro session used to
+    /// brand as Anthropic because of this), and an adapter can run against
+    /// more than one billing relationship (Bedrock/Vertex vs. a Claude Pro
+    /// OAuth account) that only the daemon can tell apart.
     ///
-    /// Returns "anthropic" / "openai" for known providers, or nil when
-    /// the snapshot doesn't tell us enough (rare: usually planType or the
-    /// adapter is enough). Callers fall back to the adapter icon when nil.
+    /// `adapter` is accepted but unused — kept so every call site (several
+    /// of which sit outside this ticket's file boundary) needs no change.
+    ///
+    /// Returns "anthropic" / "openai" (or a future provider key) only when
+    /// `attributionQuality` is confirmed, or nil otherwise. Callers fall
+    /// back to `"unknown:<adapter>"` and the adapter icon when nil.
     func providerKey(adapter: String?) -> String? {
-        switch planType {
-        case "max", "pro": return "anthropic"
-        case "plus": return "openai"
-        default: break
+        guard attributionQuality == Self.attributionQualityConfirmed,
+              let provider, !provider.isEmpty else {
+            return nil
         }
-        switch adapter {
-        case "claude-code": return "anthropic"
-        case "codex": return "openai"
-        default: return nil
-        }
+        return provider
     }
 }
 
