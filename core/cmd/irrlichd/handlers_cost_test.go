@@ -46,3 +46,49 @@ func TestAttachGroupCosts_GastownSumsDistinctProjects(t *testing.T) {
 		t.Errorf("proj-c.Costs[day]: want 9.00, got %v", got)
 	}
 }
+
+// TestProviderCostsByProvider_UnattributedBucketPreservesTotal is #1996's
+// red-first proof: a cost row with no confirmed billing attribution must
+// still surface in provider_costs — under the reserved "unattributed" key
+// rather than being dropped — so the per-provider total agrees with what the
+// project view already counts. Asserted against the literal wire string
+// "unattributed" (the decided reserved key), not a shared constant, so this
+// test also catches a future accidental rename of that constant.
+//
+// Before the fix, providerCostsByProvider's `if provider == "" { continue }`
+// (handlers.go) drops the empty-provider bucket outright: the two sums
+// below disagree and the "unattributed" key is absent. After, they agree.
+func TestProviderCostsByProvider_UnattributedBucketPreservesTotal(t *testing.T) {
+	byTf := map[string]map[string]float64{
+		"day": {
+			"anthropic": 1.00,
+			"":          4.00, // no confirmed billing attribution
+		},
+	}
+	// byProject (attachGroupCosts, driven by a separate project-keyed map)
+	// counts every row regardless of provider — this is the ground truth
+	// the per-provider view must agree with. Simulated directly here since
+	// providerCostsByProvider only ever sees the provider-keyed map.
+	const wantProjectTotalDay = 5.00
+
+	got := providerCostsByProvider(byTf)
+
+	var gotProviderTotalDay float64
+	for _, byTf2 := range got {
+		gotProviderTotalDay += byTf2["day"]
+	}
+	if gotProviderTotalDay != wantProjectTotalDay {
+		t.Errorf("provider_costs day total: want %v (must equal the project total), got %v from %+v",
+			wantProjectTotalDay, gotProviderTotalDay, got)
+	}
+	unattributed, ok := got["unattributed"]
+	if !ok {
+		t.Fatalf(`provider_costs missing the reserved "unattributed" key: %+v`, got)
+	}
+	if unattributed["day"] != 4.00 {
+		t.Errorf(`provider_costs["unattributed"]["day"]: want 4.00, got %v`, unattributed["day"])
+	}
+	if _, hasRawEmpty := got[""]; hasRawEmpty {
+		t.Errorf(`provider_costs must not carry a raw "" key, got %+v`, got)
+	}
+}
