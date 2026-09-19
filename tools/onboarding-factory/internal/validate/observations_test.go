@@ -233,6 +233,58 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	}
 }
 
+func TestDeepseekTaskListNoWaitingAssertionDetectsMutation(t *testing.T) {
+	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "2-3_task-list"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.ReadFile(filepath.Join(source, "expected.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
+	if err != nil || !ok {
+		t.Fatalf("find task-list recording: ok=%v err=%v", ok, err)
+	}
+	events, err := os.ReadFile(filepath.Join(recording.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "expected.jsonl"), expected, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := "2026-09-19-00-00-00_mutation"
+	mkGoldenRec(t, dir, name, `{}`)
+	eventPath := filepath.Join(dir, "recordings", name, "events.jsonl")
+	if err := os.WriteFile(eventPath, events, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || baseline == nil || !baseline.ExpectedPass() {
+		t.Fatalf("unmutated recording must pass event assertions: report=%+v err=%v", baseline, err)
+	}
+
+	mutated := append(append([]byte{}, events...), []byte(`{"kind":"state_transition","new_state":"waiting"}`+"\n")...)
+	if err := os.WriteFile(eventPath, mutated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || result == nil || result.ExpectedPass() {
+		t.Fatalf("injected waiting transition must fail: report=%+v err=%v", result, err)
+	}
+	for _, assertion := range result.Asserts {
+		if assertion.Name == "no waiting state" {
+			if assertion.OK {
+				t.Fatal("no waiting state assertion ignored the injected transition")
+			}
+			return
+		}
+	}
+	t.Fatal("task-list spec has no no waiting state assertion")
+}
+
 func TestCommittedRecordAssertions(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents"))
 	if err != nil {
