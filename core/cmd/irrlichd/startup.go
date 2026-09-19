@@ -183,11 +183,16 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 	if err := costTracker.BackfillCO2(); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker CO2 backfill failed: %v", err))
 	}
-	// Attribute wrapper agents (pi, opencode) to the subscription they
-	// inherit, so per-provider spend matches the dashboard's quota chip
-	// instead of going unattributed.
+	// Route provider resolution through services.ProviderForSession so the
+	// evidence rule lives in one place (issue #1994: a session's own native
+	// quota snapshot is confirmed evidence; an adapter name or a configured
+	// credential list is not). As of #1994 this resolves identically to the
+	// tracker's own built-in default — pi/opencode wrapper agents no longer
+	// attribute to an inherited subscription here, since that inheritance
+	// was credential-based, not session evidence — but centralizing it keeps
+	// a single call site ready for whatever evidence source lands next.
 	costTracker.SetProviderResolver(func(s *session.SessionState) string {
-		return services.ProviderForSession(s, "")
+		return services.ProviderForSession(s)
 	})
 	if err := costTracker.Prune(costRetentionDays); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))

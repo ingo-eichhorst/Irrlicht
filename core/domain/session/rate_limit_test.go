@@ -97,6 +97,31 @@ func TestForecastCap_SingleSampleReturnsNil(t *testing.T) {
 	}
 }
 
+// TestForecastCap_DoesNotPairDifferentQuotasSameWindowMinutes is #1994's
+// red-first proof for ForecastCap's window-pairing defect: two snapshots each
+// carry a single 300-minute window, but the ResetsAt values disagree — the
+// signature of two distinct quotas that happen to share a window duration,
+// not two samples of the same quota's window. Matching on WindowMinutes
+// alone (±1, today's only criterion) pairs them anyway and projects a bogus
+// slope from unrelated readings. The fix must decline to forecast instead of
+// guessing a shared identity ForecastCap cannot confirm.
+func TestForecastCap_DoesNotPairDifferentQuotasSameWindowMinutes(t *testing.T) {
+	base := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	history := []RateLimitSnapshot{
+		{
+			SampledAt: base.Unix(),
+			Windows:   []RateLimitWindow{{UsedPercent: 20, WindowMinutes: 300, ResetsAt: base.Add(1 * time.Hour).Unix()}},
+		},
+		{
+			SampledAt: base.Add(10 * time.Minute).Unix(),
+			Windows:   []RateLimitWindow{{UsedPercent: 30, WindowMinutes: 300, ResetsAt: base.Add(3 * time.Hour).Unix()}},
+		},
+	}
+	if eta := ForecastCap(history, base.Add(10*time.Minute)); eta != nil {
+		t.Fatalf("expected nil when ResetsAt disagrees between samples (different quota, same window duration), got %v", *eta)
+	}
+}
+
 func TestForecastCap_ToleratesOffByOneWindowMinutes(t *testing.T) {
 	// Codex v1 quirk: earliest sample reports 299, latest reports 300.
 	// ImminentWindow uses 300; matching must tolerate ±1.

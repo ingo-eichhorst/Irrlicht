@@ -570,13 +570,36 @@ func TestCostSeries_EmptyAndInvalid(t *testing.T) {
 	}
 }
 
+// TestRecordSnapshot_StampsProvider verifies attribution when the session
+// carries the session-specific evidence #1994 requires: its own rate_limit
+// snapshot, stamped exactly as codex/parser.go's extractCodexRateLimits
+// stamps a real one (Provider + a confirmed AttributionQuality — the
+// resolver reads this stamp directly, not the adapter name; an unstamped
+// snapshot no longer resolves at all, see the mismatch this fixture would
+// otherwise silently start reporting). Before #1994 codex resolved to
+// "openai" from the adapter name alone with no evidence needed; this
+// fixture was widened rather than left as-is so it still proves something
+// under the new rule instead of quietly starting to assert "" (see
+// TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider for the
+// no-evidence case, and TestInheritRateLimits_CodexAPIKeyDoesNotDonate's
+// package for why adapter name alone was never trustworthy for claude-code).
 func TestRecordSnapshot_StampsProvider(t *testing.T) {
 	tr := newTestTracker(t)
 	state := &session.SessionState{
 		SessionID:   "s1",
 		ProjectName: "proj-a",
 		Adapter:     "codex",
-		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10},
+		Metrics: &session.SessionMetrics{
+			EstimatedCostUSD: 0.10,
+			RateLimit: &session.RateLimitSnapshot{
+				SampledAt:           1000,
+				Windows:             []session.RateLimitWindow{{UsedPercent: 10, WindowMinutes: 300, ResetsAt: 9999}},
+				Provider:            session.ProviderOpenAI,
+				ObservationSource:   "transcript",
+				AttributionEvidence: "codex_transcript_rate_limits",
+				AttributionQuality:  session.AttributionQualityConfirmed,
+			},
+		},
 	}
 	if err := tr.RecordSnapshot(state); err != nil {
 		t.Fatal(err)
@@ -584,6 +607,61 @@ func TestRecordSnapshot_StampsProvider(t *testing.T) {
 	rows := readRows(t, tr.filePath("proj-a"))
 	if len(rows) != 1 || rows[0].Provider != "openai" {
 		t.Fatalf("want one row with provider openai, got %+v", rows)
+	}
+}
+
+// TestRecordSnapshot_UnstampedRateLimitIsUnknownProvider is the companion to
+// TestRecordSnapshot_StampsProvider: a session with ITS OWN rate_limit
+// snapshot, but one that carries no confirmed stamp (e.g. a row shape an
+// older adapter build produced, before #1994's stamp existed), must not
+// resolve to a provider just because a snapshot is merely present.
+// providerForSession reads the stamp, not "hasRateLimit && adapter==codex".
+func TestRecordSnapshot_UnstampedRateLimitIsUnknownProvider(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Adapter:     "codex",
+		Metrics: &session.SessionMetrics{
+			EstimatedCostUSD: 0.10,
+			RateLimit: &session.RateLimitSnapshot{
+				SampledAt: 1000,
+				Windows:   []session.RateLimitWindow{{UsedPercent: 10, WindowMinutes: 300, ResetsAt: 9999}},
+				// No Provider/AttributionQuality stamp.
+			},
+		},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Provider != "" {
+		t.Fatalf("want provider unknown (empty) for an unstamped snapshot, got %+v", rows)
+	}
+}
+
+// TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider is
+// #1994's red-first proof for the cost tracker's own default provider
+// resolver: a claude-code session with no rate-limit snapshot (no native
+// statusline evidence was ever observed for it) must not be attributed to
+// "anthropic" — claude-code can also run against Bedrock/Vertex, which never
+// emits that snapshot and is not Anthropic's own consumer subscription. The
+// adapter name alone is not evidence; only the session's own quota snapshot
+// is.
+func TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Adapter:     "claude-code",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10}, // no RateLimit: no quota evidence observed
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Provider != "" {
+		t.Fatalf("want provider unknown (empty) absent quota evidence, got %+v", rows)
 	}
 }
 
