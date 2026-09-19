@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -246,6 +246,12 @@ step_slash() {
   tmux send-keys -t "$SESSION" Enter
 }
 
+step_seed_instruction() { # <path> <text>
+  local path="$1" text="$2"
+  printf '%s' "$text" > "$RUN_CWD/$path"
+  echo "[driver] seed_instruction: wrote $(printf '%s' "$text" | wc -c | tr -d ' ') bytes to $RUN_CWD/$path" >&2
+}
+
 step_wait_turn() {
   resolve_transcript || return 1
   local now=0 unreadable_since=0
@@ -452,7 +458,14 @@ step_fork() {
   echo "[driver] fork: parent=$parent_id child=$child_id inherited_turns=$baseline" >&2
 }
 
-# Allocate the first slot before applying the script.
+# Seed leading project instructions before the first TUI starts. The agent
+# loads them on its first request, so an in-loop write would be too late.
+while IFS= read -r leading_step; do
+  [[ "$(jq -r '.type' <<<"$leading_step")" == "seed_instruction" ]] || break
+  step_seed_instruction "$(jq -r '.path' <<<"$leading_step")" "$(jq -r '.text' <<<"$leading_step")"
+done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
+
+# Allocate the first slot before applying the remaining script.
 alloc_slot "dshdrv-$$-$(date +%s)-1" "$RUN_CWD"
 boot_slot
 
@@ -487,6 +500,7 @@ while IFS= read -r step; do
     exit_clean)    step_exit_clean || STEP_OK=false ;;
     start_session) step_start_session "$(jq -r '.cwd // empty' <<<"$step")" || STEP_OK=false ;;
     session)       : ;;
+    seed_instruction) step_seed_instruction "$(jq -r '.path' <<<"$step")" "$(jq -r '.text' <<<"$step")" ;;
     *)             echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; STEP_OK=false ;;
   esac
   (( $(remaining_seconds) > 0 )) || { EXIT_REASON="timeout"; break; }
