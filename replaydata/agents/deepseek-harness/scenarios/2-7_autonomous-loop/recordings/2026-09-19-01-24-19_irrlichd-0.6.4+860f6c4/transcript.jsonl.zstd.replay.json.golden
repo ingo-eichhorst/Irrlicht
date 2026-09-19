@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "dsh",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 16,
+    "consumed_events": 16,
+    "total_transitions": 5,
+    "first_event_time": "2026-09-19T01:24:20.166175+02:00",
+    "last_event_time": "2026-09-19T01:26:05.664488+02:00",
+    "wall_clock_session_duration": 105498313000,
+    "state_durations": {
+      "ready": 2031620000,
+      "working": 103466693000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "ready_between_working": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 1
+    },
+    "cum_input_tokens": 64016,
+    "cum_output_tokens": 923,
+    "model_name": "qwen/qwen3.5-9b",
+    "total_tokens": 13784,
+    "context_window": 262144,
+    "context_utilization_percentage": 5.2581787109375
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-19T01:24:20.166175+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-19T01:24:20.166175+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 6,
+      "virtual_time": "2026-09-19T01:25:05.642899+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ROUND_ONE"
+    },
+    {
+      "index": 3,
+      "event_index": 8,
+      "virtual_time": "2026-09-19T01:25:07.674519+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ROUND_ONE"
+    },
+    {
+      "index": 4,
+      "event_index": 15,
+      "virtual_time": "2026-09-19T01:26:05.664488+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "… is `disarmed`.\n\n**Verification:** The `update_goal` response confirms the go…"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-81350991-06a5-496e-bf2d-333995a9ce6d",
+      "adapter": "dsh",
+      "first_seen": "2026-09-19T01:24:19.945049+02:00",
+      "last_seen": "2026-09-19T01:32:20.1754+02:00",
+      "duration_ms": 480230,
+      "event_count": 39,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 80751,
+      "pid_discovery_lag_ms": 420,
+      "debounce_coalesced_events": 10,
+      "state_durations_ms": {
+        "ready": 378854,
+        "working": 101371
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+bf97ac6",
+    "confidence": 0.92,
+    "notes": "DeepSeek Harness records per-call token use and terminal quota failures, but it does not expose a live subscription quota window or burndown percentage."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "deepseek-harness",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.92,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires one subscription session to expose a fresh `RateLimitSnapshot` after each turn. The snapshot must contain a quota window whose `UsedPercent` does not decrease, and `SampledAt` must advance. Per-call token counts and terminal quota failures do not satisfy this signal.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 does not expose the required live quota-window signal. The required `strings` scan of the installed `dsh` launcher returned no match for quota, rate limit, used percent, subscription, balance, or usage. A separate scan of the installed official packages found terminal `QUOTA` and `RATE_LIMIT` error classes, but no quota-window, used-percent, reset-time, or subscription-plan record. Those error classes describe a failed request after a limit is reached. They do not report progressive consumption before exhaustion.\n\nThe installed durable-session schema confirms the boundary. `SessionEventMap` persists lifecycle, messages, tools, request context, and assistant usage. The complete `TokenUsage` type contains input, output, total, cache-read, cache-write, and reasoning token counts only. It has no plan, quota window, used percent, remaining amount, or reset time. A measured v3 transcript from the configured LM Studio route contains provider, model, context window, and one positive token-usage vector. A full quota-carrier scan of that decoded transcript returned no match.\n\nThe current recording driver makes the environment constraint explicit. It replaces the default provider route with local LM Studio at `http://127.0.0.1:1234/v1` and selects `qwen/qwen3.5-9b`. This local route has no subscription account or provider quota window for DSH to expose. The agent therefore lacks the behavior that this scenario tests.\n\n## Daemon capability\n\nDaemon capability is `n/a` because the agent does not emit the required feature. The DSH adapter tails the compressed v3 session log. Its parser handles lifecycle, messages, tools, model, context-window, and token-usage records. `parseAssistantUsage` maps only input, output, and total tokens. No record handler or parser path creates a `RateLimitSnapshot`. That absence matches the trace that DSH writes and is not a daemon bug.\n\n## Driver capability and route\n\nThe driver is `ready` by the frozen-no-feature convention. Its declared primitives include `send`, `wait_turn`, and `sleep`, which would be enough for a three-turn recipe if the agent emitted quota snapshots. No driver primitive can create a missing agent-owned quota signal. The recipe is therefore `applicable:false`, and the route is `frozen`.\n\n## Vacuous-pass check\n\nThis cell could pass while proving no burndown because its frozen meta-only spec launches no session and observes no turns. That is intentional for a capability-absence claim. Reassess after a DSH upgrade or recording-route change only if the durable log gains a plan, quota-window, used-percent, remaining-quota, or reset-time carrier.",
+      "caveats": [
+        "Vacuous-pass condition: the frozen meta-only spec passes without launching DSH or observing multiple turns. It documents a capability-absence claim and does not test runtime burndown.",
+        "Load-bearing environment precondition: the current driver pins a self-hosted LM Studio route and qwen/qwen3.5-9b. That route has no subscription account. Reassess if the driver changes to a provider-authenticated subscription route and DSH persists its quota window.",
+        "DSH `QUOTA` and `RATE_LIMIT` error classes are terminal request-failure facts. They do not supply the pre-exhaustion `UsedPercent` and fresh `SampledAt` values required by this scenario.",
+        "The capability scan covers DSH 0.1.5-rc.2. Re-run the launcher, installed-package, durable-schema, and transcript scans after an agent upgrade."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh",
+          "note": "Installed DSH 0.1.5-rc.2 launcher. The required strings scan for quota, rate limit, used percent, subscription, balance, and usage returned no matches."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts",
+          "note": "Installed official durable-session schema. SessionEventMap carries lifecycle, messages, tools, request context, and assistant usage, but it defines no quota-window or subscription-plan record."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/types.d.ts",
+          "note": "The complete TokenUsage type contains input, output, total, cache-read, cache-write, and reasoning token counts. It has no plan, quota window, used percent, remaining quota, or reset time."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/README.md",
+          "note": "Official installed provider documentation describes API-key routes and terminal QUOTA and RATE_LIMIT failures. It defines no progressive quota-window surface."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-projects-irrlicht-.claude-worktrees-1985-deepseek-core-replay-.build-refresh-deepseek-harness-5-2_model-identification-20260918T130832-cwd--/session-a41f6332-63e2-4ada-8d54-56affc13a2b8/session.v3.jsonl.zstd",
+          "note": "Measured DSH v3 transcript from the configured LM Studio/qwen route. It records provider, model, context window, and input/output/total usage. A successful full decoded scan found no subscription, quota-window, used-percent, balance, or reset-time carrier."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go and core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The daemon tails compressed DSH session logs and maps lifecycle, messages, tools, model, context-window, and token usage. No handler or parser path emits RateLimitSnapshot."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver pins the local LM Studio/qwen route and declares send, wait_turn, and sleep. The route has no subscription identity, and no driver step can supply an agent-owned quota snapshot."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen on agent_supports=no. DSH 0.1.5-rc.2 persists per-call token usage and terminal quota errors, but no subscription quota window, used percent, remaining quota, or reset time. Reassess only after DSH persists a progressive quota carrier."
+    }
+  }
+}

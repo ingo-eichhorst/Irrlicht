@@ -1,0 +1,102 @@
+{
+  "scenario_id": "blocking-dialog-without-tool-call",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+6192166",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness 0.1.5-rc.2 and dsh-tui 0.8.1 expose tool approvals and tool-based questions, but no tool-free mid-turn blocking dialog from any of the scenario's four trigger classes."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "blocking-dialog-without-tool-call",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T21:41:24Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires an established session to enter `ready -> working -> waiting` because a user-visible dialog blocks the agent while no tool call is open. After the user answers the dialog, the same session must enter `waiting -> working -> ready` and stay ready for at least 15 seconds. A startup gate does not qualify because it has no prior working state. A tool approval does not qualify because an open tool call carries that wait.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 with the installed dsh-tui 0.8.1 profile does not expose any of the four required trigger classes.\n\n1. Sandbox or network-access confirmation: the official sandbox contract covers file effects only. It states that network access is outside the sandbox guarantee. A denied file operation can lead to a one-shot approval only when the model retries the same tool call with `sandbox_permissions`. The official approval contract requires an open turn and names the requesting tool and optional call id. The TUI's `ApprovalOverlay` renders that tool name and call id. This is a tool-carried approval and belongs to the tool-permission scenarios, not this row.\n2. First-use trust prompt: the required launcher scan and the complete installed TUI scan found no workspace-trust, folder-trust, or server-trust prompt. The composed TUI profile has no trust plugin or trust-review row.\n3. Server-driven MCP elicitation: the installed official `dsh-mcp-client` package bridges MCP tools only. Its documentation says that no server is enabled by default and that only tools are bridged. Its implementation and package documentation contain no `elicitation`, `sampling/createMessage`, or `roots/list` handler. The composed TUI profile contains no MCP client row. A server therefore cannot raise an elicitation dialog through this profile or through the shipped MCP bridge.\n4. Auto-mode or settings review: the composed profile has no Auto review integration. The permission selector cycles `read-only`, `workspace-write`, `danger-full-access`, and `custom`; it does not open a review dialog. The official file-settings provider applies valid edits live after a 100 ms debounce. It does not ask for a security or settings review.\n\nThe required binary scan was `strings $(command -v dsh) | grep -iE 'sandbox|network[ -]?access|trust (this |the )?(workspace|folder|server)|elicitation|auto[ -]?mode|settings[ -]?review|blocking dialog|managed.settings'`. It returned no matches. The same scan over the TUI entry bundle returned only the durable event names `sandbox/mode`, `permission/preset`, and `approval/policy`; it found no matching dialog string. The TUI source confirms that the only agent-blocking interaction queue items are an `approval/request` for a named tool and a `user-questions/request` for `ask_user_question` or plan review. Both have a tool-backed durable signal and are covered by other scenarios.\n\nBecause the agent cannot perform this scenario, daemon capability is not applicable. The current DSH adapter reads local session transcripts and maps `approval/asked` and `approval/decided`, but there is no qualifying agent trace to assess. This is not a daemon dismissal; a future DeepSeek Harness release that adds a tool-free dialog needs a fresh transport assessment.\n\nThe driver is ready by the frozen-no-feature convention. Its declared step scan includes `send`, `keys`, `wait_turn`, and `sleep`, which would cover the scenario process if a qualifying dialog existed. No executable recipe can create missing agent behavior, so this cell uses `applicable:false`.\n\n## What would change the verdict\n\nRe-assess this cell when DeepSeek Harness or dsh-tui ships a mid-turn sandbox/network confirmation, a workspace or server trust review, MCP elicitation handling, or an Auto/settings review that blocks with no tool call open.",
+      "caveats": [
+        "Vacuous-pass condition: a meta-only spec passes without raising any dialog. This cell is frozen and makes no behavioral pass claim; ordinary working and ready phases would only prove a normal turn.",
+        "The TUI has several user-invoked overlays and it has tool approvals and agent questions. None satisfies this scenario because user-invoked settings/model panels do not interrupt an active turn, while approvals and questions are backed by a tool call.",
+        "DeepSeek Harness is a developer preview. Re-run the launcher, composed-profile, MCP-client, settings, and TUI source scans after an upgrade before preserving this verdict.",
+        "A custom third-party plugin could add a new dialog and durable record. This assessment covers the installed official dsh 0.1.5-rc.2 packages and the installed dsh-tui 0.8.1 profile that the factory driver records."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh",
+          "note": "Installed launcher, version 0.1.5-rc.2. The required strings scan found no sandbox/network confirmation, workspace/server trust, MCP elicitation, Auto-mode review, settings-review, or blocking-dialog surface."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Installed dsh-tui 0.8.1 feature reference. Its blocking interactions are a named tool approval and ask_user_question/plan review. Its permission selector has read-only, workspace-write, danger-full-access, and custom modes; it documents no tool-free dialog trigger."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "The interaction queue has only `approval` and `question` items. Its two listeners are `approval/request` and `user-questions/request`; no trust, elicitation, settings-review, or Auto-review listener exists."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/interaction/ApprovalOverlay.js",
+          "note": "The approval UI states `Tool: <toolName>` and includes the call id when present. It is explicitly an answerer for a tool call parked on a pre-execute decision."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-sandbox/README.md",
+          "note": "Official installed sandbox contract. It confines file effects only, excludes network policy, and routes a wider-mode retry through a one-shot approval on the same tool call."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-user-approval/README.md",
+          "note": "Official installed approval contract. A request names the agent, tool, optional call id, and requires an open turn. The durable records are approval/asked and approval/decided."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-mcp-client/README.md",
+          "note": "Official installed MCP client contract. It bridges external server tools only, enables no server by default, and documents no elicitation capability. A package-wide source scan found no elicitation, sampling/createMessage, or roots/list handler."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-settings-file/README.md",
+          "note": "Official installed settings provider contract. Valid file edits take effect live after the configured debounce. The provider has no settings-security review or blocking confirmation."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml",
+          "note": "The official base composition mounts file sandboxing, tool approval, permission presets, user questions, and live settings. It mounts no trust-review, MCP, elicitation, Auto-review, or settings-review row. `dsh --profile tui --dump-config` confirmed the installed composition."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/user-approval/README.md",
+          "note": "Official upstream approval documentation confirms that approvals are one-shot decisions before sensitive tool actions and that each request records its tool identity."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/tomowang/dsh-tui",
+          "note": "Official dsh-tui repository documentation lists in-terminal blocking interactions as tool approvals and ask_user_question/plan review."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The daemon parser maps approval/asked and approval/decided plus turn, message, tool, and request records. Unknown record types are skipped. No qualifying dialog trace exists to judge because the installed agent lacks the behavior."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports send, keys, wait_turn, and sleep among the implemented primitives. The driver would be ready if a qualifying agent dialog existed."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen on agent_supports=no. DeepSeek Harness 0.1.5-rc.2 with dsh-tui 0.8.1 has no tool-free mid-turn blocking dialog from the sandbox/network, trust, MCP elicitation, or Auto/settings-review trigger classes."
+    }
+  }
+}

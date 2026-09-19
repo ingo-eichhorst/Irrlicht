@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "dsh",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-19T03:29:08.598122+02:00",
+    "last_event_time": "2026-09-19T03:29:14.366985+02:00",
+    "wall_clock_session_duration": 5768863000,
+    "state_durations": {
+      "working": 5768863000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "cum_input_tokens": 12,
+    "cum_output_tokens": 1,
+    "model_name": "qwen/qwen3.5-9b",
+    "total_tokens": 13,
+    "context_window": 262144,
+    "context_utilization_percentage": 0.0049591064453125
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-19T03:29:08.598122+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-19T03:29:08.598122+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 9,
+      "virtual_time": "2026-09-19T03:29:14.366985+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-2512edd7-9e20-4202-9779-768f850cebeb",
+      "adapter": "dsh",
+      "first_seen": "2026-09-19T03:29:08.380352+02:00",
+      "last_seen": "2026-09-19T03:29:17.489345+02:00",
+      "duration_ms": 9108,
+      "event_count": 30,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 22322,
+      "pid_discovery_lag_ms": 463,
+      "debounce_coalesced_events": 9,
+      "state_durations_ms": {
+        "ready": 3371,
+        "working": 5731
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

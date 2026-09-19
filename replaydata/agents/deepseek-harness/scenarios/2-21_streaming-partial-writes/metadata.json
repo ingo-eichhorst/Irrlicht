@@ -1,0 +1,71 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+e51e15b",
+    "confidence": 0.94,
+    "notes": "DeepSeek Harness streams assistant chunks in-process, but its durable log commits one complete assistant/message after the stream ends, so irrlichd cannot observe the partial-flush window."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T21:24:28Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.94,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 performs incremental assistant streaming. Its official installed `dsh-agent` documentation defines `agent/assistant-stream` as one process-local attempt with ordered start, transient chunk, and end frames. The installed loop creates an `AssistantStreamAttempt`, emits `agent/assistant-stream`, and pushes every item from the model's async stream. This directly establishes the agent behavior.\n\n## Daemon capability\n\nThe same official contract makes the observability boundary explicit. The transient chunk frames are process-local presentation data. The loop first accumulates them in memory. It then appends one durable `assistant/message` containing the complete compact `stream` only when the attempt settles. The DSH adapter tails only `session.vN.jsonl.zstd` files under `$DSH_HOME/sessions`; it has no connection to the process-local event bus. Its parser handles the final `assistant/message`, but no durable partial-chunk record can arrive while generation is in progress.\n\nThe archived DSH basic-turn recording confirms this transport shape. Its transcript has one `assistant/message` with eight embedded stream records, followed by `turn/end`. The recording enters `working` at 15:00:43.169. It then has no transcript activity during the approximately 84-second generation window. One final transcript update arrives at 15:02:07.414 and the session becomes `ready` at 15:02:07.422. Thus a lifecycle-only `ready -> working -> ready` spec would observe silence during generation. It could not prove that the daemon handled multiple partial flushes without flicker.\n\nThis is `daemon=incapable`, not `bug`. The source available to irrlichd never receives the transient partial writes. The parser cannot handle events that do not reach its transcript transport. The final embedded stream documents that streaming happened, but it arrives only after completion and cannot form the live partial-flush window required by this scenario.\n\n## Driver capability\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`, which are all steps a would-be recipe needs. The driver has no missing primitive. The cell is frozen because the observable signal is absent, not because the driver is incomplete.\n\n## Vacuous-pass check\n\nThis cell would pass while proving nothing if it asserted only a long `working` dwell followed by `ready`: the dwell can occur while the durable transcript is silent and would duplicate the basic-turn cell. The spec is therefore meta-only and the recipe is `applicable:false`.\n\n## What would change the verdict\n\nReassess if DeepSeek Harness starts persisting incremental assistant chunks before the terminal `assistant/message`, or if irrlichd gains an authorized source for the process-local `agent/assistant-stream` feed.",
+      "caveats": [
+        "Vacuous-pass condition: a ready -> working -> ready lifecycle with a long working dwell can pass while the transcript is silent, so it proves no partial-flush behavior. The cell is frozen and the meta-only spec makes no behavioral pass claim.",
+        "The final durable assistant/message embeds the complete compact stream. This proves that DeepSeek Harness streamed, but the record arrives only after settlement and cannot prove that irrlichd observed each partial flush live.",
+        "The installed package contract and archived recording settle the current transport shape. Reassess after a DeepSeek Harness version change because the project is still a release candidate."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent/README.md",
+          "note": "Official installed 0.1.5-rc.2 package documentation, line 67: agent/assistant-stream carries process-local start, transient chunk, and end frames; the loop commits the complete compact stream as one assistant/message or assistant/attempt, and the live event remains presentation data rather than the replay source."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Installed loop source, lines 1031-1043 and 1100-1114: emits the process-local agent/assistant-stream frames while iterating model chunks, then appends one assistant/message with live.stream only after the stream finishes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "The irrlicht DSH source is FilesUnderRoot over durable compressed session transcripts. It has no process-local event-bus source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The parser maps durable turn/start, assistant/message, and turn/end records. It has no transient assistant-stream input because that event family is not in the tailed transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-1_basic-turn/recordings/2026-09-18-15-00-42_irrlichd-0.6.4+83ff4b8/transcript.jsonl.zstd",
+          "note": "Archived real DSH v3 transcript: exactly one assistant/message carries eight embedded stream records, followed by step/end and completed turn/end. There are no durable per-chunk records."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-1_basic-turn/recordings/2026-09-18-15-00-42_irrlichd-0.6.4+83ff4b8/events.jsonl",
+          "note": "Archived daemon trace: working at 15:00:43.169, no transcript activity during generation, one final activity at 15:02:07.414, then ready at 15:02:07.422. This anchors daemon=incapable to the observed transport."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports send, wait_turn, sleep, and the other standard primitives. No driver step is missing."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "FROZEN: DeepSeek Harness streams through the process-local agent/assistant-stream event, but the durable DSH transcript that irrlichd tails receives only one complete assistant/message after settlement. A send -> wait_turn -> sleep recipe would produce a basic-turn lifecycle over a transcript-silent generation window and could not test partial-flush stability."
+    }
+  }
+}

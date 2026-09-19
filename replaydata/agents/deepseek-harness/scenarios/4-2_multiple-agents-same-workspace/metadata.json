@@ -1,0 +1,135 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+968624b",
+    "confidence": 0.85,
+    "notes": "DeepSeek Harness and Claude Code have disjoint process matchers and transcript roots; the cross-adapter rig can drive one session of each in one cwd."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThis cell runs one DeepSeek Harness session and one Claude Code session in one working directory. DeepSeek Harness uses the invoking directory as the workspace root. The installed 0.1.5-rc.2 launcher supports the TUI profile that the driver starts. Existing live DSH evidence is stronger than the documentation alone: the 4-1 recording contains two concurrent DSH processes with distinct durable session IDs and PIDs in one cwd. The daemon defect in that recording concerns the second same-adapter DSH row and a crossed DSH teardown path. This 4-2 recipe creates only one DSH row and pairs it with a Claude Code row from a different matcher and transcript root.\n\nThe daemon wires the DSH and Claude Code sources independently. DSH declares adapter `dsh`, a command-line matcher for the `dsh` launcher, a FilesUnderRoot source under `$DSH_HOME/sessions`, and a fresh DSH parser per transcript. Claude Code declares adapter `claude-code`, the exact process name `claude`, and a FilesUnderRoot source under `~/.claude/projects`. `buildAgentWatchers` creates a watcher and scanner from each declaration and stamps the declaration's identity on their events. The metrics registry selects parsers and subagent counters by the session's adapter name and keeps one tailer per transcript path. One adapter therefore cannot parse the other adapter's transcript or supply its metric vector.\n\nThe DSH parser maps durable `turn/start` and completed `turn/end` records to the required working and ready arc. It maps assistant model and token usage from the same DSH transcript. The recorded 2-1 basic-turn fixture proves this emitted trace reaches irrlichd: one `dsh` session is born ready, enters working, binds to its session.lock writer PID, and returns ready on `turn_done`. The DSH driver resolves a post-marker transcript whose header cwd equals `IRRLICHT_ONBOARD_CWD`, waits for the durable turn/end count, and implements send, wait_turn, and sleep.\n\n`run-cell-multi.sh` is the cross-adapter owner. It launches the DSH and Claude Code drivers concurrently with one exported `IRRLICHT_ONBOARD_CWD`. It reconciles each driver's transcript to the daemon session ID. It then curates only those driver-owned IDs into a shared events fixture while retaining the DSH transcript for this cell. The recipe uses the established Claude Code partner and the fleet's 15-second post-turn settle delay. The 300-second DSH timeout matches the local-model latency already measured by the basic-turn cell.\n\nThe spec anchors both sessions on working transitions so a transient process row cannot satisfy either agent turn. It requires two distinct working-to-ready arcs. Event assertions require both `dsh` and `claude-code` transcript labels plus two distinct PID bindings. DSH transcript assertions require the exact tool-free reply and a session header from the cross-adapter staging path. The observation vector pins the recipe-selected qwen/qwen3.5-9b model and non-zero tokens; local LM Studio cost may remain zero.",
+      "caveats": [
+        "Vacuous-pass condition: the lifecycle phases can pass for two adapter-correct turns in different working directories because state_transition records contain no cwd. The load-bearing precondition is that run-cell-multi.sh exports one IRRLICHT_ONBOARD_CWD and both drivers resolve their transcripts from that exact path; record must compare both driver contracts before promotion.",
+        "The DSH model route is load-bearing. LM Studio must listen at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded, because the recipe pins that model and the spec exact-matches it.",
+        "The exact-word DSH prompt must end with literal `delta`. A refusal, question, or waiting cue is a fixture failure and must not be accepted as another valid terminal arc.",
+        "The 4-1 same-adapter DSH recording exposes a second-session identity defect. This assessment does not dismiss that defect as fixed. It limits the 4-2 recipe to one DSH session and one Claude Code session, whose matchers and transcript roots are disjoint.",
+        "Parent linkage and subagent counts are expected to remain empty for both top-level exact-word turns. The no-parent-link assertion detects cross-linking, but a zero count does not exercise non-zero subagent isolation."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/README.md",
+          "note": "Installed DSH documentation states that the invoking directory is the default workspace root and documents the TUI profile launcher surface."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-1_basic-turn/recordings/2026-09-18-15-00-42_irrlichd-0.6.4+83ff4b8/{events.jsonl,transcript.jsonl.zstd,manifest.json}",
+          "note": "Live DSH emission and observation evidence: one real session transitions ready to working to ready, binds its lock-writer PID, and reports the pinned model and tokens."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-18-15-43-18_irrlichd-0.6.4+da0e1be/{events.jsonl,transcript.jsonl.zstd,manifest.json}",
+          "note": "Live agent capability evidence: two concurrent DSH sessions shared one cwd and had distinct durable IDs and PIDs; it also bounds the known same-adapter daemon defect cited in the caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/{agent.go,adapter.go,pid.go,parser.go}",
+          "note": "DSH declares its adapter identity, argv matcher, session-root watcher, per-session lock PID lookup, lifecycle parser, and model/token mapping."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/{agent.go,adapter.go}",
+          "note": "Claude Code declares the distinct `claude-code` identity, exact `claude` process matcher, and ~/.claude/projects transcript root."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers creates one identity-stamped filesystem watcher and process scanner per FilesUnderRoot adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/{maps.go,agentwiring/collector.go}",
+          "note": "Parser, PID, metrics-provider, and subagent-counter projections are keyed by adapter identity and cover every registered adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "ComputeMetrics selects the parser and subagent counter by the session adapter and keeps parser state per transcript path."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver honors IRRLICHT_ONBOARD_CWD, resolves a new DSH transcript by marker and header cwd, waits for completed turn/end records, and implements send/wait_turn/sleep."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "The cross-adapter rig exports one cwd to both drivers, reconciles their driver-owned transcript IDs, and curates the two session IDs into each cell's workspace fixture."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-2_multiple-agents-same-workspace/{metadata.json,expected.jsonl,recordings}",
+          "note": "Recorded reference cell establishes Claude Code as the canonical partner, the adapter-agnostic two-arc phase shape, and the 15-second settle delay."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "claude is installed, on PATH, and authenticated",
+        "tmux and zstd are installed",
+        "run-cell-multi.sh uses one isolated recording daemon and exports one IRRLICHT_ONBOARD_CWD to both drivers",
+        "no unrelated DSH or Claude Code process starts a session in the shared recording cwd while the two drivers run"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates one shared cwd and launches the deepseek-harness and claudecode interactive drivers concurrently with IRRLICHT_ONBOARD_CWD set to it.",
+        "The DSH driver applies a temporary LM Studio patch for qwen/qwen3.5-9b without modifying the installed TUI profile; the Claude Code driver uses its existing authenticated configuration.",
+        "The recorder reconciles each driver's transcript to its daemon session ID and curates both IDs into this cell's events.jsonl; this cell retains only the DSH compressed transcript for replay."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "both driver contracts resolve transcripts from the exact shared IRRLICHT_ONBOARD_CWD",
+        "events.jsonl contains distinct dsh and claude-code session IDs with distinct PID bindings",
+        "each real session has its own working-to-ready arc and neither session receives the other's transitions",
+        "the DSH transcript contains one session header, the exact delta reply, and no tool call",
+        "the DSH observation vector reports qwen/qwen3.5-9b and non-zero tokens, with no parent link"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses the 15-second post-turn settle delay carried by the claudecode, antigravity, gemini-cli, and mistral-vibe siblings. The DSH timeout is 300 seconds because the local qwen basic-turn recording took about 85 seconds before settle."
+    }
+  }
+}

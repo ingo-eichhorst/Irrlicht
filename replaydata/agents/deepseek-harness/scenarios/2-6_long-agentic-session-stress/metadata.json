@@ -1,0 +1,156 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+1c6a6b0",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness writes explicit durable boundaries for every turn and durable call IDs for tool work, so the adapter can observe four clean arcs on one session."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Observable contract\n\nThis cell runs four prompts in one interactive DeepSeek Harness session. Each turn must produce a clean `ready -> working -> ready` arc. The session must not enter `waiting`, must not settle early inside a turn, and must finish in `ready`. The third turn must include one successful bash call.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 supports one long-lived interactive TUI session. The installed `dsh --profile tui --help` surface starts a fresh session or resumes a stored session. The installed official agent-loop package defines the standard lifecycle as call model, run tools, and repeat. It also states that accepted user messages, assistant messages, tool calls, and tool results remain in history for later steps and turns. A measured local v3 transcript contains two complete `turn/start` to `turn/end` cycles on one `session-<uuid>` log. That transcript includes three successful bash tool rounds across the two turns. This is direct evidence that the installed TUI can keep one session alive across multiple turns and tool steps.\n\nThe recipe makes tool execution deterministic enough for recording. It selects `qwen/qwen3.5-9b` through the driver's temporary LM Studio patch and sets `DSH_PERMISSION_MODE=danger-full-access`. The active TUI composition maps that mode to approval policy `never`. A recorded sibling tool turn contains one bash call, one matching successful result, no approval request, and a completed turn boundary.\n\n## Daemon capability\n\nThe DSH adapter tails one compressed v3 transcript under the stable `session-<uuid>` directory. Its parser maps every `turn/start` to `turn_start`, every real user record to `user_message`, every `tool/call` and matching `tool/result` to an open and close pair, and only `turn/end` to `turn_done`. Assistant messages and tool records are non-terminal. They therefore keep the session in `working`. A completed `turn/end` returns it to `ready`. A measured sibling recording confirms this path end to end: events seq 246 and 711 are the only state transitions around a tool turn, from `ready` to `working` and then from `working` to `ready`; all assistant and tool activity between them caused no `ready` or `waiting` flicker.\n\nThe same explicit boundary mapping applies independently to later turns in the same transcript. The transcript assertions require exactly four durable turn starts and four completed turn ends, plus the third turn's successful bash round and zero approval requests. The phase chain pins all four arcs to the session selected by the first `working` transition. A transient `proc-<PID>` row can satisfy neither that transition nor later phases.\n\nModel and usage observations are direct. The recipe pins `qwen/qwen3.5-9b`, and measured assistant records report that exact model with positive input and output usage. Cost stays zero because the recording uses a local endpoint and the model has no matching price entry.\n\n## Driver capability\n\nThe recipe needs only `send`, `wait_turn`, and `sleep`. The DeepSeek Harness driver declares and implements all three. Its `wait_turn` decodes the durable Zstandard transcript and waits for the expected count of completed `turn/end` records. The 12-second delay after every turn matches the longest committed sibling delay for this scenario and gives irrlichd time to observe each boundary before the next prompt. The 900-second budget covers four local turns; measured qwen turns have taken about 158 seconds each.\n\n## Result\n\nAll three pillars support recording. The daemon verdict is settled for single-turn tool emission by the recorded sibling and is strongly grounded for repeated turns by the measured two-turn durable transcript and explicit parser boundary rules.",
+      "caveats": [
+        "Vacuous-pass condition: four lifecycle arcs could pass with four plain replies and prove nothing about agentic tool work. The spec therefore requires exactly one successful bash call for the third prompt, matching call/result IDs, and zero approval/asked records.",
+        "Load-bearing environment precondition: LM Studio must serve the tool-capable qwen/qwen3.5-9b model at http://127.0.0.1:1234/v1. Re-probe the live model at record time.",
+        "Load-bearing environment precondition: DSH_PERMISSION_MODE=danger-full-access must still map to approval policy never in the active TUI composition. Otherwise the tool turn can legitimately enter waiting.",
+        "Load-bearing isolation precondition: the driver must retain its fresh per-run cwd and pre-launch marker. Otherwise an unrelated DSH transcript could be selected.",
+        "The exact four-turn cell has not been recorded yet. A measured two-turn DSH transcript proves repeated durable boundaries, and the recorded one-tool sibling proves the no-flicker daemon path for tool activity."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/README.md",
+          "note": "Installed official 0.1.5-rc.2 CLI documentation defines named profiles, a persisted headless session, the current directory as workspace root, and TUI resume forwarding."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/README.md",
+          "note": "Installed official package reference defines the call-model, run-tools, repeat lifecycle and states that accepted user, assistant, tool-call, and tool-result history is retained across later steps and turns."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured DSH 0.1.5-rc.2 durable transcript contains two turn/start and two completed turn/end records on one session, with three matching bash call/result rounds and five assistant usage records from qwen/qwen3.5-9b."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/events.jsonl",
+          "note": "Measured daemon events contain only ready->working seq 246 and working->ready seq 711 around the full tool turn, with no intermediate ready or waiting transition."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/transcript.jsonl.zstd",
+          "note": "Recorded sibling transcript contains assistant usage, one bash pwd call, its successful result, a post-tool assistant reply, no approval request, and completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps explicit turn boundaries, real user messages, assistant usage, tool call/result pairs, approvals, model, and tokens into daemon signals. Only turn/end maps to turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins measured v3 turn boundaries, assistant usage, user messages, and matching tool call/result records through the parser and compressed-transcript tailer."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep; isolates transcript selection by marker and cwd; applies the exact local model and permission mode through per-run inputs."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/2-6_long-agentic-session-stress/metadata.json",
+          "note": "Sibling recipe carries the scenario's longest 12-second delay after every turn. The DSH recipe matches it to preserve every observed boundary."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 900,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH, and the community TUI profile is installed under the active DSH home",
+        "re-probe at record time that LM Studio serves the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1",
+        "re-probe at record time that DSH_PERMISSION_MODE=danger-full-access maps to approval policy never in the active TUI composition",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd and a pre-launch transcript marker.",
+        "The driver applies a temporary LM Studio patch for qwen/qwen3.5-9b and exports danger-full-access without modifying the installed profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by marker, header cwd, and parent session ID, then keeps one TUI session alive for all four turns."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Use the bash tool exactly once to run pwd. Then reply with exactly the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "one stable DSH UUID session completes four ordered ready -> working -> ready arcs and ends ready",
+        "within every turn the state remains working until the explicit completed turn/end; no intermediate ready or waiting transition occurs",
+        "the third turn contains exactly one bash pwd call and its matching successful result, with no approval/asked record",
+        "the durable transcript contains exactly four turn/start and four completed turn/end records",
+        "observations report deepseek-harness, model qwen/qwen3.5-9b, and non-zero tokens"
+      ],
+      "scope_note": "Uses 12 seconds after every turn, matching the longest committed sibling delay. DSH has explicit turn/end records, but the shared delay ensures irrlichd observes each ready boundary before the next prompt. The 900-second budget covers four local qwen turns at the measured approximately 158-second upper latency plus settle time."
+    }
+  }
+}

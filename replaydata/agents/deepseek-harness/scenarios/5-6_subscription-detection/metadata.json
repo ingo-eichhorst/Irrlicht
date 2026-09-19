@@ -1,0 +1,74 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+3ba8bf4",
+    "confidence": 0.9,
+    "notes": "agent_supports=no: DeepSeek Harness records model and token usage but no subscription plan, quota window, credits, or billing tier; daemon=n/a; driver=ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T22:06:05Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires a subscription session to expose a non-nil `RateLimitSnapshot` after a turn. The snapshot must contain at least one quota window, or an equivalent non-empty subscription plan identifier. Token use, context-window use, provider error classes, and model identity do not satisfy this signal.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 does not expose the required subscription signal. The installed launcher and TUI have no billing-plan, credit, quota-window, used-percent, or reset-time surface. The required `strings` scan of the `dsh` executable returned no matches for subscription, rate-limit, quota, plan-type, credit, billing, balance, used-percent, or reset-time terms. The TUI package search found only event-stream subscription comments. Those comments do not describe a billing subscription.\n\nThe official provider guide describes API-key routes and custom or self-hosted gateways. The recording driver uses that gateway model directly. It pins provider `lmstudio`, model `qwen/qwen3.5-9b`, endpoint `http://127.0.0.1:1234/v1`, and a local placeholder API key. This route has no provider subscription identity for the agent to detect.\n\nThe durable session schema confirms the boundary. `SessionEventMap` stores lifecycle, messages, tool activity, request context, and related session facts. Its assistant record can carry `TokenUsage`, whose complete type contains input, output, total, cache-read, cache-write, and reasoning token counts. Neither schema contains plan, subscription, quota-window, credits, used-percent, or reset-time fields. A measured DSH v3 transcript from the configured LM Studio route contains `provider=lmstudio`, `model=qwen/qwen3.5-9b`, `contextWindow=262144`, and input/output/total token usage. A full keyword scan of that transcript returned no subscription or quota carrier.\n\nDeepSeek Harness can classify provider failures as `QUOTA` or `RATE_LIMIT`. Those values identify a failed request. They do not identify a subscription tier and do not provide a quota window, remaining credits, used percent, or reset time. The separate token-quota assessment covers that error behavior. It does not make this subscription-detection cell applicable.\n\nThe agent therefore lacks the behavior that this scenario tests. This is `agent_supports=no`, not a daemon observability defect.\n\n## Daemon capability\n\nDaemon capability is `n/a` because the agent does not emit the required feature. For context, the DSH adapter tails `session.vN.jsonl.zstd` and parses lifecycle, messages, tools, model, context-window, and token usage. Its parser contains no rate-limit, subscription, quota, plan-type, credit, billing, balance, used-percent, or reset-time path. That absence is correct for the trace that DSH writes.\n\n## Driver capability and route\n\nThe driver is `ready` by the frozen-no-feature convention. Its static step scan reports all current interactive primitives, including `send`, `wait_turn`, and `sleep`. No driver primitive can create the missing agent signal. The recipe is therefore `applicable:false`, and the route is `frozen`.\n\n## Unblock condition\n\nReassess this cell if DeepSeek Harness adds a billing-subscription surface and persists a plan, credit balance, or quota window in its session log. The daemon pillar would then require a new assessment against that exact trace.",
+      "caveats": [
+        "Vacuous-pass condition: the meta-only frozen spec passes without launching DSH or producing a turn. This cell makes only a capability-absence claim. A future recordable spec must require both a completed turn and a persisted plan, credit, or quota-window carrier, plus the resulting non-nil RateLimitSnapshot.",
+        "The current recording route is load-bearing context for this verdict: the driver pins a self-hosted LM Studio endpoint and qwen/qwen3.5-9b. That route has no subscription account. Reassess if the driver changes to a provider-authenticated subscription route.",
+        "DSH provider `QUOTA` and `RATE_LIMIT` error classes are request-failure facts. They are not subscription-plan or rate-limit-window readings and must not be used as a substitute for this scenario's signal.",
+        "The measured transcript is from DSH 0.1.5-rc.2. Re-run the binary, TUI, session-schema, and transcript keyword scans after an agent upgrade.",
+        "record_blocked=upstream documents why this explicit frozen cell overrides the capability catalog's default traced assumption: DSH must first add and persist the missing subscription signal."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh",
+          "note": "Installed DSH 0.1.5-rc.2 launcher. The required strings scan for subscription, rate limit, quota, plan type, credits, billing, balance, used percent, and reset time returned no matches."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md",
+          "note": "Official provider guide: DSH configures DeepSeek and other provider routes with API keys and supports custom or self-hosted gateways. It does not define a subscription-plan or quota-window surface."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts",
+          "note": "Installed official durable-session schema. SessionEventMap carries lifecycle, messages, tools, and request context. Its complete keyword scan contains no subscription, rate-limit, quota, plan-type, credits, billing, balance, used-percent, or reset-time field."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/types.d.ts",
+          "note": "Installed official TokenUsage type contains only input, output, total, cache-read, cache-write, and reasoning token counts. It has no subscription or quota-window data."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-projects-irrlicht-.claude-worktrees-1985-deepseek-core-replay-.build-refresh-deepseek-harness-5-2_model-identification-20260918T130832-cwd--/session-a41f6332-63e2-4ada-8d54-56affc13a2b8/session.v3.jsonl.zstd",
+          "note": "Measured DSH v3 transcript from the same LM Studio/qwen route. It records provider, model, context window, and token usage. A full scan found no subscription, quota-window, credits, plan, billing, used-percent, or reset-time carrier."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go and core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The daemon tails compressed DSH session logs and maps lifecycle, message, tool, model, context-window, and token-usage records. The adapter has no subscription or RateLimitSnapshot extraction path."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver pins the local LM Studio/qwen route and implements all current interactive step primitives. No driver step can create a subscription signal that DSH does not provide."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen on agent_supports=no. DSH 0.1.5-rc.2 and its durable v3 session schema expose model and token usage but no subscription plan, credit balance, quota window, used percent, or reset time. The current driver also pins a local LM Studio route with no subscription identity. Reassess only after DSH persists a billing-subscription carrier."
+    }
+  }
+}

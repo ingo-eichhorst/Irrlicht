@@ -1,0 +1,131 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+0aa740b",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness persists an open exit_plan_mode tool/call while its plan-review question waits for the user, and the DSH parser maps that exact tool to irrlicht's waiting path."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 has a first-party plan mode. The installed package reference says that `/plan <message>` enters plan mode and that the agent must call `exit_plan_mode` with a Markdown plan. The tool opens an interactive review with `Approve` and `Keep planning` choices. The installed TUI profile composes `@deepseek-ai/dsh-plan-mode` and `@deepseek-ai/dsh-user-questions`. Its TUI recognizes `/plan` and renders the plan review through the question overlay. Thus the feature is an agent capability, not an inferred prose convention.\n\n## Daemon capability\n\nThe DSH agent loop appends a durable `tool/call` before it dispatches the tool. The plan-mode tool then awaits `ctx.userQuestions.ask`. The loop cannot append the matching `tool/result` until the user answers. Therefore, while the review is open, the compressed v3 session log contains an open `tool/call` whose exact name is `exit_plan_mode`.\n\nThe DSH adapter tails those compressed session logs with `FilesUnderRoot`. Its parser maps every durable `tool/call` with an ID and name into `ParsedEvent.ToolUses`. Irrlicht's canonical user-blocking table includes the exact snake-case name `exit_plan_mode`. The open call therefore makes `NeedsUserAttention` true, and the state classifier routes the live session from `working` to `waiting`. If the user approves later, DSH appends `tool/result`; the parser resolves the open call and later activity can drive `waiting` to `working` and then `ready`. The canonical scenario description records only entry into waiting because the continuation is structurally identical to other waiting-resume paths.\n\n## Driver capability\n\nThe recipe needs only `slash` and `sleep`. The DeepSeek Harness interactive driver declares and implements both. It sends `/plan <message>` as one TUI command, which both activates plan mode and steers the message into the first model turn. It then holds the unanswered plan overlay. It does not use `wait_turn`, because the turn cannot complete while `exit_plan_mode` waits for review.\n\nThe 240-second hold is longer than the committed sibling recipes. Existing local DSH recordings show that qwen/qwen3.5-9b can need about 90 to 158 seconds for a short turn. The 420-second cell timeout leaves startup and teardown margin.\n\n## Vacuous-pass check\n\nThe lifecycle could pass without proving plan review if another permission or question moved the same session to waiting. The transcript assertions prevent that hollow pass. They require one and only one tool call, require its exact name to be `exit_plan_mode`, require active plan mode, and reject `approval/asked`, `tool/result`, and `turn/end` records while the review is held.",
+      "caveats": [
+        "Vacuous-pass condition: an unrelated user-blocking tool or permission prompt could produce the same working-to-waiting arc; exact transcript assertions for plan/mode and the sole open exit_plan_mode call prevent that pass.",
+        "The installed TUI profile must compose both @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions. Re-run `dsh --profile tui --dump-config` at record time; without either service, `/plan` or interactive review cannot prove this cell.",
+        "LM Studio at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded is a load-bearing recipe input. The model must follow the exact instruction and emit exit_plan_mode as its first and only tool call; the transcript assertions fail loudly if it does not.",
+        "The daemon verdict is grounded in the durable append order and parser path. Live record must still confirm that the active DSH compressed writer flushes the open exit_plan_mode call early enough for irrlichd to observe the waiting interval.",
+        "The recipe holds the plan review and ends in waiting. It does not approve the plan, because the canonical scenario description says this cell captures only entry into waiting and treats the approval continuation as the same waiting-resume path covered elsewhere.",
+        "Cost is expected to stay zero because the driver selects a local LM Studio model. Token usage must be non-zero."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plan-mode/README.md",
+          "note": "Installed first-party package reference: /plan enters plan mode; exit_plan_mode presents the complete plan for Approve or Keep planning review."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plan-mode/lib/index.js",
+          "note": "Registers /plan and the exact exit_plan_mode tool; the tool awaits ctx.userQuestions.ask with Approve and Keep planning options."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "appendToolCall durably appends tool/call before dispatch; appendToolResult runs only after execution returns."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/commands.js",
+          "note": "The installed interactive TUI recognizes /plan with free-text input and routes it to the plan action."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/interaction/QuestionOverlay.js",
+          "note": "The installed TUI presents exit_plan_mode plan review through the user-question overlay and leaves the request pending until input."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "The DSH source tails compressed session transcripts through FilesUnderRoot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseToolCall maps durable tool/call records into ToolUses, and parseToolResult resolves calls only after a durable result appears."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "The canonical user-blocking tool matcher includes the exact snake-case name exit_plan_mode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The user_blocking_tool rule classifies an open user-blocking tool as waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The interactive driver implements slash and sleep and selects the local qwen/qwen3.5-9b recording surface."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-17_user-blocking-question/metadata.json",
+          "note": "Measured local timing reference: a short qwen/qwen3.5-9b turn required about 158 seconds, which justifies the longer hold than the fleet siblings."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 420,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH",
+        "the active DSH TUI profile composes @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions; re-probe with `dsh --profile tui --dump-config` at record time",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "qwen/qwen3.5-9b follows the exact request and calls exit_plan_mode as its first and only tool; verify this from the durable transcript rather than the TUI overlay",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create an empty cwd under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and danger-full-access policy through its per-run environment and temporary patch",
+        "Confirm the composed profile still contains plan-mode and user-questions before the run"
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/plan Do not read files, search, write, or call any tool except exit_plan_mode. Immediately call exit_plan_mode as your first and only tool call. Use this exact plan argument: # Hello file\\n\\nAdd hello.py with one line that prints hello world. Do not send prose before or after the tool call."
+        },
+        {
+          "type": "sleep",
+          "seconds": 240
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row born ready and bound to the DSH process PID",
+        "events.jsonl shows the same real session move from ready to working after the /plan message starts its model turn",
+        "events.jsonl shows the same session move from working to waiting after the durable exit_plan_mode tool/call appears",
+        "the session remains waiting for at least five seconds and never transitions to ready before teardown",
+        "the compressed transcript contains exactly one plan/mode record with active=true and exactly one tool/call whose name is exit_plan_mode",
+        "the transcript contains no other tool/call, no tool/result, no approval/asked, and no turn/end while the review is held",
+        "the recording reports model qwen/qwen3.5-9b, non-zero tokens, and zero local-model cost"
+      ],
+      "scope_note": "Uses a 240-second hold instead of the siblings' 10-75 seconds because committed local DSH qwen/qwen3.5-9b turns have taken about 90-158 seconds. The recipe cannot use wait_turn because exit_plan_mode deliberately keeps the turn open until review."
+    }
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+7adf456",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness can run an in-process foreground child, but the DSH adapter rejects the child's bare UUID transcript and ignores its durable parentSession link."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `subagent` tool. The effective TUI configuration mounts the in-process `spawn` provider in continuable mode. The official tool contract states that `run_in_background: false` waits for the child result. The recipe uses that explicit foreground override, so the parent remains in its turn while the child runs.\n\nThe in-process driver creates a separate child Agent and Session in the same DSH process. It gives the child a bare `randomUUID()` id. `childSessionMeta` writes the durable parent id to `parentSession` and writes `origin: subagent` in the child header. The JSONL persistence backend gives each child its own session directory and fsyncs committed records. A SIGKILL of the TUI process therefore stops the parent and the in-process child while both durable transcripts remain on disk. This is the orphan shape that the scenario requires.\n\n## Daemon capability\n\nThe current DSH adapter mishandles the required child trace. `sessionIDFromPath` accepts only directory names that match `session-<uuid>`. The official in-process driver and installed TUI use a bare UUID for a subagent child. `FilesUnderRoot` therefore skips the child transcript, so no child `SessionState` or `transcript_new` event can exist. The source also declares no `ParentSessionIDFromPath` extractor, and `parseSession` discards the header's `parentSession` field. Even if the id filter were widened alone, the daemon could not emit `parent_linked`.\n\nThis is `daemon=bug`, not `incapable`. The agent writes both required facts under the root that the adapter already watches. Irrlicht already has the source seam for header-derived parent ids. Its PID manager also supports in-process parent and child sessions that share one PID: `HandleWatcherExit` fans the exit out to children before parents, and deletion does not set either session to `working`. The correct expected spec stays known-failing until the DSH adapter admits bare child ids and reads `parentSession`.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `sleep`, and `sigkill`, which are the only required steps. The prompt requires exactly one foreground `subagent` call and gives the child a long `sleep 240` task. The recipe waits 150 seconds before SIGKILL. A recorded DSH bash-tool turn needed about 100 seconds to reach its first tool call on the pinned local model, so 150 seconds gives the parent time to create the child while the child's long turn remains active. The 25-second post-kill delay matches the upper end of committed sibling settle delays and gives the process watcher time to fan out the shared-PID exit.\n\nThe spec requires the exact foreground subagent call, a distinct child transcript, the durable parent link, a legitimate child `working` state before the kill, and child and parent cleanup events after the kill. It then forbids any new `working` or `waiting` transition for the child during cleanup. Thus a parent-only crash or an ordinary turn cannot pass.",
+      "caveats": [
+        "Known daemon bug: core/adapters/inbound/agents/dsh/adapter.go accepts only session-<uuid> directory names, but @deepseek-ai/dsh-subagent-in-process-driver creates a bare UUID child id. FilesUnderRoot therefore skips the durable child transcript.",
+        "Known daemon bug: the DSH child header carries parentSession, but core/adapters/inbound/agents/dsh/agent.go declares no ParentSessionIDFromPath extractor and parser.go discards that field. No parent_linked event or SubagentCount can be produced.",
+        "The child is in-process and shares the parent DSH PID. Do not require a separate child process. The correct cleanup proof is a distinct child SessionState with ParentSessionID plus the shared-PID process-exit fanout.",
+        "Vacuous-pass condition: a parent-only SIGKILL would exercise process cleanup without proving subagent orphan cleanup. The spec prevents this by requiring one foreground subagent tool call, a distinct child transcript, parent_linked, and a child working state before cleanup.",
+        "Load-bearing environment precondition: the active TUI profile must expose the in-process subagent tool, and LM Studio must expose qwen/qwen3.5-9b. Record must re-probe both live surfaces instead of trusting this assessment.",
+        "The 150-second pre-kill delay is based on the committed DeepSeek Harness 2.2 recording, where the pinned local model reached its bash tool call after about 100 seconds. If the live parent has not emitted its subagent call before SIGKILL, the recording is invalid rather than evidence of no child support."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-subagent/README.md",
+          "note": "Official installed package reference: run_in_background:false waits for the child result in continuable mode."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml",
+          "note": "Shipped standard preset mounts tool-subagent with provider spawn, toolName subagent, and continuable mode; the effective TUI dump confirmed these rows."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js",
+          "note": "Official implementation creates the in-process child with a bare randomUUID and a distinct child Session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent/lib/index.js",
+          "note": "childSessionMeta persists parentSession and origin:subagent in the child header."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/README.md",
+          "note": "Official persistence contract: each session has its own directory; committed records survive a crash; the backend does not delete session files."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed TUI source confirms that a subagent child id and persisted directory use the same bare id without a session- prefix."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "sessionIDPattern requires session-<uuid>; sessionIDFromPath returns empty for the official bare UUID child directory."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot declares SessionIDFromPath but no ParentSessionIDFromPath extractor."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseSession reads version and cwd, then skips the header without reading parentSession."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandleWatcherExit fans a shared PID out to linked children before parents; HandleProcessExit and deleteWithChildren delete rows without a working transition."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Driver implements send, sleep, and sigkill and pins the local LM Studio model through per-run settings."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/events.jsonl",
+          "note": "Live DSH recording: the pinned local-model turn stayed working for about 107 seconds and the process watcher emitted process_exited after the TUI ended."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/transcript.jsonl.zstd",
+          "note": "Live DSH transcript: the qwen/qwen3.5-9b route reached its first bash tool call about 100 seconds after turn start, grounding the recipe delay and observation vector."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 300,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the active TUI profile uses the standard preset",
+        "the active preset exposes the in-process subagent tool and accepts run_in_background:false; re-probe the live tool surface at record time",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh per-run cwd and launch the DSH TUI through the interactive driver",
+        "Apply the temporary LM Studio and qwen model patch, and set DSH_PERMISSION_MODE=danger-full-access, without modifying the installed TUI profile",
+        "Resolve the post-marker parent session.v3.jsonl.zstd before sending input"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the subagent tool exactly once. Set description to orphan marker. Set prompt to: Run the bash command `sleep 240`, then reply with exactly CHILD_DONE and no other text. Set run_in_background to false so you wait for the child result. Do not take any other action. Do not reply until the child returns."
+        },
+        {
+          "type": "sleep",
+          "seconds": 150
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        }
+      ],
+      "verify": [
+        "the raw parent transcript contains exactly one subagent tool call whose arguments explicitly set run_in_background to false",
+        "events.jsonl shows a distinct child transcript_new and parent_linked before SIGKILL",
+        "the child reaches working before the kill and has no completed tool result or turn end",
+        "the shared-PID watcher emits process_exited for the child and parent after SIGKILL",
+        "no state_transition to working or waiting fires for the child after its process_exited cleanup edge",
+        "the recording reports agent deepseek-harness, model qwen/qwen3.5-9b, and non-zero tokens"
+      ],
+      "scope_note": "The 150-second pre-kill delay matches the slow local-model class represented by the opencode sibling and exceeds the measured approximately 100-second DSH delay to a first tool call. The 25-second post-kill settle matches the upper end of committed sibling recipes. The minimal one-child shape tests the same cleanup invariant as the canonical five-child case."
+    }
+  }
+}

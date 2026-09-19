@@ -1,0 +1,130 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+73afca7",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness has a real configurable goal-round cap. Its round driver records a round-limit blocker after the second autonomous round, and the DSH adapter exposes the terminal working-to-ready arc."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 has a real count-limited autonomous loop. The installed `dsh-tool-goal` exposes `create_goal(objective, max_goal_rounds?)` for a direct top-level human request. The installed goal service persists that positive integer as `maxGoalRounds`. The installed `dsh-goal-round-driver` queues goal-sourced same-session rounds while the goal is active and armed. At whole-agent idle, it compares `roundsStarted` with `maxGoalRounds`. When the limit is reached, it records a durable blocked goal with code `round-limit` and queues no later round. The official package reference states the same behavior. The live TUI composition contains goal, goal-round-driver, command-goal, tool-goal, and agent-loop.\n\nThe recipe makes the cap two rounds without modifying the installed profile. Its direct human turn tells the model to call `create_goal` once with `max_goal_rounds=2`. The persisted create mutation is the authority for the configured cap. The goal objective tells both autonomous rounds to leave the goal active and to emit a fixed declarative token. After round 2 ends, the driver itself, not the model or the recording driver, records `operation=block`, `phase=blocked`, `blockedReason.code=round-limit`, and `roundsStarted=2`. Transcript assertions require that exact path, two goal-sourced messages with distinct round values 1 and 2, one create_goal call, three completed turn boundaries, no model completion mutation, and no approval request.\n\n## Daemon capability\n\nThe DSH adapter tails the durable v3 compressed transcript through `FilesUnderRoot` and keys the row from the stable `session-<uuid>` directory. `parseTurnStart` emits `turn_start`. `parseTurnEnd` emits `turn_done` for every non-error completed boundary. Assistant messages supply the configured model and token usage. These signals expose the required outer ready-to-working-to-ready arc and terminal ready dwell on one session.\n\nThe parser skips `goal/change`, and it skips `user/message` when `source.kind` is `goal`. Therefore the daemon does not label the stop as a round-limit stop. This is a narrow semantic-display caveat, not a daemon defect for this scenario. The scenario acceptance criteria require the lifecycle arc and a final ready state. Raw-transcript assertions prove that the exact limit, rather than completion or human intervention, caused the stop. The precise ready/working shape between rounds is provisional because the daemon can coalesce short gaps. The spec does not assert a debounce-dependent cycle count.\n\n## Driver capability\n\nThe recipe needs `send`, `wait_turn`, and `sleep`. The DeepSeek Harness interactive driver implements all three. `wait_turn` waits only for the direct setup turn because its counter advances on driver `send` steps, not on goal-sourced messages. The following fixed 480-second observation window matches the existing DeepSeek Harness autonomous-loop cell. The 900-second cell timeout also includes launch and the direct setup turn. The driver applies the model, endpoint, context window, permission mode, and API key through a temporary per-run patch and environment.\n\n## Vacuous-pass check\n\nThis cell could pass its outer ready-to-working-to-ready arc if the direct prompt ran as an ordinary turn and no capped loop started. The transcript assertions prevent that pass. They require a cap-two create mutation, exactly two goal-sourced rounds, and the driver's exact round-limit blocker. A stale transcript could also satisfy those records, so the driver's fresh cwd, post-launch marker, header-cwd match, and resolved session-ID contract are load-bearing preconditions.\n\n## Record-time recipe correction\n\nThe first live #1986 take, staged as 2-8_autonomous-loop-iteration-limit-20260918T233526, refuted the original prompt constraint. The transcript showed two goal-sourced rounds, but Qwen called update_goal in round 2 and wrote operation=complete before the round driver could enforce maxGoalRounds=2. The corrected objective defines completion only after three autonomous rounds. The configured limit remains two. Thus both permitted rounds have a concrete reason to leave the goal active, and the round driver must supply the terminal round-limit block.",
+      "caveats": [
+        "Vacuous-pass condition: an ordinary completed setup turn has the same outer ready-to-working-to-ready arc. The transcript spec therefore requires one cap-two goal create, exactly two goal-sourced rounds, and a blocked goal whose code is round-limit with roundsStarted=2.",
+        "Load-bearing environment property: the active `dsh --profile tui --dump-config` composition must mount goal, goal-round-driver, command-goal, tool-goal, and agent-loop. Re-probe the composition at record time.",
+        "Load-bearing environment property: LM Studio must serve the tool-capable qwen/qwen3.5-9b model at http://127.0.0.1:1234/v1. The direct setup turn must successfully call create_goal with max_goal_rounds=2.",
+        "PROVISIONAL emission shape: each goal round has a durable turn/end followed by the next turn/start. Irrlicht can coalesce a short inter-round ready interval. The spec asserts the outer arc and a terminal hold, not a cycle count.",
+        "The daemon does not expose goal/change or goal-sourced user/message semantics because the DSH parser skips those records. Raw-transcript assertions establish the round-limit cause. The scenario's required lifecycle remains observable.",
+        "The driver must select a fresh transcript from the current run. Its fresh cwd, post-launch marker, transcript-header cwd match, and session-ID contract prevent stale goal records from satisfying the cell.",
+        "RECORD-TIME RECIPE CORRECTION (#1986): the first live take completed the repetitive goal in round 2. The corrected objective requires three rounds while max_goal_rounds remains 2, so the driver, not the model, must terminate the goal after the second permitted round."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-goal/README.md",
+          "note": "Official installed 0.1.5-rc.2 package reference: create_goal accepts optional max_goal_rounds from a direct top-level human turn and returns the persisted goal round cap."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal-round-driver/README.md",
+          "note": "Official installed package reference: the driver schedules same-session goal rounds, stops when the cap is exhausted, and records blocker code round-limit."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js",
+          "note": "Installed implementation compares roundsStarted >= maxGoalRounds at idle, records code round-limit, and returns without queueing another round."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal/lib/index.js",
+          "note": "Installed goal domain validates a positive maxGoalRounds, persists it on create, counts admitted goal-sourced rounds, and writes full goal/change snapshots including blockedReason and roundsStarted."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: DSH_PERMISSION_MODE=danger-full-access dsh --profile tui --dump-config",
+          "note": "Live composition probe shows goal, goal-round-driver, command-goal, tool-goal, and agent-loop in the active TUI profile."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "The adapter uses FilesUnderRoot over the DSH session root and binds session identity from each transcript path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start to turn_start, completed turn/end to turn_done, and assistant usage to model and tokens. Unknown goal/change records and goal-sourced user messages are skipped."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins measured v3 session, turn/start, completed turn/end, request context, and assistant-usage mappings."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements send, wait_turn, and sleep; selects a fresh cwd-matched transcript; and applies the recipe model and endpoint with a temporary patch."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "Sibling assessment documents the same installed goal stack and grounds a 480-second window for two local-model autonomous goal rounds."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 900,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH, and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "the active TUI composition mounts goal, goal-round-driver, command-goal, tool-goal, and agent-loop; re-probe with dsh --profile tui --dump-config at record time",
+        "DSH_PERMISSION_MODE=danger-full-access maps to approval policy never in the active composition",
+        "the driver uses a fresh recording cwd and selects only a post-launch transcript whose session header matches that cwd",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh empty cwd and a fresh DSH session",
+        "Let the driver apply the LM Studio endpoint, qwen model, context window, and danger-full-access policy through its per-run environment and temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create one autonomous same-session goal now. You must call create_goal exactly once with max_goal_rounds set to 2 and with this exact objective: This goal is complete only after three autonomous goal rounds have each replied with exactly ROUND_ACTIVE. In each autonomous goal round, do not call any tools, do not mark the goal complete or blocked, and reply with exactly ROUND_ACTIVE; leave the goal active because fewer than three required rounds have finished. After create_goal succeeds in this direct human turn, do not call any other tool and end your reply with exactly ARMED. Do not ask a question."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 480
+        }
+      ],
+      "verify": [
+        "the compressed transcript contains one create_goal call and one goal/change create whose maxGoalRounds is 2",
+        "the compressed transcript contains exactly two goal-sourced user/message records with round values 1 and 2",
+        "after round 2, the compressed transcript contains one goal/change block with phase blocked, roundsStarted 2, and blockedReason.code round-limit",
+        "the transcript contains exactly three completed turn/end records: the direct setup turn and two autonomous goal rounds",
+        "events.jsonl shows the real session-UUID row entering working and finally settling in ready for at least 20 seconds, with no waiting transition",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ],
+      "scope_note": "Sibling recipes use terminal sleeps from 6 to 30 seconds, while Copilot waits 300 plus 30 seconds for its native loop. The DeepSeek Harness autonomous-loop sibling already uses a 480-second fixed observation window because goal-sourced turns do not advance this driver's wait_turn counter. This recipe first waits for the direct cap-creation turn, then uses the same 480-second window for the two autonomous rounds. Record-time correction for #1986: the first live take let Qwen decide that the repetitive objective was complete in round 2. The corrected objective requires three completed rounds while max_goal_rounds remains 2, which makes the limit behavior causal and machine-checkable."
+    }
+  }
+}

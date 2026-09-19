@@ -1,0 +1,95 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness 0.1.5-rc.2 gates sandbox escalation for mutating tools, but its shipped read, search, listing, and public-fetch paths do not raise a user approval dialog."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "deepseek-harness",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a\n\n## Agent capability\n\nThe scenario requires two distinct user-visible permission dialogs in one session. One dialog must gate a tool that changes the workspace. The other dialog must gate a different tool class that only reads. DeepSeek Harness 0.1.5-rc.2 provides the mutating half but not the read-only half.\n\nThe active TUI composition maps `DSH_PERMISSION_MODE=workspace-write` to sandbox mode `workspace-write` and approval policy `ask`. The bash, write, and edit tools can retry a denied mutation with `sandbox_permissions` and a justification. That retry calls the approval service. This is the path already assessed by scenario 2.19.\n\nThe shipped read-only tools do not use that path. The official `dsh-fs-sandbox` documentation says that reads stay unconfined and that reads, listings, and metadata behave as they do with the local filesystem backend. The official filesystem-tool documentation advertises `sandbox_permissions` only for `write` and `edit`. The filesystem search package supplies `glob` and `grep` but contains no approval call. The official web-tool documentation says that public fetches do not request approval in any shipped sandbox or approval mode. It states that a deployment which needs per-call confirmation must add a `tools/pre-execute` policy.\n\nThe installed source confirms that boundary. A package-tree scan found only three `tools/pre-execute` listeners. The jobs listener always delegates. The Codex-hook bridge can deny but cannot ask. The Claude Code-hook bridge can return `ask`, but only from an operator-supplied external hook result. The active TUI composition mounts neither hook bridge. The generic tool registry can turn an `ask` decision into `approval/asked`, but it does not decide which tools need approval. No shipped active policy returns `ask` for `read`, `glob`, `grep`, or `web_fetch`.\n\nThe required launcher scan also found no built-in permission command or read-tool gate. `strings` over the resolved installed launcher, filtered for permission-gate, non-mutating, read-only-tool, approval-plus-read/search/web, and permission or approval slash commands, returned no matches. The package sources and official package documentation were then searched because DeepSeek Harness features are composed as packages rather than encoded in the small launcher.\n\nA user can write a native `tools/pre-execute` plugin or mount the Claude Code-hook bridge with a custom PreToolUse rule that returns `ask` for a read tool. That is an extension point, not a shipped read-tool policy. Recording such a rule would record fixture-authored behavior. It would not show that the DeepSeek Harness agent gates a non-mutating tool. This is the same reason that a user-written approval plugin does not make an otherwise absent agent surface supported.\n\n## Daemon and driver\n\nDaemon capability is not applicable because the agent does not emit the required second approval episode. If a future shipped read-tool policy emits the normal `approval/asked` and `approval/decided` records, the current DSH adapter already maps those records by request id to `permission_requested` and `permission_completed`. The shared tailer derives `TranscriptPermissionPending`, and the classifier maps that value to `waiting`. That conditional path does not change the present agent verdict.\n\nDriver capability is not applicable because no valid recipe can elicit the missing shipped behavior. The interactive driver has `send`, `keys`, `wait_turn`, and `sleep`, but those primitives cannot create an agent feature that is absent. The recipe is therefore `applicable:false`.\n\n## Vacuous-pass check\n\nThe meta-only frozen spec passes without exercising a session, so it makes no behavioral pass claim. A future phase spec could also pass while proving nothing if it drove two escalations through the same `bash` tool, or if it mounted a custom pre-execute policy that gates `read`. The first case tests a dangerous tool twice. The second case tests fixture-authored behavior. A future re-assessment must bind the two dialogs to two different shipped tool names and must confirm that no custom approval policy supplied the read gate.",
+      "caveats": [
+        "Vacuous-pass condition: this frozen cell has a meta-only spec, so it can validate without a session. It makes no behavioral pass claim.",
+        "A future recipe that produces both dialogs through the same bash tool could satisfy the state arc while proving nothing about a non-mutating tool class. A re-assessment must bind the two approval records to two different shipped tool names.",
+        "A user-authored tools/pre-execute plugin or Claude Code PreToolUse hook can return ask for a read tool. Such a policy would create the missing behavior in the fixture. It is not evidence that the shipped DeepSeek Harness profile provides the behavior.",
+        "The active TUI profile is a load-bearing environment property. Re-probe `DSH_PERMISSION_MODE=workspace-write dsh --profile tui --dump-config` before re-assessment because a future profile could mount a first-party read-tool approval policy.",
+        "The negative verdict is version-specific. DeepSeek Harness is a developer preview. Re-run the launcher strings scan, the active-composition dump, and the package-tree tools/pre-execute census after an upgrade."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
+          "note": "Resolved launcher for dsh 0.1.5-rc.2. The required strings scan for permission-gate, non-mutating, read-only-tool, approval plus read/search/web, and permission or approval slash commands returned no matches."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: DSH_PERMISSION_MODE=workspace-write /Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh --profile tui --dump-config (2026-09-18)",
+          "note": "The active composition mounts approval ask, sandbox policy, bash, filesystem, filesystem-search, web, and fs-sandbox packages. It mounts neither hooks-claude-code nor hooks-codex and contains no read-tool approval policy."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-sandbox/README.md",
+          "note": "Official installed documentation states that reads stay unconfined and that reads, listings, and metadata behave like the local backend; only denied mutations have the wider-mode approval retry."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs/README.md",
+          "note": "Official installed documentation advertises sandbox_permissions and justification for write and edit only. The read tool emits an observation event but has no approval path."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs-search",
+          "note": "Installed glob and grep implementation and documentation. A source scan found no approval request or ask decision in this package."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-web/README.md",
+          "note": "Official installed documentation states that public fetches do not request approval in shipped presets and that per-call confirmation requires an added tools/pre-execute policy."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js",
+          "note": "The tool registry converts an upstream ask decision into approval.request and durable approval records. It supplies allow as the default and does not select read tools for approval."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-hooks-claude-code/lib/index.js",
+          "note": "The only installed package implementation that can produce a tools/pre-execute ask decision obtains that decision from an operator-supplied Claude Code PreToolUse hook. The active TUI profile does not mount this bridge."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "For a future real read-tool gate, the adapter generically maps every approval/asked and approval/decided request id to permission_requested and permission_completed without a tool-name allowlist."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "The tailer derives TranscriptPermissionPending from unmatched parsed approval request ids."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The transcript_permission_prompt rule maps TranscriptPermissionPending to waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver exposes send, keys, wait_turn, and sleep, but no driver sequence can elicit a shipped read-tool approval policy that the agent does not provide."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no: DeepSeek Harness 0.1.5-rc.2 has no shipped approval policy for a read, search, listing, or public-fetch tool. A custom tools/pre-execute policy would fabricate the missing gate, and two bash escalations would not test the non-mutating tool class."
+    }
+  }
+}

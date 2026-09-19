@@ -1,0 +1,149 @@
+{
+  "scenario_id": "session-reset",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+f8a1099",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness /clear rotates the live TUI to a fresh durable session UUID, and irrlicht can retire the prior row when the new session claims the same PID."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent capability\n\nThe installed DeepSeek Harness TUI 0.8.1 exposes `/clear` as `Clear the screen and start a new session`. Its command dispatcher calls `actions.clear()`. The implementation waits for the current agent to become idle, flushes and disposes it, and then calls `attachSession(undefined)`. That fresh attach creates `session-${randomUUID()}`. The TUI process remains alive. The agent therefore implements the scenario's in-process session reset and produces a distinct durable session ID.\n\n## Daemon capability\n\nThe DSH adapter watches every highest-generation `session.vN.jsonl.zstd` below the DSH sessions root. It derives the daemon ID from the `session-<uuid>` directory. The new `/clear` transcript therefore appears as a new session row. The adapter binds a real session to the process that holds its sibling `session.lock` open. Because `/clear` keeps the TUI process alive, the post-reset session claims the same PID as the pre-reset session. `PIDManager.HandlePIDAssigned` records `pid_discovered`, finds the prior non-subagent holder of that PID, records `transcript_removed` for the old ID, deletes the old row, and broadcasts the deletion. This is the exact observable required by `Old session disappears`.\n\nThe DSH parser maps `turn/start` to working and a completed `turn/end` to the authoritative `turn_done` signal. Existing DSH recordings prove a real UUID session binds through `session.lock` and completes a tool-free working-to-ready turn. The reset-specific end-to-end timing remains provisional until `record`, but every required signal has a concrete local trace and daemon path.\n\n## Driver capability and recipe\n\nThe interactive driver declares and implements `send`, `wait_turn`, `sleep`, and `reset_session`. `reset_session` saves the old transcript slot, reuses the live tmux pane and cwd in a new slot, sends `/clear`, and resolves a post-marker transcript with a fresh UUID. The shared contract writer emits both slots through `session.uuids` and `transcript.paths`, so curation keeps both halves of the reset arc.\n\nThe recipe uses 10 seconds before reset, 8 seconds after reset, and 8 seconds after the second turn. These values cover the longest corresponding sibling delays. The 600-second budget covers two measured local qwen turns plus reset and settle time. Both prompts demand exact terminal tokens and forbid tools.\n\nThe observation vector pins `qwen/qwen3.5-9b` because the driver selects it and existing DSH transcripts confirm that model. It requires non-zero tokens. It does not require non-zero cost because the local LM Studio model has no applicable priced provider record.",
+      "caveats": [
+        "Vacuous-pass condition: an unrelated second DSH session could satisfy the new-session phases without proving /clear if it entered the curated set. The load-bearing controls are the driver's fresh per-run cwd, its post-reset marker, and the aligned two-entry session.uuids/transcript.paths contract. Record must confirm that the two durable session headers have the same cwd and distinct IDs.",
+        "Load-bearing environment precondition: LM Studio must listen at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded. The driver selects that endpoint and model through its temporary patch.",
+        "The old-row removal verdict is source-backed but provisional for reset timing. Record must observe the post-reset session binding to the same PID and the old session's transcript_removed event after that binding.",
+        "A separate concurrent two-process DSH recording exposed a wrong transcript_path on one teardown event. This reset spec matches old-row removal by session ID and also asserts the two durable transcript IDs. Record must report any reset-path identity crossover instead of weakening the phase.",
+        "The DSH file watcher can emit a short transcript_removed/transcript_new pair for the same UUID while the compressed file is replaced. The phase chain pins reset to a different session ID, so that same-ID replacement cannot satisfy the reset assertion.",
+        "The local model cost is expected to remain zero. The spec asserts the configured model and non-zero tokens, not non-zero cost."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Installed TUI 0.8.1 documentation defines /clear as flushing the current session and starting a new one."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/commands.js",
+          "note": "The shipped command registry exposes /clear and dispatches it to actions.clear()."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "clearSession flushes and disposes the old agent, then attachSession(undefined) creates session-${randomUUID()} while the TUI process remains alive."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/{agent.go,adapter.go,pid.go,parser.go}",
+          "note": "FilesUnderRoot keys rows by the session UUID directory, DiscoverPID uses the sibling session.lock writer, and the parser maps explicit DSH turn boundaries."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandlePIDAssigned and cleanupStalePIDHolders record transcript_removed and delete the prior non-subagent holder when a new session claims the same PID."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements reset_session through /clear, resolves a fresh post-marker transcript slot, and implements every other recipe primitive."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/_lib/drive/{slots.sh,contracts.sh}",
+          "note": "Slot bookkeeping preserves the old and new transcript identities, and the contract writer emits both to curation."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/1-1_session-start/recordings/2026-09-18-14-53-58_irrlichd-0.6.4+d7156bb/events.jsonl",
+          "note": "Measured DSH lifecycle: a real UUID session appears in ready, binds a positive PID through session.lock, runs working to ready, and is removed on process exit."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-13_turn-end-terminal-text/recordings/2026-09-18-15-04-38_irrlichd-0.6.4+d2153df/transcript.jsonl.zstd",
+          "note": "Measured DSH turn carries qwen/qwen3.5-9b, non-zero usage, a literal tool-free assistant reply, and a completed durable turn boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-18-15-43-18_irrlichd-0.6.4+da0e1be/events.jsonl",
+          "note": "Separate concurrent-session evidence for the narrow teardown transcript-path caveat; the reset recording must check identity rather than assume it."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile with @tomowang/dsh-tui 0.8.1 or newer is installed under the active DSH home",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux, zstd, and jq are on PATH",
+        "irrlichd is recording with the DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "The driver creates a fresh per-run cwd and launches one DSH TUI in tmux.",
+        "A temporary patch selects LM Studio and qwen/qwen3.5-9b without modifying the installed profile.",
+        "The reset step preserves the old transcript slot, sends /clear in the live TUI, and resolves a distinct post-marker transcript in the same cwd."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this token and nothing else: BEFORE-RESET"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "reset_session"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this token and nothing else: AFTER-RESET"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "session.uuids and transcript.paths contain two aligned, distinct DSH session UUIDs",
+        "both compressed transcript headers contain the same fresh per-run cwd and distinct IDs",
+        "the pre-reset session completes one ready to working to ready turn and contains the exact BEFORE-RESET reply",
+        "after /clear, a different session appears in ready and binds to the same live TUI PID",
+        "the pre-reset session emits transcript_removed and leaves the dashboard after the new session claims that PID",
+        "the post-reset session completes one ready to working to ready turn and contains the exact AFTER-RESET reply",
+        "neither transcript contains a tool call or a waiting transition",
+        "the recording reports qwen/qwen3.5-9b and non-zero tokens"
+      ],
+      "scope_note": "Uses the longest sibling timing at each reset landmark: 10 seconds before reset, 8 seconds after reset, and an 8-second final settle. DSH creates the post-reset transcript immediately, but the after-reset delay also gives irrlicht time to bind the same PID and retire the old row before the second turn starts."
+    }
+  }
+}

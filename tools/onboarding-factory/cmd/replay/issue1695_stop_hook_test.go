@@ -155,6 +155,10 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "every Stop names a session the replay does not drive",
 	},
+	"deepseek-harness/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-09-19-04-09-53_irrlichd-0.6.4+02298d8/transcript.jsonl.zstd": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
 	"hermes/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-08-03-01-11-06_irrlichd-0.5.9+aef737b/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_011105_d40f63",

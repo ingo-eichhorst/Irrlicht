@@ -1,0 +1,155 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+f8a1099",
+    "confidence": 0.86,
+    "notes": "DeepSeek Harness reopens the same persisted session log by ID. The DSH adapter can observe the same row across two process lifetimes."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.86,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires one durable session ID across two process lifetimes. Each lifetime must produce an independent `ready -> working -> ready` arc. The second process must bind to the original row.\n\nDeepSeek Harness 0.1.5-rc.2 supports this behavior directly. `dsh --profile tui --help` documents `--resume <sessionId>` as reopening a persisted session. The installed TUI source passes that ID to `agents.resume`. The agent loop opens the same persistence ID for write access, reads its stored events, and seeds the resumed session from them. The JSONL backend finds the existing session log and appends new compressed frames to the same path. It does not create a new session ID.\n\nThe DSH adapter derives the daemon session ID from the parent `session-<uuid>` directory of `session.vN.jsonl.zstd`. The parser maps `turn/start` to working and completed `turn/end` to ready. PID discovery reads the writer of the same directory's `session.lock`. The first process releases that lock on `/exit`. The resumed process takes it again under a new PID. Existing DSH recordings confirm the single-birth row, explicit turn boundaries, lock-based PID binding, the exact model, and non-zero token usage. The exact resume emission order remains provisional until this cell records.\n\nThe driver implements every required primitive: `send`, `wait_turn`, `sleep`, `exit_clean`, and `resume`. Its resume step retains `UUID`, `TRANSCRIPT`, and cwd, then launches `dsh --profile tui --resume <same-id>`. The recipe waits 12 seconds after the first process exits. This clears the daemon's default 10-second deleted-session cooldown. It also waits 6 seconds after relaunch before the second send, matching the settled sibling pattern and giving the new process time to acquire the session lock.\n\nThe spec pins all phases to the first `session-` row, requires a process exit before the second birth, requires PID discoveries with one session ID and two distinct PIDs, and requires one durable session header with exactly two user turns and two completed boundaries. These checks prevent a new session or an unrelated session from satisfying the cell.",
+      "caveats": [
+        "Vacuous-pass condition: without the fresh per-run cwd, same-session phase pins, the process-exit anchor, and the one-session/two-PID assertions, an unrelated DSH session or duplicate first-lifetime transitions could satisfy the arc without proving resume. These conditions are load-bearing.",
+        "The 12-second delay after exit is load-bearing. A resumed transcript write inside the daemon's default 10-second deleted-session cooldown is ignored as a possible late write from the dead process.",
+        "The 6-second delay after resume is load-bearing for observation order. It lets the resumed process acquire session.lock before the second prompt writes the turn records.",
+        "LM Studio must serve qwen/qwen3.5-9b at http://127.0.0.1:1234/v1. The recipe pins this environment, the spec pins the model, and token assertions require two successful model turns.",
+        "The installed source proves that resume opens and appends to the same stored log. A live recording must still confirm filesystem notification order and the new PID binding for this exact two-lifetime recipe."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/startup.js",
+          "note": "Defines --resume [sessionId] and documents that an ID reopens a persisted session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "The resume branch calls agents.resume with the normalized existing session ID and seeds the TUI from persisted history."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "resumeWith opens the requested persistence ID for write access, reads stored events, and resumes the agent on that same session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "The backend opens the existing session log and appendLines uses append mode on that same session path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "Derives the stable session ID from the session directory and selects the current compressed transcript generation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps explicit turn/start and turn/end records to working and ready signals and maps model and token usage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/pid.go",
+          "note": "Binds each process lifetime through the writer of the session directory's session.lock file."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "processActivity enforces the default 10-second deleted-session cooldown before it permits same-ID re-creation from fresh transcript activity."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements exit_clean and resume. Resume retains the resolved UUID, transcript, and cwd and relaunches with --resume <same-id>."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/1-3_long-idle-live-session/recordings/2026-09-18-15-30-07_irrlichd-0.6.4+1d2dcc5/events.jsonl",
+          "note": "Existing live DSH evidence for one session-UUID row, lock-based PID binding, and two explicit working-to-ready turn arcs."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted",
+        "LOAD-BEARING: the driver uses its fresh staging cwd and no other DSH process uses that cwd"
+      ],
+      "setup": [
+        "The driver creates one fresh cwd and launches `dsh --profile tui` in tmux.",
+        "The driver applies a temporary LM Studio patch and resolves the new session.v3.jsonl.zstd by marker, header cwd, and parent session ID.",
+        "The resume step keeps the resolved UUID, transcript path, and cwd, then relaunches `dsh --profile tui --resume <same-id>` in the same slot."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this text and nothing else: RESUME-ONE"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this text and nothing else: RESUME-TWO"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one session-UUID row entering ready, working, and ready during lifetime 1",
+        "events.jsonl contains process_exited for that session after /exit",
+        "fresh transcript activity after the cooldown recreates the SAME session ID in ready, not a new row",
+        "the second prompt drives the same session through working to ready",
+        "PID events for the same session contain two distinct PIDs, one for each process lifetime",
+        "the durable transcript has one session header, two real user messages, two completed turn/end records, and no tool/call record",
+        "the final state is ready and the observation vector reports qwen/qwen3.5-9b with non-zero tokens"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 600,
+      "scope_note": "Records the clean-exit then resume variant. The 12-second post-exit sleep clears irrlichd's 10-second deleted-session cooldown. The 6-second post-resume sleep matches the settled muse/hermes sibling pattern. DSH also keeps the driver's existing 8-second post-turn settle delay because its local model transcript and daemon watcher settle independently."
+    }
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+6192166",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness supports a synchronous foreground child, but the DSH adapter rejects the child's bare UUID transcript directory and does not read the durable parentSession header."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `subagent` tool. The installed official package reference states that one-shot foreground calls wait for the child and return the child's final text. The shipped standard preset configures `subagent` with the in-process spawn provider and continuable background mode, while the tool schema makes `run_in_background: false` the explicit foreground override. The recipe uses that exact override, so the parent cannot finish its next action until the child result arrives.\n\nThe in-process driver creates a separate child Agent and Session. `childSessionMeta` writes the parent's durable session id to `parentSession` and writes `origin: subagent` in the child session header. The persistence backend writes each session to its own directory under the same `$DSH_HOME/sessions` root. The child id is a bare `randomUUID()`, not the top-level TUI's `session-<uuid>` form. The TUI source also documents that the bare child id is the on-disk persisted directory name. Thus the agent emits both required facts: a durable child transcript and a durable child-to-parent link.\n\n## Daemon capability\n\nThe current DSH adapter mishandles those shipped traces in two concrete ways. First, `sessionIDFromPath` accepts only directory names matching `^session-<uuid>$`. It returns an empty id for the bare UUID directory that the official child driver creates, so `FilesUnderRoot` skips the child transcript and no child `SessionState` or `transcript_new` event appears. Second, `Source()` does not set `ParentSessionIDFromPath`, although the first physical header contains `parentSession`. The parser handles the `session` header only for version and cwd and discards the parent field. Even if the child id filter were widened, the child would remain top-level, `parent_linked` would not fire, and `SubagentCount(parent)` would remain zero.\n\nThis is `daemon=bug`, not `incapable`. The durable child transcript and its exact parent id exist under the root the adapter already tails. Irrlicht has the `ParentSessionIDFromPath` source seam for this header-based layout, but this adapter does not use it and rejects the child's valid id. The correct expected spec remains known-failing until both adapter defects are fixed. The parent's own working-to-ready arc can still appear because the foreground tool call stays open until the child returns; that parent-only arc does not prove child observability.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`, which are the only required steps. The prompt requires exactly one `subagent` call, explicitly sets `run_in_background` to false, gives the child a deterministic exact-token task, and pins the parent's final text. The 420-second budget covers the parent tool-selection request, the child request, and the parent's final continuation on the local model. The trailing 10-second sleep matches the longest committed sibling settle delay and gives the daemon time to observe the final compressed frames.\n\nThe spec asserts the correct parent and child topology. A raw parent-transcript assertion requires one `subagent` call whose arguments contain `run_in_background:false`, plus the matching successful result containing `CHILD_OK`. Therefore an ordinary parent turn or an accidentally backgrounded child cannot satisfy the non-vacuous part of the fixture. The model and token assertions use the driver's exact live route. Cost may remain zero because the route is local LM Studio.",
+      "caveats": [
+        "Known daemon bug: core/adapters/inbound/agents/dsh/adapter.go accepts only session-<uuid> directory names, but @deepseek-ai/dsh-subagent-in-process-driver creates a bare UUID child id; the fswatcher therefore skips the durable child transcript.",
+        "Known daemon bug: the DSH child session header carries parentSession, but core/adapters/inbound/agents/dsh/agent.go declares no ParentSessionIDFromPath extractor and parser.go discards that header field. No parent_linked event or SubagentCount can be produced until the adapter reads it.",
+        "Emission is source-confirmed but not live-recorded in this cell. A recording must confirm that this installed TUI profile persists the foreground child before record promotes the child-transcript claim from provisional to settled.",
+        "Vacuous-pass condition: the parent lifecycle alone could pass after an ordinary turn or an accidentally backgrounded child. The transcript assertion therefore requires exactly one subagent tool call with run_in_background:false and its matching successful CHILD_OK result.",
+        "Load-bearing environment precondition: the active standard preset must expose the in-process subagent tool, and LM Studio must still expose qwen/qwen3.5-9b. Record must re-probe both instead of trusting this assessment.",
+        "The child runs in the same dsh process and uses a bare UUID. Do not require a distinct child PID; require a distinct child SessionState and ParentSessionID link."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-subagent/README.md",
+          "note": "Official installed package reference: foreground calls wait for the child and return its final text; run_in_background:false selects foreground under continuable mode."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml",
+          "note": "Shipped standard preset mounts tool-subagent with provider spawn, toolName subagent, and backgroundMode continuable."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js",
+          "note": "Official installed implementation creates a separate child with a bare randomUUID and passes childSessionMeta into the child Agent creation transaction."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent/lib/index.js",
+          "note": "childSessionMeta writes parentSession: parentHeader.id and origin: subagent into the durable child header."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/README.md",
+          "note": "Official persistence contract: every session gets its own session-owned directory and physical header under the configured sessions root."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed TUI source states that a subagent child id is a bare id and that its on-disk persisted directory uses that same bare id."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "sessionIDPattern requires session-<uuid>; sessionIDFromPath returns empty for the official bare UUID child directory."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot declares SessionIDFromPath but no ParentSessionIDFromPath extractor."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseSession validates version and reads cwd, then skips the header without reading parentSession."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/source.go",
+          "note": "ParentSessionIDFromPath is the existing daemon seam for flat transcript stores whose parent relationship lives in a metadata header."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Driver implements send, wait_turn, and sleep and pins the local LM Studio model through per-run settings."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 420,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the active TUI profile uses the standard preset",
+        "the active preset exposes the in-process subagent tool and accepts run_in_background:false; re-probe the live tool surface at record time",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh per-run cwd and launch the DSH TUI through the interactive driver",
+        "Apply the temporary LM Studio and qwen model patch without modifying the installed TUI profile",
+        "Resolve the post-marker parent session.v3.jsonl.zstd before sending input"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the subagent tool exactly once. Set description to read marker. Set prompt to: Reply with exactly CHILD_OK and no other text. Set run_in_background to false so you wait for the child result. After the child result arrives, reply with exactly DONE and no other text."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the raw parent transcript contains exactly one subagent tool call whose arguments explicitly set run_in_background to false",
+        "the subagent call has a matching successful tool result containing CHILD_OK, so a background acknowledgement cannot pass",
+        "events.jsonl shows a distinct child transcript_new event after the parent enters working",
+        "events.jsonl shows parent_linked for that child with ParentSessionID equal to the parent session id",
+        "the parent remains working across the foreground child lifetime and returns to ready only after the child result arrives",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ],
+      "scope_note": "The 10-second trailing delay matches the longest committed foreground-subagent sibling settle delay. The 420-second budget covers three local-model decisions: parent delegation, child answer, and parent final reply."
+    }
+  }
+}
