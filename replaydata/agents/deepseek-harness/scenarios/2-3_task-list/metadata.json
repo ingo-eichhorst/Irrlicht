@@ -84,7 +84,49 @@
       "script": [
         {
           "type": "send",
-          "text": "Use only the todo_write tool. Do not use any other tool. First call todo_write with exactly these three items in this order, all with status pending: 'draft a greeting', 'refine the greeting', 'reply done'. Then process the items one at a time. For each item, make one separate todo_write call that changes only that item to in_progress while preserving the full list, then make another separate todo_write call that changes only that item to completed before you start the next item. Do not spawn a subagent or workflow. After all three items are completed, reply with exactly: done"
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"pending\"},{\"content\":\"refine the greeting\",\"status\":\"pending\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the initial all-pending snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"in_progress\"},{\"content\":\"refine the greeting\",\"status\":\"pending\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the first in-progress snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"completed\"},{\"content\":\"refine the greeting\",\"status\":\"pending\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the first completed snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"completed\"},{\"content\":\"refine the greeting\",\"status\":\"in_progress\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the second in-progress snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"completed\"},{\"content\":\"refine the greeting\",\"status\":\"completed\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the second completed snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"completed\"},{\"content\":\"refine the greeting\",\"status\":\"completed\"},{\"content\":\"reply done\",\"status\":\"in_progress\"}]}. This is the third in-progress snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"completed\"},{\"content\":\"refine the greeting\",\"status\":\"completed\"},{\"content\":\"reply done\",\"status\":\"completed\"}]}. This is the all completed snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
         },
         {
           "type": "wait_turn"
@@ -109,7 +151,7 @@
         "api_key": "irrlicht-local-recording"
       },
       "timeout_seconds": 600,
-      "scope_note": "Uses the longest committed sibling settle delay, 10 seconds. The 600-second budget covers seven local qwen model/tool rounds; the existing one-tool DSH cell allows 240 seconds."
+      "scope_note": "Seven separate DSH turns force one full-list todo_write snapshot per required state. This addresses the first live recording, which skipped the first-completed and second-completed snapshots when asked to perform the full walk in one turn. The 600-second timeout and 10-second trailing settle delay remain."
     }
   }
 }
