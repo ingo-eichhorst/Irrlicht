@@ -251,8 +251,8 @@ type catalogCensus struct {
 // #1986 adds graded non-core DeepSeek Harness sidecars and a second task-list
 // recording. The same census command measured only the Recordings field moving;
 // the replay discrepancy populations and ungraded population held constant.
-// #1980's final DSH fixture pass moves Recordings 425 -> 433, Divergent
-// 188 -> 191, and DivergentByCountsAndKinds 187 -> 190. The exact generator
+// #1980's final DSH fixture pass updates Recordings, Divergent, and
+// DivergentByCountsAndKinds to their generator-measured values. The exact
 // command below measured all three changes. The eight new sidecars are DSH
 // 1-6, 2-12, 2-3, 3-1, 3-2, 3-3, 4-1, and 5-8. The three new divergent
 // sidecars are the regraded 2-12 golden and the new 3-2 and 3-3 recordings:
