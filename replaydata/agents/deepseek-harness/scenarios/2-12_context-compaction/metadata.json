@@ -5,7 +5,7 @@
     "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
-    "daemon_version": "0.6.4+66497e7",
+    "daemon_version": "0.6.4+28ce9c8",
     "confidence": 0.98,
     "notes": "Observed 2026-09-20: manual compaction emits the full same-session working and ready lifecycle."
   },
@@ -14,20 +14,20 @@
       "schema_version": 1,
       "scenario_id": "context-compaction",
       "agent": "deepseek-harness",
-      "assessed_at": "2026-09-18T21:09:44Z",
+      "assessed_at": "2026-09-20T21:57:16+02:00",
       "agent_supports": "yes",
       "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.98,
-      "body": "Current implementation: the DSH parser maps standalone compaction/start and compaction/end; inline numeric-turn markers remain skipped. The driver polls durable compaction/end with a deadline and fails on timeout or unreadable transcript. Fresh live verification remains required. Historical pre-fix recordings used a parser without these mappings and a fixed delay.",
+      "body": "Current implementation: the DSH parser maps standalone compaction/start and compaction/end; inline numeric-turn markers remain skipped. The driver polls durable compaction/end with a deadline and fails on timeout or unreadable transcript. The 2026-09-20 live recording passed all eight phases and all transcript and observation assertions. Its staged precheck.json records daemon version 0.6.4+28ce9c8, and its run-manifest start and end HEAD are 28ce9c850. Historical pre-fix recordings used a parser without these mappings and a fixed delay.",
       "historical_body": "Pre-fix assessment: the DSH parser skipped standalone compaction markers and the recipe used a fixed post-/compact delay. The committed historical recording therefore did not verify the required compact working-to-ready arc. This historical diagnosis does not describe current code.",
       "caveats": [
         "Vacuous-pass condition: an unrelated DSH transcript could satisfy the lifecycle chain while this run never compacts. The fresh per-run cwd and the driver's pre-launch marker are load-bearing recipe inputs, and transcript assertions require exactly one compaction/start, compaction/summary, and compaction/end in the selected transcript.",
-        "Historical pre-fix diagnosis: the installed source exposed the marker pair; current parser and driver behavior require a fresh live recording for verification. The source explicitly appends the standalone marker pair, but record must confirm the installed TUI emits those records with the composed profile.",
+        "Historical pre-fix diagnosis: the installed source exposed the marker pair. The 2026-09-20 live recording confirms that the composed TUI emits the marker pair and that the current parser and driver verify the arc.",
         "A tiny first turn can make `/compact` report `no compactable history yet` or reject a summary that is not smaller than the selected span. The recipe asks for 600 repeated tokens so the summary has a useful smaller target, and the transcript assertions fail if no compaction transaction occurs.",
         "Load-bearing environment precondition: LM Studio must expose qwen/qwen3.5-9b at http://127.0.0.1:1234/v1, and the active TUI profile must still compose the compaction-basic service. The driver pins the endpoint and model, but record must re-probe both inputs.",
         "The scenario requires zero tool calls. Both user prompts explicitly forbid tools, and the spec rejects every tool/call record. The auxiliary compaction request is an LLM request, not an agent tool call.",
-        "The scenario process says the agent emits a normal turn-end signal after compaction. DeepSeek Harness manual compaction instead emits compaction/end with turn:null. The marker is a more precise equivalent boundary, and the current parser maps it; fresh recording required."
+        "The scenario process says the agent emits a normal turn-end signal after compaction. DeepSeek Harness manual compaction instead emits compaction/end with turn:null. The marker is a more precise equivalent boundary, and the current parser maps it. The 2026-09-20 live recording verified this boundary."
       ],
       "sources": [
         {
@@ -125,7 +125,7 @@
       "verify": [
         "the same DSH session completes the priming ready-to-working-to-ready turn",
         "the raw transcript contains one successful compaction/start, compaction/summary, compaction/end transaction",
-        "the same session enters working at compaction/start and returns to ready at compaction/end without waiting — current parser behavior; fresh live verification required",
+        "the same session enters working at compaction/start and returns to ready at compaction/end without waiting",
         "the post-compaction prompt completes ready-to-working-to-ready on the same session",
         "the final session stays ready and the transcript contains no tool/call records",
         "the recording reports qwen/qwen3.5-9b and non-zero tokens"
