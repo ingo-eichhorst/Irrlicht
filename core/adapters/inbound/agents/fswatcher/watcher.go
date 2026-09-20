@@ -533,12 +533,16 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	projectDir := filepath.Base(filepath.Dir(name))
 	if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 		sessionID, known := w.emittedSessionID[name]
-		if !known {
-			return
-		}
+		// A header-linked file can be parked while it is still zero bytes. It
+		// may disappear before a readable header establishes an emitted ID.
+		// Clear all per-path bookkeeping in either case, so a later file at the
+		// same path starts a new lifecycle.
 		delete(w.pendingNew, name)
 		delete(w.emitted, name)
 		delete(w.emittedSessionID, name)
+		if !known {
+			return
+		}
 		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
 		return
 	}
