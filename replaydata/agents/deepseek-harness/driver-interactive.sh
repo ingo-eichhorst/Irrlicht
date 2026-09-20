@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn wait_compaction sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
+DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -195,6 +195,8 @@ resolve_transcript() {
 
 # shellcheck source=turn-count.sh
 source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
+# shellcheck source=child-turn.sh
+source "$(dirname "${BASH_SOURCE[0]}")/child-turn.sh"
 
 boot_slot() { # [resume-session-id]
   local resume_id="${1:-}" command_text pane
@@ -305,6 +307,16 @@ step_wait_compaction() {
   echo "[driver] wait_compaction timed out without compaction/end" >&2
   EXIT_REASON="timeout"
   return 1
+}
+
+step_await_child_turn_end() {
+  local child_transcript
+  resolve_transcript || return 1
+  if ! child_transcript="$(dsh_await_child_turn_end "$DSH_SESSIONS_DIR" "$UUID" "$DEADLINE")"; then
+    EXIT_REASON="child_turn_end_timeout"
+    return 1
+  fi
+  echo "[driver] native child completed turn: $child_transcript" >&2
 }
 
 step_interrupt() {
@@ -520,6 +532,7 @@ while IFS= read -r step; do
     slash)         step_slash "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)     step_wait_turn || STEP_OK=false ;;
     wait_compaction) step_wait_compaction || STEP_OK=false ;;
+    await_child_turn_end) step_await_child_turn_end || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)     step_interrupt ;;
     keys)          step_keys "$(jq -r '.keys // .text // empty' <<<"$step")" || STEP_OK=false ;;
