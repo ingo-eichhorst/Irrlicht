@@ -87,14 +87,14 @@ func writeMutatedTranscript(t *testing.T, path string, records []map[string]any,
 		}
 	}()
 	for _, record := range records {
-		copy := cloneJSONRecord(t, record)
-		if !mutation.keep(copy) {
+		mutated := cloneJSONRecord(t, record)
+		if !mutation.keep(mutated) {
 			continue
 		}
 		if mutation.mutate != nil {
-			mutation.mutate(copy)
+			mutation.mutate(mutated)
 		}
-		writeJSONRecord(t, f, copy)
+		writeJSONRecord(t, f, mutated)
 	}
 }
 
@@ -104,11 +104,11 @@ func cloneJSONRecord(t *testing.T, record map[string]any) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var copy map[string]any
-	if err := json.Unmarshal(b, &copy); err != nil {
+	var cloned map[string]any
+	if err := json.Unmarshal(b, &cloned); err != nil {
 		t.Fatal(err)
 	}
-	return copy
+	return cloned
 }
 
 func writeJSONRecord(t *testing.T, f *os.File, record map[string]any) {
