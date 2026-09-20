@@ -135,7 +135,8 @@
           "type": "wait_turn"
         },
         {
-          "type": "stop_session_updates"
+          "type": "stop_session_updates",
+          "require_completed_tasks": true
         },
         {
           "type": "sleep",

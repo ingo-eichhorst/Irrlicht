@@ -357,10 +357,14 @@ step_capture_session_updates() {
   kill -0 "$UPDATES_CAPTURE_PID" 2>/dev/null || { echo "[driver] session-update capture closed after opening" >&2; EXIT_REASON="capture_dead"; return 1; }
 }
 
-step_stop_session_updates() {
-  local raw="$STAGING/session_updates.raw.jsonl" jq_status
+step_stop_session_updates() { # [require-completed-tasks]
+  local require_completed="${1:-false}" raw="$STAGING/session_updates.raw.jsonl" jq_status
+  local predicate='select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")'
+  if [[ "$require_completed" == "true" ]]; then
+    predicate='select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready" and (.session.metrics.tasks | length == 3) and ([.session.metrics.tasks[].status] | all(. == "completed")))'
+  fi
   while (( $(remaining_seconds) > 0 )); do
-    if jq -e --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")' "$raw" >/dev/null; then
+    if jq -e --arg id "$UUID" "$predicate" "$raw" >/dev/null; then
       break
     else
       jq_status=$?
@@ -372,7 +376,7 @@ step_stop_session_updates() {
     fi
     sleep 0.25
   done
-  if jq -e --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")' "$raw" >/dev/null; then
+  if jq -e --arg id "$UUID" "$predicate" "$raw" >/dev/null; then
     jq_status=0
   else
     jq_status=$?
@@ -623,7 +627,7 @@ while IFS= read -r step; do
     await_child_turn_end) step_await_child_turn_end || STEP_OK=false ;;
     await_parent_ready) step_await_parent_ready || STEP_OK=false ;;
     capture_session_updates) step_capture_session_updates || STEP_OK=false ;;
-    stop_session_updates) step_stop_session_updates || STEP_OK=false ;;
+    stop_session_updates) step_stop_session_updates "$(jq -r '.require_completed_tasks // false' <<<"$step")" || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)     step_interrupt ;;
     keys)          step_keys "$(jq -r '.keys // .text // empty' <<<"$step")" || STEP_OK=false ;;

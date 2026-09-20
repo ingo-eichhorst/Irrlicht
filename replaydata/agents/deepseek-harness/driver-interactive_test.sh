@@ -165,6 +165,33 @@ run_capture_malformed_json
 run_capture_readiness_failure
 run_capture_ready_frame_timeout
 
+run_capture_completed_tasks_frame() {
+  reset_remaining
+  STAGING="$TMP/capture-completed-tasks" UUID="session-right" EXIT_REASON="ok" REMAINING=1
+  mkdir -p "$STAGING"
+  printf '%s\n' \
+    '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"in_progress"},{"status":"pending"}]}}}' \
+    '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"completed"},{"status":"completed"}]}}}' > "$STAGING/session_updates.raw.jsonl"
+  start_capture_process
+  step_stop_session_updates true
+  jq -e 'select(.session.metrics.tasks | length == 3) | select([.session.metrics.tasks[].status] | all(. == "completed"))' "$STAGING/session_updates.jsonl" >/dev/null
+}
+
+run_capture_completed_tasks_timeout() {
+  STAGING="$TMP/capture-incomplete-tasks" UUID="session-right" EXIT_REASON="ok"
+  mkdir -p "$STAGING"
+  printf '%s\n' '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"in_progress"},{"status":"pending"}]}}}' > "$STAGING/session_updates.raw.jsonl"
+  rm -f "$TMP/incomplete-tasks-polled"
+  remaining_seconds() { if [[ ! -e "$TMP/incomplete-tasks-polled" ]]; then : > "$TMP/incomplete-tasks-polled"; echo 1; else echo 0; fi; }
+  start_capture_process
+  if step_stop_session_updates true; then echo "incomplete task frame unexpectedly succeeded" >&2; return 1; fi
+  stop_session_updates_process
+  [[ "$EXIT_REASON" == "capture_ready_timeout" ]]
+}
+
+run_capture_completed_tasks_frame
+run_capture_completed_tasks_timeout
+
 task_recipe="$ROOT/replaydata/agents/deepseek-harness/scenarios/2-3_task-list/metadata.json"
 task_steps="$(jq -r '.details.recipe.script[].type' "$task_recipe")"
 [[ "$(printf '%s\n' "$task_steps" | sed -n '1p')" == "capture_session_updates" ]]
