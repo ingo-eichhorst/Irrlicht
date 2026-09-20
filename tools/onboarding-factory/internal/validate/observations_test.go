@@ -378,6 +378,21 @@ func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testi
 	if len(report.Asserts) == 0 || report.Asserts[0].OK || report.ExpectedPass() {
 		t.Fatalf("adding a ready-frame task estimate must fail the required assertion: report=%+v", report)
 	}
+
+	etaRemoved := bytes.Replace(frames, []byte(`"task_completion_eta":`), []byte(`"removed_task_completion_eta":`), 1)
+	if bytes.Equal(etaRemoved, frames) {
+		t.Fatal("task-completion-ETA mutation did not change the fixture")
+	}
+	if err := os.WriteFile(path, etaRemoved, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil {
+		t.Fatalf("validate task-completion-ETA mutation: report=%+v err=%v", report, err)
+	}
+	if report.ExpectedPass() || report.Pass {
+		t.Fatalf("removing a working task completion ETA must fail the required present assertion: report=%+v", report)
+	}
 }
 
 func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {

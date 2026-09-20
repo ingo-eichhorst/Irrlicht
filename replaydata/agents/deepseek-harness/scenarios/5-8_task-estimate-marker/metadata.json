@@ -2,12 +2,12 @@
   "scenario_id": "task-estimate-marker",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+bf97ac6",
     "confidence": 0.96,
-    "notes": "Known failing: captured DSH websocket frames carry task_estimate and task_completion_eta while ready. Factory session-update assertions verify both API metric fields."
+    "notes": "Observed: the 2026-09-20 capture has task_estimate and task_completion_eta on marker-bearing working updates and omits both on ready updates."
   },
   "details": {
     "assessment": {
@@ -15,7 +15,7 @@
       "scenario_id": "task-estimate-marker",
       "agent": "deepseek-harness",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.96,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Evidence\n\nThe installed dsh-agent-instructions package loads project AGENTS.md on the first request and injects its content into the model. The DSH adapter scans full assistant text for irrlicht-eta markers before display truncation. The metrics adapter projects task_completion_eta from the parsed estimate. The driver now executes seed_instruction before its first TUI boot.\n\nTwo live qwen/qwen3.5-9b runs on 2026-09-19 did not produce the full marker sequence: the first timed out after 28 tool steps, and the second emitted 0/4 but omitted later markers. The staged transcript of the second run shows 0/4 in the first assistant reply and no marker in replies for phases 1 through 3. These runs do not support declaring the cell recorded.\n\nThe installed LM Studio model list includes google/gemma-4-26b-a4b. Two direct chat-completion probes on 2026-09-19 returned exact parseable 1/4 and 2/4 HTML comments in consecutive turns. This supports one bounded live recording attempt with that model; only the DSH recording can establish the full five-turn acceptance criteria. The recipe keeps five turns, 12-second inter-turn waits, and a 30-second final settle.\n\n## Live websocket backflow (2026-09-19, issue #1986)\n\nA second live DSH run used the same five-turn recipe and an isolated daemon on 127.0.0.1:7840. A Node 22 built-in WebSocket client subscribed to /api/v1/sessions/stream from before turn 1 and printed session_updated messages for the run cwd. The exact decoded projection of the first ready frame was {\"type\":\"session_updated\",\"seq\":514,\"state\":\"ready\",\"updated_at\":1789787210,\"estimate\":{\"total_rounds\":4,\"completed_rounds\":0,\"updated_at\":1789787210,\"source\":\"marker\"},\"eta\":1789788170}. A final ready frame at seq 1001 retained 4/4 and eta 1789787357. Ready frames for 1/4, 2/4, and 3/4 also retained both fields. The ETA values decreased 1789788170 -> 1789787887 -> 1789787611 -> 1789787470 -> 1789787357, and updated_at advanced. Working frames in later turns carried the previous prior marker. The scenario requires task_estimate and task_completion_eta absent at ready, so the daemon is bugged against this scenario even though transcript and lifecycle checks pass. The web client hides the chip at ready; that presentation rule does not remove the fields from the API.\n\nReproduce the capture by starting IRRLICHT_ONBOARD_HOME=/tmp/irr-onb-1986-5-8-probe IRRLICHT_ONBOARD_BIND_ADDR=127.0.0.1:7840 IRRLICHT_PERMISSION_MODE=grant-all go run ./tools/onboarding-factory/cmd/of record run --agent deepseek-harness --scenario task-estimate-marker, then subscribe with Node 22 WebSocket to ws://127.0.0.1:7840/api/v1/sessions/stream before the first turn. For each JSON frame with session.adapter == dsh and session.cwd containing task-estimate-marker, print type, seq, session.state, session.metrics.task_estimate, and session.metrics.task_completion_eta. No existing factory recording artifact stores these websocket metric frames; the committed recording proves marker emission and lifecycle only.",

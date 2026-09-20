@@ -306,7 +306,9 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 
 func (evaluation *recordEvaluation) checkPresent(paths []string, records []map[string]any) {
 	for _, path := range paths {
-		if !allPathExists(records, path) { evaluation.ok = false }
+		if !allPathExists(records, path) {
+			evaluation.ok = false
+		}
 		evaluation.expected += ", each with " + path
 	}
 }
@@ -498,9 +500,13 @@ func anyPathExists(records []map[string]any, path string) bool {
 }
 
 func allPathExists(records []map[string]any, path string) bool {
-	if len(records) == 0 { return false }
+	if len(records) == 0 {
+		return false
+	}
 	for _, record := range records {
-		if _, ok := valueAtPath(record, path); !ok { return false }
+		if _, ok := valueAtPath(record, path); !ok {
+			return false
+		}
 	}
 	return true
 }
