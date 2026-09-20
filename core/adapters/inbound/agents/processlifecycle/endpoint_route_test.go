@@ -178,6 +178,37 @@ func TestRedactEndpoint(t *testing.T) {
 			wantLocal:    true,
 		},
 		{
+			// A LiteLLM-style local proxy is commonly addressed by name
+			// rather than by IP literal — localhost is reserved to loopback
+			// by RFC 6761 §6.3 and needs no DNS resolution to classify.
+			name:         "localhost by name is local",
+			raw:          "http://localhost:4000/v1",
+			wantOK:       true,
+			wantEndpoint: "http://localhost:4000/v1",
+			wantLocal:    true,
+		},
+		{
+			name:         "localhost is case-insensitive",
+			raw:          "http://LOCALHOST:4000/v1",
+			wantOK:       true,
+			wantEndpoint: "http://LOCALHOST:4000/v1",
+			wantLocal:    true,
+		},
+		{
+			name:         "a name under the .localhost TLD is local",
+			raw:          "http://proxy.localhost:4000/v1",
+			wantOK:       true,
+			wantEndpoint: "http://proxy.localhost:4000/v1",
+			wantLocal:    true,
+		},
+		{
+			name:         "an ordinary DNS name is not local",
+			raw:          "http://api.example.com/v1",
+			wantOK:       true,
+			wantEndpoint: "http://api.example.com/v1",
+			wantLocal:    false,
+		},
+		{
 			name:         "private network address is local",
 			raw:          "http://10.0.0.5:11434/v1",
 			wantOK:       true,

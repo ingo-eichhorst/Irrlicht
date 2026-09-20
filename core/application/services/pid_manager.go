@@ -395,20 +395,30 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 }
 
 // captureRoute invokes the route reader if one is installed and the session
-// does not yet have a route recorded. Safe to call multiple times; only
-// populates on the first call that finds one unset.
+// does not yet have an INFORMATIVE route recorded. Safe to call multiple
+// times.
 //
-// Set-once, with no repair path — unlike captureLauncher's Launcher (whose
-// herdr-pane address can be confirmed by a later, separate signal), an
-// env-based route read has nothing left to learn on a second look: the
-// process's env at exec time already answered denied/unreadable/absent/
-// malformed/observed, and processlifecycle.ObserveRoute encodes all five
-// distinctly. A permission revoked after this capture does not retroactively
-// clear the stored observation, matching Launcher's own precedent for
-// already-captured host fields (#1485: a revoke must not clear what was
-// captured while the grant was live).
+// RouteDenied is deliberately NOT locked in the way every other status is:
+// it means "the permission was pending or denied at read time", a fact about
+// consent state, not about the process's environment — and consent can
+// change after this capture runs. Every other status
+// (observed/absent/unreadable/malformed) reflects the process's env at exec
+// time, which is fixed for the process's life, so those ARE locked in on
+// first read, matching captureLauncher's own set-once shape for Launcher.
+//
+// Before this guard existed, ObserveRoute's non-nil-on-every-call contract
+// (unlike LauncherEnvReader, which returns nil on denial) meant the very
+// first capture attempt under a pending grant stored `denied` permanently:
+// state.Route != nil was already true, so no later call — including
+// backfillRoute below — ever looked again, even after the user granted the
+// permission. A caller must still supply a FRESH grant-state read each call
+// (the wiring in startup.go reads permService.Granted per invocation) for
+// the retry to see the grant.
 func (pm *PIDManager) captureRoute(state *session.SessionState, pid int) {
-	if pm.routeEnv == nil || state == nil || state.Route != nil || pid <= 0 {
+	if pm.routeEnv == nil || state == nil || pid <= 0 {
+		return
+	}
+	if state.Route != nil && state.Route.Status != session.RouteDenied {
 		return
 	}
 	state.Route = pm.routeEnv(pid)
@@ -1681,6 +1691,7 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 		}
 	}
 	pm.backfillLauncher(state)
+	pm.backfillRoute(state) // independent of Launcher (#2002)
 	// Re-attach the background-agent badge to sessions persisted before the
 	// field existed, or restored after a daemon restart (#744). Runs after
 	// backfillLauncher so Detached reflects the refreshed TTY.
@@ -1738,6 +1749,30 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 		return
 	}
 	if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
+		pm.touchAndSave(state)
+	}
+}
+
+// backfillRoute reattempts Route capture for a session carrying no
+// informative observation yet: nil (predates the field) or RouteDenied (the
+// endpoint permission was pending or denied the last time this session was
+// read). Mirrors backfillLauncher's top branch, minus its per-field merge —
+// Route is one atomic value, not a struct assembled from independently
+// missing parts.
+//
+// This is what makes a permission granted AFTER a session's first PID
+// assignment actually take effect for that already-running session: nothing
+// re-probes a live process's env continuously, so seeding at the next daemon
+// startup is the sole retry path (#2002 review finding — captureRoute alone,
+// called only from assignPIDLocked on a NEW pid, would otherwise never run
+// again for a session whose PID never changes).
+func (pm *PIDManager) backfillRoute(state *session.SessionState) {
+	if state.Route != nil && state.Route.Status != session.RouteDenied {
+		return
+	}
+	before := state.Route
+	pm.captureRoute(state, state.PID)
+	if state.Route != before {
 		pm.touchAndSave(state)
 	}
 }

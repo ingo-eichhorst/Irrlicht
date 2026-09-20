@@ -8,6 +8,7 @@ package processlifecycle
 import (
 	"net"
 	"net/url"
+	"strings"
 
 	"irrlicht/core/domain/session"
 )
@@ -91,12 +92,19 @@ func redactEndpoint(raw string) (endpoint string, local bool, ok bool) {
 }
 
 // isLocalHost reports whether host is a loopback, private-network, or
-// link-local address. It proves ONLY that: never that inference runs
-// locally, and never a zero cost — a local gateway can forward to a paid
-// upstream service (#2002 §1.3, session.RouteObservation.Local's own doc). A
-// host that isn't a literal IP (a DNS name) reports false rather than being
-// resolved — resolving it would be a network read this package never makes.
+// link-local address, OR the "localhost" name RFC 6761 §6.3 reserves to
+// loopback (case-insensitively, and any name under the ".localhost" TLD it
+// also reserves) — recognized by name, never by resolving it, so this stays
+// a pure string/IP check with no network read. It proves ONLY that: never
+// that inference runs locally, and never a zero cost — a local gateway can
+// forward to a paid upstream service (#2002 §1.3, session.RouteObservation.Local's
+// own doc). Any other host that isn't a literal IP (an ordinary DNS name)
+// reports false rather than being resolved.
 func isLocalHost(host string) bool {
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
 	ip := net.ParseIP(host)
 	if ip == nil {
 		return false
