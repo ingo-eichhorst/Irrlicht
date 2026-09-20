@@ -6,14 +6,21 @@
 # or found. Arguments: <bind-address> <parent-id> <deadline-epoch-seconds>
 dsh_await_parent_ready() {
   local bind_addr="$1" parent_id="$2" deadline="$3"
-  local response state last_state="" first_scan=1
-  [[ -n "$bind_addr" ]] || {
-    echo "await_parent_ready: daemon bind address is empty" >&2
+  local port daemon_url response state last_state="" first_scan=1
+  if [[ ! "$bind_addr" =~ ^127\.0\.0\.1:([0-9]+)$ ]]; then
+    echo "await_parent_ready: daemon bind address must be 127.0.0.1 with a numeric unprivileged port" >&2
     return 1
-  }
+  fi
+  port="${BASH_REMATCH[1]}"
+  if (( 10#$port < 1024 || 10#$port > 65535 )); then
+    echo "await_parent_ready: daemon bind address must use an unprivileged port" >&2
+    return 1
+  fi
+  # parent-ready_test.sh exercises the rejected address forms before curl runs.
+  daemon_url="http://127.0.0.1:$port" # NOSONAR: the validated literal is loopback-only.
   while (( first_scan || $(date +%s) <= deadline )); do
     first_scan=0
-    if ! response="$(curl -fsS --connect-timeout 1 --max-time 2 "http://$bind_addr/api/v1/sessions")"; then
+    if ! response="$(curl -fsS --connect-timeout 1 --max-time 2 "$daemon_url/api/v1/sessions")"; then
       echo "await_parent_ready: could not read daemon session snapshot from $bind_addr" >&2
       return 1
     fi
