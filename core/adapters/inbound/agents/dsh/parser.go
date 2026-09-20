@@ -246,28 +246,45 @@ func (p *Parser) parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
 }
 
 func (p *Parser) parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
-	message := object(object(raw, "data"), "message")
-	id := text(object(message, "source"), "callId")
+	id, message := toolResultIDAndMessage(raw)
 	if id == "" {
 		ev.Skip = true
 		return
 	}
 	ev.EventType = "function_call_output"
 	ev.ToolResultIDs = []string{id}
+	ev.IsError = toolResultHasError(message)
+	p.completeBackgroundCall(id, message, ev)
+}
+
+func toolResultIDAndMessage(raw map[string]any) (string, map[string]any) {
+	message := object(object(raw, "data"), "message")
+	return text(object(message, "source"), "callId"), message
+}
+
+func toolResultHasError(message map[string]any) bool {
 	for _, item := range array(message, "content") {
 		block, _ := item.(map[string]any)
-		if value, ok := block["isError"].(bool); ok && value {
-			ev.IsError = true
+		if isError, _ := block["isError"].(bool); isError {
+			return true
 		}
 	}
-	if _, background := p.backgroundCalls[id]; background {
-		delete(p.backgroundCalls, id)
-		if !ev.IsError {
-			if jobID := dshBackgroundJobID(toolResultText(message)); jobID != "" {
-				ev.BackgroundSpawns = []tailer.BackgroundSpawn{{BashID: jobID, NoProbeHold: true}}
-			}
-		}
+	return false
+}
+
+func (p *Parser) completeBackgroundCall(id string, message map[string]any, ev *tailer.ParsedEvent) {
+	if _, background := p.backgroundCalls[id]; !background {
+		return
 	}
+	delete(p.backgroundCalls, id)
+	if ev.IsError {
+		return
+	}
+	jobID := dshBackgroundJobID(toolResultText(message))
+	if jobID == "" {
+		return
+	}
+	ev.BackgroundSpawns = []tailer.BackgroundSpawn{{BashID: jobID, NoProbeHold: true}}
 }
 
 func dshBackgroundBash(arguments string) bool {
@@ -294,17 +311,27 @@ func dshBackgroundJobID(value string) string {
 }
 
 func sourceIsTerminalBackgroundNotice(source map[string]any, value string, ev *tailer.ParsedEvent) bool {
-	if text(source, "kind") != "plugin" || text(source, "plugin") != "tool-jobs" || text(source, "form") != "notice" {
+	if !sourceIsToolJobsNotice(source) {
 		return false
 	}
 	match := backgroundJobNoticeRe.FindStringSubmatch(value)
-	if len(match) != 3 || strings.EqualFold(match[2], "running") {
+	if !backgroundJobNoticeIsTerminal(match) {
 		return false
 	}
 	ev.Skip = true
 	ev.TerminatedBackgroundTaskIDs = []string{match[1]}
 	ev.OriginTaskNotification = true
 	return true
+}
+
+func sourceIsToolJobsNotice(source map[string]any) bool {
+	return text(source, "kind") == "plugin" &&
+		text(source, "plugin") == "tool-jobs" &&
+		text(source, "form") == "notice"
+}
+
+func backgroundJobNoticeIsTerminal(match []string) bool {
+	return len(match) == 3 && !strings.EqualFold(match[2], "running")
 }
 
 func toolResultText(message map[string]any) string {
