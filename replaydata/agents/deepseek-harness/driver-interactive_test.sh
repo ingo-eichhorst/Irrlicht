@@ -164,4 +164,10 @@ run_capture_zero_or_wrong_frames
 run_capture_malformed_json
 run_capture_readiness_failure
 run_capture_ready_frame_timeout
+
+task_recipe="$ROOT/replaydata/agents/deepseek-harness/scenarios/2-3_task-list/metadata.json"
+task_steps="$(jq -r '.details.recipe.script[].type' "$task_recipe")"
+[[ "$(printf '%s\n' "$task_steps" | sed -n '1p')" == "capture_session_updates" ]]
+[[ "$(printf '%s\n' "$task_steps" | sed -n '15p')" == "stop_session_updates" ]]
+[[ "$(printf '%s\n' "$task_steps" | sed -n '14p')" == "wait_turn" ]]
 echo "ok: deepseek-harness wait_compaction"

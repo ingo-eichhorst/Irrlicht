@@ -83,6 +83,9 @@
       ],
       "script": [
         {
+          "type": "capture_session_updates"
+        },
+        {
           "type": "send",
           "text": "For this turn, call only the todo_write tool. Call it exactly once with this complete argument: {\"todos\":[{\"content\":\"draft a greeting\",\"status\":\"pending\"},{\"content\":\"refine the greeting\",\"status\":\"pending\"},{\"content\":\"reply done\",\"status\":\"pending\"}]}. This is the initial all-pending snapshot. Keep every item and status exactly as shown. Do not call any other tool. After the tool result, reply only DONE."
         },
@@ -130,6 +133,9 @@
         },
         {
           "type": "wait_turn"
+        },
+        {
+          "type": "stop_session_updates"
         },
         {
           "type": "sleep",
