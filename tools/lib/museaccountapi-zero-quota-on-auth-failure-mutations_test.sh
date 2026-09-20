@@ -113,7 +113,7 @@ assert_go_test_goes_red \
   "$REPLACEMENT" \
   "./core/application/services/..." \
   "TestMuseAccountRefresh_NeverPublishesZeroOnFailure" \
-  "expected an error on an auth-rejected fetch"
+  "expected an error on the immediate retry"
 
 if [[ $fails -gt 0 ]]; then
   echo "museaccountapi-zero-quota-on-auth-failure-mutations: $fails FAILED"

@@ -53,6 +53,16 @@ func TestMuseAccountRefresh_EmptySessionIDRefused(t *testing.T) {
 // tools/lib/museaccountapi-zero-quota-on-auth-failure-mutations_test.sh
 // mutates the !obs.HasValue branch in museaccountpoll.go to return an empty
 // snapshot instead of an error and confirms this test goes red.
+//
+// This exercises the !obs.HasValue branch specifically (not the earlier
+// `err != nil` one, which a failed Poll call also returns through and which
+// TestMuseAccountRefresh_ResolverFailureNeverPublishesZero already covers):
+// accountpoller.go's Poll returns (Observation{HasValue:false}, nil) — no
+// error — for a caller that retries WITHIN the post-failure backoff window,
+// serving the cached "never succeeded" state directly. The first call here
+// populates that state (its own error is asserted too); the second,
+// immediate call on the same session hits exactly that no-error/no-value
+// path.
 func TestMuseAccountRefresh_NeverPublishesZeroOnFailure(t *testing.T) {
 	poller := NewAccountPoller()
 	transport := &fakeTransport{
@@ -68,6 +78,17 @@ func TestMuseAccountRefresh_NeverPublishesZeroOnFailure(t *testing.T) {
 	}
 	if snap != nil {
 		t.Fatalf("snap = %+v, want nil — a failed fetch must never publish a snapshot", snap)
+	}
+
+	// Immediate retry: lands in the post-failure backoff window, so Poll
+	// returns the cached (HasValue:false) state with a NIL error — the
+	// branch this test's own mutation fixture targets.
+	snap, err = MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(2, 0))
+	if err == nil {
+		t.Fatal("expected an error on the immediate retry (no cached value yet, in backoff)")
+	}
+	if snap != nil {
+		t.Fatalf("snap = %+v, want nil — no cached value must never publish a snapshot", snap)
 	}
 }
 
