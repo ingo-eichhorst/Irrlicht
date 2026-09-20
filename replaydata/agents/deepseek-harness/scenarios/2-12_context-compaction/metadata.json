@@ -2,12 +2,12 @@
   "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "unknown",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+66497e7",
-    "confidence": 0.88,
-    "notes": "Current code maps standalone compaction/start and compaction/end to lifecycle boundaries. The driver polls durable compaction/end with a deadline. A fresh live recording must verify the current daemon output."
+    "confidence": 0.98,
+    "notes": "Observed 2026-09-20: manual compaction emits the full same-session working and ready lifecycle."
   },
   "details": {
     "assessment": {
@@ -16,9 +16,9 @@
       "agent": "deepseek-harness",
       "assessed_at": "2026-09-18T21:09:44Z",
       "agent_supports": "yes",
-      "daemon_capability": "unknown",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.88,
+      "confidence": 0.98,
       "body": "Current implementation: the DSH parser maps standalone compaction/start and compaction/end; inline numeric-turn markers remain skipped. The driver polls durable compaction/end with a deadline and fails on timeout or unreadable transcript. Fresh live verification remains required. Historical pre-fix recordings used a parser without these mappings and a fixed delay.",
       "historical_body": "Pre-fix assessment: the DSH parser skipped standalone compaction markers and the recipe used a fixed post-/compact delay. The committed historical recording therefore did not verify the required compact working-to-ready arc. This historical diagnosis does not describe current code.",
       "caveats": [
