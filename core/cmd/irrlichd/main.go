@@ -732,8 +732,8 @@ func runDaemon() {
 		HookHealth: liveHookHealth(hookLiveness, hookVerifier),
 	})
 
-	var watcherFactories map[string]services.WatcherFactory
-	detector, watcherFactories = buildDetector(buildDetectorDeps{
+	home, _ := os.UserHomeDir()
+	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
 		DemoMode:         demoMode,
 		PWPort:           pwPort,
 		CachedRepo:       cachedRepo,
@@ -747,20 +747,15 @@ func runDaemon() {
 		CostTracker:      costTracker,
 		AutonomySpans:    autonomySpans,
 		HistoryTracker:   historyTracker,
-	})
-
-	home, _ := os.UserHomeDir()
-	permService := setupPermissionService(mux, setupPermissionServiceDeps{
-		Detector:         detector,
-		Push:             push,
-		Logger:           logger,
-		Cfg:              cfg,
-		AllAgents:        allAgents,
-		WatcherFactories: watcherFactories,
-		DemoMode:         demoMode,
-		Home:             home,
-		StartGastown:     startGastown,
-		StopGastown:      stopGastown,
+	}, setupPermissionServiceDeps{
+		Push:         push,
+		Logger:       logger,
+		Cfg:          cfg,
+		AllAgents:    allAgents,
+		DemoMode:     demoMode,
+		Home:         home,
+		StartGastown: startGastown,
+		StopGastown:  stopGastown,
 	})
 
 	// The watchdog's second collaborator, available only now: "is this channel

@@ -44,12 +44,15 @@ func Agent() agent.Agent {
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, state, model & context-window usage",
 				Touches: "Reads compressed session transcripts and sibling session.lock files " +
-					"under ~/.dsh/sessions/ or $DSH_HOME/sessions/",
+					"under ~/.dsh/sessions/ or $DSH_HOME/sessions/; reads process arguments " +
+					"and parent PIDs to identify one-shot provider children",
 				Detail: "Tails the highest session.vN.jsonl.zstd generation under each " +
 					"$DSH_HOME/sessions/<workspace>/session-<uuid>/ directory to derive " +
 					"session state, activity, model, and token usage. Checks which process " +
 					"holds the sibling session.lock file open for writing to bind a live " +
-					"session to its PID. Read-only — no file or DeepSeek Harness profile " +
+					"session to its PID. With native-adapter consent, checks process " +
+					"arguments and parent PIDs to avoid duplicate Codex or Claude Code " +
+					"rows for DSH-owned one-shot children. Read-only — no file or DeepSeek Harness profile " +
 					"is modified. Toggling off stops all reading immediately.",
 			},
 		},

@@ -53,9 +53,11 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.codex/sessions/",
+				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
 				Detail: "Tails *.jsonl session files under ~/.codex/sessions/YYYY/MM/DD/ " +
-					"to derive session state, cost, and token metrics. Read-only — " +
+					"to derive session state, cost, and token metrics. Scans Codex processes " +
+					"to show sessions before their first message. With DSH consent, checks " +
+					"process arguments and parent PIDs to avoid duplicate one-shot child rows. Read-only — " +
 					"no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
 			},

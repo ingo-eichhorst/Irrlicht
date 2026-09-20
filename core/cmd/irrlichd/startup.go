@@ -19,6 +19,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
@@ -643,19 +644,20 @@ func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 
 // buildDetectorDeps bundles buildDetector's dependencies.
 type buildDetectorDeps struct {
-	DemoMode         bool
-	PWPort           outbound.ProcessWatcher
-	CachedRepo       outbound.SessionRepository
-	Logger           outbound.Logger
-	GitResolver      *git.Adapter
-	MetricsCollector outbound.MetricsCollector
-	Push             outbound.PushBroadcaster
-	Version          string
-	Cfg              config.Config
-	AllAgents        []agent.Agent
-	CostTracker      outbound.CostTracker
-	AutonomySpans    outbound.AutonomySpanStore
-	HistoryTracker   *services.HistoryTracker
+	DemoMode          bool
+	PWPort            outbound.ProcessWatcher
+	CachedRepo        outbound.SessionRepository
+	Logger            outbound.Logger
+	GitResolver       *git.Adapter
+	MetricsCollector  outbound.MetricsCollector
+	Push              outbound.PushBroadcaster
+	Version           string
+	Cfg               config.Config
+	AllAgents         []agent.Agent
+	CostTracker       outbound.CostTracker
+	AutonomySpans     outbound.AutonomySpanStore
+	HistoryTracker    *services.HistoryTracker
+	DSHObserveGranted func() bool
 }
 
 // buildDetector constructs the SessionDetector (orchestrating Watchers +
@@ -678,13 +680,21 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 		}
 		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	}
+	dshChildFilter := func(provider string, pid int) bool {
+		if deps.DSHObserveGranted == nil || !deps.DSHObserveGranted() {
+			return false
+		}
+		return dsh.OwnsProviderChild(provider, pid, func(parentPID int) bool {
+			return visibleDSHParent(deps.CachedRepo, deps.DSHObserveGranted, parentPID)
+		})
+	}
 
 	var watcherFactories map[string]services.WatcherFactory
 	if !deps.DemoMode {
 		watcherFactories = make(map[string]services.WatcherFactory, len(deps.AllAgents))
 		for _, a := range deps.AllAgents {
 			watcherFactories[a.Identity.Name] = func() []inbound.Watcher {
-				ws, _ := buildAgentWatchers(a, deps.Cfg.MaxSessionAge, realSessionCheck, deps.Logger)
+				ws, _ := buildAgentWatchers(a, deps.Cfg.MaxSessionAge, realSessionCheck, dshChildFilter, deps.Logger)
 				return ws
 			}
 		}
@@ -731,6 +741,52 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 	))
 
 	return detector, watcherFactories
+}
+
+func visibleDSHParent(repo outbound.SessionRepository, consent func() bool, pid int) bool {
+	if consent == nil || !consent() || repo == nil {
+		return false
+	}
+	sessions, err := repo.ListAll()
+	if err != nil {
+		return false
+	}
+	for _, state := range sessions {
+		if isVisibleDSHParent(state, pid) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVisibleDSHParent(state *session.SessionState, pid int) bool {
+	if state == nil || state.Adapter != dsh.AdapterName || state.PID != pid || state.TranscriptPath == "" {
+		return false
+	}
+	return state.State == session.StateWorking || state.State == session.StateWaiting
+}
+
+type dshObserveConsent struct {
+	service *services.PermissionService
+}
+
+func (c *dshObserveConsent) granted() bool {
+	if c.service == nil {
+		return false
+	}
+	return c.service.ObserveGranted(dsh.AdapterName)
+}
+
+func setupDetectorAndPermissions(mux *http.ServeMux, detectorDeps buildDetectorDeps,
+	permissionDeps setupPermissionServiceDeps) (*services.SessionDetector, *services.PermissionService) {
+	dshConsent := &dshObserveConsent{}
+	detectorDeps.DSHObserveGranted = dshConsent.granted
+	detector, watcherFactories := buildDetector(detectorDeps)
+	permissionDeps.Detector = detector
+	permissionDeps.WatcherFactories = watcherFactories
+	permService := setupPermissionService(mux, permissionDeps)
+	dshConsent.service = permService
+	return detector, permService
 }
 
 // setupPermissionService wires the PermissionService (issue #570): the

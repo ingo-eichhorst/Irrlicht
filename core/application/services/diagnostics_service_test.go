@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,7 +34,10 @@ type diagFakeObserver struct {
 	byName map[string][]int
 }
 
-func (f *diagFakeObserver) FindByName(n string) ([]int, error)   { return f.byName[n], nil }
+func (f *diagFakeObserver) FindByName(n string) ([]int, error) { return f.byName[n], nil }
+func (f *diagFakeObserver) ParentPIDOf(context.Context, int) (int, error) {
+	return 0, fmt.Errorf("parent not configured")
+}
 func (f *diagFakeObserver) FindByCmdline(string) ([]int, error)  { return nil, nil }
 func (f *diagFakeObserver) ArgvOf(pid int) ([]string, error)     { return f.argv[pid], nil }
 func (f *diagFakeObserver) CWDOf(pid int) (string, error)        { return f.cwd[pid], nil }

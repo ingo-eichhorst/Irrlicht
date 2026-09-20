@@ -32,6 +32,11 @@ type darwinObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return darwinObserver{} }
 
+func (darwinObserver) ParentPIDOf(ctx context.Context, pid int) (int, error) {
+	ppid, _, err := readProcInfo(ctx, pid)
+	return ppid, err
+}
+
 // FindByName returns PIDs whose executable name exactly matches name
 // (pgrep -x).
 func (darwinObserver) FindByName(name string) ([]int, error) {

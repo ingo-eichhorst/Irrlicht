@@ -765,6 +765,9 @@ type ProcessWatcher interface {
 // the discovery/scanner orchestration that routes every OS primitive through
 // it. The concrete implementation is selected at compile time by build tag.
 type ProcessObserver interface {
+	// ParentPIDOf reads one parent link. A failed or incomplete read returns
+	// an error, so callers cannot treat unknown ancestry as a match.
+	ParentPIDOf(ctx context.Context, pid int) (int, error)
 	// FindByName returns the PIDs of processes whose executable base name
 	// exactly matches name. Returns nil, nil when none match.
 	FindByName(name string) ([]int, error)
