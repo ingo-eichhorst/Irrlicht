@@ -360,11 +360,11 @@ func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testi
 		t.Fatal(err)
 	}
 	baseline, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil || baseline == nil || !baseline.ExpectedPass() || baseline.Pass {
-		t.Fatalf("documented ready-frame leak must be an expected failure: report=%+v err=%v", baseline, err)
+	if err != nil || baseline == nil || !baseline.ExpectedPass() || !baseline.Pass {
+		t.Fatalf("fixed ready-frame projection must pass: report=%+v err=%v", baseline, err)
 	}
 
-	mutated := bytes.ReplaceAll(frames, []byte(`"task_estimate":`), []byte(`"removed_task_estimate":`))
+	mutated := bytes.ReplaceAll(frames, []byte(`"metrics":{`), []byte(`"metrics":{"task_estimate":{"total_rounds":4,"completed_rounds":0},`))
 	if bytes.Equal(mutated, frames) {
 		t.Fatal("task-estimate mutation did not change the fixture")
 	}
@@ -375,8 +375,8 @@ func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testi
 	if err != nil || report == nil {
 		t.Fatalf("validate task-estimate mutation: report=%+v err=%v", report, err)
 	}
-	if len(report.Asserts) == 0 || !report.Asserts[0].OK || report.ExpectedPass() {
-		t.Fatalf("removing ready-frame task estimates must expose the stale known-failure waiver: report=%+v", report)
+	if len(report.Asserts) == 0 || report.Asserts[0].OK || report.ExpectedPass() {
+		t.Fatalf("adding a ready-frame task estimate must fail the required assertion: report=%+v", report)
 	}
 }
 
