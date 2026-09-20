@@ -312,7 +312,7 @@ step_wait_compaction() {
 step_await_child_turn_end() {
   local child_transcript
   resolve_transcript || return 1
-  if ! child_transcript="$(dsh_await_child_turn_end "$DSH_SESSIONS_DIR" "$UUID" "$DEADLINE")"; then
+  if ! child_transcript="$(dsh_await_child_turn_end "$DSH_SESSIONS_DIR" "$UUID" "$MARKER" "$DEADLINE")"; then
     EXIT_REASON="child_turn_end_timeout"
     return 1
   fi

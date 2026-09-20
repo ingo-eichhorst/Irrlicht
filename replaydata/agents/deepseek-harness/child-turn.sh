@@ -3,16 +3,16 @@
 
 # dsh_await_child_turn_end waits until a durable native child of parent_id has
 # a completed turn/end record. It prints the matching transcript path.
-# Arguments: <sessions-dir> <parent-id> <deadline-epoch-seconds>
-dsh_await_child_turn_end() {
-  local sessions_dir="$1" parent_id="$2" deadline="$3"
+# Arguments: <sessions-dir> <parent-id> <marker-path> <deadline-epoch-seconds>
+dsh_await_child_turn_end() (
+  local sessions_dir="$1" parent_id="$2" marker_path="$3" deadline="$4"
   local candidate child_id decoded header header_id header_parent origin
   local saw_child=0 saw_wrong_parent=0 saw_unreadable=0
   decoded="$(mktemp "${TMPDIR:-/tmp}/irrlicht-dsh-child-turn.XXXXXX")" || {
     echo "await_child_turn_end: cannot allocate decode buffer" >&2
     return 1
   }
-  trap 'rm -f "$decoded"' RETURN
+  trap 'rm -f "$decoded"' EXIT
 
   while (( $(date +%s) <= deadline )); do
     while IFS= read -r candidate; do
@@ -37,7 +37,7 @@ dsh_await_child_turn_end() {
         printf '%s\n' "$candidate"
         return 0
       fi
-    done < <(find "$sessions_dir" -type f -name 'session.v*.jsonl.zstd' 2>/dev/null)
+    done < <(find "$sessions_dir" -type f -name 'session.v*.jsonl.zstd' -newer "$marker_path" 2>/dev/null)
     sleep 0.2
   done
 
@@ -51,4 +51,4 @@ dsh_await_child_turn_end() {
     echo "await_child_turn_end: no durable native child linked to $parent_id appeared before deadline" >&2
   fi
   return 1
-}
+)
