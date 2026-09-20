@@ -28,9 +28,20 @@ func fakeSecurity(t *testing.T, script string) {
 	t.Cleanup(func() { SecurityPath = prev })
 }
 
+// testTimeout is generous (not a measured probe cost — a deliberate ceiling)
+// for the two tests below whose fake `security` script exits immediately:
+// under a loaded machine running the full -race suite in parallel,
+// process spawn+schedule alone was measured to exceed a 1s bound at least
+// once (found running this file inside the full repo suite, issue #2007
+// review follow-up) even though the script itself does no work. These
+// tests assert CORRECTNESS (the right string / the right error), not
+// latency, so a generous bound costs nothing in the common case and only
+// matters when it saves the test from a false failure.
+const testTimeout = 10 * time.Second
+
 func TestRaw_SuccessTrimsTrailingNewline(t *testing.T) {
 	fakeSecurity(t, `echo 'the-secret-value'`)
-	got, err := Raw(context.Background(), "svc", "acct", time.Second)
+	got, err := Raw(context.Background(), "svc", "acct", testTimeout)
 	if err != nil {
 		t.Fatalf("Raw: %v", err)
 	}
@@ -41,7 +52,7 @@ func TestRaw_SuccessTrimsTrailingNewline(t *testing.T) {
 
 func TestRaw_ItemNotFoundIsAnAnsweredError(t *testing.T) {
 	fakeSecurity(t, `exit 44`) // security's real "item not found" exit code
-	if _, err := Raw(context.Background(), "svc", "acct", time.Second); err == nil {
+	if _, err := Raw(context.Background(), "svc", "acct", testTimeout); err == nil {
 		t.Fatal("expected an error for a nonzero exit")
 	}
 }
@@ -71,7 +82,7 @@ func TestRaw_NeverPassesABareRootContextToTheChild(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(8 * time.Second):
 		t.Fatal("Raw did not respect its own timeout — the child was not bounded")
 	}
 }
