@@ -1,7 +1,9 @@
 package dsh
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,7 +37,10 @@ const (
 type Parser struct {
 	unsupportedVersion string
 	todos              tailer.TodoReconciler
+	backgroundCalls    map[string]struct{}
 }
+
+var backgroundJobNoticeRe = regexp.MustCompile(`^background job (bash-[[:alnum:]-]+)(?: .* )?finished \[status: ([^,\]]+)`)
 
 type recordHandler func(*Parser, map[string]any, *tailer.ParsedEvent)
 
@@ -53,8 +58,8 @@ var recordHandlers = map[string]recordHandler{
 	recordApprovalDecided:  statelessHandler(parseApprovalDecided),
 	recordAssistantMessage: statelessHandler(parseAssistantMessage),
 	recordUserMessage:      statelessHandler(parseUserMessage),
-	recordToolCall:         statelessHandler(parseToolCall),
-	recordToolResult:       statelessHandler(parseToolResult),
+	recordToolCall:         (*Parser).parseToolCall,
+	recordToolResult:       (*Parser).parseToolResult,
 	recordTodoWrite:        (*Parser).parseTodoWrite,
 	recordCompactionStart:  statelessHandler(parseCompactionStart),
 	recordCompactionEnd:    statelessHandler(parseCompactionEnd),
@@ -209,7 +214,11 @@ func parseAssistantUsage(data map[string]any, model string, ev *tailer.ParsedEve
 
 func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	message := object(raw, "data")
-	if text(object(message, "source"), "kind") != "user" {
+	source := object(message, "source")
+	if sourceIsTerminalBackgroundNotice(source, messageText(message), ev) {
+		return
+	}
+	if text(source, "kind") != "user" {
 		ev.Skip = true
 		return
 	}
@@ -218,7 +227,7 @@ func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	ev.UserText = messageText(message)
 }
 
-func parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
+func (p *Parser) parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
 	data := object(raw, "data")
 	id := text(data, "callId")
 	name := text(data, "name")
@@ -228,9 +237,15 @@ func parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
 	}
 	ev.EventType = "function_call"
 	ev.ToolUses = []tailer.ToolUse{{ID: id, Name: name}}
+	if name == "bash" && dshBackgroundBash(text(data, "arguments")) {
+		if p.backgroundCalls == nil {
+			p.backgroundCalls = make(map[string]struct{})
+		}
+		p.backgroundCalls[id] = struct{}{}
+	}
 }
 
-func parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
+func (p *Parser) parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
 	message := object(object(raw, "data"), "message")
 	id := text(object(message, "source"), "callId")
 	if id == "" {
@@ -245,6 +260,65 @@ func parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
 			ev.IsError = true
 		}
 	}
+	if _, background := p.backgroundCalls[id]; background {
+		delete(p.backgroundCalls, id)
+		if !ev.IsError {
+			if jobID := dshBackgroundJobID(toolResultText(message)); jobID != "" {
+				ev.BackgroundSpawns = []tailer.BackgroundSpawn{{BashID: jobID, NoProbeHold: true}}
+			}
+		}
+	}
+}
+
+func dshBackgroundBash(arguments string) bool {
+	var value struct {
+		RunInBackground bool `json:"run_in_background"`
+	}
+	return json.Unmarshal([]byte(arguments), &value) == nil && value.RunInBackground
+}
+
+func dshBackgroundJobID(value string) string {
+	prefix := "started background job bash-"
+	if !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimPrefix(value, "started background job "))
+	if len(fields) == 0 {
+		return ""
+	}
+	id := fields[0]
+	if !regexp.MustCompile(`^bash-[[:alnum:]-]+$`).MatchString(id) {
+		return ""
+	}
+	return id
+}
+
+func sourceIsTerminalBackgroundNotice(source map[string]any, value string, ev *tailer.ParsedEvent) bool {
+	if text(source, "kind") != "plugin" || text(source, "plugin") != "tool-jobs" || text(source, "form") != "notice" {
+		return false
+	}
+	match := backgroundJobNoticeRe.FindStringSubmatch(value)
+	if len(match) != 3 || strings.EqualFold(match[2], "running") {
+		return false
+	}
+	ev.Skip = true
+	ev.TerminatedBackgroundTaskIDs = []string{match[1]}
+	ev.OriginTaskNotification = true
+	return true
+}
+
+func toolResultText(message map[string]any) string {
+	var parts []string
+	for _, item := range array(message, "content") {
+		block, _ := item.(map[string]any)
+		for _, nested := range array(block, "content") {
+			textBlock, _ := nested.(map[string]any)
+			if value := strings.TrimSpace(text(textBlock, "text")); value != "" {
+				parts = append(parts, value)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // parseTodoWrite reconciles DSH's authoritative whole-list todo snapshot.

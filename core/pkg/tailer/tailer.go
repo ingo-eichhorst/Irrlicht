@@ -1238,8 +1238,8 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 			continue
 		}
 		t.openBackgroundProcs[sp.BashID] = sp.OutputPath
-		if sp.IsMonitor {
-			t.openBackgroundDeadlines[sp.BashID] = monitorDeadline(sp, parsed.Timestamp)
+		if sp.IsMonitor || sp.NoProbeHold {
+			t.openBackgroundDeadlines[sp.BashID] = noProbeHoldDeadline(sp, parsed.Timestamp)
 		}
 	}
 	for _, poll := range parsed.BashOutputPolls {
@@ -1296,17 +1296,18 @@ func (t *TranscriptTailer) deleteBackgroundProc(id string) {
 	delete(t.openBackgroundDeadlines, id)
 }
 
-// monitorDeadline computes when a Monitor spawn's clock-bound hold expires:
-// launchedAt + MonitorTimeoutMs for an ordinary Monitor, or
-// launchedAt + monitorPersistentHoldCeiling for a persistent one (which
-// reports MonitorTimeoutMs as 0). launchedAt is the spawn event's own
-// transcript timestamp; a zero timestamp (a synthesized event, or a parser
-// that doesn't set one) falls back to wall-clock now rather than computing
-// against the zero time, which would read as already-expired. See issue
-// #1982.
-func monitorDeadline(sp BackgroundSpawn, launchedAt time.Time) time.Time {
+// noProbeHoldDeadline bounds a clock-held background entry. Monitor tasks use
+// their reported timeout. Other adapters can use a measured timeout or the
+// same conservative ceiling while waiting for an explicit terminal notice.
+func noProbeHoldDeadline(sp BackgroundSpawn, launchedAt time.Time) time.Time {
 	if launchedAt.IsZero() {
 		launchedAt = time.Now()
+	}
+	if sp.NoProbeHold {
+		if sp.NoProbeHoldTimeoutMs > 0 {
+			return launchedAt.Add(time.Duration(sp.NoProbeHoldTimeoutMs) * time.Millisecond)
+		}
+		return launchedAt.Add(monitorPersistentHoldCeiling)
 	}
 	if sp.MonitorPersistent {
 		return launchedAt.Add(monitorPersistentHoldCeiling)
