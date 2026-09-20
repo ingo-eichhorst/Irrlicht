@@ -264,6 +264,36 @@ func TestSessionUpdateAssertionsDetectLeakedMetricMutation(t *testing.T) {
 	}
 }
 
+func TestRecordAssertionsRejectVacuousOrMalformedAbsentPaths(t *testing.T) {
+	records := []map[string]any{{"type": "session_updated", "session": map[string]any{"state": "ready"}}}
+	for _, tc := range []struct {
+		name      string
+		assertion RecordAssertion
+	}{
+		{
+			name: "zero minimum count",
+			assertion: RecordAssertion{
+				Name: "vacuous absence", Where: map[string]any{"type": "session_updated"},
+				Absent: []string{"session.metrics.task_estimate"},
+			},
+		},
+		{
+			name: "empty path segment",
+			assertion: RecordAssertion{
+				Name: "malformed absence", Where: map[string]any{"type": "session_updated"}, MinCount: 1,
+				Absent: []string{"session..metrics"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := evaluateRecordAssertions("session-update", []RecordAssertion{tc.assertion}, records)
+			if err == nil || report != nil {
+				t.Fatalf("invalid absent assertion must fail closed: report=%+v err=%v", report, err)
+			}
+		})
+	}
+}
+
 func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testing.T) {
 	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "5-8_task-estimate-marker"))
 	if err != nil {

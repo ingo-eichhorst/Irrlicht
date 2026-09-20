@@ -191,6 +191,9 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if !validAbsentPaths(assertion.Absent) {
 		return fmt.Errorf("%s assertion %q has an invalid absent-path requirement", kind, assertion.Name)
 	}
+	if len(assertion.Absent) > 0 && assertion.MinCount < 1 {
+		return fmt.Errorf("%s assertion %q has absent paths but no positive minimum count", kind, assertion.Name)
+	}
 	return nil
 }
 
@@ -232,6 +235,11 @@ func validAbsentPaths(paths []string) bool {
 	for _, path := range paths {
 		if path == "" {
 			return false
+		}
+		for _, part := range strings.Split(path, ".") {
+			if part == "" {
+				return false
+			}
 		}
 	}
 	return true
