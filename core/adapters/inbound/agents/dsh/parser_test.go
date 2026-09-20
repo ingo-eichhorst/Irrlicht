@@ -146,6 +146,21 @@ func TestParserSkipsMalformedTodoWriteSnapshot(t *testing.T) {
 	}
 }
 
+func TestTodoWriteEmptySnapshotClearsAndRecreatesTask(t *testing.T) {
+	lines := strings.Join([]string{
+		`{"type":"session","version":3,"createdAt":1789787679000}`,
+		`{"type":"todo/write","time":1789787679937,"data":{"todos":[{"content":"draft","status":"pending"}]}}`,
+		`{"type":"todo/write","time":1789787696051,"data":{"todos":[]}}`,
+		`{"type":"todo/write","time":1789787714507,"data":{"todos":[{"content":"draft","status":"pending"}]}}`,
+	}, "\n") + "\n"
+	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, lines)
+	metrics := tailTranscript(t, newTestTranscriptTailer(path))
+	if len(metrics.Tasks) != 1 || metrics.Tasks[0].ID != "2" || metrics.Tasks[0].Subject != "draft" || metrics.Tasks[0].Status != "pending" {
+		t.Fatalf("tasks = %+v, want recreated task id 2", metrics.Tasks)
+	}
+}
+
 func assertTodoSnapshot(t *testing.T, event *tailer.ParsedEvent, want []tailer.TaskSnapshotEntry) {
 	t.Helper()
 	if event.TaskSnapshot == nil {

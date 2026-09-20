@@ -74,8 +74,8 @@ func (r *TodoReconciler) Reconcile(todos []Todo, ev *ParsedEvent) {
 	}
 	if len(snapshot) > 0 {
 		ev.TaskSnapshot = &snapshot
+		r.pruneMissingKeys(snapshot)
 	}
-	r.pruneMissingKeys(snapshot)
 }
 
 // ReconcileEmptySnapshot clears an authoritative todo list. It preserves the
