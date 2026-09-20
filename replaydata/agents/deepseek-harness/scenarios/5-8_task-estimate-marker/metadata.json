@@ -124,6 +124,9 @@
           "text": "# Project instructions\n\n## Task progress marker\n\nWhile you work on a multi-phase task, emit exactly one hidden progress marker in your own assistant reply text on every turn. Use this exact compact HTML-comment form:\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the planned number of phases. Before work starts, emit completed_rounds=0. Increase completed_rounds by exactly one after each phase. Keep total_rounds fixed. Emit completed_rounds=total_rounds after the final phase. Put the marker on the first line of every reply, before any other text. Do not put the marker only in a tool call or file."
         },
         {
+          "type": "capture_session_updates"
+        },
+        {
           "type": "send",
           "text": "Do not call tools or inspect files. This is a self-contained writing exercise. In one sentence, name the four phases for a technical note about deterministic replay: outline, introduction, body, and conclusion. Do not perform a phase yet. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token PHASE0. Reply in chat only. Put the AGENTS.md marker first, with total_rounds=4 and completed_rounds=0."
         },
@@ -177,6 +180,9 @@
         {
           "type": "sleep",
           "seconds": 30
+        },
+        {
+          "type": "stop_session_updates"
         }
       ],
       "verify": [
