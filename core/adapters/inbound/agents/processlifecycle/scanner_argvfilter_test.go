@@ -1,6 +1,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -16,7 +17,10 @@ type fakeObserver struct {
 	argv map[int][]string
 }
 
-func (f fakeObserver) FindByName(string) ([]int, error)    { return f.pids, nil }
+func (f fakeObserver) FindByName(string) ([]int, error) { return f.pids, nil }
+func (f fakeObserver) ParentPIDOf(context.Context, int) (int, error) {
+	return 0, fmt.Errorf("parent not configured")
+}
 func (f fakeObserver) FindByCmdline(string) ([]int, error) { return nil, nil }
 func (f fakeObserver) ArgvOf(pid int) ([]string, error)    { return f.argv[pid], nil }
 func (f fakeObserver) CWDOf(pid int) (string, error)       { return f.cwd[pid], nil }

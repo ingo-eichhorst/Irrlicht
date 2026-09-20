@@ -3,6 +3,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 
@@ -17,6 +18,10 @@ import (
 type stubObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return stubObserver{} }
+
+func (stubObserver) ParentPIDOf(context.Context, int) (int, error) {
+	return 0, fmt.Errorf("process ancestry unsupported on %s", runtime.GOOS)
+}
 
 func (stubObserver) FindByName(string) ([]int, error)    { return nil, nil }
 func (stubObserver) FindByCmdline(string) ([]int, error) { return nil, nil }

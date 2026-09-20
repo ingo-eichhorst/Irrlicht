@@ -3,6 +3,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,27 @@ import (
 type linuxObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return linuxObserver{} }
+
+func (linuxObserver) ParentPIDOf(ctx context.Context, pid int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "PPid:") {
+			continue
+		}
+		parent, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")))
+		if err != nil || parent <= 0 {
+			return 0, fmt.Errorf("invalid PPid for pid %d: %q", pid, line)
+		}
+		return parent, nil
+	}
+	return 0, fmt.Errorf("missing PPid for pid %d", pid)
+}
 
 // FindByName returns PIDs whose process name matches name, the way `pgrep -x`
 // does on macOS.

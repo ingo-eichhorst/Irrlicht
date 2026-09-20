@@ -733,6 +733,9 @@ func runDaemon() {
 	})
 
 	var watcherFactories map[string]services.WatcherFactory
+	// Factories are not started until after setupPermissionService returns.
+	// A nil service keeps the native row visible during startup.
+	var permService *services.PermissionService
 	detector, watcherFactories = buildDetector(buildDetectorDeps{
 		DemoMode:         demoMode,
 		PWPort:           pwPort,
@@ -747,10 +750,13 @@ func runDaemon() {
 		CostTracker:      costTracker,
 		AutonomySpans:    autonomySpans,
 		HistoryTracker:   historyTracker,
+		DSHObserveGranted: func() bool {
+			return permService != nil && permService.ObserveGranted("dsh")
+		},
 	})
 
 	home, _ := os.UserHomeDir()
-	permService := setupPermissionService(mux, setupPermissionServiceDeps{
+	permService = setupPermissionService(mux, setupPermissionServiceDeps{
 		Detector:         detector,
 		Push:             push,
 		Logger:           logger,

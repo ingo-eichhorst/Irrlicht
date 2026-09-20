@@ -41,6 +41,7 @@ func buildAgentWatchers(
 	a agent.Agent,
 	maxSessionAge time.Duration,
 	sessionChecker func(projectDir string, pid int) bool,
+	dshChildFilter func(provider string, pid int) bool,
 	logger outbound.Logger,
 ) ([]inbound.Watcher, []string) {
 	var (
@@ -106,6 +107,9 @@ func buildAgentWatchers(
 	}
 	if a.Process.ExcludeArgv != nil {
 		scanner.WithArgvFilter(a.Process.ExcludeArgv)
+	}
+	if dshChildFilter != nil && (a.Identity.Name == "codex" || a.Identity.Name == "claude-code") {
+		scanner.WithPIDFilter(func(pid int) bool { return dshChildFilter(a.Identity.Name, pid) })
 	}
 	if s, ok := a.Source.(agent.FilesUnderCWD); ok {
 		scanner.WithTranscriptFilename(s.Filename)

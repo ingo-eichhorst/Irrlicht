@@ -56,6 +56,9 @@ type Scanner struct {
 	// session. Keeping the predicate here (not in poll's matcher) keeps the
 	// scanner generic; the format-specific argv shapes live in the adapter.
 	argvFilter func(argv []string) bool
+	// pidFilter checks process ownership that can change while a PID is live.
+	// Unlike argvFilter, its verdict is checked on every poll.
+	pidFilter func(pid int) bool
 
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
@@ -65,6 +68,7 @@ type Scanner struct {
 	// poll prunes entries whose PID no longer matches, so a recycled PID
 	// cannot inherit a stale verdict. See argvExcluded.
 	argvVerdicts map[int]bool
+	pidExcluded  map[int]bool
 	subs         []chan agent.Event
 
 	// Adaptive backoff: back off to backoffInterval when PID set is stable.
@@ -90,6 +94,7 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 		interval:     interval,
 		tracked:      make(map[int]trackedProc),
 		argvVerdicts: make(map[int]bool),
+		pidExcluded:  make(map[int]bool),
 	}
 }
 
@@ -141,6 +146,14 @@ func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *
 // tracked. Returns the scanner for chaining.
 func (s *Scanner) WithArgvFilter(fn func(argv []string) bool) *Scanner {
 	s.argvFilter = fn
+	return s
+}
+
+// WithPIDFilter excludes a process while fn confirms another visible session
+// owns it. The filter is rechecked so an unreadable parent or revoked consent
+// restores the native pre-session on a later poll.
+func (s *Scanner) WithPIDFilter(fn func(pid int) bool) *Scanner {
+	s.pidFilter = fn
 	return s
 }
 
@@ -221,6 +234,9 @@ func (s *Scanner) Subscribe() <-chan agent.Event {
 	ch := make(chan agent.Event, 4)
 	s.mu.Lock()
 	s.subs = append(s.subs, ch)
+	// A new subscriber may need removals that older subscribers received.
+	// Repeat them on the next poll; removal by session ID is idempotent.
+	clear(s.pidExcluded)
 	s.mu.Unlock()
 	return ch
 }
@@ -259,6 +275,7 @@ func (s *Scanner) poll() {
 	s.probeCWDResidentTranscripts()
 	s.handleExitedPIDs(live)
 	s.pruneArgvVerdicts(pids)
+	s.prunePIDExcluded(pids)
 }
 
 // findMatchingPIDs finds the PIDs currently matching this scanner's process
@@ -281,6 +298,10 @@ func (s *Scanner) handleMatchedPID(pid int, live map[int]bool) {
 	// that "exited" on the next poll. A nil argv (unreadable) is passed
 	// through; the predicate must default to not-excluding in that case.
 	if s.argvFilter != nil && s.argvExcluded(pid) {
+		delete(live, pid)
+		return
+	}
+	if s.pidFilter != nil && s.pidFiltered(pid) {
 		delete(live, pid)
 		return
 	}
@@ -499,6 +520,55 @@ func (s *Scanner) pruneArgvVerdicts(pids []int) {
 			delete(s.argvVerdicts, pid)
 		}
 	}
+}
+
+func (s *Scanner) prunePIDExcluded(pids []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	matched := make(map[int]bool, len(pids))
+	for _, pid := range pids {
+		matched[pid] = true
+	}
+	for pid := range s.pidExcluded {
+		if !matched[pid] {
+			delete(s.pidExcluded, pid)
+		}
+	}
+}
+
+func (s *Scanner) pidFiltered(pid int) bool {
+	excluded := s.pidFilter(pid)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !excluded {
+		delete(s.pidExcluded, pid)
+		return false
+	}
+	if s.pidExcluded[pid] {
+		return true
+	}
+	proc := s.tracked[pid]
+	if len(s.subs) == 0 {
+		return true
+	}
+	ev := agent.Event{
+		Type:       agent.EventRemoved,
+		SessionID:  fmt.Sprintf("proc-%d", pid),
+		ProjectDir: proc.projectDir,
+	}
+	delivered := true
+	for _, ch := range s.subs {
+		select {
+		case ch <- ev:
+		default:
+			delivered = false
+		}
+	}
+	if delivered {
+		delete(s.tracked, pid)
+		s.pidExcluded[pid] = true
+	}
+	return true
 }
 
 // argvExcluded reports whether pid's argv marks it as agent infrastructure

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/opencode"
@@ -12,6 +16,35 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
 )
+
+// Mutation fixture: removing WithPIDFilter in wiring.go makes the two native
+// rows fail this test. The DSH scanner itself must not get this filter.
+func TestDSHChildFilterWiredOnlyToNativeProviderScanners(t *testing.T) {
+	for _, tc := range []struct {
+		a    agent.Agent
+		want bool
+	}{
+		{codex.Agent(), true},
+		{claudecode.Agent(), true},
+		{dsh.Agent(), false},
+	} {
+		watchers, _ := buildAgentWatchers(tc.a, time.Minute, nil,
+			func(string, int) bool { return false }, e2eLog{})
+		var scanner *processlifecycle.Scanner
+		for _, watcher := range watchers {
+			if candidate, ok := watcher.(*processlifecycle.Scanner); ok {
+				scanner = candidate
+			}
+		}
+		if scanner == nil {
+			t.Fatalf("%s has no process scanner", tc.a.Identity.Name)
+		}
+		got := !reflect.ValueOf(scanner).Elem().FieldByName("pidFilter").IsNil()
+		if got != tc.want {
+			t.Errorf("%s PID filter configured = %t, want %t", tc.a.Identity.Name, got, tc.want)
+		}
+	}
+}
 
 // countWatcherKinds classifies watchers by concrete type — a process scanner,
 // an fswatcher (FilesUnderRoot), or a per-adapter store watcher
@@ -84,7 +117,7 @@ func assertWatcherCountsForSource(t *testing.T, name string, source agent.Source
 // one process scanner, plus the Source variant's dedicated watcher.
 func assertAgentWatcherSet(t *testing.T, a agent.Agent, noCheck func(string, int) bool) {
 	t.Helper()
-	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck, e2eLog{})
+	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck, nil, e2eLog{})
 	scanners, fswatchers, stores := countWatcherKinds(t, a.Identity.Name, watchers)
 	if scanners != 1 {
 		t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)
