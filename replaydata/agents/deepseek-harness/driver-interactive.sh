@@ -279,20 +279,27 @@ step_wait_turn() {
 
 step_wait_compaction() {
   resolve_transcript || return 1
-  local unreadable_since=0
+  local unreadable_since=0 zstd_status jq_status
+  local -a pipe_status
   while (( $(remaining_seconds) > 0 )); do
     if zstd -dc -- "$TRANSCRIPT" | jq -e 'select(.type == "compaction/end")' >/dev/null; then
       echo "[driver] compaction complete[s$ACTIVE]" >&2
       return 0
     fi
-    [[ "$?" -eq 1 ]] && unreadable_since=0 || {
-      [[ "$unreadable_since" -ne 0 ]] || unreadable_since=$(date +%s)
-      if (( $(date +%s) - unreadable_since >= 10 )); then
-        echo "[driver] DSH transcript stayed unreadable for 10 seconds: $TRANSCRIPT" >&2
-        EXIT_REASON="unreadable_transcript"
-        return 1
-      fi
-    }
+    pipe_status=("${PIPESTATUS[@]}")
+    zstd_status="${pipe_status[0]}"
+    jq_status="${pipe_status[1]}"
+    if [[ "$zstd_status" -eq 0 && "$jq_status" -eq 4 ]]; then
+      unreadable_since=0
+      sleep 0.25
+      continue
+    fi
+    [[ "$unreadable_since" -ne 0 ]] || unreadable_since=$(date +%s)
+    if (( $(date +%s) - unreadable_since >= 10 )); then
+      echo "[driver] DSH transcript is unreadable (zstd=$zstd_status jq=$jq_status): $TRANSCRIPT" >&2
+      EXIT_REASON="unreadable_transcript"
+      return 1
+    fi
     sleep 0.25
   done
   echo "[driver] wait_compaction timed out without compaction/end" >&2
