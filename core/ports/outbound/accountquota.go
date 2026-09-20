@@ -33,10 +33,17 @@ import "context"
 // (reflect.Value.CanInterface() is false there), so a type that copies a
 // Credential's revealed string into a plain `string` field — exported or not —
 // defeats this entirely. The one thing that makes the claim hold in practice
-// is that Reveal() has exactly one caller in this codebase (the transport,
-// immediately before setting a request header) — see
-// TestCredential_RevealHasOneCallSite in the adapter package, which greps for
-// it rather than trusting this sentence.
+// is that Reveal() has exactly one caller — the transport in
+// core/adapters/outbound/accountquota, immediately before setting a request
+// header. TestCredential_RevealHasOneCallSite (in that adapter package)
+// checks this by grepping that package's own non-test sources, which is
+// package-scoped, NOT codebase-wide (found by review, #2003): a future
+// provider package gaining its own second Reveal() call site (for logging,
+// say) would violate this comment's claim with nothing here to catch it.
+// Every provider ticket is expected to route through this transport rather
+// than building its own — see accountquota's package doc — so the intended
+// invariant IS codebase-wide; only the enforcement is narrower than that
+// today.
 type Credential struct {
 	secret string
 }
@@ -169,6 +176,23 @@ const (
 	// transport-level reason not covered above (DNS, connection refused,
 	// TLS, a cancelled context that isn't the timeout above).
 	QuotaFailureNetwork QuotaFailureReason = "network"
+	// QuotaFailureCredential means the credential itself could not be used —
+	// CredentialResolver.Resolve failed (a missing/deleted file, an absent
+	// keychain item, an unconfigured resolver), or it resolved to an empty
+	// secret. Distinct from QuotaFailureNetwork (found by review, #2003):
+	// this is a permanent misconfiguration a user needs to act on — "your
+	// credential is missing", not "the network is down" — and a poller
+	// should not apply the same retry-and-wait treatment to both.
+	QuotaFailureCredential QuotaFailureReason = "credential"
+	// QuotaFailureInternal means the fetch could not be completed due to a
+	// fault in irrlicht's own code path (a panic recovered from a
+	// provider-supplied CredentialResolver or AccountQuotaTransport
+	// implementation), not a network or credential condition. Found by
+	// review, #2003: core/application/services.AccountPoller's runDoFetch
+	// recovers such a panic so it cannot leave an in-flight fetch's
+	// followers permanently blocked, and classifies it distinctly so it is
+	// never confused with an ordinary transient failure.
+	QuotaFailureInternal QuotaFailureReason = "internal"
 )
 
 // AccountQuotaTransport is the single reviewed way irrlicht reaches a

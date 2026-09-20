@@ -23,6 +23,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -105,6 +106,14 @@ var (
 	// is discarded — see doFetch's final Granted() check, which is what
 	// tools/lib/provapi-revoke-blocks-publish-mutations_test.sh mutates away.
 	errRevokedBeforePublish = errors.New("accountpoller: permission revoked before the result could be published — discarded")
+
+	// errMisconfiguredRequest is returned when req.Resolver or req.Transport
+	// is nil — a caller wiring bug, not a network condition. Checked
+	// explicitly (found by review, #2003) rather than left to surface as a
+	// nil-pointer panic inside doFetch, even though runDoFetch's recover
+	// would also catch that: this is the cheap, immediate case, distinct
+	// from a genuine panic inside a real Resolver/Transport implementation.
+	errMisconfiguredRequest = errors.New("accountpoller: PollRequest.Resolver and PollRequest.Transport must both be set")
 )
 
 // PollRequest is one caller's ask to poll AccountQuotaKey Key, bundling exactly
@@ -194,11 +203,44 @@ func cacheKeyFor(req PollRequest) AccountQuotaKey {
 // when needed (and permitted) or joining an in-flight fetch another caller
 // already started for the identical key.
 func (p *AccountPoller) Poll(ctx context.Context, req PollRequest) (Observation, error) {
+	obs, err := p.poll(ctx, req)
+	// Clone Body before it ever crosses back out of the poller: every
+	// return path below can hand the SAME cached/in-flight Observation to
+	// more than one caller (the freshness-window hit, and every follower
+	// joining one inflight), so without this every caller shares one
+	// backing array with the cache itself and with each other. Found by
+	// review (#2003): TestAccountPoller_PollNeverAliasesTheCachedBody
+	// mutates this away and confirms two Poll calls' Body slices alias.
+	return cloneObservation(obs), err
+}
+
+// cloneObservation returns o with Body copied into a fresh backing array
+// (nil Body stays nil — nothing to copy, and a non-nil empty clone would
+// wrongly change HasValue's "no value" reading for a zero Observation).
+func cloneObservation(o Observation) Observation {
+	if o.Body == nil {
+		return o
+	}
+	o.Body = append([]byte(nil), o.Body...)
+	return o
+}
+
+// poll is Poll's actual logic, split out so the exported entry point can
+// apply cloneObservation to every return path uniformly rather than at each
+// one individually.
+func (p *AccountPoller) poll(ctx context.Context, req PollRequest) (Observation, error) {
 	if req.Key.Account == "" {
 		return Observation{}, errUnknownAccount
 	}
 	if req.Granted == nil || !req.Granted() {
 		return Observation{}, errNotGranted
+	}
+	if req.Resolver == nil || req.Transport == nil {
+		// Cheap, explicit refusal for the two dependencies doFetch cannot
+		// run without — found by review alongside the panic-recovery below:
+		// a nil Resolver/Transport is a caller wiring bug, not a network
+		// condition, and catching it here needs no recover().
+		return Observation{}, errMisconfiguredRequest
 	}
 	key := cacheKeyFor(req)
 
@@ -213,8 +255,18 @@ func (p *AccountPoller) Poll(ctx context.Context, req PollRequest) (Observation,
 	if e.inflight != nil {
 		inflight := e.inflight
 		p.mu.Unlock()
-		<-inflight.done
-		return inflight.obs, inflight.err
+		// select on the FOLLOWER's own ctx too, not just the leader's
+		// inflight.done — found by review: an unconditional <-inflight.done
+		// let a follower whose own context had already expired keep
+		// blocking until the LEADER's fetch finished, ignoring a deadline
+		// that was never the leader's to honor.
+		// TestAccountPoller_FollowerHonorsItsOwnContext is what this closes.
+		select {
+		case <-inflight.done:
+			return inflight.obs, inflight.err
+		case <-ctx.Done():
+			return Observation{}, ctx.Err()
+		}
 	}
 	if e.obs.HasValue && now.Sub(e.obs.FetchedAt) < pollFreshWindow {
 		obs := e.obs
@@ -232,12 +284,32 @@ func (p *AccountPoller) Poll(ctx context.Context, req PollRequest) (Observation,
 	e.inflight = inflight
 	p.mu.Unlock()
 
-	obs, err := p.doFetch(fetchCtx, req, key, inflight)
+	obs, err := p.runDoFetch(fetchCtx, req, key, inflight)
 	inflight.obs, inflight.err = obs, err
 	close(inflight.done)
 	cancel()
 
 	return obs, err
+}
+
+// runDoFetch wraps doFetch with a recover so a panic inside a PROVIDER's own
+// CredentialResolver.Resolve or AccountQuotaTransport.Fetch — arbitrary,
+// third-party-shaped code this poller does not control — cannot leave
+// inflight.done permanently unclosed. Found by review (#2003): without this,
+// every follower already waiting on <-inflight.done blocks forever, and
+// because e.inflight is never cleared, every LATER caller for the same key
+// joins the same dead inflight and hangs too — Revoke can delete the cache
+// entry for a fresh caller afterward, but cannot rescue a follower already
+// parked on the old inflight's channel.
+// TestAccountPoller_PanicInDoFetchStillCompletesFollowers is what this closes.
+func (p *AccountPoller) runDoFetch(ctx context.Context, req PollRequest, key AccountQuotaKey, inflight *inflightPoll) (obs Observation, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			obs = p.recordFailure(key, inflight, outbound.QuotaFailureInternal)
+			err = fmt.Errorf("accountpoller: panic in doFetch: %v", r)
+		}
+	}()
+	return p.doFetch(ctx, req, key, inflight)
 }
 
 // doFetch performs the leader's actual credential resolve + transport fetch
@@ -251,7 +323,14 @@ func (p *AccountPoller) Poll(ctx context.Context, req PollRequest) (Observation,
 func (p *AccountPoller) doFetch(ctx context.Context, req PollRequest, key AccountQuotaKey, inflight *inflightPoll) (Observation, error) {
 	cred, err := req.Resolver.Resolve(ctx)
 	if err != nil {
-		return p.recordFailure(key, inflight, outbound.QuotaFailureNetwork), err
+		// A resolver failure (missing/deleted credential file, a keychain
+		// item that no longer exists, ...) is a permanent misconfiguration
+		// a user needs to act on, not a transient network condition — found
+		// by review: folding it into QuotaFailureNetwork gave it the same
+		// doubling-backoff RETRY treatment and the same opaque "network"
+		// reason as a real network blip, with no signal that re-entering a
+		// credential (not waiting) is the fix.
+		return p.recordFailure(key, inflight, outbound.QuotaFailureCredential), err
 	}
 
 	resp, err := req.Transport.Fetch(ctx, outbound.AccountQuotaRequest{

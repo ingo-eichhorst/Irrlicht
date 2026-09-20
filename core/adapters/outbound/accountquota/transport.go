@@ -143,8 +143,11 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 		}
 	}
 	if req.Credential.IsZero() {
+		// QuotaFailureCredential, not QuotaFailureNetwork (found by review,
+		// #2003): an empty credential is a resolver problem the caller must
+		// fix, not a transport condition worth the poller's retry backoff.
 		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{
-			Reason: outbound.QuotaFailureNetwork,
+			Reason: outbound.QuotaFailureCredential,
 			Detail: "empty credential — refusing to send an unauthenticated request",
 		}
 	}
@@ -181,25 +184,46 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 	}
 	defer resp.Body.Close()
 
-	body, sizeErr := readBounded(resp.Body)
-	if sizeErr != nil {
-		return outbound.AccountQuotaResponse{}, sizeErr
-	}
-
+	// Status is classified BEFORE the body is ever read (found by review,
+	// #2003): the status code is already known from the response headers,
+	// and a non-2xx response's body carries nothing this transport needs.
+	// Reading it first meant an auth-rejected response with an oversized or
+	// mid-stream-broken body was misclassified as response_too_large or
+	// network instead of auth_rejected — losing exactly the signal
+	// QuotaFailureAuthRejected's doc comment says the poller must act on
+	// specially. The body is still drained (bounded, errors ignored) purely
+	// for HTTP connection-reuse hygiene, never inspected.
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		drainIgnoringErrors(resp.Body)
 		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{
 			Reason: outbound.QuotaFailureAuthRejected,
 			Detail: fmt.Sprintf("status %d", resp.StatusCode),
 		}
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
+		drainIgnoringErrors(resp.Body)
 		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{
 			Reason: outbound.QuotaFailureHTTPStatus,
 			Detail: fmt.Sprintf("status %d", resp.StatusCode),
 		}
 	}
 
+	body, sizeErr := readBounded(resp.Body)
+	if sizeErr != nil {
+		return outbound.AccountQuotaResponse{}, sizeErr
+	}
+
 	return outbound.AccountQuotaResponse{StatusCode: resp.StatusCode, Body: body}, nil
+}
+
+// drainIgnoringErrors reads (and discards) up to responseSizeCeiling bytes of
+// a non-2xx response body purely so the underlying connection can be reused
+// by net/http's transport — never to inspect the content, and never allowed
+// to affect the classification already decided by the status code. Errors
+// are deliberately ignored: a read failure here says nothing about the
+// (already known) auth/status outcome.
+func drainIgnoringErrors(r io.Reader) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(r, responseSizeCeiling))
 }
 
 // readBounded reads r up to responseSizeCeiling+1 bytes and reports

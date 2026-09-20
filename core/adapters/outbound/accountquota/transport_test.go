@@ -327,3 +327,63 @@ func TestCredential_RevealHasOneCallSite(t *testing.T) {
 			"a second call site is a second place a credential can leak into a log or an error", count, foundFile)
 	}
 }
+
+// TestHTTPTransport_RefusesEmptyCredentialBeforeDialing closes the
+// test-coverage gap found by review (#2003): Fetch's "empty credential"
+// guard (req.Credential.IsZero()) was shipped exercised by no test at all —
+// dead code under test, even though it's a guard AGENTS.md's testing
+// philosophy says earns its place. Also confirms the guard's failure
+// reason is QuotaFailureCredential (review's finding #5's fix), not
+// QuotaFailureNetwork.
+func TestHTTPTransport_RefusesEmptyCredentialBeforeDialing(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server was contacted despite an empty credential")
+	}))
+	defer server.Close()
+
+	guard := &loopbackDialGuard{}
+	rt := newLoopbackOnlyTransport(guard, certPool(server))
+	tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, rt)
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+
+	req := testRequest("s1")
+	req.Credential = outbound.Credential{} // zero value: IsZero() == true
+	_, err = tr.Fetch(t.Context(), req)
+	var qerr *outbound.QuotaError
+	if !errors.As(err, &qerr) || qerr.Reason != outbound.QuotaFailureCredential {
+		t.Fatalf("expected a credential QuotaError, got err=%v", err)
+	}
+	if guard.dials.Load() != 0 {
+		t.Fatalf("dialed %d time(s) for an empty credential — should never reach the network", guard.dials.Load())
+	}
+}
+
+// TestHTTPTransport_AuthRejectedIgnoresOversizedBody is the regression found
+// by review (#2003): the bounded read used to run BEFORE the status-code
+// classification, so a 401/403 with a body over the size ceiling reported
+// response_too_large instead of auth_rejected — losing exactly the signal
+// QuotaFailureAuthRejected's own doc comment says the poller must act on
+// specially. Status is now classified before any body read is attempted.
+func TestHTTPTransport_AuthRejectedIgnoresOversizedBody(t *testing.T) {
+	oversized := bytes.Repeat([]byte("x"), responseSizeCeiling*3)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write(oversized)
+	}))
+	defer server.Close()
+
+	guard := &loopbackDialGuard{}
+	rt := newLoopbackOnlyTransport(guard, certPool(server))
+	tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, rt)
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+
+	_, err = tr.Fetch(t.Context(), testRequest("s1"))
+	var qerr *outbound.QuotaError
+	if !errors.As(err, &qerr) || qerr.Reason != outbound.QuotaFailureAuthRejected {
+		t.Fatalf("expected an auth_rejected QuotaError even with an oversized body, got err=%v", err)
+	}
+}

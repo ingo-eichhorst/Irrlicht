@@ -151,12 +151,14 @@ const InstructionsPermissionKey = "instructions"
 // wire it into core/cmd/irrlichd/consentcatalog.go, following the gastown
 // shape: Kind: permission.KindObserve, a non-nil Apply/Remove pair, and (per
 // docs/testing-contracts.md's managed-user-files bullet) a name in
-// core/cmd/irrlichd/managedwrites_test.go's applyWritesNoUserFile list,
+// core/cmd/irrlichd/managedfiles_test.go's applyWritesNoUserFile list,
 // because Apply here starts a poller registration rather than writing any
-// user-owned file. Confirmed by reading that file directly (not assumed):
-// "gastown/state" is already there with the reason "Apply starts and stops
-// the Gas Town watcher; it reads ~/gt and writes nothing" — the identical
-// shape an account-API Apply needs stated for itself.
+// user-owned file. Confirmed by reading that file directly (not assumed —
+// and corrected by review, #2003, which caught this comment first citing
+// the similarly-named managedwrites_test.go instead): "gastown/state" is
+// already there with the reason "Apply starts and stops the Gas Town
+// watcher; it reads ~/gt and writes nothing" — the identical shape an
+// account-API Apply needs stated for itself.
 const AccountAPIPermissionKey = "account-api"
 
 // ManagedUserFile is the outside-the-adapter half of a permission that writes a

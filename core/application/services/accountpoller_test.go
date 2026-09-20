@@ -470,3 +470,177 @@ func TestAccountPoller_RevokeWipesCachedValue(t *testing.T) {
 		t.Fatal("expected Revoke to remove the cached observation")
 	}
 }
+
+// panickingResolver simulates a real provider's CredentialResolver
+// implementation panicking — a nil PollRequest.Resolver is now caught
+// explicitly by poll's own guard (errMisconfiguredRequest) before doFetch
+// ever runs, so this is what actually reaches runDoFetch's recover.
+type panickingResolver struct{}
+
+func (panickingResolver) Resolve(context.Context) (outbound.Credential, error) {
+	panic("simulated panic in a provider's CredentialResolver")
+}
+
+// TestAccountPoller_PanicInDoFetchStillCompletesFollowers is the regression
+// found by review (#2003): before runDoFetch's recover existed, a panic
+// inside doFetch left inflight.done permanently unclosed and e.inflight
+// permanently set, so a LATER Poll call for the identical key joined the
+// same dead inflight and blocked forever — Revoke could delete the map
+// entry for a FRESH caller, but could not rescue one already parked on the
+// dead inflight's channel.
+func TestAccountPoller_PanicInDoFetchStillCompletesFollowers(t *testing.T) {
+	p := NewAccountPoller()
+	key := AccountQuotaKey{Provider: "probe", Account: "acct-1", Scope: "default"}
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte("ok")}, nil
+	}}
+
+	obs, err := p.Poll(context.Background(), PollRequest{
+		Key: key, Granted: alwaysGranted, Resolver: panickingResolver{}, Transport: transport, DestinationKey: "primary",
+	})
+	if err == nil {
+		t.Fatal("expected an error from a panicking resolver")
+	}
+	if obs.HasValue {
+		t.Fatalf("expected no published value from a panic, got %+v", obs)
+	}
+
+	// The regression: a SECOND Poll call for the SAME key, after the first
+	// panicked, must complete — not join a dead inflight and hang.
+	done := make(chan struct{})
+	go func() {
+		_, _ = p.Poll(context.Background(), PollRequest{
+			Key: key, Granted: alwaysGranted, Resolver: fakeResolver{secret: "s"}, Transport: transport, DestinationKey: "primary",
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a Poll call for the same key after a panic in doFetch is wedged")
+	}
+}
+
+// TestAccountPoller_FollowerHonorsItsOwnContext is the regression found by
+// review (#2003): a follower joining an in-flight fetch used to block on
+// <-inflight.done unconditionally, ignoring its OWN context entirely — so a
+// follower whose caller had already given up (an expired context) still
+// waited for the LEADER's fetch to finish rather than returning promptly.
+// The follower's context here is already expired at construction (a
+// deadline in the past), so no sleep is needed to observe it.
+func TestAccountPoller_FollowerHonorsItsOwnContext(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	transport := &fakeTransport{
+		entered: entered,
+		release: release,
+		fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+			return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte("ok")}, nil
+		},
+	}
+	p := NewAccountPoller()
+	key := AccountQuotaKey{Provider: "muse", Account: "acct-1", Scope: "default"}
+	req := func() PollRequest {
+		return PollRequest{Key: key, Granted: alwaysGranted, Resolver: fakeResolver{secret: "s"}, Transport: transport, DestinationKey: "primary"}
+	}
+
+	go func() {
+		_, _ = p.Poll(context.Background(), req())
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader never reached the transport")
+	}
+
+	followerCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	type result struct {
+		obs Observation
+		err error
+	}
+	followerDone := make(chan result, 1)
+	go func() {
+		obs, err := p.Poll(followerCtx, req())
+		followerDone <- result{obs, err}
+	}()
+
+	select {
+	case r := <-followerDone:
+		if !errors.Is(r.err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want context.DeadlineExceeded (the follower's OWN already-expired context)", r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower blocked on the leader's inflight instead of honoring its own already-expired context")
+	}
+
+	close(release) // let the leader finish so no goroutine leaks past the test
+}
+
+// TestAccountPoller_PollNeverAliasesTheCachedBody is the regression found by
+// review (#2003): Observation is returned by value, but a []byte field's
+// value is only a slice header — two callers receiving the same
+// freshness-window-cached observation used to share ONE backing array with
+// each other and with the poller's own cache, so mutating one caller's Body
+// in place corrupted the cache and every other caller's copy too.
+func TestAccountPoller_PollNeverAliasesTheCachedBody(t *testing.T) {
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte("original")}, nil
+	}}
+	p := NewAccountPoller()
+	req := PollRequest{
+		Key:            AccountQuotaKey{Provider: "muse", Account: "acct-1", Scope: "default"},
+		Granted:        alwaysGranted,
+		Resolver:       fakeResolver{secret: "s"},
+		Transport:      transport,
+		DestinationKey: "primary",
+	}
+
+	obsA, err := p.Poll(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	obsB, err := p.Poll(context.Background(), req) // served from the freshness-window cache
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(obsA.Body) == 0 || len(obsB.Body) == 0 {
+		t.Fatalf("expected a non-empty Body from both calls, got %q and %q", obsA.Body, obsB.Body)
+	}
+	if &obsA.Body[0] == &obsB.Body[0] {
+		t.Fatal("obsA and obsB share the same backing array — Poll is handing out an aliased cached Body")
+	}
+
+	obsA.Body[0] = 'X'
+	if obsB.Body[0] == 'X' {
+		t.Fatal("mutating obsA's Body corrupted obsB's — Poll did not return independent copies")
+	}
+
+	obsC, err := p.Poll(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if obsC.Body[0] == 'X' {
+		t.Fatal("mutating a returned Observation's Body corrupted the poller's own cache")
+	}
+}
+
+// TestAccountPoller_NilResolverOrTransportIsRefusedNotPaniced is the cheap
+// guard found by review alongside the panic recovery above: a caller wiring
+// bug (nil Resolver/Transport) is refused immediately rather than reaching
+// doFetch at all.
+func TestAccountPoller_NilResolverOrTransportIsRefusedNotPaniced(t *testing.T) {
+	p := NewAccountPoller()
+	key := AccountQuotaKey{Provider: "muse", Account: "acct-1", Scope: "default"}
+
+	_, err := p.Poll(context.Background(), PollRequest{Key: key, Granted: alwaysGranted, Transport: &fakeTransport{}})
+	if !errors.Is(err, errMisconfiguredRequest) {
+		t.Fatalf("nil Resolver: err = %v, want errMisconfiguredRequest", err)
+	}
+
+	_, err = p.Poll(context.Background(), PollRequest{Key: key, Granted: alwaysGranted, Resolver: fakeResolver{secret: "s"}})
+	if !errors.Is(err, errMisconfiguredRequest) {
+		t.Fatalf("nil Transport: err = %v, want errMisconfiguredRequest", err)
+	}
+}
