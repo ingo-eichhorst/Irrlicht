@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
+DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end capture_session_updates stop_session_updates sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -47,6 +47,7 @@ DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
 REACHED_EPILOGUE=0
 FORK_WEB_PID=""
+UPDATES_CAPTURE_PID=""
 
 N_SLOTS=0
 ACTIVE=0
@@ -319,6 +320,25 @@ step_await_child_turn_end() {
   echo "[driver] native child completed turn: $child_transcript" >&2
 }
 
+step_capture_session_updates() {
+  local bind="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
+  local raw="$STAGING/session_updates.raw.jsonl" ready="$STAGING/session_updates.ready"
+  rm -f "$raw" "$ready"
+  node "$(dirname "$0")/capture-session-updates.mjs" "ws://$bind/api/v1/sessions/stream" "$raw" "$ready" &
+  UPDATES_CAPTURE_PID=$!
+  local until=$(( $(date +%s) + 10 ))
+  while [[ ! -s "$ready" && $(date +%s) -lt $until ]]; do sleep 0.1; done
+  [[ -s "$ready" ]] || { echo "[driver] session-update capture did not open" >&2; EXIT_REASON="capture_unready"; return 1; }
+}
+
+step_stop_session_updates() {
+  [[ -n "$UPDATES_CAPTURE_PID" ]] && kill "$UPDATES_CAPTURE_PID" 2>/dev/null || true
+  wait "$UPDATES_CAPTURE_PID" 2>/dev/null || true
+  resolve_transcript || return 1
+  jq -c --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id)' "$STAGING/session_updates.raw.jsonl" > "$STAGING/session_updates.jsonl"
+  [[ -s "$STAGING/session_updates.jsonl" ]] || { echo "[driver] no matching DSH session_updated frame for $UUID" >&2; EXIT_REASON="capture_empty"; return 1; }
+}
+
 step_interrupt() {
   tmux send-keys -t "$SESSION" C-c
 }
@@ -533,6 +553,8 @@ while IFS= read -r step; do
     wait_turn)     step_wait_turn || STEP_OK=false ;;
     wait_compaction) step_wait_compaction || STEP_OK=false ;;
     await_child_turn_end) step_await_child_turn_end || STEP_OK=false ;;
+    capture_session_updates) step_capture_session_updates || STEP_OK=false ;;
+    stop_session_updates) step_stop_session_updates || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)     step_interrupt ;;
     keys)          step_keys "$(jq -r '.keys // .text // empty' <<<"$step")" || STEP_OK=false ;;
