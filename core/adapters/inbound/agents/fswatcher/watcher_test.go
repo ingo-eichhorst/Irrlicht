@@ -335,36 +335,16 @@ func TestWatch_UnseenBareUUIDRemovalDoesNotEmit(t *testing.T) {
 	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
 	transcriptPath := filepath.Join(root, "-Users-test-myproject", childID+".jsonl")
 
-	// This models a header-backed adapter rejecting a bare UUID transcript.
-	// No delivered birth must exist for its later removal.
-	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(string) string { return "" })
+	// The callback would accept this path if called. The removal still must
+	// not emit because no earlier delivery established a path-to-ID mapping.
+	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(string) string { return childID })
 	ch := w.Subscribe()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	watchErr := make(chan error, 1)
-	go func() { watchErr <- w.Watch(ctx) }()
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not become ready")
-	}
-
-	if err := os.WriteFile(transcriptPath, []byte(`{"type":"session"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(transcriptPath); err != nil {
-		t.Fatal(err)
-	}
+	w.handleEvent(nil, fsnotify.Event{Name: transcriptPath, Op: fsnotify.Remove})
 
 	select {
 	case ev := <-ch:
 		t.Fatalf("unexpected event for unseen transcript removal: %#v", ev)
-	case <-time.After(250 * time.Millisecond):
-	}
-
-	cancel()
-	if err := <-watchErr; err != nil && err != context.Canceled {
-		t.Errorf("Watch returned unexpected error: %v", err)
+	default:
 	}
 }
 
