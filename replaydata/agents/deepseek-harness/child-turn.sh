@@ -6,7 +6,7 @@
 # Arguments: <sessions-dir> <parent-id> <marker-path> <deadline-epoch-seconds>
 dsh_await_child_turn_end() (
   local sessions_dir="$1" parent_id="$2" marker_path="$3" deadline="$4"
-  local candidate child_id decoded candidates header header_id header_parent origin
+  local candidate child_id decoded candidates header header_id header_parent origin first_scan=1
   local saw_child=0 saw_wrong_parent=0 saw_unreadable=0 saw_malformed=0
   if [[ ! -f "$marker_path" || ! -r "$marker_path" ]]; then
     echo "await_child_turn_end: marker is not a readable regular file: $marker_path" >&2
@@ -27,7 +27,10 @@ dsh_await_child_turn_end() (
   }
   trap 'rm -f "$decoded" "$candidates"' EXIT
 
-  while (( $(date +%s) <= deadline )); do
+  # Scan once even when the deadline has just elapsed. This reports a
+  # discovered-but-incomplete child as such, instead of reporting no child.
+  while (( first_scan || $(date +%s) <= deadline )); do
+    first_scan=0
     if ! find "$sessions_dir" -type f -name 'session.v*.jsonl.zstd' -newer "$marker_path" -print >"$candidates"; then
       echo "await_child_turn_end: could not scan sessions directory: $sessions_dir" >&2
       return 1
