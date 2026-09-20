@@ -18,6 +18,12 @@ import (
 )
 
 func TestDSHBackgroundReleaseFollowsTerminalNotice(t *testing.T) {
+	terminal, events := dshBackgroundReleaseRecording(t)
+	assertDSHBackgroundReleaseAfterTerminalNotice(t, terminal, events)
+}
+
+func dshBackgroundReleaseRecording(t *testing.T) (time.Time, []lifecycle.Event) {
+	t.Helper()
 	const sessionID = "session-dbb71762-2da1-4a14-a40c-b57ffb8895d9"
 	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
 		"3-3_background-process", "recordings", "2026-09-20-21-35-33_irrlichd-0.6.4+ec736f3.dirty")
@@ -26,25 +32,66 @@ func TestDSHBackgroundReleaseFollowsTerminalNotice(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatalf("events for %s not found", sessionID)
 	}
-	working := time.Time{}
-	readyAfterNotice := time.Time{}
+	return terminal, events
+}
+
+func assertDSHBackgroundReleaseAfterTerminalNotice(t *testing.T, terminal time.Time, events []lifecycle.Event) {
+	t.Helper()
+	timing := dshBackgroundReleaseTiming{terminal: terminal}
 	for _, event := range events {
-		if event.NewState == "working" {
-			working = event.Timestamp
-		}
-		if !working.IsZero() && event.NewState == "ready" && event.PrevState == "working" {
-			if event.Timestamp.Before(terminal) {
-				t.Fatalf("background session became ready at %s before terminal notice at %s", event.Timestamp, terminal)
-			}
-			readyAfterNotice = event.Timestamp
-		}
+		timing.observe(event)
 	}
-	if working.IsZero() {
+	if timing.working.IsZero() {
 		t.Fatal("working transition not found")
 	}
-	if readyAfterNotice.IsZero() {
+	if !timing.readyBeforeTerminal.IsZero() {
+		t.Fatalf("background session became ready at %s before terminal notice at %s", timing.readyBeforeTerminal, terminal)
+	}
+	if timing.readyAfterTerminal.IsZero() {
 		t.Fatal("ready transition after terminal notice not found")
 	}
+}
+
+type dshBackgroundReleaseTiming struct {
+	terminal            time.Time
+	working             time.Time
+	readyBeforeTerminal time.Time
+	readyAfterTerminal  time.Time
+}
+
+func (timing *dshBackgroundReleaseTiming) observe(event lifecycle.Event) {
+	if event.NewState == "working" {
+		timing.working = event.Timestamp
+	}
+	if timing.working.IsZero() || event.NewState != "ready" || event.PrevState != "working" {
+		return
+	}
+	if event.Timestamp.Before(timing.terminal) {
+		timing.readyBeforeTerminal = event.Timestamp
+		return
+	}
+	timing.readyAfterTerminal = event.Timestamp
+}
+
+type dshTerminalNoticeRecord struct {
+	Type string                `json:"type"`
+	Time int64                 `json:"time"`
+	Data dshTerminalNoticeData `json:"data"`
+}
+
+type dshTerminalNoticeData struct {
+	Source  dshTerminalNoticeSource    `json:"source"`
+	Content []dshTerminalNoticeContent `json:"content"`
+}
+
+type dshTerminalNoticeSource struct {
+	Kind   string `json:"kind"`
+	Plugin string `json:"plugin"`
+	Form   string `json:"form"`
+}
+
+type dshTerminalNoticeContent struct {
+	Text string `json:"text"`
 }
 
 func dshTerminalNoticeTime(t *testing.T, path, bashID string) time.Time {
@@ -61,20 +108,7 @@ func dshTerminalNoticeTime(t *testing.T, path, bashID string) time.Time {
 	defer decoder.Close()
 	scanner := bufio.NewScanner(decoder)
 	for scanner.Scan() {
-		var record struct {
-			Type string `json:"type"`
-			Time int64  `json:"time"`
-			Data struct {
-				Source struct {
-					Kind   string `json:"kind"`
-					Plugin string `json:"plugin"`
-					Form   string `json:"form"`
-				} `json:"source"`
-				Content []struct {
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"data"`
-		}
+		var record dshTerminalNoticeRecord
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			t.Fatal(err)
 		}
