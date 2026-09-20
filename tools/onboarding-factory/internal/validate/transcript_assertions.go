@@ -190,10 +190,10 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if !validFieldContainsRequirements(assertion.FieldContains) {
 		return fmt.Errorf("%s assertion %q has an incomplete field-contains requirement", kind, assertion.Name)
 	}
-	if !validAbsentPaths(assertion.Absent) {
+	if !validDottedPaths(assertion.Absent) {
 		return fmt.Errorf("%s assertion %q has an invalid absent-path requirement", kind, assertion.Name)
 	}
-	if !validAbsentPaths(assertion.Present) {
+	if !validDottedPaths(assertion.Present) {
 		return fmt.Errorf("%s assertion %q has an invalid present-path requirement", kind, assertion.Name)
 	}
 	if len(assertion.Present) > 0 && assertion.MinCount < 1 {
@@ -239,18 +239,18 @@ func validFieldContainsRequirements(requirements []FieldContainsAssertion) bool 
 	return true
 }
 
-func validAbsentPaths(paths []string) bool {
+func validDottedPaths(paths []string) bool {
 	for _, path := range paths {
-		if path == "" {
+		if !validDottedPath(path) {
 			return false
-		}
-		for _, part := range strings.Split(path, ".") {
-			if part == "" {
-				return false
-			}
 		}
 	}
 	return true
+}
+
+func validDottedPath(path string) bool {
+	return path != "" && !strings.HasPrefix(path, ".") &&
+		!strings.HasSuffix(path, ".") && !strings.Contains(path, "..")
 }
 
 func readJSONLRecords(path, kind string) ([]map[string]any, error) {
