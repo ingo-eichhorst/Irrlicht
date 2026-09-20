@@ -107,8 +107,8 @@ type ObservationSpec struct {
 	ContextWindowNonzero      bool `json:"context_window_nonzero,omitempty"`      // summary.context_window > 0
 	ContextUtilizationNonzero bool `json:"context_utilization_nonzero,omitempty"` // summary.context_utilization_percentage > 0
 	// CumulativeTokensEquals asserts the replay's cumulative input plus output
-	// total. Zero omits the assertion because an unset JSON number decodes to 0.
-	CumulativeTokensEquals int64 `json:"cumulative_tokens_equals,omitempty"`
+	// total. A pointer distinguishes an omitted assertion from an explicit zero.
+	CumulativeTokensEquals *int64 `json:"cumulative_tokens_equals,omitempty"`
 }
 
 // ExpectedPhase is one line of expected.jsonl after the meta line.

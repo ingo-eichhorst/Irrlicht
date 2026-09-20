@@ -102,6 +102,17 @@ func TestObservationsCumulativeTokensEquals(t *testing.T) {
 	if rep.Pass || len(rep.Asserts) != 1 || rep.Asserts[0].Field != "cumulative_tokens" || rep.Asserts[0].OK {
 		t.Fatalf("committed cumulative-token mutation must fail: %+v", rep)
 	}
+
+	negative := t.TempDir()
+	mkGoldenRec(t, negative, "2026-09-19-00-00-00_negative", `{"cum_input_tokens":38005,"cum_output_tokens":431}`)
+	writeExpected(t, negative, `{"schema_version":1,"scenario_id":"s","observations":{"cumulative_tokens_equals":-1}}`)
+	rep, err = ValidateObservations(negative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Pass || len(rep.Asserts) != 1 || rep.Asserts[0].Field != "cumulative_tokens" || rep.Asserts[0].Expected != "-1" {
+		t.Fatalf("negative cumulative-token assertion must run and fail: %+v", rep)
+	}
 }
 
 // TestObservationsDirectContextPass covers the direct context vector. A golden
