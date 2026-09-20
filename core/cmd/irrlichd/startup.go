@@ -777,6 +777,18 @@ func (c *dshObserveConsent) granted() bool {
 	return c.service.ObserveGranted(dsh.AdapterName)
 }
 
+func setupDetectorAndPermissions(mux *http.ServeMux, detectorDeps buildDetectorDeps,
+	permissionDeps setupPermissionServiceDeps) (*services.SessionDetector, *services.PermissionService) {
+	dshConsent := &dshObserveConsent{}
+	detectorDeps.DSHObserveGranted = dshConsent.granted
+	detector, watcherFactories := buildDetector(detectorDeps)
+	permissionDeps.Detector = detector
+	permissionDeps.WatcherFactories = watcherFactories
+	permService := setupPermissionService(mux, permissionDeps)
+	dshConsent.service = permService
+	return detector, permService
+}
+
 // setupPermissionService wires the PermissionService (issue #570): the
 // single source of truth for consent state. It exercises grants (hook
 // install, watcher start), undoes revokes, arbitrates wizard answers

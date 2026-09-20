@@ -732,39 +732,31 @@ func runDaemon() {
 		HookHealth: liveHookHealth(hookLiveness, hookVerifier),
 	})
 
-	var watcherFactories map[string]services.WatcherFactory
-	dshConsent := &dshObserveConsent{}
-	detector, watcherFactories = buildDetector(buildDetectorDeps{
-		DemoMode:          demoMode,
-		PWPort:            pwPort,
-		CachedRepo:        cachedRepo,
-		Logger:            logger,
-		GitResolver:       gitResolver,
-		MetricsCollector:  metricsCollector,
-		Push:              push,
-		Version:           Version,
-		Cfg:               cfg,
-		AllAgents:         allAgents,
-		CostTracker:       costTracker,
-		AutonomySpans:     autonomySpans,
-		HistoryTracker:    historyTracker,
-		DSHObserveGranted: dshConsent.granted,
-	})
-
 	home, _ := os.UserHomeDir()
-	permService := setupPermissionService(mux, setupPermissionServiceDeps{
-		Detector:         detector,
-		Push:             push,
+	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
+		DemoMode:         demoMode,
+		PWPort:           pwPort,
+		CachedRepo:       cachedRepo,
 		Logger:           logger,
+		GitResolver:      gitResolver,
+		MetricsCollector: metricsCollector,
+		Push:             push,
+		Version:          Version,
 		Cfg:              cfg,
 		AllAgents:        allAgents,
-		WatcherFactories: watcherFactories,
-		DemoMode:         demoMode,
-		Home:             home,
-		StartGastown:     startGastown,
-		StopGastown:      stopGastown,
+		CostTracker:      costTracker,
+		AutonomySpans:    autonomySpans,
+		HistoryTracker:   historyTracker,
+	}, setupPermissionServiceDeps{
+		Push:         push,
+		Logger:       logger,
+		Cfg:          cfg,
+		AllAgents:    allAgents,
+		DemoMode:     demoMode,
+		Home:         home,
+		StartGastown: startGastown,
+		StopGastown:  stopGastown,
 	})
-	dshConsent.service = permService
 
 	// The watchdog's second collaborator, available only now: "is this channel
 	// expected to deliver" is a consent question, and answering it before the
