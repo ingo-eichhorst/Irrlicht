@@ -135,9 +135,32 @@ stop_fork_web() {
   return 0
 }
 
+stop_session_updates_process() {
+  local pid="${UPDATES_CAPTURE_PID:-}" i
+  [[ -n "$pid" ]] || return 0
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null || true
+    UPDATES_CAPTURE_PID=""
+    return 1
+  fi
+  kill -TERM "$pid" 2>/dev/null || return 1
+  for (( i = 0; i < 40; i++ )); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "[driver] session-update capture process $pid survived shutdown" >&2
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  UPDATES_CAPTURE_PID=""
+  return 0
+}
+
 # BEGIN cleanup
 cleanup() {
   local i
+  stop_session_updates_process || true
   stop_fork_web || true
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
@@ -326,16 +349,51 @@ step_capture_session_updates() {
   rm -f "$raw" "$ready"
   node "$(dirname "$0")/capture-session-updates.mjs" "ws://$bind/api/v1/sessions/stream" "$raw" "$ready" &
   UPDATES_CAPTURE_PID=$!
-  local until=$(( $(date +%s) + 10 ))
+  local until=$(( $(date +%s) + ${CAPTURE_READY_TIMEOUT_S:-10} ))
   while [[ ! -s "$ready" && $(date +%s) -lt $until ]]; do sleep 0.1; done
   [[ -s "$ready" ]] || { echo "[driver] session-update capture did not open" >&2; EXIT_REASON="capture_unready"; return 1; }
+  kill -0 "$UPDATES_CAPTURE_PID" 2>/dev/null || { echo "[driver] session-update capture closed after opening" >&2; EXIT_REASON="capture_dead"; return 1; }
 }
 
 step_stop_session_updates() {
-  [[ -n "$UPDATES_CAPTURE_PID" ]] && kill -0 "$UPDATES_CAPTURE_PID" 2>/dev/null || { echo "[driver] session-update capture is not running" >&2; EXIT_REASON="capture_dead"; return 1; }
-  wait "$UPDATES_CAPTURE_PID" 2>/dev/null || true
+  local raw="$STAGING/session_updates.raw.jsonl" jq_status
+  while (( $(remaining_seconds) > 0 )); do
+    if jq -e --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")' "$raw" >/dev/null; then
+      break
+    else
+      jq_status=$?
+    fi
+    if [[ "$jq_status" -ne 4 ]]; then
+      echo "[driver] session-update capture contains invalid JSON (jq=$jq_status)" >&2
+      EXIT_REASON="capture_unreadable"
+      return 1
+    fi
+    sleep 0.25
+  done
+  if jq -e --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")' "$raw" >/dev/null; then
+    jq_status=0
+  else
+    jq_status=$?
+    if [[ "$jq_status" -ne 4 ]]; then
+      echo "[driver] session-update capture contains invalid JSON (jq=$jq_status)" >&2
+      EXIT_REASON="capture_unreadable"
+    else
+      echo "[driver] no matching ready DSH session_updated frame for $UUID" >&2
+      EXIT_REASON="capture_ready_timeout"
+    fi
+    return 1
+  fi
+  stop_session_updates_process || { echo "[driver] session-update capture is not running or did not stop" >&2; EXIT_REASON="capture_dead"; return 1; }
   resolve_transcript || return 1
-  jq -c --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id)' "$STAGING/session_updates.raw.jsonl" > "$STAGING/session_updates.jsonl"
+  if jq -c --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id)' "$raw" > "$STAGING/session_updates.jsonl.tmp"; then
+    :
+  else
+    rm -f "$STAGING/session_updates.jsonl.tmp"
+    echo "[driver] session-update capture contains invalid JSON" >&2
+    EXIT_REASON="capture_unreadable"
+    return 1
+  fi
+  mv "$STAGING/session_updates.jsonl.tmp" "$STAGING/session_updates.jsonl"
   [[ -s "$STAGING/session_updates.jsonl" ]] || { echo "[driver] no matching DSH session_updated frame for $UUID" >&2; EXIT_REASON="capture_empty"; return 1; }
 }
 

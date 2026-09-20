@@ -178,10 +178,6 @@
           "type": "wait_turn"
         },
         {
-          "type": "sleep",
-          "seconds": 30
-        },
-        {
           "type": "stop_session_updates"
         }
       ],
