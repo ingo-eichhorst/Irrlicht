@@ -23,6 +23,21 @@ reset_remaining() {
 sleep() { command sleep 0.01; }
 remaining_seconds() { echo "${REMAINING:-1}"; }
 
+run_case() { # <function-name>
+  local name="$1" raw="${STAGING:-}/session_updates.raw.jsonl" json_status completed_status
+  if "$name"; then
+    return 0
+  fi
+  json_status="not-run"
+  completed_status="not-run"
+  if [[ -f "$raw" ]]; then
+    if jq -e . "$raw" >/dev/null 2>&1; then json_status=0; else json_status=$?; fi
+    if jq -e --arg id "${UUID:-}" 'select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready" and (.session.metrics.tasks | length == 3) and ([.session.metrics.tasks[].status] | all(. == "completed")))' "$raw" >/dev/null 2>&1; then completed_status=0; else completed_status=$?; fi
+  fi
+  echo "driver-interactive test failed: case=$name exit_reason=${EXIT_REASON:-unset} json_jq=$json_status completed_tasks_jq=$completed_status" >&2
+  return 1
+}
+
 run_success() {
   printf '%s\n' '{"type":"compaction/end"}' | zstd -q -c > "$TMP/success.zstd"
   TRANSCRIPT="$TMP/success.zstd" ACTIVE=1 EXIT_REASON="ok" REMAINING=1
@@ -68,10 +83,10 @@ run_unreadable() {
   [[ "$EXIT_REASON" == "unreadable_transcript" ]]
 }
 
-run_success
-run_absent
-run_unreadable
-run_malformed_json
+run_case run_success
+run_case run_absent
+run_case run_unreadable
+run_case run_malformed_json
 
 start_capture_process() {
   /bin/sleep 60 &
@@ -161,11 +176,11 @@ run_capture_ready_frame_timeout() {
   [[ "$EXIT_REASON" == "capture_ready_timeout" ]]
 }
 
-run_capture_matching_frame
-run_capture_zero_or_wrong_frames
-run_capture_malformed_json
-run_capture_readiness_failure
-run_capture_ready_frame_timeout
+run_case run_capture_matching_frame
+run_case run_capture_zero_or_wrong_frames
+run_case run_capture_malformed_json
+run_case run_capture_readiness_failure
+run_case run_capture_ready_frame_timeout
 
 run_capture_completed_tasks_frame() {
   reset_remaining
@@ -192,8 +207,8 @@ run_capture_completed_tasks_timeout() {
   [[ "$EXIT_REASON" == "capture_ready_timeout" ]]
 }
 
-run_capture_completed_tasks_frame
-run_capture_completed_tasks_timeout
+run_case run_capture_completed_tasks_frame
+run_case run_capture_completed_tasks_timeout
 
 task_recipe="$ROOT/replaydata/agents/deepseek-harness/scenarios/2-3_task-list/metadata.json"
 task_steps="$(jq -r '.details.recipe.script[].type' "$task_recipe")"
