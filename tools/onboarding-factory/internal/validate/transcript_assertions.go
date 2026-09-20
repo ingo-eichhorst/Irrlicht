@@ -29,6 +29,8 @@ type RecordAssertion struct {
 	FieldContains []FieldContainsAssertion `json:"field_contains,omitempty"`
 	// Absent requires every selected record to omit each dotted path.
 	Absent []string `json:"absent,omitempty"`
+	// Present requires every selected record to contain each dotted path.
+	Present []string `json:"present,omitempty"`
 }
 
 // RelatedRecordAssertion requires each selected record to have a second
@@ -191,6 +193,12 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if !validAbsentPaths(assertion.Absent) {
 		return fmt.Errorf("%s assertion %q has an invalid absent-path requirement", kind, assertion.Name)
 	}
+	if !validAbsentPaths(assertion.Present) {
+		return fmt.Errorf("%s assertion %q has an invalid present-path requirement", kind, assertion.Name)
+	}
+	if len(assertion.Present) > 0 && assertion.MinCount < 1 {
+		return fmt.Errorf("%s assertion %q has present paths but no positive minimum count", kind, assertion.Name)
+	}
 	if len(assertion.Absent) > 0 && assertion.MinCount < 1 {
 		return fmt.Errorf("%s assertion %q has absent paths but no positive minimum count", kind, assertion.Name)
 	}
@@ -285,6 +293,7 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	evaluation.checkDistinct(assertion.MinDistinct, matched)
 	evaluation.checkFieldContains(assertion.FieldContains, matched)
 	evaluation.checkAbsent(assertion.Absent, matched)
+	evaluation.checkPresent(assertion.Present, matched)
 	name := assertion.Name
 	if name == "" {
 		name = "records"
@@ -292,6 +301,13 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	return RecordAssertResult{
 		Name: name, Expected: evaluation.expected, Actual: evaluation.actual, OK: evaluation.ok,
 		KnownFailing: assertion.KnownFailing,
+	}
+}
+
+func (evaluation *recordEvaluation) checkPresent(paths []string, records []map[string]any) {
+	for _, path := range paths {
+		if !allPathExists(records, path) { evaluation.ok = false }
+		evaluation.expected += ", each with " + path
 	}
 }
 
@@ -479,6 +495,14 @@ func anyPathExists(records []map[string]any, path string) bool {
 		}
 	}
 	return false
+}
+
+func allPathExists(records []map[string]any, path string) bool {
+	if len(records) == 0 { return false }
+	for _, record := range records {
+		if _, ok := valueAtPath(record, path); !ok { return false }
+	}
+	return true
 }
 
 func distinctPathValues(records []map[string]any, path string) int {
