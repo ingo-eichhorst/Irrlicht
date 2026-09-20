@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 DRIVER="$ROOT/replaydata/agents/deepseek-harness/driver-interactive.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+SESSION_ID="session-right"
 
 # Load only the polling function. The production driver otherwise starts tmux.
 # shellcheck disable=SC2046
@@ -98,12 +99,12 @@ resolve_transcript() { :; }
 
 run_capture_matching_frame() {
   reset_remaining
-  STAGING="$TMP/capture-matching" UUID="session-right" EXIT_REASON="ok" REMAINING=1
+  STAGING="$TMP/capture-matching" UUID="$SESSION_ID" EXIT_REASON="ok" REMAINING=1
   mkdir -p "$STAGING"
   printf '%s\n' \
     '{"type":"session_updated","session":{"session_id":"session-wrong"}}' \
-    '{"type":"session_updated","session":{"session_id":"session-right","state":"working","task_estimate":4}}' \
-    '{"type":"session_updated","session":{"session_id":"session-right","state":"ready"}}' > "$STAGING/session_updates.raw.jsonl"
+    "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"working\",\"task_estimate\":4}}" \
+    "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"ready\"}}" > "$STAGING/session_updates.raw.jsonl"
   start_capture_process
   step_stop_session_updates
   [[ "$(wc -l < "$STAGING/session_updates.jsonl" | tr -d ' ')" == "2" ]]
@@ -113,7 +114,7 @@ run_capture_matching_frame() {
 
 run_capture_zero_or_wrong_frames() {
   reset_remaining
-  STAGING="$TMP/capture-wrong" UUID="session-right" EXIT_REASON="ok" REMAINING=0
+  STAGING="$TMP/capture-wrong" UUID="$SESSION_ID" EXIT_REASON="ok" REMAINING=0
   mkdir -p "$STAGING"
   printf '%s\n' '{"type":"session_updated","session":{"session_id":"session-wrong"}}' > "$STAGING/session_updates.raw.jsonl"
   start_capture_process
@@ -127,10 +128,10 @@ run_capture_zero_or_wrong_frames() {
 
 run_capture_malformed_json() {
   reset_remaining
-  STAGING="$TMP/capture-malformed" UUID="session-right" EXIT_REASON="ok" REMAINING=1
+  STAGING="$TMP/capture-malformed" UUID="$SESSION_ID" EXIT_REASON="ok" REMAINING=1
   mkdir -p "$STAGING"
   printf '%s\n' \
-    '{"type":"session_updated","session":{"session_id":"session-right"}}' \
+    "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\"}}" \
     'not json' > "$STAGING/session_updates.raw.jsonl"
   start_capture_process
   if step_stop_session_updates; then
@@ -162,9 +163,9 @@ run_capture_readiness_failure() {
 
 run_capture_ready_frame_timeout() {
   # shellcheck disable=SC2034 # eval-loaded driver function reads this global.
-  STAGING="$TMP/capture-no-ready" UUID="session-right" EXIT_REASON="ok"
+  STAGING="$TMP/capture-no-ready" UUID="$SESSION_ID" EXIT_REASON="ok"
   mkdir -p "$STAGING"
-  printf '%s\n' '{"type":"session_updated","session":{"session_id":"session-right","state":"working"}}' > "$STAGING/session_updates.raw.jsonl"
+  printf '%s\n' "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"working\"}}" > "$STAGING/session_updates.raw.jsonl"
   rm -f "$TMP/no-ready-polled"
   remaining_seconds() { if [[ ! -e "$TMP/no-ready-polled" ]]; then : > "$TMP/no-ready-polled"; echo 1; else echo 0; fi; }
   start_capture_process
@@ -185,20 +186,20 @@ run_case run_capture_ready_frame_timeout
 run_capture_completed_tasks_frame() {
   reset_remaining
   # shellcheck disable=SC2034 # eval-loaded driver function reads this global.
-  STAGING="$TMP/capture-completed-tasks" UUID="session-right" EXIT_REASON="ok" REMAINING=1
+  STAGING="$TMP/capture-completed-tasks" UUID="$SESSION_ID" EXIT_REASON="ok" REMAINING=1
   mkdir -p "$STAGING"
   printf '%s\n' \
-    '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"in_progress"},{"status":"pending"}]}}}' \
-    '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"completed"},{"status":"completed"}]}}}' > "$STAGING/session_updates.raw.jsonl"
+    "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"ready\",\"metrics\":{\"tasks\":[{\"status\":\"completed\"},{\"status\":\"in_progress\"},{\"status\":\"pending\"}]}}}" \
+    "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"ready\",\"metrics\":{\"tasks\":[{\"status\":\"completed\"},{\"status\":\"completed\"},{\"status\":\"completed\"}]}}}" > "$STAGING/session_updates.raw.jsonl"
   start_capture_process
   step_stop_session_updates true
   jq -e 'select(.session.metrics.tasks | length == 3) | select([.session.metrics.tasks[].status] | all(. == "completed"))' "$STAGING/session_updates.jsonl" >/dev/null
 }
 
 run_capture_completed_tasks_timeout() {
-  STAGING="$TMP/capture-incomplete-tasks" EXIT_REASON="ok"
+  STAGING="$TMP/capture-incomplete-tasks" UUID="$SESSION_ID" EXIT_REASON="ok"
   mkdir -p "$STAGING"
-  printf '%s\n' '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"in_progress"},{"status":"pending"}]}}}' > "$STAGING/session_updates.raw.jsonl"
+  printf '%s\n' "{\"type\":\"session_updated\",\"session\":{\"session_id\":\"$SESSION_ID\",\"state\":\"ready\",\"metrics\":{\"tasks\":[{\"status\":\"completed\"},{\"status\":\"in_progress\"},{\"status\":\"pending\"}]}}}" > "$STAGING/session_updates.raw.jsonl"
   rm -f "$TMP/incomplete-tasks-polled"
   remaining_seconds() { if [[ ! -e "$TMP/incomplete-tasks-polled" ]]; then : > "$TMP/incomplete-tasks-polled"; echo 1; else echo 0; fi; }
   start_capture_process
@@ -212,7 +213,29 @@ run_case run_capture_completed_tasks_timeout
 
 task_recipe="$ROOT/replaydata/agents/deepseek-harness/scenarios/2-3_task-list/metadata.json"
 task_steps="$(jq -r '.details.recipe.script[].type' "$task_recipe")"
-[[ "$(printf '%s\n' "$task_steps" | sed -n '1p')" == "capture_session_updates" ]]
-[[ "$(printf '%s\n' "$task_steps" | sed -n '15p')" == "stop_session_updates" ]]
-[[ "$(printf '%s\n' "$task_steps" | sed -n '14p')" == "wait_turn" ]]
+assert_recipe_step() { # <line> <expected-type>
+  local line="$1" expected="$2" actual
+  actual="$(printf '%s\n' "$task_steps" | sed -n "${line}p")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "task-list recipe step $line: expected $expected, got ${actual:-missing}" >&2
+    return 1
+  fi
+}
+
+assert_recipe_step_rejects_wrong_type() { # <line> <wrong-type> <expected-diagnostic>
+  local line="$1" wrong_type="$2" expected_diagnostic="$3" diagnostic
+  if diagnostic="$(assert_recipe_step "$line" "$wrong_type" 2>&1)"; then
+    echo "task-list recipe mutation unexpectedly passed: step $line accepted $wrong_type" >&2
+    return 1
+  fi
+  if [[ "$diagnostic" != "$expected_diagnostic" ]]; then
+    echo "task-list recipe mutation diagnostic mismatch: got ${diagnostic:-missing}" >&2
+    return 1
+  fi
+}
+
+assert_recipe_step_rejects_wrong_type 16 wait_turn 'task-list recipe step 16: expected wait_turn, got stop_session_updates' || exit 1
+assert_recipe_step 1 capture_session_updates || exit 1
+assert_recipe_step 15 wait_turn || exit 1
+assert_recipe_step 16 stop_session_updates || exit 1
 echo "ok: deepseek-harness wait_compaction"
