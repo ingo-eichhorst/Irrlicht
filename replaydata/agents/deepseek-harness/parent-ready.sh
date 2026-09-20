@@ -7,7 +7,7 @@
 dsh_await_parent_ready() {
   local bind_addr="$1" parent_id="$2" deadline="$3"
   local port daemon_url response state last_state="" first_scan=1
-  if [[ ! "$bind_addr" =~ ^127\.0\.0\.1:([0-9]+)$ ]]; then
+  if [[ ! "$bind_addr" =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]]; then
     echo "await_parent_ready: daemon bind address must be 127.0.0.1 with a numeric unprivileged port" >&2
     return 1
   fi

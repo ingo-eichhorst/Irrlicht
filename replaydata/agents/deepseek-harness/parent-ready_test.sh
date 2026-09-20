@@ -13,10 +13,10 @@ fail() { printf 'not ok - %s\n' "$1" >&2; failures=$((failures + 1)); }
 with_fake_curl() { # <response> <function name>
   local response="$1" function_name="$2" root status
   root="$(mktemp -d)"
-  printf '#!/usr/bin/env bash\nprintf "%%s" "$FAKE_CURL_RESPONSE"\n' > "$root/curl"
+  printf '%s\n' '#!/usr/bin/env bash' '[[ -z "${FAKE_CURL_MARKER:-}" ]] || : > "$FAKE_CURL_MARKER"' 'printf "%s" "$FAKE_CURL_RESPONSE"' > "$root/curl"
   chmod +x "$root/curl"
   set +e
-  FAKE_CURL_RESPONSE="$response" PATH="$root:$PATH" "$function_name"
+  FAKE_CURL_RESPONSE="$response" FAKE_CURL_MARKER="${FAKE_CURL_MARKER:-}" PATH="$root:$PATH" "$function_name"
   status=$?
   set -e
   rm -rf "$root"
@@ -64,32 +64,40 @@ test_malformed_response() {
   [[ $status -ne 0 && "$out" == *'snapshot was malformed'* ]] && pass malformed-api-response || fail malformed-api-response
 }
 
+rejects_before_curl() { # <bind-address> <expected-error>
+  local bind_addr="$1" expected_error="$2" id='session-77777777-7777-4777-8777-777777777777'
+  local marker out status
+  marker="$(mktemp)"
+  rm -f "$marker"
+  check() { dsh_await_parent_ready "$bind_addr" "$id" "$(date +%s)"; }
+  set +e; out="$(FAKE_CURL_MARKER="$marker" with_fake_curl '{"groups":[]}' check 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 && "$out" == *"$expected_error"* && ! -e "$marker" ]]
+  status=$?
+  rm -f "$marker"
+  return "$status"
+}
+
 test_rejects_non_loopback_address() {
-  local id='session-77777777-7777-4777-8777-777777777777' out status
-  check() { dsh_await_parent_ready '192.0.2.1:9999' "$id" "$(date +%s)"; }
-  set +e; out="$(with_fake_curl '{"groups":[]}' check 2>&1)"; status=$?; set -e
-  [[ $status -ne 0 && "$out" == *'must be 127.0.0.1 with a numeric unprivileged port'* ]] && pass rejects-non-loopback-address || fail rejects-non-loopback-address
+  rejects_before_curl '192.0.2.1:9999' 'must be 127.0.0.1 with a numeric unprivileged port' && pass rejects-non-loopback-address || fail rejects-non-loopback-address
 }
 
 test_rejects_url_injection() {
-  local id='session-88888888-8888-4888-8888-888888888888' out status
-  check() { dsh_await_parent_ready '127.0.0.1:9999@evil.example' "$id" "$(date +%s)"; }
-  set +e; out="$(with_fake_curl '{"groups":[]}' check 2>&1)"; status=$?; set -e
-  [[ $status -ne 0 && "$out" == *'must be 127.0.0.1 with a numeric unprivileged port'* ]] && pass rejects-url-injection || fail rejects-url-injection
+  rejects_before_curl '127.0.0.1:9999@evil.example' 'must be 127.0.0.1 with a numeric unprivileged port' && pass rejects-url-injection || fail rejects-url-injection
 }
 
 test_rejects_privileged_port() {
-  local id='session-99999999-9999-4999-8999-999999999999' out status
-  check() { dsh_await_parent_ready '127.0.0.1:1023' "$id" "$(date +%s)"; }
-  set +e; out="$(with_fake_curl '{"groups":[]}' check 2>&1)"; status=$?; set -e
-  [[ $status -ne 0 && "$out" == *'must use an unprivileged port'* ]] && pass rejects-privileged-port || fail rejects-privileged-port
+  rejects_before_curl '127.0.0.1:1023' 'must use an unprivileged port' && pass rejects-privileged-port || fail rejects-privileged-port
 }
 
 test_rejects_out_of_range_port() {
-  local id='session-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' out status
-  check() { dsh_await_parent_ready '127.0.0.1:65536' "$id" "$(date +%s)"; }
-  set +e; out="$(with_fake_curl '{"groups":[]}' check 2>&1)"; status=$?; set -e
-  [[ $status -ne 0 && "$out" == *'must use an unprivileged port'* ]] && pass rejects-out-of-range-port || fail rejects-out-of-range-port
+  rejects_before_curl '127.0.0.1:65536' 'must use an unprivileged port' && pass rejects-out-of-range-port || fail rejects-out-of-range-port
+}
+
+test_rejects_huge_port() {
+  local port
+  printf -v port '%*s' 1000 ''
+  port="${port// /9}"
+  rejects_before_curl "127.0.0.1:$port" 'must be 127.0.0.1 with a numeric unprivileged port' && pass rejects-huge-port || fail rejects-huge-port
 }
 
 test_success
@@ -102,4 +110,5 @@ test_rejects_non_loopback_address
 test_rejects_url_injection
 test_rejects_privileged_port
 test_rejects_out_of_range_port
+test_rejects_huge_port
 [[ $failures -eq 0 ]]
