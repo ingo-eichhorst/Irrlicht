@@ -444,9 +444,9 @@ func TestEveryModifyPermissionDeclaresTheFileItWrites(t *testing.T) {
 // than silence.
 var applyWritesNoUserFile = map[string]string{
 	"gastown/state": "Apply starts and stops the Gas Town watcher; it reads ~/gt and writes nothing",
-	"muse-account-api/account-api": "Apply performs one best-effort credential resolve to fail fast on a " +
-		"broken setup and registers the daemon-wide AccountPoller's revoke effect; it reads " +
-		"~/.config/muse/auth.json (or the macOS Keychain) and writes nothing (issue #2007)",
+	"muse-account-api/account-api": "Apply performs one best-effort credential resolve (async, to fail fast " +
+		"on a broken setup without blocking the grant) and writes no shared user file; it reads " +
+		"~/.config/muse/auth.json (or the macOS Keychain) and nothing else (issue #2007)",
 }
 
 // TestPrintManagedFilesNamesTheFilesTheIssueFound is the concrete arm of the

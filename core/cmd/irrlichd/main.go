@@ -390,8 +390,10 @@ func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store
 // permissions that actually write them.
 //
 // It projects the full consent catalog rather than agents.All(): the kitty
-// patch is one of four daemon-wide declarations appended outside the adapter
-// registry, and projecting only the registry is how it stayed unprotected.
+// patch is one of five daemon-wide declarations appended outside the adapter
+// registry (#2002 added endpoint-route observation as the 4th, #2007 Muse's
+// account-quota permission as the 5th), and projecting only the registry is
+// how it stayed unprotected.
 //
 // An empty result is an error, not an empty list: the rig would read "nothing
 // to protect" as success and record over the user's files unprotected.
@@ -716,14 +718,14 @@ func runDaemon() {
 	defer orchCancel()
 	startGastown, stopGastown := gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 
-	// Muse's account-quota poller (issue #2007) is constructed once here,
-	// daemon-wide, matching accountpoller.go's own "exactly one
-	// AccountPoller per daemon" design. The poller/resolver/transport are
-	// discarded here (blank) — nothing yet triggers a per-session poll; see
-	// museaccountapi_effects.go's own doc comment for why that trigger is
-	// deliberately left for a follow-up. Only the grant/revoke effects wire
-	// into the permission catalog below.
-	_, _, _, startMuseAccountAPI, stopMuseAccountAPI := museAccountAPIEffects(logger)
+	// Muse's account-quota poller (issue #2007) is constructed once inside
+	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
+	// "exactly one AccountPoller per daemon" design — its own start/stop
+	// closures capture it directly, so nothing here needs it. Nothing yet
+	// triggers a per-session poll; see museaccountapi_effects.go's own doc
+	// comment for why that trigger is deliberately left for a follow-up.
+	// Only the grant/revoke effects wire into the permission catalog below.
+	startMuseAccountAPI, stopMuseAccountAPI := museAccountAPIEffects(logger)
 
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{

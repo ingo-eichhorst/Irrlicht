@@ -57,7 +57,9 @@ func TestDestination_HasTheReviewedRequestShape(t *testing.T) {
 // see) and confirming (a) the file exists, (b) its first line is exactly the
 // constraint, and (c) no OTHER .go file in this directory (excluding _test.go
 // files, which never construct a production transport) calls
-// accountquota.NewHTTPTransport at all.
+// accountquota.NewHTTPTransport at all — the second half via
+// assertNoProductionFileContains (production_source_scan_test.go), shared
+// with TestCredentialResolver_NeverCallsReveal's identical scan shape.
 func TestMuseDestination_NeverDialsInTheOrdinarySuite(t *testing.T) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -74,34 +76,6 @@ func TestMuseDestination_NeverDialsInTheOrdinarySuite(t *testing.T) {
 		t.Fatalf("%s's first line is %q, want \"//go:build live_probe\" — without this exact constraint, `go test` with no tags WOULD compile and could run the one real HTTP call to api.meta.ai this package contains", liveProbeFile, firstLine)
 	}
 
-	// Scanned: every NON-TEST (production) .go file — the claim checked here
-	// is "production code never constructs a real transport outside the
-	// gated file". _test.go files are excluded deliberately, not merely
-	// skipped for convenience: THIS file's own source necessarily contains
-	// the literal searched-for string (in the strings.Contains call below)
-	// and would falsely flag itself if _test.go files were scanned too — the
-	// same self-match risk TestCredentialResolver_NeverCallsReveal
-	// (credential_test.go) hit and fixed for its own grepped string.
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	scanned := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		scanned++
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("ReadFile %s: %v", name, err)
-		}
-		if strings.Contains(string(data), "accountquota.NewHTTPTransport(") {
-			t.Errorf("%s calls accountquota.NewHTTPTransport — every real transport construction in this package must live ONLY in the live_probe-gated file", name)
-		}
-	}
-	if scanned == 0 {
-		t.Fatal("vacuity: scanned zero production .go files — this test verified nothing")
-	}
+	assertNoProductionFileContains(t, "accountquota.NewHTTPTransport(",
+		"calls accountquota.NewHTTPTransport — every real transport construction in this package must live ONLY in the live_probe-gated file")
 }

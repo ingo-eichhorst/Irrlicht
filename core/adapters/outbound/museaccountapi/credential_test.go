@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -102,33 +101,15 @@ func TestCredentialResolver_NoPathResolver(t *testing.T) {
 // accountquota.TestCredential_RevealHasOneCallSite: this package must never
 // call outbound.Credential.Reveal() at all (it only ever CONSTRUCTS one via
 // outbound.NewCredential) — see this package's doc comment. Grepped
-// structurally, the same style as the guard it mirrors, over every non-test
-// .go file in this directory.
+// structurally, the same style as the guard it mirrors, via
+// assertNoProductionFileContains (production_source_scan_test.go).
 func TestCredentialResolver_NeverCallsReveal(t *testing.T) {
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	scanned := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		scanned++
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("ReadFile %s: %v", name, err)
-		}
-		if strings.Contains(string(data), ".Reveal()") {
-			t.Errorf("%s calls .Reveal() — this package must never unwrap a Credential, only construct one via outbound.NewCredential", name)
-		}
-	}
-	if scanned == 0 {
-		t.Fatal("vacuity: scanned zero non-test .go files — this test verified nothing")
-	}
+	// ".Reveal" + "()" split across a concatenation so this file's OWN
+	// source never contains the literal substring being searched for — see
+	// assertNoProductionFileContains's own doc comment on the self-match
+	// risk this avoids (this file is a _test.go file and so is already
+	// excluded from the scan, but the split keeps the intent visible at the
+	// call site too).
+	assertNoProductionFileContains(t, ".Reveal"+"()",
+		"calls .Reveal() — this package must never unwrap a Credential, only construct one via outbound.NewCredential")
 }

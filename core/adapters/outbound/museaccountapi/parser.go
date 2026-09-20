@@ -147,12 +147,18 @@ func quotaWindow(w *quotaWindowJSON, defaultMinutes int) (*session.RateLimitWind
 // email address, neither of which is provider-issued, and both the epic
 // (#1977 §3.2/§5.1) and this ticket's own §1.3 forbid deriving one from the
 // access token ("a token hash is credential identity, not account
-// identity... token rotation changes it"). Leaving ConfirmedAccountRef
-// empty is what keeps core/application/services/quotainherit.go's
-// cross-session sharing (donorKey/recipientKey, gated on a non-empty,
-// MATCHING ConfirmedAccountRef) from ever bridging two Muse sessions —
-// issue #2007's own resolution to its §9.3 question: "one chip per session
-// is the honest outcome if that is all the evidence supports."
+// identity... token rotation changes it").
+//
+// This does NOT currently gate anything in
+// core/application/services/quotainherit.go: donorKey and recipientKey each
+// switch on s.Adapter with no "muse" case (checked directly, issue #2007
+// review), so a Muse session can never be a cross-session donor or
+// recipient there today regardless of what ConfirmedAccountRef holds — that
+// protection is "muse isn't a case in the switch", not this field. Leaving
+// ConfirmedAccountRef empty is still the right call on its own terms (a
+// non-provider-issued value must never be published as if it were one), and
+// is what a FUTURE "muse" case in quotainherit.go would need to keep
+// respecting if one is ever added.
 // TestBuildSnapshot_NeverDerivesAnAccountRef (mutation fixture #1) mutates
 // this to return a hash derived from the response body and confirms the
 // lock test goes red.
