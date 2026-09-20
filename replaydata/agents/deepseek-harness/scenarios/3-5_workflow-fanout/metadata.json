@@ -7,7 +7,7 @@
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+968624b",
     "confidence": 0.89,
-    "notes": "DeepSeek Harness ships workflow fan-out, but the DSH adapter skips bare-UUID child transcripts and ignores their durable parentSession field."
+    "notes": "UNVERIFIED: current adapter supports the native bare-UUID parent link, but no live workflow fan-out run exists because the prompt-only driver cannot force the local model to invoke workflow."
   },
   "details": {
     "assessment": {
@@ -18,15 +18,12 @@
       "daemon_capability": "unknown",
       "driver_capability": "limited",
       "confidence": 0.89,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `workflow` tool. The installed official tool reference states that a model-authored JavaScript workflow can delegate to many subagents, that `parallel()` starts zero-argument thunks concurrently, and that the parent tool call waits until every child settles. The installed base profile mounts `@deepseek-ai/dsh-workflow-worker-thread` with provider `spawn` and mounts `@deepseek-ai/dsh-tool-workflow`. The active TUI composition contains both rows.\n\nThe workflow engine sends every `agent()` call through `ctx.subagents.start` with the workflow's calling Agent as `parent`. The shipped in-process spawn driver creates a separate child session with a bare `randomUUID()` id. `childSessionMeta` writes `parentSession` equal to the durable parent id and `origin: subagent` into each child header. The workflow tool also writes one `tool-workflow/agent-start` parent record for each published child, including its distinct `childId`, and returns `agentsStarted` in its result. These sources explicitly support a three-child parallel fan-out and a non-vacuous transcript assertion.\n\n## Daemon capability\n\nThe DSH adapter cannot currently observe the required child topology. `sessionIDFromPath` accepts only directory names matching `session-<uuid>`, but the official in-process driver persists workflow children under bare UUID ids. The source therefore returns an empty session id for every valid workflow child transcript. `FilesUnderRoot` skips those transcripts before the parser can emit a child lifecycle.\n\nThe adapter also declares no `ParentSessionIDFromPath` function. Its session-header parser reads only `version` and `cwd`, then skips the header. It therefore ignores the durable `parentSession` field. Even if the child-id filter were widened alone, the daemon would not emit `parent_linked`, would not set `ParentSessionID`, and would not derive `SubagentCount(parent)`. This is `daemon=bug`, not `incapable`, because the exact child transcripts and parent ids are durable under the root that the adapter already monitors. The correct spec stays known-failing until both defects are fixed.\n\nDeepSeek Harness does not create a Claude-style per-run journal file. Its workflow bookkeeping is stored as typed records inside the parent transcript. The scenario's no-phantom-journal condition is therefore vacuous for this adapter and does not reduce the daemon verdict.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`, which are the only recipe steps. The prompt requires one `workflow` tool call. It gives an exact script shape: one `parallel()` call with exactly three thunks, one `agent()` call per thunk, distinct labels, and deterministic child outputs after a 20-second shell delay. The workflow runs in the foreground, so `wait_turn` covers parent selection, concurrent child work, the tool result, and the final parent reply. The 900-second budget covers the measured slow local-model class. The 120-second trailing sleep exceeds the largest committed sibling settle delay of 90 seconds because this route writes concatenated zstd frames after four local-model continuations.\n\nThe spec requires exactly one workflow call, exactly three distinct `tool-workflow/agent-start` child ids, three completed member endings, and a successful tool result that says three agents completed. Thus a plain parent turn, three plain subagent calls, or a one-child workflow cannot satisfy the fixture. Lifecycle phases assert three distinct child sessions, three parent links, child completion, and the parent held in working until the foreground workflow completes.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: unknown\ndriver_capability: limited\n\n## Current capability\n\nDeepSeek Harness ships a model-authored `workflow` tool. Its workflow worker starts native subagents with the workflow session as parent. Each native child uses a bare UUID and stores `origin: subagent` and durable `parentSession` in its header. The current adapter accepts and links this child form. The 3.1 and 3.2 live recordings verify the underlying native-child mechanism. The historical adapter-bug verdict is obsolete.\n\n## Missing end-to-end evidence\n\nNo live workflow fan-out recording exists for this cell. The installed tool source supports fan-out, but source support does not prove that the active local model will emit the required workflow tool call or that a three-child run will complete under this driver. Therefore daemon capability for the workflow lifecycle remains unknown.\n\n## Driver limit\n\nThe interactive driver can only prompt the model. It has no primitive to force the model-owned `workflow` tool or its three `agent()` calls. The driver's `fork` operation creates a seeded DSH session. It does not create a native `origin: subagent` child and is not a valid substitute. A valid recording must observe the workflow call, three distinct linked native children, their completion, and parent release.",
       "caveats": [
-        "Known daemon bug: core/adapters/inbound/agents/dsh/adapter.go accepts only session-<uuid> directory names, but @deepseek-ai/dsh-subagent-in-process-driver creates workflow child ids as bare UUIDs. The source skips every durable workflow child transcript.",
-        "Known daemon bug: the child header carries parentSession, but core/adapters/inbound/agents/dsh/agent.go declares no ParentSessionIDFromPath extractor and parser.go discards that header field. No parent_linked event or SubagentCount can be produced.",
-        "Emission is source-confirmed but not live-recorded for this cell. Recording must confirm that the active TUI composition persists all three workflow children and that their headers carry the calling parent id.",
-        "Vacuous-pass condition: the parent ready-to-working-to-ready arc could pass after an ordinary turn, or unrelated children could satisfy positive lifecycle checks. The transcript assertions therefore require one workflow call, three distinct tool-workflow child ids, three completed member endings, and the exact successful three-agent result.",
-        "The no-phantom-journal condition is vacuous for DeepSeek Harness. This workflow stores run bookkeeping as typed events in the parent transcript and creates no separate journal JSONL that could become a session.",
-        "Load-bearing environment preconditions: the active TUI profile must still expose the workflow tool with the spawn provider, the host must allow at least three concurrent workflow agents, and LM Studio must expose qwen/qwen3.5-9b. Record must re-probe all three instead of trusting this assessment.",
-        "The three workflow children share the parent dsh process. Do not require distinct child PIDs; require distinct child SessionState rows and ParentSessionID links."
+        "No live 3.5 workflow recording exists. Installed DSH source confirms the workflow feature, but source evidence does not establish the end-to-end daemon lifecycle.",
+        "The interactive driver cannot force a model-owned workflow call or a three-child fan-out. This is a driver limit, not evidence of a daemon bug.",
+        "The driver fork operation creates a seeded session. It is not a native origin:subagent child and cannot satisfy this scenario.",
+        "The historical bare-UUID and parentSession adapter defects were fixed and observed in the 3.1 and 3.2 native-child recordings."
       ],
       "sources": [
         {
@@ -67,17 +64,17 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/adapter.go",
-          "note": "sessionIDPattern requires session-<uuid>; sessionIDFromPath returns empty for the official bare-UUID child directories."
+          "note": "Current adapter accepts validated bare-UUID native child directories."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/agent.go",
-          "note": "FilesUnderRoot declares SessionIDFromPath but no ParentSessionIDFromPath extractor."
+          "note": "Current source wires ParentSessionIDFromPath for durable native-child links."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/parser.go",
-          "note": "parseSession validates the header version and reads cwd, then skips the header without reading parentSession."
+          "note": "Current adapter header reader validates native subagent origin and parentSession."
         },
         {
           "kind": "file",
