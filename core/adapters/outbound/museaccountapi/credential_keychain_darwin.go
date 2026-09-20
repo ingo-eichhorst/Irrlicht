@@ -14,15 +14,23 @@ import (
 )
 
 // keychainTimeout bounds one `security find-generic-password` invocation.
-// Not a measured probe cost — mirrors
-// accountquota.keychainTimeout's own reasoning verbatim: a local, offline
-// keychain lookup should return in well under a second, with headroom for a
-// loaded machine. A Keychain ACL PROMPT is a distinct, much slower case
-// (herdr-agent-quota budgets 5s for exactly that) — this package's own live
-// probe (museaccountapi_live_probe_test.go) wraps its one real invocation in
-// an outer `timeout` at the shell level rather than raising this constant,
-// so an unattended prompt fails the probe rather than hanging it.
-const keychainTimeout = 3 * time.Second
+// MEASURED, not assumed: issue #2007's live probe on 2026-09-20 first ran
+// this constant at 3s (matching accountquota.keychainTimeout's own value for
+// a DIFFERENT, never-prompted use) and the real `ai.meta.dev.credentials`
+// item's `-w` read consistently timed out — `TestLiveProbe` logged
+// "security did not answer (killed or timed out)". Raising it to 25s for one
+// diagnostic re-run (never committed at that value) let the SAME read
+// succeed in ~9.5s (12.72s total probe time minus the 2869ms HTTP fetch the
+// same run measured, minus `muse --version`'s own sub-second cost) — with no
+// interactive prompt observed (the run was unattended and returned data, not
+// a denial). herdr-agent-quota's own KEYCHAIN_COMMAND_BUDGET is 5s for the
+// same call, which this measurement contradicts for this item/machine — see
+// the PR body for the full timing. 15s keeps ~50% headroom over the ~9.5s
+// observed without approaching herdr's separate 300s INTERACTIVE-approval
+// budget, which this package does not implement (no
+// `--keychain-approve`-equivalent ceremony exists here; a slow read still
+// just fails after 15s, recorded as a credential error, never a hang).
+const keychainTimeout = 15 * time.Second
 
 // securityPath is resolved once from a fixed, unwriteable directory set
 // rather than trusted PATH (core/pkg/pathutil's own rationale, go:S4036) —
