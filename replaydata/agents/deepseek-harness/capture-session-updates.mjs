@@ -6,5 +6,5 @@ if (!url || !output || !ready) process.exit(2);
 const ws = new WebSocket(url);
 ws.addEventListener("open", () => writeFileSync(ready, "open\n"));
 ws.addEventListener("message", (event) => appendFileSync(output, `${event.data}\n`));
-ws.addEventListener("error", () => process.exitCode = 1);
+ws.addEventListener("error", () => process.exit(1));
 setInterval(() => {}, 1000);

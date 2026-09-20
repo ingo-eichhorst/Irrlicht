@@ -321,7 +321,7 @@ populate_recording() {
   # Desktop Local recordings preserve the raw identity chain that
   # `of validate` reads. CLI staging does not create these files, so the same
   # allow-list remains a no-op for every existing recording profile.
-  for f in events.jsonl transcript.jsonl transcript.jsonl.zstd transcript.md transcript.json \
+  for f in events.jsonl session_updates.jsonl transcript.jsonl transcript.jsonl.zstd transcript.md transcript.json \
     desktop-registry.json desktop-environment.json hooks.jsonl process.json \
     irrlicht-session.json; do
     if [[ -f "$STAGED_DIR/$f" ]]; then

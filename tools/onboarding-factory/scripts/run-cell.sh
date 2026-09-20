@@ -1110,6 +1110,10 @@ fi
   -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$FOLDER"
 
+if [[ -f "$STAGING/session_updates.jsonl" ]]; then
+  cp "$STAGING/session_updates.jsonl" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER/session_updates.jsonl"
+fi
+
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DESKTOP_STAGED_DIR="$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
   # The SAME spelling the driver handed Claude Desktop. cmd/desktop-driver

@@ -321,7 +321,7 @@ step_await_child_turn_end() {
 }
 
 step_capture_session_updates() {
-  local bind="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
+  local bind="${IRRLICHT_BIND_ADDR:-127.0.0.1:7837}"
   local raw="$STAGING/session_updates.raw.jsonl" ready="$STAGING/session_updates.ready"
   rm -f "$raw" "$ready"
   node "$(dirname "$0")/capture-session-updates.mjs" "ws://$bind/api/v1/sessions/stream" "$raw" "$ready" &
@@ -332,7 +332,7 @@ step_capture_session_updates() {
 }
 
 step_stop_session_updates() {
-  [[ -n "$UPDATES_CAPTURE_PID" ]] && kill "$UPDATES_CAPTURE_PID" 2>/dev/null || true
+  [[ -n "$UPDATES_CAPTURE_PID" ]] && kill -0 "$UPDATES_CAPTURE_PID" 2>/dev/null || { echo "[driver] session-update capture is not running" >&2; EXIT_REASON="capture_dead"; return 1; }
   wait "$UPDATES_CAPTURE_PID" 2>/dev/null || true
   resolve_transcript || return 1
   jq -c --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id)' "$STAGING/session_updates.raw.jsonl" > "$STAGING/session_updates.jsonl"
