@@ -10,9 +10,10 @@ const PermissionKeyTranscripts = "transcripts"
 
 func Source() agent.Source {
 	return agent.FilesUnderRoot{
-		Dir:               defaultRootDir,
-		DirFunc:           sessionsDir,
-		SessionIDFromPath: sessionIDFromPath,
+		Dir:                     defaultRootDir,
+		DirFunc:                 sessionsDir,
+		SessionIDFromPath:       sessionIDFromPath,
+		ParentSessionIDFromPath: parentSessionIDFromPath,
 		Parser: agent.JSONLineParser{
 			NewParser: func() agent.LineParser { return &Parser{} },
 		},
