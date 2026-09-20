@@ -13,14 +13,17 @@ import (
 
 func TestSessionUpdatedTaskEstimateVisibilityFollowsState(t *testing.T) {
 	state := taskEstimateReadyFixtureSession(t)
-	for _, stateName := range []string{session.StateReady, session.StateWaiting, session.StateError} {
+	for _, stateName := range session.CanonicalStates() {
+		if stateName == session.StateWorking {
+			continue
+		}
 		state.State = stateName
 		response := sessionUpdateJSON(t, state)
 		assertSessionUpdateMetricAbsent(t, response, "task_estimate")
 		assertSessionUpdateMetricAbsent(t, response, "task_completion_eta")
 	}
 	if state.Metrics.TaskEstimate == nil || state.Metrics.TaskCompletionEta == nil {
-		t.Fatal("ready session update mutated the source metrics")
+		t.Fatal("non-working session update mutated the source metrics")
 	}
 
 	state.State = session.StateWorking
