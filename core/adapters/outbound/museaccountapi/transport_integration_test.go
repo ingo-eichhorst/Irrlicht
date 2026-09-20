@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	outbound "irrlicht/core/ports/outbound"
 )
 
 // TestDestination_HasTheReviewedRequestShape is a pure unit test (no
@@ -105,18 +103,5 @@ func TestMuseDestination_NeverDialsInTheOrdinarySuite(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("vacuity: scanned zero production .go files — this test verified nothing")
-	}
-}
-
-// TestMuseDestination_TransportRefusesTheWrongMethod is a plain sanity check
-// that outbound.FixedDestination's own zero-value default (GET, no body) is
-// NOT what Destination() returns — a regression here would mean this
-// package silently reverted to the pre-#2007 GET shape the real endpoint
-// does not accept.
-func TestMuseDestination_TransportRefusesTheWrongMethod(t *testing.T) {
-	d := Destination()
-	var zero outbound.FixedDestination
-	if d.Method == zero.Method {
-		t.Fatalf("Destination().Method equals the zero value %q — Muse's endpoint needs POST", zero.Method)
 	}
 }

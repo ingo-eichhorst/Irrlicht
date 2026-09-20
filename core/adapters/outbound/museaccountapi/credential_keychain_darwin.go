@@ -21,15 +21,23 @@ import (
 // "security did not answer (killed or timed out)". Raising it to 25s for one
 // diagnostic re-run (never committed at that value) let the SAME read
 // succeed in ~9.5s (12.72s total probe time minus the 2869ms HTTP fetch the
-// same run measured, minus `muse --version`'s own sub-second cost) — with no
-// interactive prompt observed (the run was unattended and returned data, not
-// a denial). herdr-agent-quota's own KEYCHAIN_COMMAND_BUDGET is 5s for the
-// same call, which this measurement contradicts for this item/machine — see
-// the PR body for the full timing. 15s keeps ~50% headroom over the ~9.5s
-// observed without approaching herdr's separate 300s INTERACTIVE-approval
-// budget, which this package does not implement (no
-// `--keychain-approve`-equivalent ceremony exists here; a slow read still
-// just fails after 15s, recorded as a credential error, never a hang).
+// same run measured, minus `muse --version`'s own sub-second cost).
+//
+// UNVERIFIED which of two causes that ~9.5s was: securityd/ACL negotiation
+// latency for an already-trusted caller, or a Keychain authorization dialog
+// that was answered (by whoever was at this keyboard) within the 25s window
+// — this run cannot distinguish the two, and no screenshot or prompt log was
+// captured either way. That distinction matters: if it was a one-time Allow
+// rather than an already-trusted ACL, every UNATTENDED production poll after
+// this one could re-prompt and simply time out again at 15s, silently
+// degrading to "credential not resolvable" rather than ever completing. The
+// pinned herdr-agent-quota source treats this as a first-class risk its own
+// way: it refuses a background keychain read outright without a recorded
+// `--keychain-approve` marker, so an unattended process NEVER triggers a
+// prompt. This package implements no equivalent ceremony — 15s (roughly 50%
+// headroom over the one successful measurement) is a stopgap the maintainer
+// should treat as an open question, not a settled fix; see the PR body's
+// risks section.
 const keychainTimeout = 15 * time.Second
 
 // securityPath is resolved once from a fixed, unwriteable directory set
