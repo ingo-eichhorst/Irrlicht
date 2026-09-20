@@ -27,6 +27,13 @@ func TestRetryErrorSurvivesRetryStartedUntilSuccessfulBoundary(t *testing.T) {
 	}
 }
 
+func TestMalformedRetryFailsLoudly(t *testing.T) {
+	retry := parseRecord(t, &Parser{}, `{"type":"llm/retry","data":{"retry":1,"maxRetries":5,"delayMs":10,"failure":{"message":"missing code"}}}`)
+	if retry.SessionError == nil || retry.SessionError.Class != "malformed_retry_record" {
+		t.Fatalf("malformed retry = %+v, want malformed_retry_record", retry)
+	}
+}
+
 func assertRetryingServerError(t *testing.T, metrics *tailer.SessionMetrics) {
 	t.Helper()
 	if metrics.SessionError == nil || metrics.SessionError.Phase != tailer.ErrorPhaseRetrying || metrics.SessionError.Class != "server" {

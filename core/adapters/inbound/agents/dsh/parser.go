@@ -379,7 +379,12 @@ func parseLLMRetry(raw map[string]any, ev *tailer.ParsedEvent) {
 	failure := object(data, "failure")
 	class := strings.ToLower(text(failure, "code"))
 	if class == "" {
-		ev.Skip = true
+		ev.EventType = "retrying"
+		ev.SessionError = &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseUnknown,
+			Class:   "malformed_retry_record",
+			Message: "DeepSeek Harness llm/retry record has no failure code",
+		}
 		return
 	}
 	ev.EventType = "retrying"
