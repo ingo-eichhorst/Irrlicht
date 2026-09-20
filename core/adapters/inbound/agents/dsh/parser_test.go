@@ -130,6 +130,20 @@ func TestParserReconcilesMeasuredTodoWriteSnapshots(t *testing.T) {
 	if len(cleared.TaskDeltas) != 0 {
 		t.Fatalf("empty todo/write task deltas = %+v, want none", cleared.TaskDeltas)
 	}
+
+	recreated := parseRecord(t, parser, `{"type":"todo/write","seq":33,"time":1789787696053,"data":{"todos":[{"content":"draft a greeting","status":"pending"}]}}`)
+	if !reflect.DeepEqual(recreated.TaskDeltas, []tailer.TaskDelta{{Op: tailer.TaskOpCreate, Subject: "draft a greeting"}}) {
+		t.Fatalf("recreated todo/write task deltas = %+v, want a create", recreated.TaskDeltas)
+	}
+	assertTodoSnapshot(t, recreated, []tailer.TaskSnapshotEntry{{ID: "4", Subject: "draft a greeting", Status: "pending"}})
+}
+
+func TestParserSkipsMalformedTodoWriteSnapshot(t *testing.T) {
+	parser := &Parser{}
+	malformed := parseRecord(t, parser, `{"type":"todo/write","data":{"todos":[{"content":"valid","status":"pending"},42]}}`)
+	if !malformed.Skip {
+		t.Fatalf("mixed malformed todo/write = %+v, want skipped", malformed)
+	}
 }
 
 func assertTodoSnapshot(t *testing.T, event *tailer.ParsedEvent, want []tailer.TaskSnapshotEntry) {

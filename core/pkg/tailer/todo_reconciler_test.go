@@ -79,3 +79,18 @@ func TestTodoReconciler_EmptyIsNoop(t *testing.T) {
 		t.Errorf("empty reconcile mutated ev: deltas=%v snapshot=%v", ev.TaskDeltas, ev.TaskSnapshot)
 	}
 }
+
+func TestTodoReconciler_RecreatesPrunedKeyWithMonotonicID(t *testing.T) {
+	var r TodoReconciler
+	r.Reconcile([]Todo{{Key: "first", Status: "pending"}}, &ParsedEvent{})
+	r.Reconcile([]Todo{{Key: "second", Status: "pending"}}, &ParsedEvent{})
+
+	recreated := &ParsedEvent{}
+	r.Reconcile([]Todo{{Key: "first", Status: "pending"}}, recreated)
+	if !reflect.DeepEqual(recreated.TaskDeltas, []TaskDelta{{Op: TaskOpCreate, Subject: "first"}}) {
+		t.Fatalf("recreated task deltas = %+v, want a fresh create", recreated.TaskDeltas)
+	}
+	if recreated.TaskSnapshot == nil || !reflect.DeepEqual(*recreated.TaskSnapshot, []TaskSnapshotEntry{{ID: "3", Subject: "first", Status: "pending"}}) {
+		t.Fatalf("recreated task snapshot = %+v, want id 3", recreated.TaskSnapshot)
+	}
+}

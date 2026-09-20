@@ -33,7 +33,10 @@ type TodoReconciler struct {
 // ev.TaskSnapshot to the full tracked list. A Create starts a task at pending, so
 // a non-pending status emits an Update to move it forward; reversions back to
 // pending are left to the tailer's snapshot reconcile (the delta path skips them
-// by design). Empty-Key todos are skipped; an empty slice is a no-op.
+// by design). A later snapshot that omits a key removes that key's synthetic
+// mapping. If the key returns, it gets a fresh monotonic ID that matches the
+// tailer's next TaskCreate ID. Empty-Key todos are skipped; an empty slice is
+// a no-op because callers must opt in to an authoritative empty snapshot.
 func (r *TodoReconciler) Reconcile(todos []Todo, ev *ParsedEvent) {
 	if len(todos) == 0 {
 		return
@@ -71,5 +74,30 @@ func (r *TodoReconciler) Reconcile(todos []Todo, ev *ParsedEvent) {
 	}
 	if len(snapshot) > 0 {
 		ev.TaskSnapshot = &snapshot
+	}
+	r.pruneMissingKeys(snapshot)
+}
+
+// ReconcileEmptySnapshot clears an authoritative todo list. It preserves the
+// monotonic ID counter so a later re-created key matches the tailer's next
+// TaskCreate ID.
+func (r *TodoReconciler) ReconcileEmptySnapshot(ev *ParsedEvent) {
+	r.idByKey = nil
+	snapshot := []TaskSnapshotEntry{}
+	ev.TaskSnapshot = &snapshot
+}
+
+func (r *TodoReconciler) pruneMissingKeys(snapshot []TaskSnapshotEntry) {
+	if len(r.idByKey) == 0 {
+		return
+	}
+	present := make(map[string]struct{}, len(snapshot))
+	for _, entry := range snapshot {
+		present[entry.Subject] = struct{}{}
+	}
+	for key := range r.idByKey {
+		if _, ok := present[key]; !ok {
+			delete(r.idByKey, key)
+		}
 	}
 }

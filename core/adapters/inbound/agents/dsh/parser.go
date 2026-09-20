@@ -253,9 +253,10 @@ func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
 	}
 	todos := make([]tailer.Todo, 0, len(rawTodos))
 	for _, rawTodo := range rawTodos {
-		todo, _ := rawTodo.(map[string]any)
-		if todo == nil {
-			continue
+		todo, ok := rawTodo.(map[string]any)
+		if !ok || text(todo, "content") == "" {
+			ev.Skip = true
+			return
 		}
 		todos = append(todos, tailer.Todo{
 			Key:    text(todo, "content"),
@@ -264,8 +265,7 @@ func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
 	}
 	ev.EventType = "task_update"
 	if len(rawTodos) == 0 {
-		snapshot := []tailer.TaskSnapshotEntry{}
-		ev.TaskSnapshot = &snapshot
+		p.todos.ReconcileEmptySnapshot(ev)
 		return
 	}
 	p.todos.Reconcile(todos, ev)
