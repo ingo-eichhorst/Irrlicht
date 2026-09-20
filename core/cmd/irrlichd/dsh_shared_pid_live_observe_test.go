@@ -159,7 +159,12 @@ func readDSHLiveEvents(t *testing.T, stateDir string) map[string][]lifecycle.Eve
 	if err != nil || len(files) != 1 {
 		t.Fatalf("expected one daemon event recording: files=%v err=%v", files, err)
 	}
-	f, err := os.Open(files[0])
+	return readDSHLiveEventsFile(t, files[0])
+}
+
+func readDSHLiveEventsFile(t *testing.T, path string) map[string][]lifecycle.Event {
+	t.Helper()
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,40 +184,63 @@ func readDSHLiveEvents(t *testing.T, stateDir string) map[string][]lifecycle.Eve
 	return events
 }
 
+func TestDSHLiveArcRejectsRecordedCrossSessionIdentity(t *testing.T) {
+	const sessionID = "session-9e1e0760-a587-4886-a855-abd971c22838"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"4-1_multiple-sessions-same-cwd", "recordings", "2026-09-18-15-43-18_irrlichd-0.6.4+da0e1be", "events.jsonl")
+	arc := summarizeDSHLiveArc(readDSHLiveEventsFile(t, path)[sessionID])
+	if arc.complete(sessionID) {
+		t.Fatalf("recorded identity failure passed: %+v", arc)
+	}
+	if arc.working != 2 || arc.readyAfterWorking != 2 {
+		t.Fatalf("recorded second state arc = working:%d ready-after-working:%d, want 2/2", arc.working, arc.readyAfterWorking)
+	}
+	if len(arc.removedPaths) != 2 || filepath.Base(filepath.Dir(arc.removedPaths[1])) == sessionID {
+		t.Fatalf("recorded cross-session teardown path = %v", arc.removedPaths)
+	}
+}
+
 func assertDSHLiveArc(t *testing.T, id string, events []lifecycle.Event) {
 	t.Helper()
 	arc := summarizeDSHLiveArc(events)
-	if arc.complete() {
+	if arc.complete(id) {
 		return
 	}
-	t.Errorf("session %s: working=%v ready_after_working=%v process_exited=%d", id, arc.working, arc.readyAfterWorking, arc.exited)
+	t.Errorf("session %s: working_transitions=%d ready_after_working=%d process_exited=%d removed_paths=%v", id, arc.working, arc.readyAfterWorking, arc.exited, arc.removedPaths)
 }
 
 type dshLiveArc struct {
-	working, readyAfterWorking bool
-	exited                     int
+	working, readyAfterWorking, exited int
+	removedPaths                       []string
 }
 
-func (arc dshLiveArc) complete() bool {
-	if !arc.working || !arc.readyAfterWorking {
+func (arc dshLiveArc) complete(id string) bool {
+	if arc.working != 1 || arc.readyAfterWorking != 1 || arc.exited != 1 || len(arc.removedPaths) == 0 {
 		return false
 	}
-	return arc.exited == 1
+	for _, path := range arc.removedPaths {
+		if path == "" || filepath.Base(filepath.Dir(path)) != id {
+			return false
+		}
+	}
+	return true
 }
 
 func summarizeDSHLiveArc(events []lifecycle.Event) dshLiveArc {
-	var arc dshLiveArc
+	arc := dshLiveArc{}
 	for _, event := range events {
 		switch event.Kind {
 		case lifecycle.KindStateTransition:
 			if event.NewState == "working" {
-				arc.working = true
+				arc.working++
 			}
-			if event.NewState == "ready" && arc.working {
-				arc.readyAfterWorking = true
+			if event.NewState == "ready" && arc.working > 0 {
+				arc.readyAfterWorking++
 			}
 		case lifecycle.KindProcessExited:
 			arc.exited++
+		case lifecycle.KindTranscriptRemoved:
+			arc.removedPaths = append(arc.removedPaths, event.TranscriptPath)
 		}
 	}
 	return arc
