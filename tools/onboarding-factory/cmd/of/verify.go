@@ -120,7 +120,13 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 			"state": state, "observations": obs, "transcript": transcript, "events": events, "session_updates": sessionUpdates,
 		})
 	} else {
-		printVerifyText(stdout, request.Agent, request.Scenario, state, obs, transcript, events, sessionUpdates)
+		printVerifyText(stdout, request, verifyReports{
+			state:          state,
+			observations:   obs,
+			transcript:     transcript,
+			events:         events,
+			sessionUpdates: sessionUpdates,
+		})
 	}
 	if !stateOK || !obsOK || !transcriptOK || !eventsOK || !sessionUpdatesOK {
 		return exitFail
@@ -128,8 +134,30 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 	return exitOK
 }
 
-func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.ExpectedReport, obs *validate.ObservationReport, transcript, events, sessionUpdates *validate.RecordReport) {
-	fmt.Fprintf(stdout, "verify %s / %s\n", agent, scenario)
+type verifyReports struct {
+	state          *validate.ExpectedReport
+	observations   *validate.ObservationReport
+	transcript     *validate.RecordReport
+	events         *validate.RecordReport
+	sessionUpdates *validate.RecordReport
+}
+
+func printVerifyText(stdout io.Writer, request verifyRequest, reports verifyReports) {
+	fmt.Fprintf(stdout, "verify %s / %s\n", request.Agent, request.Scenario)
+	printStateReport(stdout, reports.state)
+	printObservationReport(stdout, reports.observations)
+	printOptionalRecordReport(stdout, "transcript", reports.transcript, func(report *validate.RecordReport) bool {
+		return report.Pass
+	})
+	printOptionalRecordReport(stdout, "events", reports.events, func(report *validate.RecordReport) bool {
+		return report.ExpectedPass()
+	})
+	printOptionalRecordReport(stdout, "session updates", reports.sessionUpdates, func(report *validate.RecordReport) bool {
+		return report.ExpectedPass()
+	})
+}
+
+func printStateReport(stdout io.Writer, state *validate.ExpectedReport) {
 	switch {
 	case state == nil:
 		fmt.Fprintln(stdout, "  state:        (no spec / no recording)")
@@ -140,38 +168,38 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 	default:
 		fmt.Fprintf(stdout, "  state:        FAIL — %s\n", state.Summary)
 	}
+}
+
+func printObservationReport(stdout io.Writer, observations *validate.ObservationReport) {
 	switch {
-	case obs == nil || obs.Skipped:
+	case observations == nil || observations.Skipped:
 		note := "no golden"
-		if obs != nil && obs.Note != "" {
-			note = obs.Note
+		if observations != nil && observations.Note != "" {
+			note = observations.Note
 		}
 		fmt.Fprintf(stdout, "  observations: skipped (%s)\n", note)
 	default:
 		verdict := "PASS"
-		if !obs.Pass {
+		if !observations.Pass {
 			verdict = "FAIL"
 		}
-		fmt.Fprintf(stdout, "  observations: %s — %d assert(s), %d drift(s)\n", verdict, len(obs.Asserts), len(obs.Drifts))
-		for _, a := range obs.Asserts {
+		fmt.Fprintf(stdout, "  observations: %s — %d assert(s), %d drift(s)\n", verdict, len(observations.Asserts), len(observations.Drifts))
+		for _, a := range observations.Asserts {
 			mark := "✓"
 			if !a.OK {
 				mark = "✗"
 			}
 			fmt.Fprintf(stdout, "    %s %s: want %s got %s\n", mark, a.Field, a.Expected, a.Actual)
 		}
-		for _, d := range obs.Drifts {
+		for _, d := range observations.Drifts {
 			fmt.Fprintf(stdout, "    ~ %s: %s → %s (drift vs prior)\n", d.Field, d.Prior, d.Current)
 		}
 	}
-	if transcript != nil {
-		printRecordReport(stdout, "transcript", transcript, transcript.Pass)
-	}
-	if events != nil {
-		printRecordReport(stdout, "events", events, events.ExpectedPass())
-	}
-	if sessionUpdates != nil {
-		printRecordReport(stdout, "session updates", sessionUpdates, sessionUpdates.ExpectedPass())
+}
+
+func printOptionalRecordReport(stdout io.Writer, label string, report *validate.RecordReport, accepted func(*validate.RecordReport) bool) {
+	if report != nil {
+		printRecordReport(stdout, label, report, accepted(report))
 	}
 }
 

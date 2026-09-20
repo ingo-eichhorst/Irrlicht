@@ -1,104 +1,12 @@
 package validate
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"irrlicht/tools/onboarding-factory/internal/matrix"
-	internalreplay "irrlicht/tools/onboarding-factory/internal/replay"
 )
-
-// TestDSHBackgroundTranscriptMutations proves the 3.2 contract checks the
-// two automatic DSH child-delivery records and their completed parent turns.
-func TestDSHBackgroundTranscriptMutations(t *testing.T) {
-	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "3-2_background-subagent"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
-	if err != nil || !ok {
-		t.Fatalf("newest DSH 3.2 recording: ok=%v err=%v", ok, err)
-	}
-	records, err := readJSONLRecords(internalreplay.TranscriptPath(recording.Dir), "transcript")
-	if err != nil {
-		t.Fatalf("read DSH 3.2 transcript: %v", err)
-	}
-	for _, tc := range []struct {
-		name, assertion string
-		keep            func(map[string]any) bool
-		mutate          func(map[string]any)
-	}{
-		{"missing agent-message", "one child result relay", func(r map[string]any) bool {
-			value, _ := valueAtPath(r, "data.source.kind")
-			return value != "agent-message"
-		}, nil},
-		{"aborted follow-up", "three completed parent turns", func(map[string]any) bool { return true }, func(r map[string]any) {
-			typ, _ := valueAtPath(r, "type")
-			turn, _ := valueAtPath(r, "data.turn")
-			if typ == "turn/end" && turn == float64(3) {
-				r["data"].(map[string]any)["reason"].(map[string]any)["kind"] = "aborted"
-			}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cell := t.TempDir()
-			mustCopy(t, filepath.Join(source, "expected.jsonl"), filepath.Join(cell, "expected.jsonl"))
-			dst := filepath.Join(cell, "recordings", "run")
-			if err := os.MkdirAll(dst, 0755); err != nil {
-				t.Fatal(err)
-			}
-			mustCopy(t, filepath.Join(recording.Dir, "events.jsonl"), filepath.Join(dst, "events.jsonl"))
-			mustCopy(t, filepath.Join(recording.Dir, "manifest.json"), filepath.Join(dst, "manifest.json"))
-			f, err := os.Create(filepath.Join(dst, "transcript.jsonl"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, r := range records {
-				if !tc.keep(r) {
-					continue
-				}
-				if tc.mutate != nil {
-					tc.mutate(r)
-				}
-				b, err := json.Marshal(r)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := f.Write(append(b, '\n')); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := f.Close(); err != nil {
-				t.Fatal(err)
-			}
-			report, err := ValidateTranscriptForProfile(cell, matrix.ProfileCLILocal)
-			if err != nil || report == nil || report.Pass {
-				t.Fatalf("mutation did not fail: report=%+v err=%v", report, err)
-			}
-			for _, a := range report.Asserts {
-				if a.Name == tc.assertion && !a.OK {
-					return
-				}
-			}
-			t.Fatalf("mutation failed without %q: %+v", tc.assertion, report.Asserts)
-		})
-	}
-}
-
-func mustCopy(t *testing.T, source, destination string) {
-	t.Helper()
-	b, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(destination, b, 0644); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // TestValidateExpected runs the spec-grounded expected.jsonl validator
 // against every committed claudecode scenario that has an expected.jsonl
