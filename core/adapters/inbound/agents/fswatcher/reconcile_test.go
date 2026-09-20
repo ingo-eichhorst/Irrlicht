@@ -243,6 +243,30 @@ func TestReconcile_RecreatedFileIsANewSessionAgain(t *testing.T) {
 	expectEvent(t, ch, agent.EventNewSession, "abc-123")
 }
 
+// An atomic replacement reports the old path as Rename after that path is no
+// longer readable. The removal must keep the ID delivered for the old file.
+func TestReconcile_RenamedHeaderBackedTranscriptUsesEmittedID(t *testing.T) {
+	root := setupFakeProjects(t)
+	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(path string) string {
+		if _, err := os.Stat(path); err != nil {
+			return ""
+		}
+		return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	})
+	ch := w.Subscribe()
+	fsw := newFsnotify(t)
+	path := filepath.Join(root, "-Users-test-myproject", "abc-123.jsonl")
+	writeTranscript(t, path, `{"a":1}`+"\n")
+	w.handleEvent(fsw, fsnotify.Event{Name: path, Op: fsnotify.Create})
+	expectEvent(t, ch, agent.EventNewSession, "abc-123")
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	w.handleEvent(fsw, fsnotify.Event{Name: path, Op: fsnotify.Rename})
+	expectEvent(t, ch, agent.EventRemoved, "abc-123")
+}
+
 // For header-linked adapters the sweep defers a zero-byte file exactly like a
 // zero-byte Create does, so a child never surfaces before its parent link is
 // readable.

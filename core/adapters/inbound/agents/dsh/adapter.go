@@ -81,13 +81,6 @@ func sessionIDFromDirectory(path string) string {
 	if childID == id {
 		return id
 	}
-	// fsnotify delivers removal after the header is gone. A bare UUID is not
-	// accepted while live unless its header proves native-child ownership, but
-	// a missing transcript must retain its prior identity so the watcher emits
-	// the matching removal event.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return id
-	}
 	return ""
 }
 
@@ -127,7 +120,12 @@ func nativeSubagentHeader(path string) (childID, parentID string) {
 	}
 	defer f.Close()
 
-	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+	decoder, err := zstd.NewReader(f,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderLowmem(true),
+		zstd.WithDecoderMaxMemory(maxNativeHeaderBytes),
+		zstd.WithDecoderMaxWindow(maxNativeHeaderBytes),
+	)
 	if err != nil {
 		return "", ""
 	}

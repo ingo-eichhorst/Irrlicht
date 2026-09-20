@@ -274,7 +274,14 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root, testAdapter, 0)
+	// Header-backed adapters cannot derive an ID after removal because the
+	// transcript is gone. The watcher must use the ID it delivered at birth.
+	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(path string) string {
+		if _, err := os.Stat(path); err != nil {
+			return ""
+		}
+		return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	})
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())

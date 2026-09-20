@@ -227,11 +227,7 @@ func TestNativeSubagentHeaderRejectsOversizedHeader(t *testing.T) {
 	}
 }
 
-// TestNativeSubagentRemovalKeepsTheKnownBareUUID is the removal-edge lock:
-// fswatcher asks SessionIDFromPath after the file is gone, so live-header
-// validation cannot run at that point. Keeping this identity produces the
-// child's transcript_removed event without accepting any live unrelated UUID.
-func TestNativeSubagentRemovalKeepsTheKnownBareUUID(t *testing.T) {
+func TestBareUUIDWithoutNativeHeaderIsNeverADSHSession(t *testing.T) {
 	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
 	dir := filepath.Join(t.TempDir(), childID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -244,8 +240,8 @@ func TestNativeSubagentRemovalKeepsTheKnownBareUUID(t *testing.T) {
 	if err := os.Remove(transcript); err != nil {
 		t.Fatal(err)
 	}
-	if got := sessionIDFromPath(transcript); got != childID {
-		t.Errorf("removed child session ID = %q, want %q", got, childID)
+	if got := sessionIDFromPath(transcript); got != "" {
+		t.Errorf("unproven bare UUID session ID = %q, want empty", got)
 	}
 }
 
