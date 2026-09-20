@@ -43,6 +43,20 @@ test_timeout() {
   [[ $status -ne 0 && "$out" == *'remained working'* ]] && pass timeout || fail timeout
 }
 
+test_duplicate_parent_uses_first_match() {
+  local id='session-55555555-5555-4555-8555-555555555555' out status
+  check() { dsh_await_parent_ready 127.0.0.1:9999 "$id" "$(date +%s)"; }
+  set +e; out="$(with_fake_curl "{\"groups\":[{\"agents\":[{\"session_id\":\"$id\",\"state\":\"working\",\"children\":[{\"session_id\":\"$id\",\"state\":\"ready\"}]}]}]}" check 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 && "$out" == *'remained working'* ]] && pass duplicate-parent || fail duplicate-parent
+}
+
+test_invalid_parent_state_refuses() {
+  local id='session-66666666-6666-4666-8666-666666666666' out status
+  check() { dsh_await_parent_ready 127.0.0.1:9999 "$id" "$(date +%s)"; }
+  set +e; out="$(with_fake_curl "{\"groups\":[{\"agents\":[{\"session_id\":\"$id\",\"state\":17}]}]}" check 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 && "$out" == *'had malformed state 17'* ]] && pass invalid-parent-state || fail invalid-parent-state
+}
+
 test_malformed_response() {
   local id='session-44444444-4444-4444-8444-444444444444' out status
   check() { dsh_await_parent_ready 127.0.0.1:9999 "$id" "$(date +%s)"; }
@@ -53,5 +67,7 @@ test_malformed_response() {
 test_success
 test_missing_parent
 test_timeout
+test_duplicate_parent_uses_first_match
+test_invalid_parent_state_refuses
 test_malformed_response
 [[ $failures -eq 0 ]]

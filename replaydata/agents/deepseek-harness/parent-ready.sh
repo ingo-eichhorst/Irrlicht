@@ -21,7 +21,7 @@ dsh_await_parent_ready() {
       echo "await_parent_ready: daemon session snapshot was malformed" >&2
       return 1
     fi
-    state="$(jq -er --arg id "$parent_id" '.. | objects | select(.session_id? == $id) | .state' <<<"$response" 2>/dev/null | head -n1)" || {
+    state="$(jq -er --arg id "$parent_id" 'first(.. | objects | select(.session_id? == $id) | .state)' <<<"$response" 2>/dev/null)" || {
       if (( $(date +%s) > deadline )); then
         echo "await_parent_ready: parent session $parent_id was absent from daemon snapshot before deadline" >&2
         return 1
@@ -29,6 +29,13 @@ dsh_await_parent_ready() {
       sleep 0.2
       continue
     }
+    case "$state" in
+      ready|working|waiting|error) ;;
+      *)
+        echo "await_parent_ready: parent session $parent_id had malformed state $state" >&2
+        return 1
+        ;;
+    esac
     last_state="$state"
     [[ "$state" == ready ]] && {
       echo "[driver] parent session ready: $parent_id" >&2
