@@ -27,6 +27,8 @@ type RecordAssertion struct {
 	EqualPaths    []string                 `json:"equal_paths,omitempty"`
 	MinDistinct   map[string]int           `json:"min_distinct,omitempty"`
 	FieldContains []FieldContainsAssertion `json:"field_contains,omitempty"`
+	// Absent requires every selected record to omit each dotted path.
+	Absent []string `json:"absent,omitempty"`
 }
 
 // RelatedRecordAssertion requires each selected record to have a second
@@ -125,6 +127,27 @@ func ValidateEventsForProfile(scenarioDir string, profile matrix.ExecutionProfil
 	return evaluateRecordAssertions("event", meta.EventAssertions, records)
 }
 
+// ValidateSessionUpdatesForProfile checks the newest recording's captured API
+// session-update frames against assertions in expected.jsonl.
+func ValidateSessionUpdatesForProfile(scenarioDir string, profile matrix.ExecutionProfile) (*RecordReport, error) {
+	meta, err := loadExpectedMeta(scenarioDir)
+	if err != nil || meta == nil || len(meta.SessionUpdateAssertions) == 0 {
+		return nil, err
+	}
+	recording, ok, err := matrix.NewestRecording(scenarioDir, profile)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("session-update assertions configured but no %s recording exists", profile)
+	}
+	records, err := readJSONLRecords(filepath.Join(recording.Dir, "session_updates.jsonl"), "session-update")
+	if err != nil {
+		return nil, err
+	}
+	return evaluateRecordAssertions("session-update", meta.SessionUpdateAssertions, records)
+}
+
 func loadExpectedMeta(scenarioDir string) (*ExpectedMeta, error) {
 	b, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl"))
 	if os.IsNotExist(err) {
@@ -165,6 +188,9 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if !validFieldContainsRequirements(assertion.FieldContains) {
 		return fmt.Errorf("%s assertion %q has an incomplete field-contains requirement", kind, assertion.Name)
 	}
+	if !validAbsentPaths(assertion.Absent) {
+		return fmt.Errorf("%s assertion %q has an invalid absent-path requirement", kind, assertion.Name)
+	}
 	return nil
 }
 
@@ -196,6 +222,15 @@ func validDistinctRequirements(requirements map[string]int) bool {
 func validFieldContainsRequirements(requirements []FieldContainsAssertion) bool {
 	for _, requirement := range requirements {
 		if requirement.ValuePath == "" || requirement.ContainerPath == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func validAbsentPaths(paths []string) bool {
+	for _, path := range paths {
+		if path == "" {
 			return false
 		}
 	}
@@ -241,6 +276,7 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	evaluation.checkEqualPaths(assertion.EqualPaths, matched)
 	evaluation.checkDistinct(assertion.MinDistinct, matched)
 	evaluation.checkFieldContains(assertion.FieldContains, matched)
+	evaluation.checkAbsent(assertion.Absent, matched)
 	name := assertion.Name
 	if name == "" {
 		name = "records"
@@ -248,6 +284,15 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	return RecordAssertResult{
 		Name: name, Expected: evaluation.expected, Actual: evaluation.actual, OK: evaluation.ok,
 		KnownFailing: assertion.KnownFailing,
+	}
+}
+
+func (evaluation *recordEvaluation) checkAbsent(paths []string, records []map[string]any) {
+	for _, path := range paths {
+		if anyPathExists(records, path) {
+			evaluation.ok = false
+		}
+		evaluation.expected += ", each without " + path
 	}
 }
 
@@ -417,6 +462,15 @@ func allPathValuesEqual(records []map[string]any, path string) bool {
 		}
 	}
 	return true
+}
+
+func anyPathExists(records []map[string]any, path string) bool {
+	for _, record := range records {
+		if _, ok := valueAtPath(record, path); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func distinctPathValues(records []map[string]any, path string) int {

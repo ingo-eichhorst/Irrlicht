@@ -86,6 +86,8 @@ type ExpectedMeta struct {
 	// EventAssertions verify relationships between captured daemon events that
 	// lifecycle phases cannot express, such as distinct PIDs and path ownership.
 	EventAssertions []RecordAssertion `json:"event_assertions,omitempty"`
+	// SessionUpdateAssertions verify captured API session-update frames.
+	SessionUpdateAssertions []RecordAssertion `json:"session_update_assertions,omitempty"`
 }
 
 // ObservationSpec is the optional metric-assertion block of an expected.jsonl

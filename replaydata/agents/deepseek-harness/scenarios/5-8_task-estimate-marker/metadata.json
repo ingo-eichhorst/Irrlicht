@@ -7,7 +7,7 @@
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+bf97ac6",
     "confidence": 0.96,
-    "notes": "Known failing: live DSH websocket frames carry task_estimate and task_completion_eta while ready. The factory verifies markers and state, but cannot assert these metric fields."
+    "notes": "Known failing: captured DSH websocket frames carry task_estimate and task_completion_eta while ready. Factory session-update assertions verify both API metric fields."
   },
   "details": {
     "assessment": {
@@ -26,7 +26,7 @@
         "LM Studio at http://127.0.0.1:1234/v1 with google/gemma-4-26b-a4b available is load-bearing. The local route has no required non-zero cost.",
         "State-only phases would prove only lifecycle. The transcript assertions are load-bearing because they require each exact parseable marker from completed_rounds 0 through 4. The recipe verify checks the derived estimate and ETA semantics that the lifecycle phase DSL cannot express.",
         "LIVE KNOWN FAILURE: websocket session_updated seq 514 exposed 0/4 task_estimate and ETA 1789788170 while state was ready; seq 1001 exposed 4/4 and ETA 1789787357 while ready. The scenario requires both fields absent at ready.",
-        "Factory verify checks 12 lifecycle phases, 5 transcript markers, model, and token use, but it has no task_estimate/task_completion_eta websocket assertion. A green 12/12 fixture does not prove the metric acceptance rules. The second live capture is documented in the assessment body; no unvalidated websocket file was added under replaydata/."
+        "Factory verify checks 12 lifecycle phases, 5 transcript markers, model, token use, and the captured ready-state websocket metrics. The session_updates.jsonl fixture carries the two documented ready-frame projections. Its per-field known-failure assertions fail until both API metrics are suppressed at ready."
       ],
       "sources": [
         {
@@ -187,7 +187,7 @@
         "The user-visible task estimate and ETA are present only while working and are suppressed after the final ready state.",
         "The one DSH session follows ready -> working -> ready and finishes ready without a waiting transition.",
         "The recording reports agent deepseek-harness, model google/gemma-4-26b-a4b, non-zero tokens, and no required non-zero cost.",
-        "Known failing in the live websocket capture: task_estimate and task_completion_eta remained on ready-state session_updated frames (seq 514 through 1001). Existing of record verify does not check these metric fields."
+        "Known failing in the live websocket capture: task_estimate and task_completion_eta remained on ready-state session_updated frames (seq 514 through 1001). Factory session-update assertions check both metric fields."
       ],
       "scope_note": "Two qwen/qwen3.5-9b staged runs failed to complete the five-marker sequence. A direct Gemma 4 local endpoint probe returned exact 1/4 and 2/4 comments across two turns. The live run remains necessary. The 12-second inter-turn and 30-second final sleeps match conservative recorded siblings. The second live run observed ready-state API metric leakage on websocket seq 514 through 1001. The run was not promoted because the first complete marker fixture is already committed and the branch HEAD moved during the second run. This known failure is documented in the assessment and spec."
     }

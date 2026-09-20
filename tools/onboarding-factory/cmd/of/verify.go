@@ -99,6 +99,11 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "of verify: event validation: %v\n", err)
 		return exitUsage
 	}
+	sessionUpdates, err := validate.ValidateSessionUpdatesForProfile(cellDir, request.Profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "of verify: session-update validation: %v\n", err)
+		return exitUsage
+	}
 
 	stateOK := state == nil || state.Pass || state.Meta.KnownFailing
 	obsOK := obs == nil || obs.Pass
@@ -106,23 +111,24 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 	// An event assertion can waive only its own known defect. Other event and
 	// transcript regressions must still fail a known-failing lifecycle cell.
 	eventsOK := events.ExpectedPass()
+	sessionUpdatesOK := sessionUpdates.ExpectedPass()
 
 	if request.JSON {
 		_ = writeJSON(stdout, map[string]any{
 			"agent": request.Agent, "scenario": request.Scenario,
-			"state_pass": stateOK, "observations_pass": obsOK, "transcript_pass": transcriptOK, "events_pass": eventsOK,
-			"state": state, "observations": obs, "transcript": transcript, "events": events,
+			"state_pass": stateOK, "observations_pass": obsOK, "transcript_pass": transcriptOK, "events_pass": eventsOK, "session_updates_pass": sessionUpdatesOK,
+			"state": state, "observations": obs, "transcript": transcript, "events": events, "session_updates": sessionUpdates,
 		})
 	} else {
-		printVerifyText(stdout, request.Agent, request.Scenario, state, obs, transcript, events)
+		printVerifyText(stdout, request.Agent, request.Scenario, state, obs, transcript, events, sessionUpdates)
 	}
-	if !stateOK || !obsOK || !transcriptOK || !eventsOK {
+	if !stateOK || !obsOK || !transcriptOK || !eventsOK || !sessionUpdatesOK {
 		return exitFail
 	}
 	return exitOK
 }
 
-func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.ExpectedReport, obs *validate.ObservationReport, transcript, events *validate.RecordReport) {
+func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.ExpectedReport, obs *validate.ObservationReport, transcript, events, sessionUpdates *validate.RecordReport) {
 	fmt.Fprintf(stdout, "verify %s / %s\n", agent, scenario)
 	switch {
 	case state == nil:
@@ -163,6 +169,9 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 	}
 	if events != nil {
 		printRecordReport(stdout, "events", events, events.ExpectedPass())
+	}
+	if sessionUpdates != nil {
+		printRecordReport(stdout, "session updates", sessionUpdates, sessionUpdates.ExpectedPass())
 	}
 }
 

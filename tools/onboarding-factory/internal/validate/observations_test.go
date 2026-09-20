@@ -236,6 +236,83 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	}
 }
 
+func TestSessionUpdateAssertionsDetectLeakedMetricMutation(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_x"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","session_update_assertions":[`+
+		`{"name":"ready update omits task estimate","where":{"type":"session_updated","session.state":"ready"},"min_count":1,"absent":["session.metrics.task_estimate"]}]}`)
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	withoutMetric := `{"type":"session_updated","session":{"state":"ready","metrics":{}}}` + "\n"
+	if err := os.WriteFile(path, []byte(withoutMetric), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.ExpectedPass() {
+		t.Fatalf("unmutated session update must pass: report=%+v err=%v", report, err)
+	}
+
+	// This is the committed mutation proof for absent-path assertions. A
+	// ready-frame task estimate must make the assertion fail.
+	leakedMetric := `{"type":"session_updated","session":{"state":"ready","metrics":{"task_estimate":{"total_rounds":4}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(leakedMetric), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.ExpectedPass() || report.Asserts[0].OK {
+		t.Fatalf("ready task-estimate leak must fail: report=%+v err=%v", report, err)
+	}
+}
+
+func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testing.T) {
+	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "5-8_task-estimate-marker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("no task-estimate-marker recording found")
+	}
+	expected, err := os.ReadFile(filepath.Join(source, "expected.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := os.ReadFile(filepath.Join(recording.Dir, "session_updates.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_mutation"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, strings.TrimSpace(string(expected)))
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	if err := os.WriteFile(path, frames, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || baseline == nil || !baseline.ExpectedPass() || baseline.Pass {
+		t.Fatalf("documented ready-frame leak must be an expected failure: report=%+v err=%v", baseline, err)
+	}
+
+	mutated := bytes.ReplaceAll(frames, []byte(`"task_estimate":`), []byte(`"removed_task_estimate":`))
+	if bytes.Equal(mutated, frames) {
+		t.Fatal("task-estimate mutation did not change the fixture")
+	}
+	if err := os.WriteFile(path, mutated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil {
+		t.Fatalf("validate task-estimate mutation: report=%+v err=%v", report, err)
+	}
+	if len(report.Asserts) == 0 || !report.Asserts[0].OK || report.ExpectedPass() {
+		t.Fatalf("removing ready-frame task estimates must expose the stale known-failure waiver: report=%+v", report)
+	}
+}
+
 func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	fixture := stageTaskListMutationFixture(t)
 	assertTaskListNoWaitingMutation(t, fixture)
@@ -440,12 +517,13 @@ func TestCommittedRecordAssertions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", expectedPath, err)
 		}
-		if meta == nil || len(meta.TranscriptAssertions) == 0 && len(meta.EventAssertions) == 0 {
+		if meta == nil || len(meta.TranscriptAssertions) == 0 && len(meta.EventAssertions) == 0 && len(meta.SessionUpdateAssertions) == 0 {
 			continue
 		}
 		checked++
 		checkCommittedTranscriptAssertions(t, expectedPath, scenarioDir, meta.TranscriptAssertions)
 		checkCommittedEventAssertions(t, expectedPath, scenarioDir, meta.EventAssertions)
+		checkCommittedSessionUpdateAssertions(t, expectedPath, scenarioDir, meta.SessionUpdateAssertions)
 	}
 	if checked == 0 {
 		t.Fatal("no committed transcript or event assertions were discovered; the catalog gate checked nothing")
@@ -490,5 +568,25 @@ func checkCommittedEventAssertions(
 	}
 	if report == nil || !report.ExpectedPass() {
 		t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
+	}
+}
+
+func checkCommittedSessionUpdateAssertions(
+	t *testing.T,
+	expectedPath string,
+	scenarioDir string,
+	assertions []RecordAssertion,
+) {
+	t.Helper()
+	if len(assertions) == 0 {
+		return
+	}
+	report, err := ValidateSessionUpdatesForProfile(scenarioDir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Errorf("%s: %v", expectedPath, err)
+		return
+	}
+	if report == nil || !report.ExpectedPass() {
+		t.Errorf("%s: session-update assertions failed: %+v", expectedPath, report)
 	}
 }
