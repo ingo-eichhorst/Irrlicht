@@ -17,6 +17,7 @@
 package accountquota
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -66,8 +67,18 @@ func refuseAllRedirects(_ *http.Request, _ []*http.Request) error {
 // Construct one per provider (or share one across providers that need no
 // per-provider client settings) with the fixed destination set that
 // provider's ticket reviewed.
+// destination is a parsed, validated FixedDestination — the transport's own
+// internal shape, kept distinct from the port type so a caller can never
+// hand a *url.URL that skipped parseDestinations' validation.
+type destination struct {
+	url     *url.URL
+	method  string
+	body    []byte
+	headers map[string]string
+}
+
 type HTTPTransport struct {
-	destinations map[string]*url.URL
+	destinations map[string]destination
 	client       *http.Client
 }
 
@@ -106,11 +117,11 @@ func newHTTPTransport(destinations []outbound.FixedDestination, rt http.RoundTri
 // timeout, to provoke QuotaFailureTimeout without a real 10s wait) while
 // still going through the same validation every production destination set
 // does.
-func parseDestinations(destinations []outbound.FixedDestination) (map[string]*url.URL, error) {
+func parseDestinations(destinations []outbound.FixedDestination) (map[string]destination, error) {
 	if len(destinations) == 0 {
 		return nil, fmt.Errorf("accountquota: at least one destination is required")
 	}
-	parsed := make(map[string]*url.URL, len(destinations))
+	parsed := make(map[string]destination, len(destinations))
 	for _, d := range destinations {
 		if d.Key == "" {
 			return nil, fmt.Errorf("accountquota: destination has an empty Key")
@@ -128,7 +139,11 @@ func parseDestinations(destinations []outbound.FixedDestination) (map[string]*ur
 		if u.Host == "" {
 			return nil, fmt.Errorf("accountquota: destination %q has no host", d.Key)
 		}
-		parsed[d.Key] = u
+		method := d.Method
+		if method == "" {
+			method = http.MethodGet
+		}
+		parsed[d.Key] = destination{url: u, method: method, body: d.Body, headers: d.Headers}
 	}
 	return parsed, nil
 }
@@ -152,9 +167,19 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, dest.String(), nil)
+	var bodyReader io.Reader
+	if dest.body != nil {
+		bodyReader = bytes.NewReader(dest.body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, dest.method, dest.url.String(), bodyReader)
 	if err != nil {
 		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureNetwork, Detail: "building request"}
+	}
+	if dest.body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range dest.headers {
+		httpReq.Header.Set(k, v)
 	}
 	header := req.Auth.Header
 	if header == "" {
