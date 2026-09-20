@@ -18,7 +18,9 @@ resolve_transcript() { :; }
 reset_remaining() {
   remaining_seconds() { echo "${REMAINING:-1}"; }
 }
-sleep() { :; }
+# Keep polling fast, but yield after TERM so Linux can reap the fake capture
+# child before stop_session_updates_process checks it again.
+sleep() { command sleep 0.01; }
 remaining_seconds() { echo "${REMAINING:-1}"; }
 
 run_success() {
