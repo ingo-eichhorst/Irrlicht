@@ -58,7 +58,7 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/parser.go",
-          "note": "recordHandlers has no compaction handlers, so all compaction markers are skipped. parseUserMessage also skips a replacement whose source.kind is not `user`."
+          "note": "Current parser handlers map standalone compaction/start and compaction/end. The plugin checkpoint remains skipped because it is not a human prompt."
         },
         {
           "kind": "file",
@@ -73,7 +73,7 @@
         {
           "kind": "file",
           "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
-          "note": "DRIVE_ELICITS and the dispatch arms implement send, slash, wait_turn, and sleep. wait_turn counts completed turn/end records and therefore needs a timed wait for standalone compaction."
+          "note": "DRIVE_ELICITS and dispatch implement wait_compaction. It polls the selected transcript for compaction/end and fails on deadline or unreadable input."
         }
       ]
     },
