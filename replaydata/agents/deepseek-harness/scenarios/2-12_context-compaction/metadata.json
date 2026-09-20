@@ -107,8 +107,7 @@
           "text": "/compact"
         },
         {
-          "type": "sleep",
-          "seconds": 45
+          "type": "wait_compaction"
         },
         {
           "type": "send",

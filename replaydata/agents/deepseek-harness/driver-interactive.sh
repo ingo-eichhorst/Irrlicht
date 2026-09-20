@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
+DRIVE_ELICITS="send slash wait_turn wait_compaction sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -277,6 +277,29 @@ step_wait_turn() {
   return 1
 }
 
+step_wait_compaction() {
+  resolve_transcript || return 1
+  local unreadable_since=0
+  while (( $(remaining_seconds) > 0 )); do
+    if zstd -dc -- "$TRANSCRIPT" | jq -e 'select(.type == "compaction/end")' >/dev/null; then
+      echo "[driver] compaction complete[s$ACTIVE]" >&2
+      return 0
+    fi
+    [[ "$?" -eq 1 ]] && unreadable_since=0 || {
+      [[ "$unreadable_since" -ne 0 ]] || unreadable_since=$(date +%s)
+      if (( $(date +%s) - unreadable_since >= 10 )); then
+        echo "[driver] DSH transcript stayed unreadable for 10 seconds: $TRANSCRIPT" >&2
+        EXIT_REASON="unreadable_transcript"
+        return 1
+      fi
+    }
+    sleep 0.25
+  done
+  echo "[driver] wait_compaction timed out without compaction/end" >&2
+  EXIT_REASON="timeout"
+  return 1
+}
+
 step_interrupt() {
   tmux send-keys -t "$SESSION" C-c
 }
@@ -489,6 +512,7 @@ while IFS= read -r step; do
     send)          step_send "$(jq -r '.text' <<<"$step")" ;;
     slash)         step_slash "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)     step_wait_turn || STEP_OK=false ;;
+    wait_compaction) step_wait_compaction || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)     step_interrupt ;;
     keys)          step_keys "$(jq -r '.keys // .text // empty' <<<"$step")" || STEP_OK=false ;;
