@@ -78,6 +78,32 @@ func TestObservationsCostNonzeroFails(t *testing.T) {
 	}
 }
 
+func TestObservationsCumulativeTokensEquals(t *testing.T) {
+	expected := `{"schema_version":1,"scenario_id":"s","observations":{"cumulative_tokens_equals":38436}}`
+
+	baseline := t.TempDir()
+	mkGoldenRec(t, baseline, "2026-09-19-00-00-00_baseline", `{"cum_input_tokens":38005,"cum_output_tokens":431}`)
+	writeExpected(t, baseline, expected)
+	if rep, err := ValidateObservations(baseline); err != nil || !rep.Pass {
+		t.Fatalf("38436 cumulative tokens must pass: report=%+v err=%v", rep, err)
+	}
+
+	mutated, err := os.ReadFile(filepath.Join("testdata", "cumulative_tokens_equals_mutation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	mkGoldenRec(t, dir, "2026-09-19-00-00-00_mutation", string(mutated))
+	writeExpected(t, dir, expected)
+	rep, err := ValidateObservations(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Pass || len(rep.Asserts) != 1 || rep.Asserts[0].Field != "cumulative_tokens" || rep.Asserts[0].OK {
+		t.Fatalf("committed cumulative-token mutation must fail: %+v", rep)
+	}
+}
+
 // TestObservationsDirectContextPass covers the direct context vector. A golden
 // with total tokens, context window, and utilization satisfies the nonzero
 // assertions. These fields are distinct from cost and cumulative tokens.

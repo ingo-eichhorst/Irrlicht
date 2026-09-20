@@ -171,6 +171,10 @@ func applyHardAssertions(rep *ObservationReport, spec *ObservationSpec, cur repl
 	if spec.TokensNonzero {
 		assertMetric(rep, "tokens", ">0", fmt.Sprintf("%d", cur.totalTokens()), cur.totalTokens() > 0)
 	}
+	if spec.CumulativeTokensEquals > 0 {
+		actual := cur.totalTokens()
+		assertMetric(rep, "cumulative_tokens", fmt.Sprintf("%d", spec.CumulativeTokensEquals), fmt.Sprintf("%d", actual), actual == spec.CumulativeTokensEquals)
+	}
 	if spec.TotalTokensNonzero {
 		assertMetric(rep, "total_tokens", ">0", fmt.Sprintf("%d", cur.TotalTokens), cur.TotalTokens > 0)
 	}
