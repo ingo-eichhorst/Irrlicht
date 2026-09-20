@@ -301,6 +301,30 @@ func TestSessionUpdateAssertionsDetectLeakedMetricMutation(t *testing.T) {
 	}
 }
 
+func TestDeepseekTaskListSessionUpdateAssertionsDetectMissingTask(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_tasks"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"task-list","session_update_assertions":[{"name":"completed task snapshot","where":{"type":"session_updated","session.state":"ready","session.tasks.0.subject":"draft a greeting","session.tasks.0.status":"completed","session.tasks.1.subject":"refine the greeting","session.tasks.1.status":"completed","session.tasks.2.subject":"reply done","session.tasks.2.status":"completed"},"min_count":1}]}`)
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	frame := `{"type":"session_updated","session":{"state":"ready","tasks":[{"subject":"draft a greeting","status":"completed"},{"subject":"refine the greeting","status":"completed"},{"subject":"reply done","status":"completed"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(frame), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.Pass {
+		t.Fatalf("completed task frame must pass: report=%+v err=%v", report, err)
+	}
+	missing := strings.Replace(frame, `,{"subject":"reply done","status":"completed"}`, "", 1)
+	if err := os.WriteFile(path, []byte(missing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.Pass || report.ExpectedPass() {
+		t.Fatalf("missing completed task must fail: report=%+v err=%v", report, err)
+	}
+}
+
 func TestRecordAssertionsRejectVacuousOrMalformedAbsentPaths(t *testing.T) {
 	records := []map[string]any{{"type": "session_updated", "session": map[string]any{"state": "ready"}}}
 	for _, tc := range []struct {
