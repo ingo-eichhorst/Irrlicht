@@ -92,7 +92,8 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		// are retired Mode B artifacts that may still exist in older
 		// recordings or git history.
 		if base == "expected.jsonl" || base == "ground_truth.jsonl" ||
-			base == "signals.jsonl" || base == "frames.jsonl" {
+			base == "signals.jsonl" || base == "frames.jsonl" ||
+			base == "session_updates.jsonl" {
 			return nil
 		}
 		out = append(out, path)
@@ -113,6 +114,7 @@ func TestDiscoverReplayFixturesIncludesCompressedJSONL(t *testing.T) {
 	compressed := filepath.Join(recording, "transcript.jsonl.zstd")
 	writeFile(t, compressed, "compressed bytes are sufficient for discovery")
 	writeFile(t, filepath.Join(recording, "events.jsonl"), "{}\n")
+	writeFile(t, filepath.Join(recording, "session_updates.jsonl"), `{"type":"session_updated"}`+"\n")
 
 	got := discoverReplayFixtures(t, root)
 	if len(got) != 1 || got[0] != compressed {
