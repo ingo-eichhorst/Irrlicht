@@ -30,7 +30,24 @@
     "model_name": "qwen/qwen3.5-9b",
     "total_tokens": 13615,
     "context_window": 262144,
-    "context_utilization_percentage": 5.1937103271484375
+    "context_utilization_percentage": 5.1937103271484375,
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "draft a greeting",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "refine the greeting",
+        "status": "completed"
+      },
+      {
+        "id": "3",
+        "subject": "reply done",
+        "status": "completed"
+      }
+    ]
   },
   "transitions": [
     {

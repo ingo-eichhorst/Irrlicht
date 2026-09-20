@@ -12,10 +12,11 @@
     "consumed_events": 14,
     "total_transitions": 3,
     "first_event_time": "2026-09-19T03:30:13.005281+02:00",
-    "last_event_time": "2026-09-19T03:30:31.26827+02:00",
-    "wall_clock_session_duration": 18262989000,
+    "last_event_time": "2026-09-19T03:30:29.26827+02:00",
+    "wall_clock_session_duration": 16262989000,
     "state_durations": {
-      "working": 18262989000
+      "ready": 10283638000,
+      "working": 5979351000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -53,15 +54,15 @@
     },
     {
       "index": 2,
-      "event_index": 13,
-      "virtual_time": "2026-09-19T03:30:31.26827+02:00",
+      "event_index": 9,
+      "virtual_time": "2026-09-19T03:30:18.984632+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "error",
       "reason": "session error → error",
-      "last_event_type": "turn_done",
+      "last_event_type": "retrying",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     }
