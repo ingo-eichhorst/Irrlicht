@@ -2,7 +2,7 @@
   "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "full",
+    "daemon_capability": "unknown",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+66497e7",
@@ -16,7 +16,7 @@
       "agent": "deepseek-harness",
       "assessed_at": "2026-09-18T21:09:44Z",
       "agent_supports": "yes",
-      "daemon_capability": "full",
+      "daemon_capability": "unknown",
       "driver_capability": "ready",
       "confidence": 0.88,
       "body": "Current implementation: the DSH parser maps standalone compaction/start and compaction/end; inline numeric-turn markers remain skipped. The driver polls durable compaction/end with a deadline and fails on timeout or unreadable transcript. Fresh live verification remains required. Historical pre-fix recordings used a parser without these mappings and a fixed delay.",
