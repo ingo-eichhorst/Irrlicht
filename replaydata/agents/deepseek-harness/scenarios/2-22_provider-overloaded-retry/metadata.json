@@ -6,8 +6,8 @@
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+e51e15b",
-    "confidence": 0.9,
-    "notes": "DeepSeek Harness persists each pending provider retry, but the DSH adapter skips llm/retry records and cannot paint the required retry window red; the shared OpenAI error mock now makes the cell recordable."
+    "confidence": 0.98,
+    "notes": "The current DSH parser maps llm/retry records. The 2026-09-20 staged live candidate has three durable SERVER retries but only ready -> working -> ready, so it misses the required retry error window and remains known failing at 3/5 phases."
   },
   "details": {
     "assessment": {
@@ -18,16 +18,14 @@
       "agent_supports": "yes",
       "daemon_capability": "bug",
       "driver_capability": "ready",
-      "confidence": 0.9,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires one stable session to follow ready -> working -> error -> ready. The session must enter error when the first provider retry is scheduled. It must stay in error across later attempts. It must never enter waiting. It must return to ready only after a successful turn/end.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 implements this behavior explicitly. The installed dsh-base composition mounts dsh-llm-retry. The installed retry package documents a default normal policy with five retries for RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, and EMPTY_RESPONSE. Its implementation appends a durable llm/retry record before each backoff and a durable llm/retry-started record before the next attempt. The pi-ai adapter maps messages that contain a 5xx status to SERVER. Therefore, HTTP 529 is eligible.\n\nThe committed DeepSeek Harness 2-14 transcript also measures this behavior. The transcript contains five llm/retry records and five llm/retry-started records with increasing delays before the final failed turn/end. The failure is TRANSPORT rather than HTTP 529. However, the recording proves that the installed agent loop writes the documented durable retry records on the exact TUI profile that this recipe drives.\n\n## Daemon capability\n\nThe DSH adapter mishandles the available trace. core/adapters/inbound/agents/dsh/parser.go declares handlers for session, turn, approval, message, tool, and request records only. ParseLine sets Skip=true for each unknown type. Therefore, the parser discards llm/retry and llm/retry-started.\n\nThe committed 2-14 recording gives concrete daemon evidence. Its transcript records retry scheduling from sequence 16 through sequence 29. Its events.jsonl enters working at sequence 255. It does not enter error during the retry ladder. It enters error at sequence 420 only after the terminal error turn/end. Thus, the daemon does not paint a pending retry red although the source contains the required signal.\n\nThis result is a bug, not an architectural limit. tailer.SessionError already has ErrorPhaseRetrying, Attempt, MaxAttempts, RetryIn, Class, and Message. A successful turn_done already clears a retrying error. The DSH parser must map llm/retry to that existing shape. The spec remains known-failing and asserts the correct arc.\n\n## Driver capability and recording fixture\n\nThe recipe uses send, wait_turn, sleep, and exit_clean. The DeepSeek Harness interactive driver declares and implements all four steps. The driver also accepts model, base_url, context_window, permission_mode, and api_key settings. It writes those settings into a temporary OpenAI-compatible provider patch. Therefore, the script driver is ready.\n\nCommit 61cda4ff3 supplies the shared tools/onboarding-factory/recording/mock-openai-error package. Its route is POST /v1/chat/completions, which matches the driver's openai-completions provider and the configured /v1 base URL. With --status 529, --error-type overloaded_error, and --succeed-after 3, it fails three counted primary requests and streams a successful fourth response with non-zero usage. Its case-insensitive title filter matches the installed dsh-session-title-llm system prompt, \"Create a concise title for an AI coding-assistant session...\". Matching title requests return success and stay at counter #0.\n\nThe package tests passed with the race detector. An exact local protocol probe also returned 200 for the title request, 529 for primary requests #1 through #3, and 200 plus a valid SSE completion for primary request #4. The request-log pattern excludes title line #0 and matches only counted primary lines. Thus, title traffic cannot consume a retry slot or satisfy the mock-use guard.\n",
+      "confidence": 0.98,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\nThe current DSH parser maps `llm/retry` to a retrying SessionError. The earlier claim that the parser skips llm/retry is no longer true.\n\nThe staged live candidate at `.claude/worktrees/1980-dsh-metrics-and-eta/.build/refresh/deepseek-harness/2-22_provider-overloaded-retry-20260920T200155` has three durable `llm/retry` records with `failure.code=SERVER`, at transcript sequences 16, 20, and 23. Its staged replay report records only ready -> working -> ready. It has no error transition between the first retry and the completed turn/end. The command `zstdcat <staging>/replaydata/agents/deepseek-harness/scenarios/2-22_provider-overloaded-retry/transcript.jsonl.zstd | jq -c 'select(.type == \"llm/retry\" or .type == \"llm/retry-started\" or .type == \"turn/end\")'` derives the retry rows.\n\n`go run ./tools/onboarding-factory/cmd/of verify -agent deepseek-harness -scenario provider-overloaded-retry -json` reports 3/5 actual lifecycle phases: session_birth, pid_bind, and turn_start pass; retry_window and recovered fail because no error event exists. Its top-level pass fields remain true only because the spec marks the cell known failing. The missing error state justifies the daemon bug classification. It does not justify the obsolete parser-skip explanation.\n\nThe driver and mock are ready. Do not mark the cell observed until a current-code live recording shows the full error window and recovery.",
       "caveats": [
-        "Vacuous-pass condition: the cell would pass without proving provider retry if the mock served the main request successfully on its first attempt or if a session-title request consumed the configured failure slots. The transcript spec therefore requires exactly three llm/retry records with failure.code SERVER. The request-log pattern counts only primary request lines #1 and later, not title line #0.",
-        "Load-bearing mock contract: tools/onboarding-factory/recording/mock-openai-error must serve POST /v1/chat/completions, fail the first three counted primary requests with HTTP 529 overloaded_error, and stream a successful fourth response with non-zero usage. Its case-insensitive title filter must keep the installed DSH title prompt at counter #0.",
-        "The committed measured retry fixture uses TRANSPORT failures, not HTTP 529. The installed pi-ai adapter source maps 5xx error text to SERVER, and the installed retry policy includes SERVER. A live recording must confirm that the mock produces that durable failure code.",
-        "The model observation remains intentionally unpinned until the live recording confirms which DSH source label reaches the websocket. The driver configures qwen/qwen3.5-9b, while the mock response carries mock-openai-error-model.",
-        "The llm/retry record means that another attempt is scheduled. It does not prove recovery. The transcript assertions separately require one completed turn/end and forbid an error turn/end.",
-        "The five-second post-turn sleep matches the longest committed sibling delay. It gives irrlichd time to publish the recovered ready state before exit_clean removes the live process.",
-        "Load-bearing isolation precondition: the driver must keep its fresh per-run cwd and pre-launch marker, and run-cell.sh must verify that the mock served counted primary requests. Otherwise, another DSH transcript or the real provider could satisfy the lifecycle phases."
+        "The staged candidate is diagnostic evidence, not an observed fixture. It ran with git HEAD 28ce9c850 and has three retry records but no error transition.",
+        "The verifier must report actual phase results. known_failing can make top-level pass fields true while retry_window and recovered are false.",
+        "The mock must serve three counted HTTP 529 responses and then one successful completion. The transcript assertions require exactly three SERVER retries and one completed turn/end.",
+        "The retry parser handler exists, but the state path from a parsed retrying SessionError to an error transition still needs current-code live proof.",
+        "The recording must isolate title-generation traffic from counted primary requests and use a fresh run cwd and transcript marker."
       ],
       "sources": [
         {
@@ -58,7 +56,7 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/parser.go",
-          "note": "recordHandlers has no llm/retry or llm/retry-started entry. ParseLine marks every unrecognized record Skip=true. parseTurnEnd handles only the eventual completed or terminal boundary."
+          "note": "Current recordHandlers maps llm/retry to a retrying SessionError and llm/retry-started to a retry-started event. The staged candidate still lacks an error state, so this source fact does not settle the end-to-end state path."
         },
         {
           "kind": "file",
@@ -90,7 +88,8 @@
           "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-title-llm/lib/index.js",
           "note": "The installed 0.1.5-rc.2 title package starts its stable system prompt with Create a concise title for an AI coding-assistant session, which matches the mock's case-insensitive filter."
         }
-      ]
+      ],
+      "historical_body": "Historical diagnosis: before the retry parser handler was added, llm/retry was skipped. That diagnosis explains older recordings but does not describe the current parser."
     },
     "recipe": {
       "applicable": true,
