@@ -495,9 +495,9 @@ func TestCommittedRecordAssertions(t *testing.T) {
 			continue
 		}
 		checked++
-		checkCommittedTranscriptAssertions(t, expectedPath, scenarioDir, meta.TranscriptAssertions)
-		checkCommittedEventAssertions(t, expectedPath, scenarioDir, meta.EventAssertions)
-		checkCommittedSessionUpdateAssertions(t, expectedPath, scenarioDir, meta.SessionUpdateAssertions)
+		checkCommittedRecordAssertions(t, "transcript", expectedPath, scenarioDir, meta.TranscriptAssertions, ValidateTranscriptForProfile, func(report *RecordReport) bool { return report.Pass })
+		checkCommittedRecordAssertions(t, "event", expectedPath, scenarioDir, meta.EventAssertions, ValidateEventsForProfile, (*RecordReport).ExpectedPass)
+		checkCommittedRecordAssertions(t, "session-update", expectedPath, scenarioDir, meta.SessionUpdateAssertions, ValidateSessionUpdatesForProfile, (*RecordReport).ExpectedPass)
 	}
 	if checked == 0 {
 		t.Fatal("no committed transcript or event assertions were discovered; the catalog gate checked nothing")
@@ -505,62 +505,25 @@ func TestCommittedRecordAssertions(t *testing.T) {
 	t.Logf("checked record assertions in %d committed cells", checked)
 }
 
-func checkCommittedTranscriptAssertions(
+func checkCommittedRecordAssertions(
 	t *testing.T,
+	kind string,
 	expectedPath string,
 	scenarioDir string,
 	assertions []RecordAssertion,
+	validate func(string, matrix.ExecutionProfile) (*RecordReport, error),
+	passed func(*RecordReport) bool,
 ) {
 	t.Helper()
 	if len(assertions) == 0 {
 		return
 	}
-	report, err := ValidateTranscriptForProfile(scenarioDir, matrix.ProfileCLILocal)
+	report, err := validate(scenarioDir, matrix.ProfileCLILocal)
 	if err != nil {
 		t.Errorf("%s: %v", expectedPath, err)
 		return
 	}
-	if report == nil || !report.Pass {
-		t.Errorf("%s: transcript assertions failed: %+v", expectedPath, report)
-	}
-}
-
-func checkCommittedEventAssertions(
-	t *testing.T,
-	expectedPath string,
-	scenarioDir string,
-	assertions []RecordAssertion,
-) {
-	t.Helper()
-	if len(assertions) == 0 {
-		return
-	}
-	report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
-	if err != nil {
-		t.Errorf("%s: %v", expectedPath, err)
-		return
-	}
-	if report == nil || !report.ExpectedPass() {
-		t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
-	}
-}
-
-func checkCommittedSessionUpdateAssertions(
-	t *testing.T,
-	expectedPath string,
-	scenarioDir string,
-	assertions []RecordAssertion,
-) {
-	t.Helper()
-	if len(assertions) == 0 {
-		return
-	}
-	report, err := ValidateSessionUpdatesForProfile(scenarioDir, matrix.ProfileCLILocal)
-	if err != nil {
-		t.Errorf("%s: %v", expectedPath, err)
-		return
-	}
-	if report == nil || !report.ExpectedPass() {
-		t.Errorf("%s: session-update assertions failed: %+v", expectedPath, report)
+	if report == nil || !passed(report) {
+		t.Errorf("%s: %s assertions failed: %+v", expectedPath, kind, report)
 	}
 }
