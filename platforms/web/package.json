@@ -8,7 +8,7 @@
     "snapshot:png": "node snapshots/snapshot.png.mjs"
   },
   "devDependencies": {
-    "vitest": "^5.0.0",
-    "jsdom": "^30.0.1"
+    "vitest": "^5.0.1",
+    "jsdom": "^30.1.0"
   }
 }
