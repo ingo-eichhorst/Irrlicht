@@ -966,3 +966,40 @@ be committed to be pushed — and wrong for every manual `--changed` run.
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true
 Linux-only bugs unless you pass `--linux`.
+
+### Several runs at once — what the budget does under fleet load (#2022)
+
+`/ir:fleet` dispatches several `ir:exec` runs over the same machine, and each
+one drags the pre-push hook's `--budget 540` behind it. Three of these ran
+concurrently on 2026-09-20, each with `go test -race` plus
+`replay-fixtures.sh` in scope, and load average reached **39.60**. At that
+load the budget kills gates that pass comfortably on a quiet machine, so a
+`TIMEOUT` says the machine was busy rather than that the diff is broken.
+
+Three rules follow, and they cost nothing when a single run has the machine to
+itself:
+
+- **Cap concurrency from the declared scopes, not from a fixed number.** Two
+  when any queued ticket touches `replaydata/` or `core/`, otherwise three.
+  The 39.60 figure is one observation on one machine, not a measurement across
+  machines — state it as the reason and revise it when a run contradicts it.
+- **Key every wait on a marker in a log the run owns.** A wait keyed on a
+  process name matches a sibling worktree running the same script, and
+  `pgrep -f "replay-fixtures.sh"` did exactly that during the same run. The
+  redirect has to put the marker inside the log, which the obvious spelling
+  does not: `cmd > log 2>&1; echo "EXIT=$?"` sends the marker to the outer
+  shell, so a poll for it never terminates. Write
+  `{ timeout <N> bash <cmd>; echo "EXIT=$?"; } > <own-log> 2>&1`.
+- **Do not run a gate the diff cannot break.** Two of three agents ran the
+  macOS Swift suite on diffs touching no Swift file, leaving build output in a
+  worktree that had no Swift change (#2022 §1.2 reports 319 compiled objects
+  in one such `platforms/macos/.build`; that count is quoted from the issue
+  and was not re-measured here). `--only swift` is for `platforms/macos/`
+  changes, and the `swift` gate is the one documented as able to consume the
+  whole budget on its own.
+
+Recovery from a load-induced `TIMEOUT` is the hook's own printed line: re-run
+the named `--only <group>` unbounded and in the foreground, then push with
+`git push --no-verify` citing that green run. Read the push's exit status
+directly rather than through a pipe, and confirm `git status -sb` shows a
+tracking branch afterwards.

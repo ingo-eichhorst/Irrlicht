@@ -1,0 +1,11 @@
+## ir:code-review
+
+review: effort=medium findings=2
+
+1. core/adapters/inbound/agents/pi/parser.go:86
+   category: correctness
+   summary: the provider string is dropped before the resolver reads it.
+
+2. core/application/services/quotainherit.go:41
+   category: test-coverage
+   summary: no case covers a pi session reaching recipientKey with evidence.

@@ -1,0 +1,2 @@
+reviewed at medium effort, 3 findings reported. See
+core/adapters/inbound/agents/pi/parser.go for the convention break.

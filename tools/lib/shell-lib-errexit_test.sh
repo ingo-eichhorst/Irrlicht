@@ -407,6 +407,42 @@ row 'rebase-conflict-check.sh::rebase_conflict_check' 'rebase_conflict_check (re
     '. tools/lib/rebase-conflict-check.sh' \
     'rebase_conflict_check 2>/dev/null'
 
+# The three #2022 fleet checkers share rebase_conflict_check's status grammar
+# — 0 clean, 1 FINDING, 2 REFUSAL — and so share its reason for driving only
+# 0 and 2 here: a documented 1 cannot be told apart from an errexit abort.
+# Each one's FINDING path is graded by its own _test.sh, none of which runs
+# under `-e`.
+row 'ref-exists.sh::ref_exists' 'ref_exists (refuses a branch name carrying a glob)' 2 \
+    '. tools/lib/ref-exists.sh' \
+    'ref_exists origin "feat/*" 2>/dev/null'
+row 'ref-exists.sh::ref_exists' 'ref_exists (refuses a missing argument)' 2 \
+    '. tools/lib/ref-exists.sh' \
+    'ref_exists origin 2>/dev/null'
+
+row 'fleet-scope-overlap.sh::fleet_scope_overlap' 'fleet_scope_overlap (two disjoint scopes)' 0 \
+    '. tools/lib/fleet-scope-overlap.sh' \
+    'fleet_scope_overlap tools/lib/testdata/fleet-scope-overlap/pi-adapter.md tools/lib/testdata/fleet-scope-overlap/replaydata-muse.md >/dev/null'
+row 'fleet-scope-overlap.sh::fleet_scope_overlap' 'fleet_scope_overlap (refuses an undeclared scope)' 2 \
+    '. tools/lib/fleet-scope-overlap.sh' \
+    'fleet_scope_overlap tools/lib/testdata/fleet-scope-overlap/no-section.md >/dev/null 2>&1'
+row 'fleet-scope-overlap.sh::fleet_scope_is_file' 'fleet_scope_is_file (a known extension)' 0 \
+    '. tools/lib/fleet-scope-overlap.sh' \
+    'fleet_scope_is_file core/adapters/registry.go'
+
+row 'fleet-review-evidence.sh::fleet_review_evidence' 'fleet_review_evidence (a hand-back carrying its evidence)' 0 \
+    '. tools/lib/fleet-review-evidence.sh' \
+    'fleet_review_evidence tools/lib/testdata/fleet-review-evidence/clean.txt >/dev/null'
+row 'fleet-review-evidence.sh::fleet_review_evidence' 'fleet_review_evidence (refuses when no files are named)' 2 \
+    '. tools/lib/fleet-review-evidence.sh' \
+    'fleet_review_evidence 2>/dev/null'
+
+# assert_checker_rc returns 0 for an assertion that held and 1 for one that
+# did not; only the 0 is distinctive under `-e`, for the same reason every
+# other 1 in this file is not driven.
+row 'checker-assert.sh::assert_checker_rc' 'assert_checker_rc (an assertion that holds)' 0 \
+    '. tools/lib/checker-assert.sh; . tools/lib/ref-exists.sh; rc=0' \
+    'assert_checker_rc ref_exists "a glob is refused" 2 "" origin "feat/*" >/dev/null 2>&1'
+
 # Driven against a THROWAWAY corpus, never against tools/lib itself: this
 # function runs every `*_test.sh` it finds, and this file is one of them, so
 # pointing it at the real directory would re-enter the whole suite (and this
