@@ -97,6 +97,54 @@ func TestParserMapsMeasuredTurnStart(t *testing.T) {
 	}
 }
 
+func TestParserReconcilesMeasuredTodoWriteSnapshots(t *testing.T) {
+	parser := &Parser{}
+	initial := parseRecord(t, parser, `{"type":"todo/write","seq":17,"time":1789787679937,"data":{"todos":[{"content":"draft a greeting","status":"pending"},{"content":"refine the greeting","status":"pending"},{"content":"reply done","status":"pending"}]}}`)
+	if initial.Skip {
+		t.Fatalf("todo/write was skipped: %+v", initial)
+	}
+	if len(initial.TaskDeltas) != 3 {
+		t.Fatalf("initial task deltas = %+v, want three creates", initial.TaskDeltas)
+	}
+	assertTodoSnapshot(t, initial, []tailer.TaskSnapshotEntry{
+		{ID: "1", Subject: "draft a greeting", Status: "pending"},
+		{ID: "2", Subject: "refine the greeting", Status: "pending"},
+		{ID: "3", Subject: "reply done", Status: "pending"},
+	})
+
+	progressed := parseRecord(t, parser, `{"type":"todo/write","seq":31,"time":1789787696051,"data":{"todos":[{"content":"draft a greeting","status":"in_progress"},{"content":"refine the greeting","status":"pending"},{"content":"reply done","status":"pending"}]}}`)
+	if len(progressed.TaskDeltas) != 1 || progressed.TaskDeltas[0].Op != tailer.TaskOpUpdate || progressed.TaskDeltas[0].ID != "1" || progressed.TaskDeltas[0].Status != "in_progress" {
+		t.Fatalf("progressed task deltas = %+v, want update for first todo", progressed.TaskDeltas)
+	}
+	assertTodoSnapshot(t, progressed, []tailer.TaskSnapshotEntry{
+		{ID: "1", Subject: "draft a greeting", Status: "in_progress"},
+		{ID: "2", Subject: "refine the greeting", Status: "pending"},
+		{ID: "3", Subject: "reply done", Status: "pending"},
+	})
+}
+
+func assertTodoSnapshot(t *testing.T, event *tailer.ParsedEvent, want []tailer.TaskSnapshotEntry) {
+	t.Helper()
+	if event.TaskSnapshot == nil {
+		t.Fatal("task snapshot is nil")
+	}
+	if !reflect.DeepEqual(*event.TaskSnapshot, want) {
+		t.Fatalf("task snapshot = %+v, want %+v", *event.TaskSnapshot, want)
+	}
+}
+
+func TestParserMapsMeasuredCompactionBoundaries(t *testing.T) {
+	parser := &Parser{}
+	start := parseRecord(t, parser, `{"type":"compaction/start","seq":18,"time":1789776655200,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
+	if start.Skip || start.EventType != "turn_start" {
+		t.Fatalf("compaction/start = %+v, want turn_start", start)
+	}
+	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
+	if end.Skip || end.EventType != "turn_done" {
+		t.Fatalf("compaction/end = %+v, want turn_done", end)
+	}
+}
+
 func TestParserMapsMeasuredApprovalAsked(t *testing.T) {
 	asked := parseRecord(t, &Parser{}, `{"type":"approval/asked","seq":35,"time":1789677803101,"data":{"id":"approval-1","toolName":"bash","callId":"757004337","reason":"write outside workspace"}}`)
 	if asked.EventType != "permission_requested" {

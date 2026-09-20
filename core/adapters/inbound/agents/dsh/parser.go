@@ -19,6 +19,9 @@ const (
 	recordUserMessage      = "user/message"
 	recordToolCall         = "tool/call"
 	recordToolResult       = "tool/result"
+	recordTodoWrite        = "todo/write"
+	recordCompactionStart  = "compaction/start"
+	recordCompactionEnd    = "compaction/end"
 	recordRequestHeader    = "request/header"
 	recordRequestContext   = "request/context"
 )
@@ -29,6 +32,7 @@ const (
 // after the header; the ledger already carries any earlier refusal.
 type Parser struct {
 	unsupportedVersion string
+	todos              tailer.TodoReconciler
 }
 
 type recordHandler func(*Parser, map[string]any, *tailer.ParsedEvent)
@@ -49,6 +53,9 @@ var recordHandlers = map[string]recordHandler{
 	recordUserMessage:      statelessHandler(parseUserMessage),
 	recordToolCall:         statelessHandler(parseToolCall),
 	recordToolResult:       statelessHandler(parseToolResult),
+	recordTodoWrite:        (*Parser).parseTodoWrite,
+	recordCompactionStart:  statelessHandler(parseCompactionStart),
+	recordCompactionEnd:    statelessHandler(parseCompactionEnd),
 	recordRequestHeader:    statelessHandler(parseRequestHeader),
 	recordRequestContext:   statelessHandler(parseRequestContext),
 }
@@ -234,6 +241,36 @@ func parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
 			ev.IsError = true
 		}
 	}
+}
+
+// parseTodoWrite reconciles DSH's authoritative whole-list todo snapshot.
+// Each durable todo/write record replaces the agent's visible list.
+func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
+	todos := make([]tailer.Todo, 0)
+	for _, rawTodo := range array(object(raw, "data"), "todos") {
+		todo, _ := rawTodo.(map[string]any)
+		if todo == nil {
+			continue
+		}
+		todos = append(todos, tailer.Todo{
+			Key:    text(todo, "content"),
+			Status: text(todo, "status"),
+		})
+	}
+	if len(todos) == 0 {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "task_update"
+	p.todos.Reconcile(todos, ev)
+}
+
+func parseCompactionStart(_ map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "turn_start"
+}
+
+func parseCompactionEnd(_ map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "turn_done"
 }
 
 func parseRequestHeader(raw map[string]any, ev *tailer.ParsedEvent) {
