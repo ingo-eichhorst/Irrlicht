@@ -156,14 +156,18 @@ type ExpectedPhase struct {
 	// enumerating intermediate cycles purely as matcher anchors, which pins a
 	// count that is itself debounce-dependent. Composes with MaxDelayMs as a
 	// window: min filters candidates, max rejects the one that matched.
-	MinDelayMs        int64    `json:"min_delay_ms,omitempty"`
-	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
-	SameSessionAs     string   `json:"same_session_as,omitempty"`
-	NewSession        bool     `json:"new_session,omitempty"`
-	SessionIDPrefix   string   `json:"session_id_prefix,omitempty"`
-	Invariants        []string `json:"invariants,omitempty"`
-	Trigger           string   `json:"trigger,omitempty"` // documentation-only this iteration
-	Text              string   `json:"text,omitempty"`
+	MinDelayMs        int64  `json:"min_delay_ms,omitempty"`
+	DurationAtLeastMs int64  `json:"duration_at_least_ms,omitempty"`
+	SameSessionAs     string `json:"same_session_as,omitempty"`
+	// ParentSessionSameAs requires a lifecycle event's parent_session_id to
+	// equal the session ID matched by an earlier phase. It pins ownership,
+	// rather than merely proving that a child linked to some parent.
+	ParentSessionSameAs string   `json:"parent_session_same_as,omitempty"`
+	NewSession          bool     `json:"new_session,omitempty"`
+	SessionIDPrefix     string   `json:"session_id_prefix,omitempty"`
+	Invariants          []string `json:"invariants,omitempty"`
+	Trigger             string   `json:"trigger,omitempty"` // documentation-only this iteration
+	Text                string   `json:"text,omitempty"`
 
 	// Profiles refines this phase for one execution profile, keyed by the
 	// profile name ("cli-local", "desktop-local"). A profile with no entry
@@ -249,10 +253,11 @@ type ExpectedReport struct {
 // events.jsonl. Mirrors the daemon's lifecycle.Event JSON shape; we
 // don't pull in lifecycle to keep this package's deps thin.
 type recordedEvent struct {
-	Ts        time.Time `json:"ts"`
-	Kind      string    `json:"kind"`
-	SessionID string    `json:"session_id"`
-	NewState  string    `json:"new_state,omitempty"`
+	Ts              time.Time `json:"ts"`
+	Kind            string    `json:"kind"`
+	SessionID       string    `json:"session_id"`
+	ParentSessionID string    `json:"parent_session_id,omitempty"`
+	NewState        string    `json:"new_state,omitempty"`
 }
 
 // hasParentTraversal reports whether p contains a literal ".." — the same
@@ -768,8 +773,9 @@ func resolvePhaseAnchor(p ExpectedPhase, anchorTs map[string]time.Time) (name st
 // NewSession) — at most one of the two is populated per phase, since
 // SameSessionAs and NewSession are mutually exclusive.
 type sessionConstraint struct {
-	RequireSID string
-	SeenSIDs   map[string]struct{}
+	RequireSID       string
+	RequireParentSID string
+	SeenSIDs         map[string]struct{}
 }
 
 // resolveSessionConstraint computes the session-id filter for matching, up
@@ -784,6 +790,13 @@ func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (sc
 			return sessionConstraint{}, fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
 		}
 		sc.RequireSID = sid
+	}
+	if p.ParentSessionSameAs != "" {
+		sid, ok := matchedSid[p.ParentSessionSameAs]
+		if !ok {
+			return sessionConstraint{}, fmt.Sprintf("parent_session_same_as references unknown phase %q", p.ParentSessionSameAs)
+		}
+		sc.RequireParentSID = sid
 	}
 	if p.NewSession {
 		sc.SeenSIDs = make(map[string]struct{}, len(matchedSid))
@@ -853,6 +866,9 @@ func eventSatisfiesPhase(p ExpectedPhase, ev *recordedEvent, sc sessionConstrain
 		return false
 	}
 	if sc.RequireSID != "" && ev.SessionID != sc.RequireSID {
+		return false
+	}
+	if sc.RequireParentSID != "" && ev.ParentSessionID != sc.RequireParentSID {
 		return false
 	}
 	if p.NewSession {
