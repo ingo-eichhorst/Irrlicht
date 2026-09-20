@@ -29,6 +29,13 @@ make_marker() { # <sessions> <name>
   printf '%s\n' "$marker"
 }
 
+make_malformed_frame() { # <sessions> <directory-id>
+  local sessions="$1" id="$2" dir
+  dir="$sessions/$id"
+  mkdir -p "$dir"
+  printf '{not json}\n' | zstd -q -f -o "$dir/session.v3.jsonl.zstd"
+}
+
 test_success() {
   local root parent child marker got
   root="$(mktemp -d)"; parent='session-11111111-1111-4111-8111-111111111111'; child='22222222-2222-4222-8222-222222222222'
@@ -91,9 +98,44 @@ test_direct_calls_do_not_replace_return_trap() {
   rm -rf "$root"
 }
 
+test_missing_marker_refuses() {
+  local root parent out status
+  root="$(mktemp -d)"; parent='session-cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  set +e
+  out="$(dsh_await_child_turn_end "$root" "$parent" "$root/missing-marker" "$(date +%s)" 2>&1)"; status=$?
+  set -e
+  [[ $status -ne 0 && "$out" == *'marker is not a readable regular file'* ]] && pass missing-marker || fail missing-marker
+  rm -rf "$root"
+}
+
+test_missing_sessions_refuses() {
+  local root parent marker out status
+  root="$(mktemp -d)"; parent='session-dddddddd-dddd-4ddd-8ddd-dddddddddddd'; marker="$(make_marker "$root" marker)"
+  set +e
+  out="$(dsh_await_child_turn_end "$root/missing-sessions" "$parent" "$marker" "$(date +%s)" 2>&1)"; status=$?
+  set -e
+  [[ $status -ne 0 && "$out" == *'sessions directory is not readable'* ]] && pass missing-sessions || fail missing-sessions
+  rm -rf "$root"
+}
+
+test_malformed_child_refuses() {
+  local root parent child marker out status
+  root="$(mktemp -d)"; parent='session-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'; child='ffffffff-ffff-4fff-8fff-ffffffffffff'
+  marker="$(make_marker "$root" marker)"
+  make_malformed_frame "$root" "$child"
+  set +e
+  out="$(dsh_await_child_turn_end "$root" "$parent" "$marker" "$(date +%s)" 2>&1)"; status=$?
+  set -e
+  [[ $status -ne 0 && "$out" == *'malformed JSON'* ]] && pass malformed-child || fail malformed-child
+  rm -rf "$root"
+}
+
 test_success
 test_timeout
 test_wrong_parent
 test_stale_matching_child_is_ignored
 test_direct_calls_do_not_replace_return_trap
+test_missing_marker_refuses
+test_missing_sessions_refuses
+test_malformed_child_refuses
 [[ $failures -eq 0 ]]
