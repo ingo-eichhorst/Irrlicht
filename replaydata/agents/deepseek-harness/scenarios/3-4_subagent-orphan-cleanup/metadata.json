@@ -2,8 +2,8 @@
   "scenario_id": "subagent-orphan-cleanup",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
-    "driver_capability": "ready",
+    "daemon_capability": "unknown",
+    "driver_capability": "limited",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+7adf456",
     "confidence": 0.88,
@@ -15,8 +15,8 @@
       "scenario_id": "subagent-orphan-cleanup",
       "agent": "deepseek-harness",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
-      "driver_capability": "ready",
+      "daemon_capability": "unknown",
+      "driver_capability": "limited",
       "confidence": 0.88,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `subagent` tool. The effective TUI configuration mounts the in-process `spawn` provider in continuable mode. The official tool contract states that `run_in_background: false` waits for the child result. The recipe uses that explicit foreground override, so the parent remains in its turn while the child runs.\n\nThe in-process driver creates a separate child Agent and Session in the same DSH process. It gives the child a bare `randomUUID()` id. `childSessionMeta` writes the durable parent id to `parentSession` and writes `origin: subagent` in the child header. The JSONL persistence backend gives each child its own session directory and fsyncs committed records. A SIGKILL of the TUI process therefore stops the parent and the in-process child while both durable transcripts remain on disk. This is the orphan shape that the scenario requires.\n\n## Daemon capability\n\nThe current DSH adapter mishandles the required child trace. `sessionIDFromPath` accepts only directory names that match `session-<uuid>`. The official in-process driver and installed TUI use a bare UUID for a subagent child. `FilesUnderRoot` therefore skips the child transcript, so no child `SessionState` or `transcript_new` event can exist. The source also declares no `ParentSessionIDFromPath` extractor, and `parseSession` discards the header's `parentSession` field. Even if the id filter were widened alone, the daemon could not emit `parent_linked`.\n\nThis is `daemon=bug`, not `incapable`. The agent writes both required facts under the root that the adapter already watches. Irrlicht already has the source seam for header-derived parent ids. Its PID manager also supports in-process parent and child sessions that share one PID: `HandleWatcherExit` fans the exit out to children before parents, and deletion does not set either session to `working`. The correct expected spec stays known-failing until the DSH adapter admits bare child ids and reads `parentSession`.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `sleep`, and `sigkill`, which are the only required steps. The prompt requires exactly one foreground `subagent` call and gives the child a long `sleep 240` task. The recipe waits 150 seconds before SIGKILL. A recorded DSH bash-tool turn needed about 100 seconds to reach its first tool call on the pinned local model, so 150 seconds gives the parent time to create the child while the child's long turn remains active. The 25-second post-kill delay matches the upper end of committed sibling settle delays and gives the process watcher time to fan out the shared-PID exit.\n\nThe spec requires the exact foreground subagent call, a distinct child transcript, the durable parent link, a legitimate child `working` state before the kill, and child and parent cleanup events after the kill. It then forbids any new `working` or `waiting` transition for the child during cleanup. Thus a parent-only crash or an ordinary turn cannot pass.",
       "caveats": [

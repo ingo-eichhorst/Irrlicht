@@ -2,12 +2,12 @@
   "scenario_id": "background-subagent",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+7adf456",
     "confidence": 0.88,
-    "notes": "DeepSeek Harness starts a durable continuable background child, but the DSH adapter rejects its bare UUID directory and does not read the durable parentSession header."
+    "notes": "OBSERVED 2026-09-20: a durable bare-UUID child linked to its parent, then child ready followed by parent ready 33 ms later; verifier passed 7/7 phases."
   },
   "details": {
     "assessment": {
@@ -15,7 +15,7 @@
       "scenario_id": "background-subagent",
       "agent": "deepseek-harness",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.88,
       "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `subagent` tool. The installed official package reference states that continuable mode starts a durable child in the background and returns its id without waiting. The shipped standard preset configures `subagent` with the in-process spawn provider and `backgroundMode: continuable`. The tool schema exposes `run_in_background`, defaults it to true in this mode, and the runtime calls `startContinuable` when the value is true. The recipe sets the value explicitly.\n\nThe in-process driver creates a separate child Agent and Session. It assigns a bare `randomUUID()` child id. `childSessionMeta` writes the parent's durable session id to `parentSession` and writes `origin: subagent` in the child session header. The persistence backend writes each session to its own directory under the same sessions root. The TUI source confirms that a child id and its persisted directory use the same bare UUID. Thus the agent emits a durable child transcript and an exact child-to-parent link while the parent can end its own turn without waiting.\n\n## Daemon capability\n\nThe current DSH adapter mishandles those traces in two concrete ways. First, `sessionIDFromPath` accepts only directory names matching `^session-<uuid>$`. It returns an empty id for the bare UUID directory created by the official child driver. `FilesUnderRoot` therefore skips the child transcript, so no child `SessionState` or `transcript_new` event appears. Second, `Source()` does not set `ParentSessionIDFromPath`, although the first physical child header contains `parentSession`. The parser handles the session header only for version and cwd and discards the parent field. Even after the id filter is widened, the child remains top-level, `parent_linked` does not fire, `SubagentCount(parent)` stays zero, and `hasActiveChildren` cannot hold the parent in working after its own completed boundary.\n\nThis verdict is `daemon=bug`, not `incapable`. The required child transcript and parent id exist under the root that the adapter already tails. Irrlicht already has the `ParentSessionIDFromPath` seam for a metadata-header relationship. The expected spec therefore asserts the correct held-working behavior and marks it known-failing.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`, which are the only required steps. The prompt requires exactly one `subagent` call with `run_in_background:true`, gives the child a deterministic 50-second shell delay, forbids parent polling, and pins the parent's final reply. The 600-second budget covers the parent decision, the local child model's two decisions, the deliberate delay, and the trailing observation window. The 120-second sleep exceeds the longest committed sibling delay of 95 seconds because the local LM Studio child must make a tool-selection request and a final response around the deliberate 50-second command.\n\nThe raw parent-transcript assertion requires the explicit background argument and the immediate durable child-id result. The lifecycle phases require a distinct child session, its parent link, a parent held in working for at least 30 seconds, and the parent's final ready transition only after the child drains. An ordinary turn or a foreground child cannot satisfy both parts. The model and token observations use the exact route installed by the driver. Cost can remain zero because the route is local LM Studio.",
