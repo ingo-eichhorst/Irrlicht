@@ -7,14 +7,14 @@ func (s *SessionState) ClientCopy() *SessionState {
 	if s == nil {
 		return nil
 	}
-	copy := *s
-	if copy.State != StateWorking && copy.Metrics != nil {
-		metrics := *copy.Metrics
+	clientState := *s
+	if clientState.State != StateWorking && clientState.Metrics != nil {
+		metrics := *clientState.Metrics
 		metrics.TaskEstimate = nil
 		metrics.TaskCompletionEta = nil
-		copy.Metrics = &metrics
+		clientState.Metrics = &metrics
 	}
-	return &copy
+	return &clientState
 }
 
 // ClientCopies returns client-response copies of states.
