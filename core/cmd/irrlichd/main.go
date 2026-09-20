@@ -733,30 +733,26 @@ func runDaemon() {
 	})
 
 	var watcherFactories map[string]services.WatcherFactory
-	// Factories are not started until after setupPermissionService returns.
-	// A nil service keeps the native row visible during startup.
-	var permService *services.PermissionService
+	dshConsent := &dshObserveConsent{}
 	detector, watcherFactories = buildDetector(buildDetectorDeps{
-		DemoMode:         demoMode,
-		PWPort:           pwPort,
-		CachedRepo:       cachedRepo,
-		Logger:           logger,
-		GitResolver:      gitResolver,
-		MetricsCollector: metricsCollector,
-		Push:             push,
-		Version:          Version,
-		Cfg:              cfg,
-		AllAgents:        allAgents,
-		CostTracker:      costTracker,
-		AutonomySpans:    autonomySpans,
-		HistoryTracker:   historyTracker,
-		DSHObserveGranted: func() bool {
-			return permService != nil && permService.ObserveGranted("dsh")
-		},
+		DemoMode:          demoMode,
+		PWPort:            pwPort,
+		CachedRepo:        cachedRepo,
+		Logger:            logger,
+		GitResolver:       gitResolver,
+		MetricsCollector:  metricsCollector,
+		Push:              push,
+		Version:           Version,
+		Cfg:               cfg,
+		AllAgents:         allAgents,
+		CostTracker:       costTracker,
+		AutonomySpans:     autonomySpans,
+		HistoryTracker:    historyTracker,
+		DSHObserveGranted: dshConsent.granted,
 	})
 
 	home, _ := os.UserHomeDir()
-	permService = setupPermissionService(mux, setupPermissionServiceDeps{
+	permService := setupPermissionService(mux, setupPermissionServiceDeps{
 		Detector:         detector,
 		Push:             push,
 		Logger:           logger,
@@ -768,6 +764,7 @@ func runDaemon() {
 		StartGastown:     startGastown,
 		StopGastown:      stopGastown,
 	})
+	dshConsent.service = permService
 
 	// The watchdog's second collaborator, available only now: "is this channel
 	// expected to deliver" is a consent question, and answering it before the

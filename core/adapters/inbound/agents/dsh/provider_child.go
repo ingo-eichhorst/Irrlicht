@@ -26,32 +26,49 @@ func ownsProviderChildVia(ctx context.Context, provider string, pid int,
 	if pid <= 1 || visibleParent == nil {
 		return false
 	}
-	argv := argvOf(pid)
+	var launcherPID int
 	switch provider {
 	case "codex":
-		if len(argv) < 3 || filepath.Base(argv[0]) != "codex" || argv[1] != "app-server" || argv[2] != "--stdio" {
-			return false
-		}
-		wrapperPID, err := parentOf(ctx, pid)
-		if err != nil || wrapperPID <= 1 || wrapperPID == pid || !codexWrapperArgv(argvOf(wrapperPID)) {
-			return false
-		}
-		pid = wrapperPID
+		launcherPID = codexLauncherPID(ctx, pid, argvOf, parentOf)
 	case "claude-code":
-		if len(argv) == 0 || filepath.Base(argv[0]) != "claude" ||
-			!hasPair(argv, "--input-format", "stream-json") ||
-			!hasPair(argv, "--output-format", "stream-json") ||
-			!hasArg(argv, "--no-session-persistence") {
-			return false
-		}
+		launcherPID = claudeLauncherPID(ctx, pid, argvOf, parentOf)
 	default:
 		return false
 	}
-	parentPID, err := parentOf(ctx, pid)
-	if err != nil || parentPID <= 1 || parentPID == pid || !dshLauncherArgv(argvOf(parentPID)) {
-		return false
+	return launcherPID > 1 && dshLauncherArgv(argvOf(launcherPID)) && visibleParent(launcherPID)
+}
+
+func codexLauncherPID(ctx context.Context, pid int, argvOf func(int) []string,
+	parentOf func(context.Context, int) (int, error)) int {
+	argv := argvOf(pid)
+	if len(argv) < 3 || filepath.Base(argv[0]) != "codex" || argv[1] != "app-server" || argv[2] != "--stdio" {
+		return 0
 	}
-	return visibleParent(parentPID)
+	wrapperPID, err := parentOf(ctx, pid)
+	if err != nil || wrapperPID <= 1 || wrapperPID == pid || !codexWrapperArgv(argvOf(wrapperPID)) {
+		return 0
+	}
+	return parentPID(ctx, wrapperPID, parentOf)
+}
+
+func claudeLauncherPID(ctx context.Context, pid int, argvOf func(int) []string,
+	parentOf func(context.Context, int) (int, error)) int {
+	argv := argvOf(pid)
+	if len(argv) == 0 || filepath.Base(argv[0]) != "claude" ||
+		!hasPair(argv, "--input-format", "stream-json") ||
+		!hasPair(argv, "--output-format", "stream-json") ||
+		!hasArg(argv, "--no-session-persistence") {
+		return 0
+	}
+	return parentPID(ctx, pid, parentOf)
+}
+
+func parentPID(ctx context.Context, pid int, parentOf func(context.Context, int) (int, error)) int {
+	parent, err := parentOf(ctx, pid)
+	if err != nil || parent <= 1 || parent == pid {
+		return 0
+	}
+	return parent
 }
 
 func codexWrapperArgv(argv []string) bool {

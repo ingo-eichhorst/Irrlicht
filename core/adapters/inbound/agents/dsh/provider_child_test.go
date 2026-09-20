@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Mutation fixture: removing codexWrapperArgv from ownsProviderChildVia made
+// Mutation fixture: removing codexWrapperArgv from the Codex lineage check made
 // "wrapper changed" and "shell child" fail under go test ./core/adapters/inbound/agents/dsh
 // -run TestOwnedProviderChildRequiresExactLineageAndVisibleDSH -count=1.
 func TestOwnedProviderChildRequiresExactLineageAndVisibleDSH(t *testing.T) {

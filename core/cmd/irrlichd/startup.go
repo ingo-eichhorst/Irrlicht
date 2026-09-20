@@ -752,12 +752,29 @@ func visibleDSHParent(repo outbound.SessionRepository, consent func() bool, pid 
 		return false
 	}
 	for _, state := range sessions {
-		if state != nil && state.Adapter == dsh.AdapterName && state.PID == pid && state.TranscriptPath != "" &&
-			(state.State == session.StateWorking || state.State == session.StateWaiting) {
+		if isVisibleDSHParent(state, pid) {
 			return true
 		}
 	}
 	return false
+}
+
+func isVisibleDSHParent(state *session.SessionState, pid int) bool {
+	if state == nil || state.Adapter != dsh.AdapterName || state.PID != pid || state.TranscriptPath == "" {
+		return false
+	}
+	return state.State == session.StateWorking || state.State == session.StateWaiting
+}
+
+type dshObserveConsent struct {
+	service *services.PermissionService
+}
+
+func (c *dshObserveConsent) granted() bool {
+	if c.service == nil {
+		return false
+	}
+	return c.service.ObserveGranted(dsh.AdapterName)
 }
 
 // setupPermissionService wires the PermissionService (issue #570): the
