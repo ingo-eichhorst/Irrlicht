@@ -234,6 +234,10 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 
 	// Unify subagents summary: merge in-process agents with file-based children.
 	unifySubagents(agent)
+	// Subagent enrichment can add a task estimate to a ready parent. Project
+	// after enrichment so the complete client response follows the ready-state
+	// metric contract without changing the source session.
+	agent.SessionState = agent.SessionState.ClientCopy()
 
 	return agent
 }

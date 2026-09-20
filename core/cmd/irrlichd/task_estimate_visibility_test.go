@@ -41,6 +41,40 @@ func TestDashboardReadyTaskEstimateVisibilityFollowsState(t *testing.T) {
 	assertDashboardMetricPresent(t, working, "task_completion_eta")
 }
 
+func TestDashboardReadyParentHidesSubagentTaskEstimate(t *testing.T) {
+	parent := taskEstimateReadyFixtureSession(t)
+	parent.SessionID = "ready-parent"
+	parent.Metrics.TaskEstimate = nil
+	parent.Metrics.TaskCompletionEta = nil
+
+	child := taskEstimateReadyFixtureSession(t)
+	child.SessionID = "working-child"
+	child.ParentSessionID = parent.SessionID
+	child.State = session.StateWorking
+	eta := int64(1_763_636_400)
+	child.Metrics.TaskEstimate = &session.TaskEstimate{
+		TotalRounds:     4,
+		CompletedRounds: 1,
+		Source:          "marker",
+		UpdatedAt:       1_763_636_000,
+	}
+	child.Metrics.TaskCompletionEta = &eta
+
+	b, err := json.Marshal(sessionsResponse{Groups: session.BuildDashboard([]*session.SessionState{parent, child}, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(b, &response); err != nil {
+		t.Fatal(err)
+	}
+	assertDashboardMetricAbsent(t, response, "task_estimate")
+	assertDashboardMetricAbsent(t, response, "task_completion_eta")
+	if parent.Metrics.TaskEstimate != nil || parent.Metrics.TaskCompletionEta != nil {
+		t.Fatal("dashboard subagent enrichment mutated the ready parent source metrics")
+	}
+}
+
 func taskEstimateReadyFixtureSession(t *testing.T) *session.SessionState {
 	t.Helper()
 	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "5-8_task-estimate-marker", "recordings", "2026-09-19-04-55-38_irrlichd-0.6.4+e6443f6", "session_updates.jsonl")
