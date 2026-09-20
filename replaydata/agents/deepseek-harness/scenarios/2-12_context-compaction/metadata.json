@@ -137,7 +137,7 @@
         "api_key": "irrlicht-local-recording"
       },
       "timeout_seconds": 300,
-      "scope_note": "Matches sibling sleeps before `/compact` and after the final turn. Uses 45 seconds after `/compact` because DSH compaction makes an auxiliary local-model call and wait_turn observes only normal turn/end records."
+      "scope_note": "Uses the bounded wait_compaction transcript poll after `/compact`. The poll waits for durable compaction/end and fails on deadline or an unreadable transcript; it does not use a fixed compaction delay."
     }
   }
 }
