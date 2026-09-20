@@ -133,6 +133,9 @@
         },
         {
           "type": "await_child_turn_end"
+        },
+        {
+          "type": "await_parent_ready"
         }
       ],
       "verify": [
@@ -145,7 +148,7 @@
         "the child reaches ready and only then the parent reaches ready",
         "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
       ],
-      "scope_note": "await_child_turn_end scans only transcript files newer than this run's marker. It discovers a bare-UUID child only when its durable header has origin subagent and parentSession equal to the active parent. It polls that child transcript until a completed turn/end or the scenario deadline. It fails loudly for an absent child, unreadable child transcript, wrong current-run parent, or missing completed turn/end."
+      "scope_note": "await_child_turn_end scans only transcript files newer than this run's marker. It discovers a bare-UUID child only when its durable header has origin subagent and parentSession equal to the active parent. It polls that child transcript until a completed turn/end or the scenario deadline. It fails loudly for an absent child, unreadable child transcript, wrong current-run parent, or missing completed turn/end. await_parent_ready then polls the recording daemon's /api/v1/sessions snapshot for the same parent session until it is ready. It fails loudly for an unreadable or malformed snapshot, an absent parent session, or a parent that remains non-ready."
     }
   }
 }

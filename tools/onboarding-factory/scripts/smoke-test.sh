@@ -85,6 +85,8 @@ shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/agents/codex/boot-gates_te
 echo ""
 echo "== unit tests (replaydata/agents/deepseek-harness/child-turn_test.sh) =="
 shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/agents/deepseek-harness/child-turn_test.sh" || rc=1
+echo "== unit tests (replaydata/agents/deepseek-harness/parent-ready_test.sh) =="
+shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/agents/deepseek-harness/parent-ready_test.sh" || rc=1
 
 echo ""
 # The advisory shellcheck pass that used to live here is gone (#1684). It was

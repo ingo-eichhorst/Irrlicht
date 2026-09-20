@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end capture_session_updates stop_session_updates sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
+DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end await_parent_ready capture_session_updates stop_session_updates sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -221,6 +221,8 @@ resolve_transcript() {
 source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 # shellcheck source=child-turn.sh
 source "$(dirname "${BASH_SOURCE[0]}")/child-turn.sh"
+# shellcheck source=parent-ready.sh
+source "$(dirname "${BASH_SOURCE[0]}")/parent-ready.sh"
 
 boot_slot() { # [resume-session-id]
   local resume_id="${1:-}" command_text pane
@@ -395,6 +397,14 @@ step_stop_session_updates() {
   fi
   mv "$STAGING/session_updates.jsonl.tmp" "$STAGING/session_updates.jsonl"
   [[ -s "$STAGING/session_updates.jsonl" ]] || { echo "[driver] no matching DSH session_updated frame for $UUID" >&2; EXIT_REASON="capture_empty"; return 1; }
+}
+
+step_await_parent_ready() {
+  resolve_transcript || return 1
+  if ! dsh_await_parent_ready "${IRRLICHT_BIND_ADDR:-}" "$UUID" "$DEADLINE"; then
+    EXIT_REASON="parent_ready_timeout"
+    return 1
+  fi
 }
 
 step_interrupt() {
@@ -611,6 +621,7 @@ while IFS= read -r step; do
     wait_turn)     step_wait_turn || STEP_OK=false ;;
     wait_compaction) step_wait_compaction || STEP_OK=false ;;
     await_child_turn_end) step_await_child_turn_end || STEP_OK=false ;;
+    await_parent_ready) step_await_parent_ready || STEP_OK=false ;;
     capture_session_updates) step_capture_session_updates || STEP_OK=false ;;
     stop_session_updates) step_stop_session_updates || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
