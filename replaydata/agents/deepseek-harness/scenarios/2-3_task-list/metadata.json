@@ -2,27 +2,27 @@
   "scenario_id": "task-list",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
-    "daemon_version": "0.6.4+b408e3c",
-    "confidence": 0.85,
-    "notes": "DeepSeek Harness 0.1.5-rc.2 produced all seven required todo/write snapshots in a seven-turn live recording. The DSH parser skips those records, so task_delta remains absent and the session API tasks field cannot populate."
+    "daemon_version": "0.6.4+b0d3297",
+    "confidence": 0.96,
+    "notes": "The 2026-09-20 recording produced seven todo/write snapshots, 16 task_delta events, and a final selected-session ready API frame at seq 662 with three completed metrics.tasks entries."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "task-list",
       "agent": "deepseek-harness",
-      "assessed_at": "2026-09-18T20:49:11Z",
+      "assessed_at": "2026-09-20T20:40:41Z",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.85,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 has the exact single-session task-list feature. The installed TUI composition includes `@deepseek-ai/dsh-tool-todo` with `allowParallelInProgress: true`. Its official package documentation and installed implementation define the model-facing `todo_write` tool as a whole-list replacement over items `{content,status}`, where status is `pending`, `in_progress`, or `completed`. Every successful call appends a durable `todo/write` record to the calling agent session. The tool rejects calls without an owning agent session. It does not create a child session. This satisfies the agent pillar and keeps SubagentCount at 0 when the recipe uses only `todo_write`.\n\nThe daemon has a parser bug for the load-bearing task observable. `core/adapters/inbound/agents/dsh/parser.go` has handlers for turn, approval, message, tool, and request records, but no handler for `todo/write`. `ParseLine` marks every unknown record skipped. The generic `tool/call` handler keeps only `callId` and `name`; it does not decode the todo arguments. The parser therefore emits neither `TaskDeltas` nor a `TaskSnapshot`. The tailer cannot populate `SessionMetrics.Tasks`, and the session API `tasks` field remains empty even though the durable transcript contains every full task snapshot. This is `daemon=bug`, not `incapable`, because the official tool implementation explicitly writes the complete signal into the local session log that the DSH Source tails.\n\nThe other required signals are observable. The parser maps `turn/start` to working and completed `turn/end` to ready. A `todo_write` call is handled inside the same agent session and needs no permission approval. The spec asserts the correct task behavior with seven durable `todo/write` snapshots, one for each required status transition. It also asserts a `task_delta` daemon event. That phase is known failing until the parser maps the snapshots through `tailer.TodoReconciler`.\n\nThe recipe needs only `send`, `wait_turn`, and `sleep`. The DeepSeek Harness driver implements all three. The 10-second trailing sleep matches the longest committed sibling delay for this scenario. The 600-second timeout covers seven local model/tool rounds. The settings pin the same locally measured model and endpoint as the existing DeepSeek Harness cells.\n\n## Vacuous-pass check\n\nThis cell could pass without testing the current run if the driver reused a prior transcript that already contained the same seven snapshots. The fresh per-run cwd, pre-launch marker, header-cwd match, and session-ID contract are therefore load-bearing recipe preconditions.\n\n## Live recording confirmation\n\nThe seven-turn recording 2026-09-19-05-12-27_irrlichd-0.6.4+03d0073 contains all seven exact todo/write states and seven completed turns. `go run ./tools/onboarding-factory/cmd/of verify --agent deepseek-harness --scenario task-list --json` reports 13/13 transcript assertions and 2/2 event assertions passing. The task_tracked state phase alone fails (5/6 phases) because the parser still skips todo/write. This is a daemon parser gap, not a source-fixture miss.\n",
+      "confidence": 0.96,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Current live evidence\n\nThe 2026-09-20 recording has seven exact `todo/write` snapshots, 16 `task_delta` events, and a final matching session API frame at seq 662. That ready frame has `session.metrics.tasks` in stable three-item order. The subjects are `draft a greeting`, `refine the greeting`, and `reply done`. Each status is `completed`. `of verify --json` passes all six lifecycle phases, transcript assertions, event assertions, the required API-task assertion, and observations.\n\nThe capture starts before the first prompt. Its stop condition waits for the selected session to be ready with all three completed tasks. This prevents an earlier ready frame from ending the capture.\n\n## Historical evidence\n\nThe 2026-09-19 recording predated DSH `todo/write` parsing. It had seven durable snapshots but no task deltas, so it supported the prior daemon=bug assessment. That recording is historical evidence only. It does not describe the current parser or live capture.\n\n## Vacuous-pass protection\n\nThe driver uses a fresh per-run cwd, a pre-launch marker, a transcript header-cwd match, and the selected session ID. These conditions prevent a prior transcript or another session from satisfying the assertions.\n",
       "caveats": [
-        "KNOWN FAILING: the DSH parser has no todo/write handler and its generic tool/call handler drops arguments, so it emits no TaskDelta or TaskSnapshot and the session API tasks field stays empty.",
-        "LIVE 2.3 recording 2026-09-19-05-12-27_irrlichd-0.6.4+03d0073 confirms all seven exact todo/write snapshots and seven tool/call records. The sole failing phase is task_tracked: the DSH parser emits no TaskDelta or TaskSnapshot from todo/write.",
+        "The 2026-09-20 current recording captures the selected session API frame at seq 662. It has all three exact completed tasks under session.metrics.tasks.",
+        "The historical 2026-09-19 recording predated the todo/write parser support. Its missing task_delta output is prior evidence only, not the current verdict.",
         "todo_write is full-list replacement. A fix must reconcile each authoritative snapshot, including removals and status reversions, instead of treating each record as an independent create.",
         "Load-bearing environment precondition: the active TUI profile must still mount @deepseek-ai/dsh-tool-todo. Re-probe `dsh --profile tui --dump-config` at record time.",
         "Load-bearing environment precondition: LM Studio must serve qwen/qwen3.5-9b at http://127.0.0.1:1234/v1. The exact model observation and the recipe depend on this endpoint.",
@@ -47,12 +47,12 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/dsh/parser.go",
-          "note": "recordHandlers has no todo/write entry; unknown records are skipped, and parseToolCall preserves only callId and name with no task extraction."
+          "note": "Current DSH parser maps authoritative todo/write snapshots through the todo reconciler. The historical 2026-09-19 capture predates this handler."
         },
         {
           "kind": "file",
           "ref": "core/pkg/tailer/todo_reconciler.go",
-          "note": "Shared full-list reconciliation path that produces TaskDeltas and TaskSnapshot for adapters with todo snapshots; the DSH parser does not call it."
+          "note": "Shared full-list reconciliation path that produces TaskDeltas and TaskSnapshot from DSH todo/write snapshots."
         },
         {
           "kind": "file",
@@ -147,7 +147,7 @@
         "the compressed transcript contains seven todo/write snapshots that walk the three exact items from all pending through each separate in_progress and completed state",
         "the transcript contains no subagent, subagent_fork, or workflow tool call and events.jsonl contains no parent_linked event, so SubagentCount stays 0",
         "events.jsonl shows the real session-UUID row moving ready -> working -> ready with no waiting transition",
-        "KNOWN FAILING: events.jsonl contains at least one task_delta and the session API tasks field lists the three exact items as completed",
+        "events.jsonl contains task_delta entries and the captured selected-session ready API frame lists the three exact completed items under session.metrics.tasks",
         "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
       ],
       "settings": {
