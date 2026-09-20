@@ -240,7 +240,7 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 	sessions, agentInfos := f.snapshotState()
 	if err := conn.WriteJSON(DaemonSnapshot{
 		Type:     MsgDaemonSnapshot,
-		Sessions: sessions,
+		Sessions: session.ClientCopies(sessions),
 		Agents:   agentInfos,
 	}); err != nil {
 		return err

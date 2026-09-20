@@ -16,11 +16,29 @@ func TestSessionUpdatedTaskEstimateVisibilityFollowsState(t *testing.T) {
 	ready := sessionUpdateJSON(t, state)
 	assertSessionUpdateMetricAbsent(t, ready, "task_estimate")
 	assertSessionUpdateMetricAbsent(t, ready, "task_completion_eta")
+	if state.Metrics.TaskEstimate == nil || state.Metrics.TaskCompletionEta == nil {
+		t.Fatal("ready session update mutated the source metrics")
+	}
 
 	state.State = session.StateWorking
 	working := sessionUpdateJSON(t, state)
 	assertSessionUpdateMetricPresent(t, working, "task_estimate")
 	assertSessionUpdateMetricPresent(t, working, "task_completion_eta")
+}
+
+func TestDashboardReadyTaskEstimateVisibilityFollowsState(t *testing.T) {
+	state := taskEstimateReadyFixtureSession(t)
+	ready := dashboardJSON(t, state)
+	assertDashboardMetricAbsent(t, ready, "task_estimate")
+	assertDashboardMetricAbsent(t, ready, "task_completion_eta")
+	if state.Metrics.TaskEstimate == nil || state.Metrics.TaskCompletionEta == nil {
+		t.Fatal("ready sessions response mutated the source metrics")
+	}
+
+	state.State = session.StateWorking
+	working := dashboardJSON(t, state)
+	assertDashboardMetricPresent(t, working, "task_estimate")
+	assertDashboardMetricPresent(t, working, "task_completion_eta")
 }
 
 func taskEstimateReadyFixtureSession(t *testing.T) *session.SessionState {
@@ -56,6 +74,19 @@ func sessionUpdateJSON(t *testing.T, state *session.SessionState) map[string]any
 	return frame
 }
 
+func dashboardJSON(t *testing.T, state *session.SessionState) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(sessionsResponse{Groups: session.BuildDashboard([]*session.SessionState{state}, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(b, &response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
 func assertSessionUpdateMetricAbsent(t *testing.T, frame map[string]any, field string) {
 	t.Helper()
 	metrics := sessionUpdateMetrics(t, frame)
@@ -81,6 +112,47 @@ func sessionUpdateMetrics(t *testing.T, frame map[string]any) map[string]any {
 	metrics, ok := state["metrics"].(map[string]any)
 	if !ok {
 		t.Fatalf("session_updated has no metrics: %s", mustJSON(t, frame))
+	}
+	return metrics
+}
+
+func assertDashboardMetricAbsent(t *testing.T, response map[string]any, field string) {
+	t.Helper()
+	metrics := dashboardMetrics(t, response)
+	if _, ok := metrics[field]; ok {
+		t.Fatalf("ready sessions response exposes metrics.%s: %s", field, mustJSON(t, response))
+	}
+}
+
+func assertDashboardMetricPresent(t *testing.T, response map[string]any, field string) {
+	t.Helper()
+	metrics := dashboardMetrics(t, response)
+	if _, ok := metrics[field]; !ok {
+		t.Fatalf("working sessions response omits metrics.%s: %s", field, mustJSON(t, response))
+	}
+}
+
+func dashboardMetrics(t *testing.T, response map[string]any) map[string]any {
+	t.Helper()
+	groups, ok := response["groups"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("sessions response groups = %s", mustJSON(t, response))
+	}
+	group, ok := groups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("sessions response group = %s", mustJSON(t, response))
+	}
+	agents, ok := group["agents"].([]any)
+	if !ok || len(agents) != 1 {
+		t.Fatalf("sessions response agents = %s", mustJSON(t, response))
+	}
+	agent, ok := agents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("sessions response agent = %s", mustJSON(t, response))
+	}
+	metrics, ok := agent["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("sessions response metrics = %s", mustJSON(t, response))
 	}
 	return metrics
 }

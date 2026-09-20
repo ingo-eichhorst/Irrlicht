@@ -56,14 +56,7 @@ type PushMessage struct {
 func (m PushMessage) MarshalJSON() ([]byte, error) {
 	type wireMessage PushMessage
 	wire := wireMessage(m)
-	if wire.Session != nil && wire.Session.State == session.StateReady && wire.Session.Metrics != nil {
-		stateCopy := *wire.Session
-		metricsCopy := *stateCopy.Metrics
-		metricsCopy.TaskEstimate = nil
-		metricsCopy.TaskCompletionEta = nil
-		stateCopy.Metrics = &metricsCopy
-		wire.Session = &stateCopy
-	}
+	wire.Session = wire.Session.ClientCopy()
 	return json.Marshal(wire)
 }
 

@@ -212,7 +212,7 @@ func buildOrchGroup(orch *orchestrator.State, partition *dashboardPartition) *Ag
 // Subagents afterwards (the detector populates session.Subagents itself
 // before save/broadcast — session_detector_subagent.go).
 func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState) *Agent {
-	cp := *s
+	cp := *s.ClientCopy()
 	agent := &Agent{SessionState: &cp}
 
 	// Annotate with orchestrator role.
