@@ -121,6 +121,15 @@ func TestParserReconcilesMeasuredTodoWriteSnapshots(t *testing.T) {
 		{ID: "2", Subject: "refine the greeting", Status: "pending"},
 		{ID: "3", Subject: "reply done", Status: "pending"},
 	})
+
+	cleared := parseRecord(t, parser, `{"type":"todo/write","seq":32,"time":1789787696052,"data":{"todos":[]}}`)
+	if cleared.Skip {
+		t.Fatalf("empty todo/write was skipped: %+v", cleared)
+	}
+	assertTodoSnapshot(t, cleared, []tailer.TaskSnapshotEntry{})
+	if len(cleared.TaskDeltas) != 0 {
+		t.Fatalf("empty todo/write task deltas = %+v, want none", cleared.TaskDeltas)
+	}
 }
 
 func assertTodoSnapshot(t *testing.T, event *tailer.ParsedEvent, want []tailer.TaskSnapshotEntry) {
@@ -142,6 +151,18 @@ func TestParserMapsMeasuredCompactionBoundaries(t *testing.T) {
 	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
 	if end.Skip || end.EventType != "turn_done" {
 		t.Fatalf("compaction/end = %+v, want turn_done", end)
+	}
+}
+
+func TestParserSkipsInlineCompactionBoundaries(t *testing.T) {
+	parser := &Parser{}
+	start := parseRecord(t, parser, `{"type":"compaction/start","seq":18,"time":1789776655200,"data":{"compactionId":"inline","turn":7}}`)
+	if !start.Skip {
+		t.Fatalf("inline compaction/start = %+v, want skipped", start)
+	}
+	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"inline","turn":7}}`)
+	if !end.Skip {
+		t.Fatalf("inline compaction/end = %+v, want skipped", end)
 	}
 }
 

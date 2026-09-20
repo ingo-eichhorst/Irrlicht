@@ -246,8 +246,13 @@ func parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
 // parseTodoWrite reconciles DSH's authoritative whole-list todo snapshot.
 // Each durable todo/write record replaces the agent's visible list.
 func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
-	todos := make([]tailer.Todo, 0)
-	for _, rawTodo := range array(object(raw, "data"), "todos") {
+	rawTodos, ok := object(raw, "data")["todos"].([]any)
+	if !ok {
+		ev.Skip = true
+		return
+	}
+	todos := make([]tailer.Todo, 0, len(rawTodos))
+	for _, rawTodo := range rawTodos {
 		todo, _ := rawTodo.(map[string]any)
 		if todo == nil {
 			continue
@@ -257,20 +262,38 @@ func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
 			Status: text(todo, "status"),
 		})
 	}
-	if len(todos) == 0 {
-		ev.Skip = true
+	ev.EventType = "task_update"
+	if len(rawTodos) == 0 {
+		snapshot := []tailer.TaskSnapshotEntry{}
+		ev.TaskSnapshot = &snapshot
 		return
 	}
-	ev.EventType = "task_update"
 	p.todos.Reconcile(todos, ev)
 }
 
-func parseCompactionStart(_ map[string]any, ev *tailer.ParsedEvent) {
+// parseCompactionStart maps only standalone manual compaction. The installed
+// dsh-compaction-basic/lib/index.js `compactSurfaceRegion` gives manual
+// compactNow owner null, while automatic compaction owns an open numeric turn.
+// The latter already has turn/start and turn/end lifecycle records.
+func parseCompactionStart(raw map[string]any, ev *tailer.ParsedEvent) {
+	if !isStandaloneCompaction(raw) {
+		ev.Skip = true
+		return
+	}
 	ev.EventType = "turn_start"
 }
 
-func parseCompactionEnd(_ map[string]any, ev *tailer.ParsedEvent) {
+func parseCompactionEnd(raw map[string]any, ev *tailer.ParsedEvent) {
+	if !isStandaloneCompaction(raw) {
+		ev.Skip = true
+		return
+	}
 	ev.EventType = "turn_done"
+}
+
+func isStandaloneCompaction(raw map[string]any) bool {
+	turn, exists := object(raw, "data")["turn"]
+	return exists && turn == nil
 }
 
 func parseRequestHeader(raw map[string]any, ev *tailer.ParsedEvent) {
