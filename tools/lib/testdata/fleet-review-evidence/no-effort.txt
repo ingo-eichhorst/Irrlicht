@@ -1,0 +1,3 @@
+core/foo.go:12
+category: correctness
+summary: something is wrong.

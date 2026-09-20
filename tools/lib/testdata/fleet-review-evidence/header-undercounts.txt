@@ -1,0 +1,5 @@
+review: effort=high findings=3
+
+1. core/foo.go:12
+   category: correctness
+   summary: only one finding actually carries a category.

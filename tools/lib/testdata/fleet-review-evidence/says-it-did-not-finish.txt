@@ -1,0 +1,2 @@
+Reviewed at high effort. I could not complete the correctness pass on
+core/adapters/inbound/agents/pi/parser.go before the rate limit hit.

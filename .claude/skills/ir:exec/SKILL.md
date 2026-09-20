@@ -44,7 +44,11 @@ git ls-remote --heads origin | grep -w "<N>"
 ```
 
 On any hit, report the PR, branch, worktree, and WIP state. Stop. Do not create
-a second implementation.
+a second implementation. One exception, for a resume after an interrupted run:
+when the caller names an existing worktree for `<N>` and asks to continue it,
+take the resume step in this section instead of stopping. Without that entry
+point a caller can only resume by telling an agent to skip this check, which
+is an instruction around the skill rather than a path through it.
 
 Create a branch from a frozen current base:
 
@@ -143,6 +147,32 @@ opt-in unless the change is Linux-specific. Perform the manual or UI checks
 named by triage. A broad readiness signal is not proof that the target behavior
 ran; poll the target condition to a deadline.
 
+Do not decide by hand which gates the diff can break — `--changed` already
+decides it, and records `SKIP (no changed files match)` for a gate whose
+trigger the diff misses. It composes with `--only`:
+
+```text
+tools/preflight.sh --changed --only <group>
+```
+
+Two of three wave-1 agents ran the Swift suite on a diff with no Swift file,
+bypassing a mechanism that was already there. Report each `SKIP` the run
+printed, rather than a gate you chose to leave out.
+
+These rules matter most when several `ir:exec` runs share the machine, and cost
+nothing when one runs alone:
+
+- Key every wait on a marker in a log this run owns, never on a process name. A
+  process name matches a sibling worktree running the same script. Put the
+  marker inside the log, which the outer redirect does not do:
+  `{ timeout <N> bash <cmd>; echo "EXIT=$?"; } > <own-log> 2>&1`.
+- Ask about an exact ref with `tools/lib/ref-exists.sh <remote> <branch>`
+  wherever the branch name is known. A substring search over `git ls-remote`
+  output answers a different question and reported a landed push that had not
+  landed.
+- Give every scratchpad filename the ticket number. The scratchpad is
+  session-scoped rather than agent-scoped, so concurrent runs share it.
+
 ## 5. Commit and refresh the base
 
 Fold any `wip` checkpoint into a conventional commit. Re-read the stored base;
@@ -196,9 +226,14 @@ Open a draft PR with both WIP markers:
 
 ```bash
 git push -u origin feat/<N>-<slug>
+tools/lib/ref-exists.sh origin feat/<N>-<slug>
 gh pr create --base main --draft \
   --title "WIP: <type>(<scope>): <change>" --body "..."
 ```
+
+Confirm the push landed before opening the PR. The branch name is known here,
+so the check is an exact ref query. Section 2's work-in-progress search stays a
+pattern search, because there the slug is not yet known.
 
 Reference `Closes #<N>`. Include the test evidence, design deviations, and the
 `🤖 Generated with [Claude Code]` footer.
@@ -212,6 +247,25 @@ the worktree, issue intent, selected effort, explicit base
 `origin/main...HEAD`, and `.claude/skills/ir:code-review/SKILL.md`. Require the
 findings in its final text. Never use the built-in `/code-review`, `/review`,
 or the Workflow tool here. Fix valid findings, commit, and push.
+
+Require the reviewer to end its final text with one machine-readable line:
+
+```text
+review: effort=<low|medium|high|xhigh|max> findings=<N>
+```
+
+A review that reported nothing is not a clean gate until there is evidence it
+ran. Save the reviewer's final text and check it:
+
+```bash
+tools/lib/fleet-review-evidence.sh <handback-file>
+```
+
+It exits 0 only when that line is present, and then either `findings=0` with
+the explicit words "no findings" or at least N findings each carrying a
+`category:` value. Prose alone cannot show that a review ran: a hand-back
+saying "I could not complete the pass" reads exactly like one that did. On any
+other result, treat the gate as unproven, say so, and re-run the review.
 
 Use the simplify method from triage. For `/simplify`, pass
 `origin/main...HEAD`. For an inline pass, inspect the same four angles. Confirm
@@ -244,6 +298,8 @@ Return the ready PR link. Report:
 - the tests and checks that passed;
 - red-first, lock, and mutation evidence;
 - review findings and fixes;
+- any delegated review whose evidence check did not pass, named as unproven;
+- every gate that was skipped, and why the diff cannot break it;
 - any design deviation;
 - any review-effort change;
 - remaining risks or human gates from triage.
