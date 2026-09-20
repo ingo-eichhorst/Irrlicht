@@ -1,14 +1,14 @@
 package session
 
-// ClientCopy returns a session copy for a client response. Ready sessions do
-// not expose task-progress metrics. The source session remains unchanged so a
-// subsequent working response can use its current estimate.
+// ClientCopy returns a session copy for a client response. Only working
+// sessions expose task-progress metrics. The source session remains unchanged
+// so a subsequent working response can use its current estimate.
 func (s *SessionState) ClientCopy() *SessionState {
 	if s == nil {
 		return nil
 	}
 	copy := *s
-	if copy.State == StateReady && copy.Metrics != nil {
+	if copy.State != StateWorking && copy.Metrics != nil {
 		metrics := *copy.Metrics
 		metrics.TaskEstimate = nil
 		metrics.TaskCompletionEta = nil
