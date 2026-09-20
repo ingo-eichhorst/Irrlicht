@@ -716,6 +716,15 @@ func runDaemon() {
 	defer orchCancel()
 	startGastown, stopGastown := gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 
+	// Muse's account-quota poller (issue #2007) is constructed once here,
+	// daemon-wide, matching accountpoller.go's own "exactly one
+	// AccountPoller per daemon" design. The poller/resolver/transport are
+	// discarded here (blank) — nothing yet triggers a per-session poll; see
+	// museaccountapi_effects.go's own doc comment for why that trigger is
+	// deliberately left for a follow-up. Only the grant/revoke effects wire
+	// into the permission catalog below.
+	_, _, _, startMuseAccountAPI, stopMuseAccountAPI := museAccountAPIEffects(logger)
+
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
 		CachedRepo:    cachedRepo,
@@ -756,6 +765,9 @@ func runDaemon() {
 		Home:         home,
 		StartGastown: startGastown,
 		StopGastown:  stopGastown,
+
+		StartMuseAccountAPI: startMuseAccountAPI,
+		StopMuseAccountAPI:  stopMuseAccountAPI,
 	})
 
 	// The watchdog's second collaborator, available only now: "is this channel

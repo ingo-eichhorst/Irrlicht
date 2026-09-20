@@ -13,6 +13,12 @@ import (
 const (
 	ProviderAnthropic = "anthropic"
 	ProviderOpenAI    = "openai"
+	// ProviderMeta is Muse Code's billing provider (issue #2007, epic #1977
+	// §10 work package B) — Meta, distinct from the "muse" adapter name:
+	// Product (below) carries the specific commercial plan
+	// ("Muse Code Everyday Usage", observed on the #2007 live probe) that
+	// Provider alone does not distinguish.
+	ProviderMeta = "meta"
 )
 
 // AttributionQualityConfirmed is the only AttributionQuality value that
