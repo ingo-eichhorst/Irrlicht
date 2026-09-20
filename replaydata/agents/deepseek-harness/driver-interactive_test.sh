@@ -22,7 +22,9 @@ run_success() {
 
 run_absent() {
   printf '%s\n' '{"type":"assistant/message"}' | zstd -q -c > "$TMP/absent.zstd"
-  TRANSCRIPT="$TMP/absent.zstd" ACTIVE=1 EXIT_REASON="ok" REMAINING=0
+  rm -f "$TMP/absent-polled"
+  remaining_seconds() { if [[ ! -e "$TMP/absent-polled" ]]; then : > "$TMP/absent-polled"; echo 1; else echo 0; fi; }
+  TRANSCRIPT="$TMP/absent.zstd" ACTIVE=1 EXIT_REASON="ok"
   if step_wait_compaction; then
     echo "absent marker unexpectedly succeeded" >&2
     return 1
@@ -30,10 +32,24 @@ run_absent() {
   [[ "$EXIT_REASON" == "timeout" ]]
 }
 
+run_malformed_json() {
+  printf 'not json\n' | zstd -q -c > "$TMP/malformed.zstd"
+  printf '100\n' > "$TMP/clock"
+  date() { local now; now="$(<"$TMP/clock")"; echo "$((now + 11))" > "$TMP/clock"; echo "$now"; }
+  remaining_seconds() { echo 1; }
+  TRANSCRIPT="$TMP/malformed.zstd" ACTIVE=1 EXIT_REASON="ok"
+  if step_wait_compaction; then
+    echo "malformed JSON unexpectedly succeeded" >&2
+    return 1
+  fi
+  [[ "$EXIT_REASON" == "unreadable_transcript" ]]
+}
+
 run_unreadable() {
   printf 'not zstd\n' > "$TMP/bad.zstd"
   printf '100\n' > "$TMP/clock"
   date() { local now; now="$(<"$TMP/clock")"; echo "$((now + 11))" > "$TMP/clock"; echo "$now"; }
+  remaining_seconds() { echo 1; }
   TRANSCRIPT="$TMP/bad.zstd" ACTIVE=1 EXIT_REASON="ok" REMAINING=1
   if step_wait_compaction; then
     echo "unreadable transcript unexpectedly succeeded" >&2
@@ -45,4 +61,5 @@ run_unreadable() {
 run_success
 run_absent
 run_unreadable
+run_malformed_json
 echo "ok: deepseek-harness wait_compaction"
