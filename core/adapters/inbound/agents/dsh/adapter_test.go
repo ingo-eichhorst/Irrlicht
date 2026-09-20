@@ -246,9 +246,8 @@ func TestBareUUIDWithoutNativeHeaderIsNeverADSHSession(t *testing.T) {
 }
 
 // TestNativeSubagentRemovalEmitsTheChildLifecycleEvent verifies the actual
-// fswatcher removal path. Removing the fallback in sessionIDFromDirectory
-// made this test time out: fswatcher skipped the deleted bare child before it
-// could emit EventRemoved.
+// fswatcher removal path. The run mutation that disabled its emitted-ID cache
+// made this test time out because the deleted bare child no longer had an ID.
 func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
 	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
 	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
