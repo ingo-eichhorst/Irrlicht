@@ -3,15 +3,91 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/lifecycle"
 )
+
+func TestDSHBackgroundReleaseFollowsTerminalNotice(t *testing.T) {
+	const sessionID = "session-dbb71762-2da1-4a14-a40c-b57ffb8895d9"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"3-3_background-process", "recordings", "2026-09-20-21-35-33_irrlichd-0.6.4+ec736f3.dirty")
+	terminal := dshTerminalNoticeTime(t, filepath.Join(path, "transcript.jsonl.zstd"), "bash-1")
+	events := readDSHLiveEventsFile(t, filepath.Join(path, "events.jsonl"))[sessionID]
+	if len(events) == 0 {
+		t.Fatalf("events for %s not found", sessionID)
+	}
+	working := time.Time{}
+	readyAfterNotice := time.Time{}
+	for _, event := range events {
+		if event.NewState == "working" {
+			working = event.Timestamp
+		}
+		if !working.IsZero() && event.NewState == "ready" && event.PrevState == "working" {
+			if event.Timestamp.Before(terminal) {
+				t.Fatalf("background session became ready at %s before terminal notice at %s", event.Timestamp, terminal)
+			}
+			readyAfterNotice = event.Timestamp
+		}
+	}
+	if working.IsZero() {
+		t.Fatal("working transition not found")
+	}
+	if readyAfterNotice.IsZero() {
+		t.Fatal("ready transition after terminal notice not found")
+	}
+}
+
+func dshTerminalNoticeTime(t *testing.T, path, bashID string) time.Time {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decoder.Close()
+	scanner := bufio.NewScanner(decoder)
+	for scanner.Scan() {
+		var record struct {
+			Type string `json:"type"`
+			Time int64  `json:"time"`
+			Data struct {
+				Source struct {
+					Kind   string `json:"kind"`
+					Plugin string `json:"plugin"`
+					Form   string `json:"form"`
+				} `json:"source"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == "user/message" && record.Data.Source.Kind == "plugin" && record.Data.Source.Plugin == "tool-jobs" && record.Data.Source.Form == "notice" && len(record.Data.Content) == 1 && strings.Contains(record.Data.Content[0].Text, "background job "+bashID+" ") && strings.Contains(record.Data.Content[0].Text, "finished [status: completed") {
+			return time.UnixMilli(record.Time)
+		}
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	t.Fatal("terminal tool-jobs notice not found")
+	return time.Time{}
+}
 
 type dshLiveRow struct {
 	SessionID      string `json:"session_id"`
@@ -197,6 +273,22 @@ func TestDSHLiveArcRejectsRecordedCrossSessionIdentity(t *testing.T) {
 	}
 	if len(arc.removedPaths) != 2 || filepath.Base(filepath.Dir(arc.removedPaths[1])) == sessionID {
 		t.Fatalf("recorded cross-session teardown path = %v", arc.removedPaths)
+	}
+}
+
+func TestDSHLiveArcRejectsRecordedForkHandoff(t *testing.T) {
+	const sessionID = "session-6875581b-de0a-4978-8182-3854f1ce6002"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"1-6_checkpoint-rewind", "recordings", "2026-09-19-00-56-13_irrlichd-0.6.4+5b3ddbd", "events.jsonl")
+	arc := summarizeDSHLiveArc(readDSHLiveEventsFile(t, path)[sessionID])
+	if arc.complete(sessionID) {
+		t.Fatalf("recorded fork handoff failure passed: %+v", arc)
+	}
+	if arc.working != 0 || arc.readyAfterWorking != 0 {
+		t.Fatalf("recorded child working window = working:%d ready-after-working:%d, want 0/0", arc.working, arc.readyAfterWorking)
+	}
+	if len(arc.removedPaths) != 3 || filepath.Base(filepath.Dir(arc.removedPaths[1])) == sessionID {
+		t.Fatalf("recorded fork teardown path = %v", arc.removedPaths)
 	}
 }
 

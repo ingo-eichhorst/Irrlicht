@@ -66,15 +66,10 @@ func TestBackgroundJobHoldSurvivesTurnEndUntilTerminalNotice(t *testing.T) {
 		t.Fatalf("turn_done with a live background hold = %q, want working", state)
 	}
 
-	// The next read includes the terminal notice. A complete second transcript
-	// avoids relying on incremental reads from an already-exhausted zstd stream.
-	completedPath := fmt.Sprintf("%s/completed.v3.jsonl.zstd", t.TempDir())
-	writeZstdFrame(t, completedPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fmt.Sprintf(`{"type":"session","version":3,"createdAt":%d}`+"\n"+
-		`{"type":"tool/call","time":%d,"data":{"callId":"call-1","name":"bash","arguments":"{\"run_in_background\":true}"}}`+"\n"+
-		`{"type":"tool/result","time":%d,"data":{"message":{"source":{"callId":"call-1"},"content":[{"type":"tool-result","content":[{"type":"text","text":"started background job bash-1"}],"isError":false}]}}}`+"\n"+
-		`{"type":"turn/end","time":%d,"data":{"reason":{"kind":"completed"}}}`+"\n"+
-		`{"type":"user/message","time":%d,"data":{"content":[{"type":"text","text":"background job bash-1 (bash: sleep 120 && echo BG_DONE) finished [status: completed, exit code: 0]."}],"source":{"kind":"plugin","plugin":"tool-jobs","form":"notice"}}}`+"\n", now, now+1, now+2, now+3, now+4))
-	metrics = tailTranscript(t, newTestTranscriptTailer(completedPath))
+	// The same tailer reads the next independently-compressed DSH frame.
+	// This is the daemon path: the terminal notice releases the existing hold.
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_APPEND, fmt.Sprintf(`{"type":"user/message","time":%d,"data":{"content":[{"type":"text","text":"background job bash-1 (bash: sleep 120 && echo BG_DONE) finished [status: completed, exit code: 0]."}],"source":{"kind":"plugin","plugin":"tool-jobs","form":"notice"}}}`+"\n", now+4))
+	metrics = tailTranscript(t, transcriptTailer)
 	if metrics.BackgroundProcessCount != 0 || metrics.BackgroundProcessClockBound {
 		t.Fatalf("background metrics after terminal notice = %+v, want released hold", metrics)
 	}
