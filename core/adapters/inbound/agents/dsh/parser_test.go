@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -180,6 +181,19 @@ func TestParserMapsMeasuredCompactionBoundaries(t *testing.T) {
 	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
 	if end.Skip || end.EventType != "turn_done" {
 		t.Fatalf("compaction/end = %+v, want turn_done", end)
+	}
+}
+
+func TestParserMapsMeasuredProviderRetry(t *testing.T) {
+	retry := parseRecord(t, &Parser{}, `{"type":"llm/retry","seq":16,"time":1789781348757,"data":{"retry":1,"maxRetries":5,"delayMs":453.45541167226247,"failure":{"message":"529: provider overloaded","code":"SERVER"}}}`)
+	if retry.Skip || retry.SessionError == nil {
+		t.Fatalf("llm/retry = %+v, want retrying session error", retry)
+	}
+	if retry.SessionError.Phase != tailer.ErrorPhaseRetrying || retry.SessionError.Class != "server" || retry.SessionError.Attempt == nil || *retry.SessionError.Attempt != 1 || retry.SessionError.MaxAttempts == nil || *retry.SessionError.MaxAttempts != 5 {
+		t.Fatalf("retry session error = %+v", retry.SessionError)
+	}
+	if retry.SessionError.RetryIn == nil || *retry.SessionError.RetryIn != 453455411*time.Nanosecond {
+		t.Fatalf("retry delay = %v, want 453455411ns", retry.SessionError.RetryIn)
 	}
 }
 

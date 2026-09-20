@@ -22,6 +22,8 @@ const (
 	recordTodoWrite        = "todo/write"
 	recordCompactionStart  = "compaction/start"
 	recordCompactionEnd    = "compaction/end"
+	recordLLMRetry         = "llm/retry"
+	recordLLMRetryStarted  = "llm/retry-started"
 	recordRequestHeader    = "request/header"
 	recordRequestContext   = "request/context"
 )
@@ -56,6 +58,8 @@ var recordHandlers = map[string]recordHandler{
 	recordTodoWrite:        (*Parser).parseTodoWrite,
 	recordCompactionStart:  statelessHandler(parseCompactionStart),
 	recordCompactionEnd:    statelessHandler(parseCompactionEnd),
+	recordLLMRetry:         statelessHandler(parseLLMRetry),
+	recordLLMRetryStarted:  statelessHandler(parseLLMRetryStarted),
 	recordRequestHeader:    statelessHandler(parseRequestHeader),
 	recordRequestContext:   statelessHandler(parseRequestContext),
 }
@@ -294,6 +298,39 @@ func parseCompactionEnd(raw map[string]any, ev *tailer.ParsedEvent) {
 func isStandaloneCompaction(raw map[string]any) bool {
 	turn, exists := object(raw, "data")["turn"]
 	return exists && turn == nil
+}
+
+func parseLLMRetry(raw map[string]any, ev *tailer.ParsedEvent) {
+	data := object(raw, "data")
+	failure := object(data, "failure")
+	class := strings.ToLower(text(failure, "code"))
+	if class == "" {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "retrying"
+	err := &tailer.SessionError{
+		Phase:   tailer.ErrorPhaseRetrying,
+		Class:   class,
+		Message: text(failure, "message"),
+	}
+	if attempt := integer(data, "retry"); attempt > 0 {
+		value := int(attempt)
+		err.Attempt = &value
+	}
+	if maximum := integer(data, "maxRetries"); maximum > 0 {
+		value := int(maximum)
+		err.MaxAttempts = &value
+	}
+	if delay, ok := number(data, "delayMs"); ok && delay >= 0 {
+		value := time.Duration(delay * float64(time.Millisecond))
+		err.RetryIn = &value
+	}
+	ev.SessionError = err
+}
+
+func parseLLMRetryStarted(_ map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "retry_started"
 }
 
 func parseRequestHeader(raw map[string]any, ev *tailer.ParsedEvent) {
