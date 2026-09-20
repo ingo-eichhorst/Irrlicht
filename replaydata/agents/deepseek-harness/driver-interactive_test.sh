@@ -167,6 +167,7 @@ run_capture_ready_frame_timeout
 
 run_capture_completed_tasks_frame() {
   reset_remaining
+  # shellcheck disable=SC2034 # eval-loaded driver function reads this global.
   STAGING="$TMP/capture-completed-tasks" UUID="session-right" EXIT_REASON="ok" REMAINING=1
   mkdir -p "$STAGING"
   printf '%s\n' \
@@ -178,7 +179,7 @@ run_capture_completed_tasks_frame() {
 }
 
 run_capture_completed_tasks_timeout() {
-  STAGING="$TMP/capture-incomplete-tasks" UUID="session-right" EXIT_REASON="ok"
+  STAGING="$TMP/capture-incomplete-tasks" EXIT_REASON="ok"
   mkdir -p "$STAGING"
   printf '%s\n' '{"type":"session_updated","session":{"session_id":"session-right","state":"ready","metrics":{"tasks":[{"status":"completed"},{"status":"in_progress"},{"status":"pending"}]}}}' > "$STAGING/session_updates.raw.jsonl"
   rm -f "$TMP/incomplete-tasks-polled"
