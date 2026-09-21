@@ -120,6 +120,47 @@ const HooksPermissionKey = "hooks"
 // (#1437, the sibling of #1425).
 const InstructionsPermissionKey = "instructions"
 
+// AccountAPIPermissionKey is the shared permission key a provider's
+// account-quota permission declares (issue #2003), covering the credential
+// read AND the outbound account-API call TOGETHER as one consent row — the
+// high-level design settled in #2003's triage comment answers the question
+// this file's own doc comment above raises (only the first observe-kind
+// permission per adapter is consulted by ObserveGranted): a provider's
+// account-quota permission is declared on its OWN pseudo-adapter Agent value
+// (Identity.Name distinct from the provider's real coding-agent adapter,
+// e.g. "muse-account-api"), appended to the consent catalog the same way
+// core/adapters/inbound/orchestrators/gastown/permission.go and
+// core/adapters/inbound/agents/processlifecycle/kitty_permission.go are —
+// never as a second Permission entry on the provider's own agent.Agent,
+// where it would silently never be consulted.
+//
+// It is Kind: permission.KindObserve (a credential read plus a network call
+// is monitoring, not a filesystem modification) with NON-NIL Apply/Remove —
+// the same shape gastown's PermissionKeyState uses for an observe-kind
+// permission that still needs an explicit start/stop effect. Apply registers
+// the provider with the daemon-wide poller
+// (core/application/services.AccountPoller); Remove calls
+// AccountPoller.Revoke(providerName), which cancels every in-flight fetch
+// for that provider and wipes its cached observations (issue #2003 §1.1:
+// revocation must stop in-flight work and prevent a later publication of a
+// result that work already produced).
+//
+// #2003 adds no real provider, so this key is declared but not yet
+// appended to any consent catalog entry — #2007 (Muse, the epic's own work
+// package B) is the first adapter to construct a Permission with this key and
+// wire it into core/cmd/irrlichd/consentcatalog.go, following the gastown
+// shape: Kind: permission.KindObserve, a non-nil Apply/Remove pair, and (per
+// docs/testing-contracts.md's managed-user-files bullet) a name in
+// core/cmd/irrlichd/managedfiles_test.go's applyWritesNoUserFile list,
+// because Apply here starts a poller registration rather than writing any
+// user-owned file. Confirmed by reading that file directly (not assumed —
+// and corrected by review, #2003, which caught this comment first citing
+// the similarly-named managedwrites_test.go instead): "gastown/state" is
+// already there with the reason "Apply starts and stops the Gas Town
+// watcher; it reads ~/gt and writes nothing" — the identical shape an
+// account-API Apply needs stated for itself.
+const AccountAPIPermissionKey = "account-api"
+
 // ManagedUserFile is the outside-the-adapter half of a permission that writes a
 // shared user-owned file (#1357, widened by #1383).
 //
