@@ -1,0 +1,46 @@
+{
+  "id": "herdr-agent-usage",
+  "name": "herdr-agent-usage",
+  "repo": "senna-lang/herdr-agent-usage",
+  "repo_url": "https://github.com/senna-lang/herdr-agent-usage",
+  "revision": "cfd84237738c3e653274b4f0090cf1ab779234e8",
+  "check_url": "https://api.github.com/repos/senna-lang/herdr-agent-usage/commits/cfd84237738c3e653274b4f0090cf1ab779234e8",
+  "kind": "reference",
+  "inspected_paths": [
+    "internal/providers/",
+    "internal/limits/billingmode.go"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/senna-lang/herdr-agent-usage/cfd84237738c3e653274b4f0090cf1ab779234e8/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "Not a billing-product list: excluded from provider-census.sh's total by kind. The relevant import per issue #2006 is this source's SEPARATION of agent identity from billing mode. internal/providers/ registers six agent-identity modules (claude, codex, cursor, grok, omp, opencode; recorded here as entries for the record). internal/limits/billingmode.go (read at this revision) classifies BillingSubscription vs BillingPayAsYouGo per pane from account/session evidence (e.g. claude: ~/.claude.json oauthAccount.billingType or CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY env flags; codex: rollout token_count with/without rate_limits; opencode: assistant message providerID; grok: auth.json auth_mode). Also noted: internal/providers/omp/provider.go registers TWO UsageProviders from one module, agent ids \"omp\" and \"pi\" (\"stock Pi coding agent\") — so the identity count is not exactly 1:1 with the directory count; not resolved further here since this source is a reference, not a counted provider list.",
+  "entries": [
+    {
+      "id": "claude",
+      "name": "claude"
+    },
+    {
+      "id": "codex",
+      "name": "codex"
+    },
+    {
+      "id": "cursor",
+      "name": "cursor"
+    },
+    {
+      "id": "grok",
+      "name": "grok"
+    },
+    {
+      "id": "omp",
+      "name": "omp"
+    },
+    {
+      "id": "opencode",
+      "name": "opencode"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "id": "herdr-agent-quota",
+  "name": "herdr-agent-quota",
+  "repo": "levi-qiao/herdr-agent-quota",
+  "repo_url": "https://github.com/levi-qiao/herdr-agent-quota",
+  "revision": "530c94b721b823a480072000012984ac8660cb2e",
+  "check_url": "https://api.github.com/repos/levi-qiao/herdr-agent-quota/commits/530c94b721b823a480072000012984ac8660cb2e",
+  "kind": "provider-list",
+  "inspected_paths": [
+    "src/providers/"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/levi-qiao/herdr-agent-quota/530c94b721b823a480072000012984ac8660cb2e/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "One Rust module per provider under src/providers/*.rs (excluding mod.rs), GitHub tree API at the pinned revision.",
+  "entries": [
+    {
+      "id": "agy",
+      "name": "agy"
+    },
+    {
+      "id": "claude",
+      "name": "claude"
+    },
+    {
+      "id": "codex",
+      "name": "codex"
+    },
+    {
+      "id": "cursor",
+      "name": "cursor"
+    },
+    {
+      "id": "devin",
+      "name": "devin"
+    },
+    {
+      "id": "grok",
+      "name": "grok"
+    },
+    {
+      "id": "muse",
+      "name": "muse"
+    },
+    {
+      "id": "omp",
+      "name": "omp"
+    },
+    {
+      "id": "opencodego",
+      "name": "opencode_go"
+    },
+    {
+      "id": "statusline",
+      "name": "statusline"
+    }
+  ]
+}

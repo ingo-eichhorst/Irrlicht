@@ -1,0 +1,41 @@
+{
+  "id": "llm-usage",
+  "name": "llm-usage",
+  "repo": "denysvitali/llm-usage",
+  "repo_url": "https://github.com/denysvitali/llm-usage",
+  "revision": "4c6f4e8544eb68d19b3e4416b7d83112f45077a4",
+  "check_url": "https://api.github.com/repos/denysvitali/llm-usage/commits/4c6f4e8544eb68d19b3e4416b7d83112f45077a4",
+  "kind": "provider-list",
+  "inspected_paths": [
+    "providers/"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/denysvitali/llm-usage/4c6f4e8544eb68d19b3e4416b7d83112f45077a4/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "One Go package directory per provider under providers/, GitHub tree API at the pinned revision.",
+  "entries": [
+    {
+      "id": "claude",
+      "name": "claude"
+    },
+    {
+      "id": "codex",
+      "name": "codex"
+    },
+    {
+      "id": "grok",
+      "name": "grok"
+    },
+    {
+      "id": "kimi",
+      "name": "kimi"
+    },
+    {
+      "id": "minimax",
+      "name": "minimax"
+    }
+  ]
+}

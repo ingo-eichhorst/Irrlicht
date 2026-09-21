@@ -1,0 +1,17 @@
+{
+  "id": "good-b",
+  "name": "Fixture Source B",
+  "repo": "example/good-b",
+  "repo_url": "https://github.com/example/good-b",
+  "revision": "0000000000000000000000000000000000000b",
+  "check_url": "https://api.github.com/repos/example/good-b/commits/0000000000000000000000000000000000000b",
+  "kind": "provider-list",
+  "inspected_paths": ["providers/"],
+  "license": {"spdx": "MIT", "url": "https://raw.githubusercontent.com/example/good-b/0000000000000000000000000000000000000b/LICENSE", "notice_required": true},
+  "evidence_date": "2026-09-20",
+  "notes": "Fixture for tools/lib/provider-census_test.sh — not a real source.",
+  "entries": [
+    {"id": "delta", "name": "Delta"},
+    {"id": "epsilon", "name": "Epsilon"}
+  ]
+}

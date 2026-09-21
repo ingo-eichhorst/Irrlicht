@@ -1,0 +1,16 @@
+{
+  "id": "bad-source",
+  "name": "Fixture Unreachable Source",
+  "repo": "example/bad-source",
+  "repo_url": "https://github.com/example/bad-source",
+  "revision": "0000000000000000000000000000000000000c",
+  "check_url": "http://127.0.0.1:1/",
+  "kind": "provider-list",
+  "inspected_paths": ["providers/"],
+  "license": {"spdx": "MIT", "url": "https://raw.githubusercontent.com/example/bad-source/0000000000000000000000000000000000000c/LICENSE", "notice_required": true},
+  "evidence_date": "2026-09-20",
+  "notes": "Fixture for tools/lib/provider-census_test.sh's unreachable-source mutation. check_url deliberately points at 127.0.0.1:1, a port nothing listens on, so curl fails with connection-refused (exit 7) deterministically offline and online alike — no live GitHub or DNS dependency, and no --offline flag can hide it since the test invokes this fixture WITHOUT --offline on purpose.",
+  "entries": [
+    {"id": "zeta", "name": "Zeta"}
+  ]
+}
