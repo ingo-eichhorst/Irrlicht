@@ -187,9 +187,36 @@ func resolveHome(userHome string) (home string, ok bool) {
 }
 
 // hasOwnRateLimit reports whether s already carries its own rate_limit
-// snapshot (donor-eligible, or recipient-ineligible).
+// snapshot (donor-eligible, or ProviderForSession's existence gate). A
+// snapshot here can be identity evidence alone — see hasOwnQuotaData below
+// for the narrower "already has real quota data" question applyDonors asks.
 func hasOwnRateLimit(s *session.SessionState) bool {
 	return s != nil && s.Metrics != nil && s.Metrics.RateLimit != nil
+}
+
+// hasOwnQuotaData reports whether s's own rate_limit snapshot carries actual
+// quota data — time-windows or a credits balance — rather than only an
+// identity stamp (Provider/AttributionQuality with neither Windows nor
+// Credits populated). Issue #2005's Pi model_change handler stamps exactly
+// that identity-only shape: it names the route Pi selected, not a confirmed
+// account, so it has no quota to publish (issue #2005 §1.3). Gating
+// applyDonors on hasOwnRateLimit instead of this would make that stamp block
+// a matching account's real quota donation the instant a Pi session reports
+// any route — regression-proven by
+// TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation, which fails
+// against a plain hasOwnRateLimit gate and passes against this one. Applying
+// a donor snapshot in that case replaces the identity-only stamp wholesale
+// with the donor's own (fuller) stamp, so ProviderForSession keeps resolving
+// correctly — see applyDonors. This changes only "does this recipient
+// already have data worth keeping", never which account may donate to which
+// (donorKey, recipientKey, and AccountKey equality are untouched) — issue
+// #2005's non-goals name the latter as out of scope, not the former.
+func hasOwnQuotaData(s *session.SessionState) bool {
+	if !hasOwnRateLimit(s) {
+		return false
+	}
+	rl := s.Metrics.RateLimit
+	return len(rl.Windows) > 0 || rl.Credits != nil
 }
 
 // donorEntry pairs one account's rate_limit snapshot with the account
@@ -240,7 +267,7 @@ func buildDonorMap(sessions []*session.SessionState, home string) map[string][]d
 // see the account-equality comparison below.
 func applyDonors(sessions []*session.SessionState, home string, donors map[string][]donorEntry) {
 	for _, s := range sessions {
-		if s == nil || hasOwnRateLimit(s) {
+		if s == nil || hasOwnQuotaData(s) {
 			continue
 		}
 		key, ok := recipientKey(s, home)

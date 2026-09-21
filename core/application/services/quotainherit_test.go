@@ -530,3 +530,53 @@ func TestProviderForSession(t *testing.T) {
 		t.Errorf("opencode (no own evidence): got %q, want \"\"", got)
 	}
 }
+
+// TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation is issue
+// #2005's proof for a design deviation: Pi's model_change handler
+// (core/adapters/inbound/agents/pi/parser.go) now stamps a Pi session's own
+// Metrics.RateLimit with identity evidence alone — Provider +
+// AttributionQuality, no Windows, no Credits, no ConfirmedAccountRef — the
+// instant a model_change names a mapped route. Before InheritRateLimits'
+// applyDonors was adjusted to check quota data rather than mere presence,
+// that identity-only stamp made hasOwnRateLimit true and silently blocked
+// the existing, tested Pi<-Codex quota-window donation
+// (TestInheritRateLimits_PiOpenAIInheritsFromCodex above) for every Pi
+// session that ever reports a route — which is effectively all of them, per
+// the committed regression fixtures. This session carries exactly the shape
+// applyPiModelChangeProvider produces.
+func TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation(t *testing.T) {
+	home := stageAuth(t, map[string]any{
+		".codex/auth.json": map[string]any{
+			"auth_mode": "chatgpt",
+			"tokens":    map[string]any{"account_id": "acct-shared"},
+		},
+		".pi/agent/auth.json": map[string]any{
+			"openai-codex": map[string]any{
+				"type":      "oauth",
+				"accountId": "acct-shared",
+			},
+		},
+	})
+
+	codex := donorCodex(1000, 22)
+	pi := &session.SessionState{
+		SessionID: "pi-1",
+		Adapter:   "pi",
+		Metrics: &session.SessionMetrics{
+			RateLimit: &session.RateLimitSnapshot{
+				Provider:            ProviderOpenAI,
+				ObservationSource:   "transcript",
+				AttributionEvidence: "pi_transcript_model_change",
+				AttributionQuality:  session.AttributionQualityConfirmed,
+			},
+		},
+	}
+	InheritRateLimits([]*session.SessionState{codex, pi}, home)
+
+	if len(pi.Metrics.RateLimit.Windows) == 0 {
+		t.Fatal("expected pi's identity-only stamp to be superseded by the matched codex donor's real quota windows")
+	}
+	if ProviderForSession(pi) != ProviderOpenAI {
+		t.Errorf("ProviderForSession(pi) = %q, want %q — donation must not lose the confirmed provider stamp", ProviderForSession(pi), ProviderOpenAI)
+	}
+}
