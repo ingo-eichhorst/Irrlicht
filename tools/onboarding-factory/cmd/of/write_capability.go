@@ -67,13 +67,23 @@ func ensureAdapterModel(repoRoot, id string) error {
 	return writeJSONFileAtomic(matrix.CapabilityFile(repoRoot), f)
 }
 
-// setAdapterModel applies an explicit maturity and/or capability edits.
+// setAdapterModel applies an explicit maturity and/or capability edits, plus
+// (#2004) any traits to pin at an explicit "traced".
 //
-// Setting a trait to `traced` DELETES the declaration rather than storing it:
-// traced is the default for anything unmentioned, so storing it would be a
-// second spelling of the same fact, and the file's stated shape is "only the
-// non-default values".
-func setAdapterModel(repoRoot, id, maturity string, caps map[string]string) error {
+// Setting a trait to `traced` via --capability DELETES the declaration rather
+// than storing it: traced is the default for anything unmentioned, so
+// storing it would be a second spelling of the same fact, and the file's
+// stated shape is "only the non-default values". pinTraced is the deliberate
+// exception, not a second way to spell the same --capability edit: it is for
+// the one case the default cannot distinguish — a scenario whose OWN
+// assessment recorded a real agent_supports value alongside
+// daemon_capability:"unknown" (an assessor's open question, not an unassessed
+// cell; see validate_maturity.go's isAssessedOpenQuestion /
+// validateCapModelAdapter). Relying on the omission there reads as a settled "no gap" claim over a
+// question deliberately left open. `of validate` requires the pin in exactly
+// that case (#2004); --capability's traced-deletes behavior is unchanged for
+// every other one.
+func setAdapterModel(repoRoot, id, maturity string, caps map[string]string, pinTraced []string) error {
 	f, err := loadCapabilityFile(repoRoot)
 	if err != nil {
 		return err
@@ -89,8 +99,8 @@ func setAdapterModel(repoRoot, id, maturity string, caps map[string]string) erro
 		entry.Maturity = maturity
 	}
 	for trait, state := range caps {
-		if _, known := matrix.TraitByID(trait); !known {
-			return fmt.Errorf("%q is not a known trait (see internal/matrix/capability.go)", trait)
+		if err := requireKnownTrait(trait); err != nil {
+			return err
 		}
 		if !matrix.IsValidCapabilityState(state) {
 			return fmt.Errorf("capability state %q is not one of: %s", state, strings.Join(matrix.CapabilityStates, ", "))
@@ -104,11 +114,30 @@ func setAdapterModel(repoRoot, id, maturity string, caps map[string]string) erro
 		}
 		entry.Capabilities[trait] = state
 	}
+	for _, trait := range pinTraced {
+		if err := requireKnownTrait(trait); err != nil {
+			return err
+		}
+		if entry.Capabilities == nil {
+			entry.Capabilities = map[string]string{}
+		}
+		entry.Capabilities[trait] = matrix.CapabilityTraced
+	}
 	if len(entry.Capabilities) == 0 {
 		entry.Capabilities = nil // keep the file free of empty objects
 	}
 	f.Adapters[id] = entry
 	return writeJSONFileAtomic(matrix.CapabilityFile(repoRoot), f)
+}
+
+// requireKnownTrait rejects a trait id outside the closed set, shared by
+// setAdapterModel's --capability and --pin-traced loops so the two verbs
+// cannot drift into refusing different sets of invented trait names.
+func requireKnownTrait(trait string) error {
+	if _, known := matrix.TraitByID(trait); !known {
+		return fmt.Errorf("%q is not a known trait (see internal/matrix/capability.go)", trait)
+	}
+	return nil
 }
 
 // capabilityFlag parses repeatable --capability trait=state pairs.

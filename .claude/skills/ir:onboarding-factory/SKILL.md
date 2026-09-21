@@ -134,6 +134,16 @@ changed, and both are visible in `of status --summary`:
   state, and `of validate` additionally rejects a declaration that contradicts
   a cell already on disk. `of agent add` writes a `planned` entry for a new
   column automatically, so a freshly registered agent validates clean.
+- **An assessed-open cell needs an explicit pin, not the default (#2004).**
+  When a scenario's own assessment records `agent_supports:{yes,partial}`
+  alongside `daemon_capability:"unknown"`, that is an assessor's open
+  question, not an unassessed cell — relying on the trait's omission default
+  would silently read as a settled "no gap" claim. `of validate` refuses the
+  omission in exactly that case; state the claim explicitly instead:
+
+  ```
+  of agent update --id <agent> --pin-traced <trait>   # store "traced" explicitly, not by omission
+  ```
 
 Do **not** use a capability declaration for a cell that is merely *not
 recorded yet* — that is `record_blocked` on the assessment, and the two mean

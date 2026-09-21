@@ -212,8 +212,16 @@ type AdapterModel struct {
 	// Maturity is the tier the adapter CLAIMS. `of validate` fails when the
 	// claim outruns the evidence; it never rewrites the claim.
 	Maturity string `json:"maturity"`
-	// Capabilities holds only the non-default values. An omitted trait is
-	// CapabilityTraced, so a fully-capable adapter's entry is one line.
+	// Capabilities holds the non-default values, so a fully-capable adapter's
+	// entry is one line — an omitted trait is CapabilityTraced. Since #2004 a
+	// trait may also be pinned at an EXPLICIT CapabilityTraced (`of agent
+	// update --pin-traced`): the one case the omission default cannot express,
+	// where the trait's own scenario recorded a real agent_supports value
+	// alongside daemon_capability:"unknown" — an assessor's open question, not
+	// an unassessed cell (isAssessedOpenQuestion in cmd/of/validate_maturity.go
+	// is the check that requires the pin there). Reading the value is
+	// unaffected either way: CapabilityState returns CapabilityTraced whether
+	// the key is absent or explicitly set to it.
 	Capabilities map[string]string `json:"capabilities,omitempty"`
 	// Notes is free text for a human reader; nothing reads it.
 	Notes string `json:"notes,omitempty"`

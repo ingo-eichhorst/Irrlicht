@@ -303,6 +303,106 @@ func TestCapModelGateExemptsADocumentedRecordBlockedDeferral(t *testing.T) {
 		`scenario "session-resume" is "n/a" for adapter codex`)
 }
 
+// TestCapModelGateCatchesAnAssessedOpenClaimRelyingOnDefault is #2004's
+// guard: a scenario whose OWN assessment records agent_supports:{yes,partial}
+// and daemon_capability:"unknown" is an assessor's open question, not an
+// unassessed cell (vocabulary.go's StateUnknown display state — "not
+// assessed, or assessed with empty axes" — collapses both, which is why
+// isStructurallyDead above cannot see this; the guard reads the raw axes
+// instead). Relying on the trait's omission default then reads as a settled
+// "no gap" claim over a question left open — Muse's subscription_signal
+// shape.
+//
+// This mirrors Muse's real defect: `go run ./tools/onboarding-factory/cmd/of
+// validate` on unmodified replaydata at 238d2054a passes clean (confirmed
+// before this guard existed), because the general declared-vs-derived checks
+// above only fire on n/a/unobservable, never on unknown.
+func TestCapModelGateCatchesAnAssessedOpenClaimRelyingOnDefault(t *testing.T) {
+	root := maturityRepo(t)
+	// codex is already a registered column in the fixture; subscription-detection
+	// is already in the fixture's catalog (maturityRepo adds every trait's
+	// scenario). Write the cell in the exact shape Muse's real 5-6 cell has.
+	cellPath := filepath.Join(root, "replaydata", "agents", "codex", "scenarios", "subscription-detection", "metadata.json")
+	write(t, cellPath, `{
+  "scenario_id": "subscription-detection",
+  "details": {
+    "assessment": {"agent_supports": "partial", "daemon_capability": "unknown", "driver_capability": "n/a"}
+  }
+}`)
+	cellRelPath := "replaydata/agents/codex/scenarios/subscription-detection/metadata.json"
+
+	// Anchor + red: the trait is genuinely omitted (codex's fixture entry in
+	// maturityRepo declares only subagent_foreground/subagent_background), so
+	// the guard fires and names BOTH the capability model and the cell's own
+	// metadata.json. Asserting the cell's exact path is the anchor: if the
+	// folder or scenario name ever moved, this fails loudly instead of the
+	// guard silently finding nothing.
+	msgs := validateFindings(t, root)
+	assertFindingContains(t, msgs, "adapters.json: adapters.codex has no subscription_signal entry",
+		`agent_supports:"partial"`, `daemon_capability:"unknown"`)
+	assertFindingContains(t, msgs, cellRelPath+`: daemon_capability:"unknown" is an open question`)
+
+	// Fix: pin the trait explicitly through the CLI (never a hand-edit) —
+	// `traced` is the honest value here: the assessment found real evidence,
+	// just not a settled daemon verdict.
+	if code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "codex", "--pin-traced", "subscription_signal"); code != exitOK {
+		t.Fatalf("of agent update --pin-traced exit=%d stderr=%s", code, errs)
+	}
+	if got := m2004CapabilityState(t, root, "codex", "subscription_signal"); got != matrix.CapabilityTraced {
+		t.Fatalf("after --pin-traced: capability state = %q, want %q (explicit, not deleted)", got, matrix.CapabilityTraced)
+	}
+	if msgs := validateFindings(t, root); len(msgs) != 0 {
+		t.Fatalf("pinning the trait explicitly must silence the guard, got:\n  %s", strings.Join(msgs, "\n  "))
+	}
+
+	// Mutation fixture: reintroduce the contradiction through the SAME `of`
+	// CLI surface a careless future edit would use — `--capability
+	// trait=traced`, which setAdapterModel deletes the declaration for
+	// (traced is the default) — never a hand-edit of replaydata/. The anchor
+	// assertion first confirms the pin is actually there to remove, so a
+	// moved/renamed site fails loudly instead of this step silently
+	// mutating nothing.
+	if _, ok := m2004CapabilityFile(t, root).Adapters["codex"].Capabilities["subscription_signal"]; !ok {
+		t.Fatal("mutation target missing before mutation: adapters.codex.capabilities.subscription_signal — anchor moved")
+	}
+	if code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "codex", "--capability", "subscription_signal=traced"); code != exitOK {
+		t.Fatalf("of agent update --capability subscription_signal=traced exit=%d stderr=%s", code, errs)
+	}
+	if _, ok := m2004CapabilityFile(t, root).Adapters["codex"].Capabilities["subscription_signal"]; ok {
+		t.Fatal("--capability trait=traced must delete the declaration, not merely change its value")
+	}
+	msgs = validateFindings(t, root)
+	assertFindingContains(t, msgs, "adapters.json: adapters.codex has no subscription_signal entry")
+	assertFindingContains(t, msgs, cellRelPath+`: daemon_capability:"unknown" is an open question`)
+}
+
+// m2004CapabilityState is a thin LoadRepo+CapabilityState wrapper so the test
+// above reads through the same path a real consumer does, rather than
+// re-parsing adapters.json itself.
+func m2004CapabilityState(t *testing.T, root, agent, trait string) string {
+	t.Helper()
+	m, err := matrix.LoadRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.Capabilities().CapabilityState(agent, trait)
+}
+
+// m2004CapabilityFile reads adapters.json's raw capabilityFile shape — used
+// only to assert the mutation anchor (a key's PRESENCE in the map), which
+// CapabilityState's default-substituting read cannot distinguish from
+// omission.
+func m2004CapabilityFile(t *testing.T, root string) *capabilityFile {
+	t.Helper()
+	cf, err := loadCapabilityFile(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cf
+}
+
 func TestCapModelGateRejectsOffVocabularyDeclarations(t *testing.T) {
 	root := maturityRepo(t)
 	writeCapModel(t, root, map[string]any{
