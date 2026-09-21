@@ -95,7 +95,9 @@
       "capabilities": {
         "cloud_agent": "absent",
         "partial_flush": "untraced",
-        "token_usage": "untraced"
+        "subagent_orphan": "traced",
+        "token_usage": "untraced",
+        "workflow_fanout": "traced"
       }
     },
     "gemini-cli": {
