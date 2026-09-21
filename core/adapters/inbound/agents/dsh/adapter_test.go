@@ -245,6 +245,17 @@ func TestBareUUIDWithoutNativeHeaderIsNeverADSHSession(t *testing.T) {
 	}
 }
 
+// dshWatchDeadline bounds the two waits in the fswatcher test below. It is
+// generous on purpose: a healthy run satisfies both in milliseconds, so the
+// value costs nothing when the code works, and only a real failure waits it
+// out. The previous 2s was tight enough to fail under CI load — the same test
+// failed on main@34578d78a (linux build-test), on #2018 (macOS go-test) and
+// twice on #2027 (linux build-test), while passing on #2026's own PR and 10/10
+// locally under -race. It does not weaken the mutation fixture it guards: the
+// run mutation that disables the emitted-ID cache makes the event never
+// arrive, so any finite deadline catches it.
+const dshWatchDeadline = 15 * time.Second
+
 // TestNativeSubagentRemovalEmitsTheChildLifecycleEvent verifies the actual
 // fswatcher removal path. The run mutation that disabled its emitted-ID cache
 // made this test time out because the deleted bare child no longer had an ID.
@@ -266,7 +277,7 @@ func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
 	go func() { done <- watcher.Watch(ctx) }()
 	select {
 	case <-watcher.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(dshWatchDeadline):
 		t.Fatal("watcher did not become ready")
 	}
 
@@ -291,7 +302,7 @@ func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
 
 func waitForDSHEvent(t *testing.T, events <-chan agent.Event, wantType agent.EventType, wantID string) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(dshWatchDeadline)
 	for {
 		select {
 		case event := <-events:
