@@ -354,9 +354,18 @@ var knownFirstTransitionDrift = map[string]string{
 // 5-4 is a later waiting→working pair. Only 5-4 exceeds 5s: replay fires at
 // 04:23:39.682, while the daemon sidecar records 04:23:48.430. This names
 // observed timing, not a proven cause of the delayed daemon read.
+// #1980's final DSH fixture tree moves the aggregate bounds 118 -> 123 and
+// 57 -> 62. The generator command below measured 123/433 recordings over 1s,
+// 62 over 5s, 1094 kind-matched pairs, and 366 measured recordings. The new
+// DSH recordings add no first-transition entry to the generated map, but they
+// do add later-transition drift. Re-tighten both upper bounds and both
+// population floors so this fixture growth is not left as slack.
+// `go test ./tools/onboarding-factory/cmd/replay -run
+// TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog -v -count=1` produced
+// these values on the final fixture tree.
 const (
-	maxRecordingsDriftingOverThreshold = 118
-	maxRecordingsDriftingOver5s        = 57
+	maxRecordingsDriftingOverThreshold = 123
+	maxRecordingsDriftingOver5s        = 62
 )
 
 // Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,
@@ -443,8 +452,8 @@ const (
 // Same frozen-sidecar cost as #1799's, for the same reason, and it resolves the
 // same way: on re-record.
 const (
-	minKindMatchedPairs   = 833
-	minMeasuredRecordings = 278
+	minKindMatchedPairs   = 1094
+	minMeasuredRecordings = 366
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,

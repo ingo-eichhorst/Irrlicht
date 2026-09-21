@@ -147,26 +147,14 @@ var coincidentalCensusFigures = []censusFigureExemption{
 			"PairedButUngraded.",
 	},
 	{
-		File:   "issue1480_timing_test.go",
-		Marker: "sidecar seq 187 carries decided_by_tier",
-		Reason: "a sidecar SEQUENCE NUMBER, not a census figure. The line " +
-			"reads it alongside that event's own decided_by_tier and " +
-			"hook_turn_done fields, which is what makes the reading " +
-			"checkable rather than a matter of taste — a census total has no " +
-			"decided_by_tier. It began colliding when #1960's recordings " +
-			"moved Divergent 185 -> 187; the seq did not move, the figure " +
-			"arrived on top of it. The #1480 ratchet deletes this entry on " +
-			"its own the next time that figure moves off 187, which is how " +
-			"its predecessor at seq 184 was retired.",
-	},
-	{
-		File:   "issue1695_stop_hook_test.go",
-		Marker: "sidecar seq 187) while replay",
-		Reason: "the same sidecar sequence number as the entry above, in the " +
-			"companion write-up of the same recording — again read next to " +
-			"decided_by_tier, so again a position in a sidecar stream rather " +
-			"than a count of recordings. Collides with Divergent at 187 for " +
-			"the same reason and retires the same way.",
+		File:   "timing_drift.go",
+		Marker: "<1ms       190   23.0%",
+		Reason: "the first row of #1480's historical timing-distribution " +
+			"table, not a live catalog census. The surrounding comment names " +
+			"the table as the 826-pair calibration measurement and says it is " +
+			"deliberately not refreshed as the catalog grows. It collided only " +
+			"when the live DivergentByCountsAndKinds figure reached the same " +
+			"integer.",
 	},
 }
 

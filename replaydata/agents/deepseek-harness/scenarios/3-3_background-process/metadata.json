@@ -2,12 +2,12 @@
   "scenario_id": "background-process",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "bug",
+    "daemon_capability": "full",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+7adf456",
-    "confidence": 0.84,
-    "notes": "DeepSeek Harness supports managed background Bash jobs, but the DSH adapter drops the persisted spawn and completion signals, so the correct held-working arc is known failing."
+    "confidence": 0.98,
+    "notes": "Observed 2026-09-20: the DSH adapter holds the session working through the managed Bash job and releases it after the terminal tool-jobs notice."
   },
   "details": {
     "assessment": {
@@ -15,17 +15,15 @@
       "scenario_id": "background-process",
       "agent": "deepseek-harness",
       "agent_supports": "yes",
-      "daemon_capability": "bug",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.84,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 has the exact managed-background primitive. The installed `@deepseek-ai/dsh-tool-bash` package documents that `run_in_background: true` returns a job ID immediately and leaves the command running. The installed `@deepseek-ai/dsh-tool-jobs` package provides `job_output`, `job_list`, and `job_kill`. It also delivers an unreported completion as an in-session plugin notice. The active TUI composition mounts `dsh-jobs-local`, `dsh-tool-bash`, and `dsh-tool-jobs`, and the Bash package defaults `enableRunInBackground` to true. This is the direct DSH equivalent of the scenario's spawn, observe, and terminate lifecycle.\n\nThe launcher help does not list model tools because they live inside the composed agent. The required binary scan was therefore supplemented by the installed package source and `dsh --profile tui --dump-config`. The launcher is a JavaScript entry point, and `strings` on that small launcher returned no background-job surface. The composed first-party package source is authoritative for the shipped model tools.\n\n## Daemon capability\n\nThe durable DSH format carries enough data for the daemon to recognize the lifecycle. A measured DSH v3 transcript proves that `tool/call` stores `data.name`, `data.callId`, and the complete JSON argument string, and that the paired `tool/result` stores model-visible result text. For a background Bash call, the shipped producer emits the exact start result `started background job <jobId>`. When that unreported job settles, `dsh-tool-jobs` creates a user message whose source is `{kind: plugin, plugin: tool-jobs, form: notice}` and whose text includes the same job ID and terminal status. Under the mounted default `completionDelivery: wakeup`, an idle owner receives that notice through a follow-up turn. The trace therefore has a structured launch discriminator, stable job ID, and explicit terminal notification.\n\nThe current DSH parser discards every background-specific field. `parseToolCall` emits only a generic `ToolUse{ID, Name}` and never reads `data.arguments`. `parseToolResult` emits only the generic result ID and error bit and never reads the result text. `parseUserMessage` rejects every source whose kind is not `user`, so it skips the `tool-jobs` plugin completion notice. The parser consequently sets none of `BackgroundSpawns`, `BashOutputPolls`, `TerminatedBashOutputIDs`, `KilledShellIDs`, or `TerminatedBackgroundTaskIDs`. `BackgroundProcessCount` stays zero. The first completed `turn/end` therefore settles the session to ready while the managed Bash job is still alive. This is a daemon bug, not an architectural incapability: the tailed transcript has both ends of the lifecycle, and the canonical states can represent the required working hold. A fix must parse the job ID on start, parse the plugin completion notice, and give DSH's explicit-completion jobs a safe liveness hold until that notice arrives.\n\nThe emission verdict is provisional only in timing and exact field placement. The package source states the exact visible strings and delivery path, while the existing live DSH transcript proves the generic call arguments and result content are durable. The live recording must confirm the background-specific rows and wake timing.\n\n## Driver and recipe\n\nThe driver implements `send`, `wait_turn`, and `sleep`, which are all this recipe needs. The prompt starts one 120-second Bash job and marks its output irrelevant so the model can finish the first turn without collecting it. The default wakeup path then opens a follow-up turn when the job completes. The 240-second trailing sleep is longer than every sibling's settle delay because this local qwen route has measured about 84 seconds for a text turn and about 107 seconds for a simple Bash turn; the recipe must also cover the 120-second job and the completion follow-up. The 480-second cell timeout contains that measured path with margin.\n\nThe correct spec requires one continuous working span for 180 seconds from turn start. This is longer than the measured first-turn completion but shorter than the expected background completion plus wakeup path. The current parser should fail at the first turn's premature ready transition. Transcript assertions require the exact background flag, its job-ID result, and the terminal plugin notice so a slow ordinary turn cannot prove the behavior by itself.",
+      "confidence": 0.98,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nThe 2026-09-20 live recording passed all four lifecycle phases and all transcript and observation assertions in `of verify --agent deepseek-harness --scenario background-process --json`. The DSH parser identifies the managed Bash launch and its job ID. The daemon holds the same session in working after the first completed turn. It releases the hold only when the terminal `tool-jobs` notice reports the same job completed. The normal wake completion then returns the session to ready.\n\nThe recorded transcript contains one `run_in_background:true` Bash call, its returned `bash-<id>`, and the matching completed terminal notice. The two `BGPROC_OK` replies are valid: the first ends the requested launch turn and the second ends the tool-jobs wake turn.\n\nThe prior recording and source review remain historical diagnostic evidence. Before the parser and no-probe hold were added, the daemon settled ready after the first turn while the job continued. That pre-fix result does not describe the observed recording.",
       "caveats": [
-        "Provisional emission: installed first-party source defines the background start result and plugin completion notice, and a measured DSH v3 transcript proves complete tool arguments and result text are durable. Only record can confirm the exact background-specific rows and wake timing end to end.",
-        "The daemon fix needs more than a BackgroundProcessCount increment. DSH exposes no transcript PID or output-file path. The detector needs a bounded hold for a managed job whose explicit plugin completion notice is the authoritative close signal.",
-        "Vacuous-pass condition: the 180-second working dwell could pass without a background hold if the local model itself takes at least 180 seconds to finish the first turn. Transcript assertions therefore require run_in_background:true, the returned background job ID, and the later completed tool-jobs notice. Record must also confirm that the first turn ended before the job completed.",
-        "Load-bearing environment property: the active TUI composition must mount dsh-jobs-local and dsh-tool-jobs, keep dsh-tool-bash enableRunInBackground=true, and keep tool-jobs completionDelivery=wakeup. Re-probe the composed profile at record time.",
-        "Load-bearing model behavior: qwen/qwen3.5-9b must call Bash once, treat the detached proof job as irrelevant after launch, and finish the first turn without job_output, job_list, or job_kill. If it collects the job before finishing, the recording does not test hold-past-turn and must not be accepted.",
-        "Sibling timing differs because the configured local model has measured 84-107 second turns. The recipe uses a 120-second job, a 240-second post-turn observation sleep, and a 480-second timeout instead of the siblings' 6-60 second settles."
+        "The verifier binds the terminal notice to the recorded DSH session and Bash job ID. It fails if a ready transition follows the working start before that matching notice, or if no ready transition follows it.",
+        "DSH has no transcript PID or output-file path for this job. The parser uses the explicit terminal tool-jobs notice as the close signal. The hold has a bounded expiry so a missing notice cannot hold the session forever.",
+        "The recipe must keep run_in_background:true and must not collect the job before the first turn ends. Otherwise the recording does not test a working hold after a completed turn.",
+        "The active TUI profile must mount dsh-jobs-local, dsh-tool-bash, and dsh-tool-jobs with completionDelivery=wakeup."
       ],
       "sources": [
         {
@@ -73,7 +71,8 @@
           "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
           "note": "Declares and implements send, wait_turn, and sleep, applies the fixed local model settings, and waits against the durable compressed transcript."
         }
-      ]
+      ],
+      "historical_body": "Historical pre-fix diagnosis: the parser discarded the background launch fields and the terminal tool-jobs notice. The daemon therefore had no managed-job hold and could settle ready before the job completed."
     },
     "recipe": {
       "applicable": true,
@@ -113,7 +112,7 @@
         "the first completed turn/end occurs after the spawn but before that bash job completes; if the model waits for or collects the job in the first turn, reject the run as vacuous",
         "the transcript later contains a plugin/tool-jobs completion notice for the same job ID with status completed, delivered through the default wakeup path",
         "the same real DSH session stays continuously working from the original user turn through the job's live interval, with no ready or waiting transition before completion",
-        "KNOWN FAILING: the current DSH parser leaves BackgroundProcessCount at zero and settles ready on the first turn/end while the job is alive",
+        "the current parser records the managed job hold, so the session does not become ready before the matching terminal tool-jobs notice",
         "after the completion wake and follow-up turn, the same session settles to final ready",
         "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
       ]

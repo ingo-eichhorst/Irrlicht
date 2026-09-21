@@ -1,10 +1,14 @@
 package dsh
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"irrlicht/core/adapters/inbound/agents/fswatcher"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
@@ -48,8 +52,8 @@ func TestAgentSourceDeclaration(t *testing.T) {
 	if !ok {
 		t.Fatalf("source = %T, want FilesUnderRoot", a.Source)
 	}
-	if source.DirFunc == nil || source.SessionIDFromPath == nil {
-		t.Error("source must resolve DSH_HOME lazily and derive directory-based session IDs")
+	if source.DirFunc == nil || source.SessionIDFromPath == nil || source.ParentSessionIDFromPath == nil {
+		t.Error("source must resolve DSH_HOME lazily and derive linked directory-based session IDs")
 	}
 	if _, ok := source.Parser.(agent.JSONLineParser); !ok {
 		t.Errorf("parser = %T, want JSONLineParser", source.Parser)
@@ -119,6 +123,184 @@ func TestSessionIDFromPathSelectsHighestGeneration(t *testing.T) {
 	}
 	if got := sessionIDFromPath(filepath.Join(filepath.Dir(dir), "not-a-session", "session.v3.jsonl.zstd")); got != "" {
 		t.Errorf("invalid session directory minted session %q", got)
+	}
+}
+
+// TestNativeSubagentHeaderIsDiscoverableAndLinked covers the durable shape
+// documented for DSH's foreground, background, orphan-cleanup, and workflow
+// children: a bare UUID directory and a first header marked origin:subagent.
+// Before #1980's implementation this test fails because the bare child
+// directory is rejected and Source does not expose a parent-header reader.
+func TestNativeSubagentHeaderIsDiscoverableAndLinked(t *testing.T) {
+	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
+
+	if got := sessionIDFromPath(transcript); got != childID {
+		t.Fatalf("child session ID = %q, want %q", got, childID)
+	}
+	source := Source().(agent.FilesUnderRoot)
+	if source.ParentSessionIDFromPath == nil {
+		t.Fatal("Source has no ParentSessionIDFromPath")
+	}
+	if got := source.ParentSessionIDFromPath(transcript); got != parentID {
+		t.Errorf("child parent ID = %q, want %q", got, parentID)
+	}
+}
+
+func TestParentSessionIDFromPathRejectsNonSubagentHeaders(t *testing.T) {
+	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), "session-"+childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"session-`+childID+`","cwd":"/work","parentSession":"`+parentID+`","isSeeded":true}`+"\n")
+
+	source := Source().(agent.FilesUnderRoot)
+	if source.ParentSessionIDFromPath == nil {
+		t.Fatal("Source has no ParentSessionIDFromPath")
+	}
+	if got := source.ParentSessionIDFromPath(transcript); got != "" {
+		t.Errorf("non-subagent parent ID = %q, want empty", got)
+	}
+}
+
+func TestNativeSubagentHeaderRequiresDirectoryIDMatch(t *testing.T) {
+	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	const directoryID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	const headerID = "b0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), directoryID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+headerID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
+
+	if got := sessionIDFromPath(transcript); got != "" {
+		t.Errorf("mismatched child session ID = %q, want empty", got)
+	}
+	if got := parentSessionIDFromPath(transcript); got != "" {
+		t.Errorf("mismatched child parent ID = %q, want empty", got)
+	}
+}
+
+func TestNativeSubagentHeaderAcceptsBareParentID(t *testing.T) {
+	const parentID = "b0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
+
+	if got := parentSessionIDFromPath(transcript); got != parentID {
+		t.Errorf("nested child parent ID = %q, want %q", got, parentID)
+	}
+}
+
+func TestNativeSubagentHeaderRejectsOversizedHeader(t *testing.T) {
+	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	padding := strings.Repeat("x", maxNativeHeaderBytes)
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`","padding":"`+padding+`"}`+"\n")
+
+	if got := sessionIDFromPath(transcript); got != "" {
+		t.Errorf("oversized child session ID = %q, want empty", got)
+	}
+}
+
+func TestBareUUIDWithoutNativeHeaderIsNeverADSHSession(t *testing.T) {
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	dir := filepath.Join(t.TempDir(), childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transcript); err != nil {
+		t.Fatal(err)
+	}
+	if got := sessionIDFromPath(transcript); got != "" {
+		t.Errorf("unproven bare UUID session ID = %q, want empty", got)
+	}
+}
+
+// TestNativeSubagentRemovalEmitsTheChildLifecycleEvent verifies the actual
+// fswatcher removal path. The run mutation that disabled its emitted-ID cache
+// made this test time out because the deleted bare child no longer had an ID.
+func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
+	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	watcher := fswatcher.NewWithRoot(root, AdapterName, 0).
+		WithSessionID(sessionIDFromPath).
+		WithParentSessionID(parentSessionIDFromPath)
+	events := watcher.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- watcher.Watch(ctx) }()
+	select {
+	case <-watcher.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not become ready")
+	}
+
+	dir := filepath.Join(workspace, childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
+	waitForDSHEvent(t, events, agent.EventNewSession, childID)
+	if err := os.Remove(transcript); err != nil {
+		t.Fatal(err)
+	}
+	waitForDSHEvent(t, events, agent.EventRemoved, childID)
+
+	cancel()
+	if err := <-done; err != nil && err != context.Canceled {
+		t.Errorf("watcher returned %v", err)
+	}
+}
+
+func waitForDSHEvent(t *testing.T, events <-chan agent.Event, wantType agent.EventType, wantID string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Type == wantType && event.SessionID == wantID {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s for %s", wantType, wantID)
+		}
 	}
 }
 

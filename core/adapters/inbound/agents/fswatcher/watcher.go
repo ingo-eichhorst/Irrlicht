@@ -98,6 +98,10 @@ type Watcher struct {
 	// the same order as the tree the watcher already walks — so it is not
 	// pruned on any other schedule.
 	emitted map[string]int64
+	// emittedSessionID records the ID delivered for each emitted path. Removal
+	// events arrive after a header-backed transcript no longer exists, so its
+	// ID must come from the prior delivered event rather than re-reading it.
+	emittedSessionID map[string]string
 	// watched records directories already registered with fsnotify, so the
 	// reconcile sweep re-arms only the ones that are genuinely new — and
 	// retries any whose earlier Add failed.
@@ -106,7 +110,7 @@ type Watcher struct {
 	// been reported, so the sweep's retry doesn't re-log the same blind spot
 	// every interval.
 	//
-	// pendingNew, emitted, watched and watchFailed are all confined to Watch's
+	// pendingNew, emitted, emittedSessionID, watched and watchFailed are all confined to Watch's
 	// goroutine (handleEvent, the backlog scan and reconcile all run on it), so
 	// none of them take a lock.
 	watchFailed map[string]struct{}
@@ -410,6 +414,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 // allocate it lazily.
 func (w *Watcher) resetRunState() {
 	w.emitted = make(map[string]int64)
+	w.emittedSessionID = make(map[string]string)
 	w.watched = make(map[string]struct{})
 	w.watchFailed = make(map[string]struct{})
 	w.pendingNew = nil
@@ -525,12 +530,27 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		return
 	}
 
+	projectDir := filepath.Base(filepath.Dir(name))
+	if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+		sessionID, known := w.emittedSessionID[name]
+		// A header-linked file can be parked while it is still zero bytes. It
+		// may disappear before a readable header establishes an emitted ID.
+		// Clear all per-path bookkeeping in either case, so a later file at the
+		// same path starts a new lifecycle.
+		delete(w.pendingNew, name)
+		delete(w.emitted, name)
+		delete(w.emittedSessionID, name)
+		if !known {
+			return
+		}
+		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
+		return
+	}
+
 	sessionID := w.idFor(name)
 	if sessionID == "" {
 		return
 	}
-
-	projectDir := filepath.Base(filepath.Dir(name))
 
 	switch {
 	case ev.Op&fsnotify.Create != 0:
@@ -539,12 +559,6 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	case ev.Op&fsnotify.Write != 0:
 		w.handleTranscriptWrite(name, sessionID, projectDir)
 
-	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-		delete(w.pendingNew, name)
-		// Forget the emitted size too, so a path that is recreated later is
-		// reported as a new session rather than as activity.
-		delete(w.emitted, name)
-		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
 	}
 }
 
@@ -651,7 +665,11 @@ func (w *Watcher) emit(typ agent.EventType, sessionID, projectDir, path string, 
 	if w.emitted == nil {
 		w.emitted = make(map[string]int64)
 	}
+	if w.emittedSessionID == nil {
+		w.emittedSessionID = make(map[string]string)
+	}
 	w.emitted[path] = size
+	w.emittedSessionID[path] = sessionID
 }
 
 // broadcast sends an event to all subscribers and reports whether at least one

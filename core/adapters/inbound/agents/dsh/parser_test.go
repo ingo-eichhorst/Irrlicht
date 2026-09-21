@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -94,6 +95,117 @@ func TestParserMapsMeasuredTurnStart(t *testing.T) {
 	start := parseRecord(t, &Parser{}, `{"type":"turn/start","seq":4,"time":1789676506647,"data":{"turn":1}}`)
 	if start.EventType != "turn_start" {
 		t.Errorf("turn/start = %+v", start)
+	}
+}
+
+func TestParserReconcilesMeasuredTodoWriteSnapshots(t *testing.T) {
+	parser := &Parser{}
+	initial := parseRecord(t, parser, `{"type":"todo/write","seq":17,"time":1789787679937,"data":{"todos":[{"content":"draft a greeting","status":"pending"},{"content":"refine the greeting","status":"pending"},{"content":"reply done","status":"pending"}]}}`)
+	if initial.Skip {
+		t.Fatalf("todo/write was skipped: %+v", initial)
+	}
+	if len(initial.TaskDeltas) != 3 {
+		t.Fatalf("initial task deltas = %+v, want three creates", initial.TaskDeltas)
+	}
+	assertTodoSnapshot(t, initial, []tailer.TaskSnapshotEntry{
+		{ID: "1", Subject: "draft a greeting", Status: "pending"},
+		{ID: "2", Subject: "refine the greeting", Status: "pending"},
+		{ID: "3", Subject: "reply done", Status: "pending"},
+	})
+
+	progressed := parseRecord(t, parser, `{"type":"todo/write","seq":31,"time":1789787696051,"data":{"todos":[{"content":"draft a greeting","status":"in_progress"},{"content":"refine the greeting","status":"pending"},{"content":"reply done","status":"pending"}]}}`)
+	if len(progressed.TaskDeltas) != 1 || progressed.TaskDeltas[0].Op != tailer.TaskOpUpdate || progressed.TaskDeltas[0].ID != "1" || progressed.TaskDeltas[0].Status != "in_progress" {
+		t.Fatalf("progressed task deltas = %+v, want update for first todo", progressed.TaskDeltas)
+	}
+	assertTodoSnapshot(t, progressed, []tailer.TaskSnapshotEntry{
+		{ID: "1", Subject: "draft a greeting", Status: "in_progress"},
+		{ID: "2", Subject: "refine the greeting", Status: "pending"},
+		{ID: "3", Subject: "reply done", Status: "pending"},
+	})
+
+	cleared := parseRecord(t, parser, `{"type":"todo/write","seq":32,"time":1789787696052,"data":{"todos":[]}}`)
+	if cleared.Skip {
+		t.Fatalf("empty todo/write was skipped: %+v", cleared)
+	}
+	assertTodoSnapshot(t, cleared, []tailer.TaskSnapshotEntry{})
+	if len(cleared.TaskDeltas) != 0 {
+		t.Fatalf("empty todo/write task deltas = %+v, want none", cleared.TaskDeltas)
+	}
+
+	recreated := parseRecord(t, parser, `{"type":"todo/write","seq":33,"time":1789787696053,"data":{"todos":[{"content":"draft a greeting","status":"pending"}]}}`)
+	if !reflect.DeepEqual(recreated.TaskDeltas, []tailer.TaskDelta{{Op: tailer.TaskOpCreate, Subject: "draft a greeting"}}) {
+		t.Fatalf("recreated todo/write task deltas = %+v, want a create", recreated.TaskDeltas)
+	}
+	assertTodoSnapshot(t, recreated, []tailer.TaskSnapshotEntry{{ID: "4", Subject: "draft a greeting", Status: "pending"}})
+}
+
+func TestParserSkipsMalformedTodoWriteSnapshot(t *testing.T) {
+	parser := &Parser{}
+	malformed := parseRecord(t, parser, `{"type":"todo/write","data":{"todos":[{"content":"valid","status":"pending"},42]}}`)
+	if !malformed.Skip {
+		t.Fatalf("mixed malformed todo/write = %+v, want skipped", malformed)
+	}
+}
+
+func TestTodoWriteEmptySnapshotClearsAndRecreatesTask(t *testing.T) {
+	lines := strings.Join([]string{
+		`{"type":"session","version":3,"createdAt":1789787679000}`,
+		`{"type":"todo/write","time":1789787679937,"data":{"todos":[{"content":"draft","status":"pending"}]}}`,
+		`{"type":"todo/write","time":1789787696051,"data":{"todos":[]}}`,
+		`{"type":"todo/write","time":1789787714507,"data":{"todos":[{"content":"draft","status":"pending"}]}}`,
+	}, "\n") + "\n"
+	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, lines)
+	metrics := tailTranscript(t, newTestTranscriptTailer(path))
+	if len(metrics.Tasks) != 1 || metrics.Tasks[0].ID != "2" || metrics.Tasks[0].Subject != "draft" || metrics.Tasks[0].Status != "pending" {
+		t.Fatalf("tasks = %+v, want recreated task id 2", metrics.Tasks)
+	}
+}
+
+func assertTodoSnapshot(t *testing.T, event *tailer.ParsedEvent, want []tailer.TaskSnapshotEntry) {
+	t.Helper()
+	if event.TaskSnapshot == nil {
+		t.Fatal("task snapshot is nil")
+	}
+	if !reflect.DeepEqual(*event.TaskSnapshot, want) {
+		t.Fatalf("task snapshot = %+v, want %+v", *event.TaskSnapshot, want)
+	}
+}
+
+func TestParserMapsMeasuredCompactionBoundaries(t *testing.T) {
+	parser := &Parser{}
+	start := parseRecord(t, parser, `{"type":"compaction/start","seq":18,"time":1789776655200,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
+	if start.Skip || start.EventType != "turn_start" {
+		t.Fatalf("compaction/start = %+v, want turn_start", start)
+	}
+	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"6c72d0f0-d416-43c7-b2ef-f528e43eda56","turn":null}}`)
+	if end.Skip || end.EventType != "turn_done" {
+		t.Fatalf("compaction/end = %+v, want turn_done", end)
+	}
+}
+
+func TestParserMapsMeasuredProviderRetry(t *testing.T) {
+	retry := parseRecord(t, &Parser{}, `{"type":"llm/retry","seq":16,"time":1789781348757,"data":{"retry":1,"maxRetries":5,"delayMs":453.45541167226247,"failure":{"message":"529: provider overloaded","code":"SERVER"}}}`)
+	if retry.Skip || retry.SessionError == nil {
+		t.Fatalf("llm/retry = %+v, want retrying session error", retry)
+	}
+	if retry.SessionError.Phase != tailer.ErrorPhaseRetrying || retry.SessionError.Class != "server" || retry.SessionError.Attempt == nil || *retry.SessionError.Attempt != 1 || retry.SessionError.MaxAttempts == nil || *retry.SessionError.MaxAttempts != 5 {
+		t.Fatalf("retry session error = %+v", retry.SessionError)
+	}
+	if retry.SessionError.RetryIn == nil || *retry.SessionError.RetryIn != 453455411*time.Nanosecond {
+		t.Fatalf("retry delay = %v, want 453455411ns", retry.SessionError.RetryIn)
+	}
+}
+
+func TestParserSkipsInlineCompactionBoundaries(t *testing.T) {
+	parser := &Parser{}
+	start := parseRecord(t, parser, `{"type":"compaction/start","seq":18,"time":1789776655200,"data":{"compactionId":"inline","turn":7}}`)
+	if !start.Skip {
+		t.Fatalf("inline compaction/start = %+v, want skipped", start)
+	}
+	end := parseRecord(t, parser, `{"type":"compaction/end","seq":21,"time":1789776673596,"data":{"compactionId":"inline","turn":7}}`)
+	if !end.Skip {
+		t.Fatalf("inline compaction/end = %+v, want skipped", end)
 	}
 }
 

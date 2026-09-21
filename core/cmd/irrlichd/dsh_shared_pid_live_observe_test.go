@@ -3,15 +3,125 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/lifecycle"
 )
+
+func TestDSHBackgroundReleaseFollowsTerminalNotice(t *testing.T) {
+	terminal, events := dshBackgroundReleaseRecording(t)
+	assertDSHBackgroundReleaseAfterTerminalNotice(t, terminal, events)
+}
+
+func dshBackgroundReleaseRecording(t *testing.T) (time.Time, []lifecycle.Event) {
+	t.Helper()
+	const sessionID = "session-dbb71762-2da1-4a14-a40c-b57ffb8895d9"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"3-3_background-process", "recordings", "2026-09-20-21-35-33_irrlichd-0.6.4+ec736f3.dirty")
+	terminal := dshTerminalNoticeTime(t, filepath.Join(path, "transcript.jsonl.zstd"), "bash-1")
+	events := readDSHLiveEventsFile(t, filepath.Join(path, "events.jsonl"))[sessionID]
+	if len(events) == 0 {
+		t.Fatalf("events for %s not found", sessionID)
+	}
+	return terminal, events
+}
+
+func assertDSHBackgroundReleaseAfterTerminalNotice(t *testing.T, terminal time.Time, events []lifecycle.Event) {
+	t.Helper()
+	timing := dshBackgroundReleaseTiming{terminal: terminal}
+	for _, event := range events {
+		timing.observe(event)
+	}
+	if timing.working.IsZero() {
+		t.Fatal("working transition not found")
+	}
+	if !timing.readyBeforeTerminal.IsZero() {
+		t.Fatalf("background session became ready at %s before terminal notice at %s", timing.readyBeforeTerminal, terminal)
+	}
+	if timing.readyAfterTerminal.IsZero() {
+		t.Fatal("ready transition after terminal notice not found")
+	}
+}
+
+type dshBackgroundReleaseTiming struct {
+	terminal            time.Time
+	working             time.Time
+	readyBeforeTerminal time.Time
+	readyAfterTerminal  time.Time
+}
+
+func (timing *dshBackgroundReleaseTiming) observe(event lifecycle.Event) {
+	if event.NewState == "working" {
+		timing.working = event.Timestamp
+	}
+	if timing.working.IsZero() || event.NewState != "ready" || event.PrevState != "working" {
+		return
+	}
+	if event.Timestamp.Before(timing.terminal) {
+		timing.readyBeforeTerminal = event.Timestamp
+		return
+	}
+	timing.readyAfterTerminal = event.Timestamp
+}
+
+type dshTerminalNoticeRecord struct {
+	Type string                `json:"type"`
+	Time int64                 `json:"time"`
+	Data dshTerminalNoticeData `json:"data"`
+}
+
+type dshTerminalNoticeData struct {
+	Source  dshTerminalNoticeSource    `json:"source"`
+	Content []dshTerminalNoticeContent `json:"content"`
+}
+
+type dshTerminalNoticeSource struct {
+	Kind   string `json:"kind"`
+	Plugin string `json:"plugin"`
+	Form   string `json:"form"`
+}
+
+type dshTerminalNoticeContent struct {
+	Text string `json:"text"`
+}
+
+func dshTerminalNoticeTime(t *testing.T, path, bashID string) time.Time {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decoder.Close()
+	scanner := bufio.NewScanner(decoder)
+	for scanner.Scan() {
+		var record dshTerminalNoticeRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == "user/message" && record.Data.Source.Kind == "plugin" && record.Data.Source.Plugin == "tool-jobs" && record.Data.Source.Form == "notice" && len(record.Data.Content) == 1 && strings.Contains(record.Data.Content[0].Text, "background job "+bashID+" ") && strings.Contains(record.Data.Content[0].Text, "finished [status: completed") {
+			return time.UnixMilli(record.Time)
+		}
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	t.Fatal("terminal tool-jobs notice not found")
+	return time.Time{}
+}
 
 type dshLiveRow struct {
 	SessionID      string `json:"session_id"`
@@ -159,7 +269,12 @@ func readDSHLiveEvents(t *testing.T, stateDir string) map[string][]lifecycle.Eve
 	if err != nil || len(files) != 1 {
 		t.Fatalf("expected one daemon event recording: files=%v err=%v", files, err)
 	}
-	f, err := os.Open(files[0])
+	return readDSHLiveEventsFile(t, files[0])
+}
+
+func readDSHLiveEventsFile(t *testing.T, path string) map[string][]lifecycle.Event {
+	t.Helper()
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,40 +294,79 @@ func readDSHLiveEvents(t *testing.T, stateDir string) map[string][]lifecycle.Eve
 	return events
 }
 
+func TestDSHLiveArcRejectsRecordedCrossSessionIdentity(t *testing.T) {
+	const sessionID = "session-9e1e0760-a587-4886-a855-abd971c22838"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"4-1_multiple-sessions-same-cwd", "recordings", "2026-09-18-15-43-18_irrlichd-0.6.4+da0e1be", "events.jsonl")
+	arc := summarizeDSHLiveArc(readDSHLiveEventsFile(t, path)[sessionID])
+	if arc.complete(sessionID) {
+		t.Fatalf("recorded identity failure passed: %+v", arc)
+	}
+	if arc.working != 2 || arc.readyAfterWorking != 2 {
+		t.Fatalf("recorded second state arc = working:%d ready-after-working:%d, want 2/2", arc.working, arc.readyAfterWorking)
+	}
+	if len(arc.removedPaths) != 2 || filepath.Base(filepath.Dir(arc.removedPaths[1])) == sessionID {
+		t.Fatalf("recorded cross-session teardown path = %v", arc.removedPaths)
+	}
+}
+
+func TestDSHLiveArcRejectsRecordedForkHandoff(t *testing.T) {
+	const sessionID = "session-6875581b-de0a-4978-8182-3854f1ce6002"
+	path := filepath.Join("..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios",
+		"1-6_checkpoint-rewind", "recordings", "2026-09-19-00-56-13_irrlichd-0.6.4+5b3ddbd", "events.jsonl")
+	arc := summarizeDSHLiveArc(readDSHLiveEventsFile(t, path)[sessionID])
+	if arc.complete(sessionID) {
+		t.Fatalf("recorded fork handoff failure passed: %+v", arc)
+	}
+	if arc.working != 0 || arc.readyAfterWorking != 0 {
+		t.Fatalf("recorded child working window = working:%d ready-after-working:%d, want 0/0", arc.working, arc.readyAfterWorking)
+	}
+	if len(arc.removedPaths) != 3 || filepath.Base(filepath.Dir(arc.removedPaths[1])) == sessionID {
+		t.Fatalf("recorded fork teardown path = %v", arc.removedPaths)
+	}
+}
+
 func assertDSHLiveArc(t *testing.T, id string, events []lifecycle.Event) {
 	t.Helper()
 	arc := summarizeDSHLiveArc(events)
-	if arc.complete() {
+	if arc.complete(id) {
 		return
 	}
-	t.Errorf("session %s: working=%v ready_after_working=%v process_exited=%d", id, arc.working, arc.readyAfterWorking, arc.exited)
+	t.Errorf("session %s: working_transitions=%d ready_after_working=%d process_exited=%d removed_paths=%v", id, arc.working, arc.readyAfterWorking, arc.exited, arc.removedPaths)
 }
 
 type dshLiveArc struct {
-	working, readyAfterWorking bool
-	exited                     int
+	working, readyAfterWorking, exited int
+	removedPaths                       []string
 }
 
-func (arc dshLiveArc) complete() bool {
-	if !arc.working || !arc.readyAfterWorking {
+func (arc dshLiveArc) complete(id string) bool {
+	if arc.working != 1 || arc.readyAfterWorking != 1 || arc.exited != 1 || len(arc.removedPaths) == 0 {
 		return false
 	}
-	return arc.exited == 1
+	for _, path := range arc.removedPaths {
+		if path == "" || filepath.Base(filepath.Dir(path)) != id {
+			return false
+		}
+	}
+	return true
 }
 
 func summarizeDSHLiveArc(events []lifecycle.Event) dshLiveArc {
-	var arc dshLiveArc
+	arc := dshLiveArc{}
 	for _, event := range events {
 		switch event.Kind {
 		case lifecycle.KindStateTransition:
 			if event.NewState == "working" {
-				arc.working = true
+				arc.working++
 			}
-			if event.NewState == "ready" && arc.working {
-				arc.readyAfterWorking = true
+			if event.NewState == "ready" && arc.working > 0 {
+				arc.readyAfterWorking++
 			}
 		case lifecycle.KindProcessExited:
 			arc.exited++
+		case lifecycle.KindTranscriptRemoved:
+			arc.removedPaths = append(arc.removedPaths, event.TranscriptPath)
 		}
 	}
 	return arc

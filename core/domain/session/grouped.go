@@ -212,7 +212,7 @@ func buildOrchGroup(orch *orchestrator.State, partition *dashboardPartition) *Ag
 // Subagents afterwards (the detector populates session.Subagents itself
 // before save/broadcast — session_detector_subagent.go).
 func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState) *Agent {
-	cp := *s
+	cp := *s.ClientCopy()
 	agent := &Agent{SessionState: &cp}
 
 	// Annotate with orchestrator role.
@@ -234,6 +234,10 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 
 	// Unify subagents summary: merge in-process agents with file-based children.
 	unifySubagents(agent)
+	// Subagent enrichment can add a task estimate to a ready parent. Project
+	// after enrichment so the complete client response follows the ready-state
+	// metric contract without changing the source session.
+	agent.SessionState = agent.SessionState.ClientCopy()
 
 	return agent
 }

@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
@@ -48,6 +49,15 @@ type PushMessage struct {
 	// session_id for ticks (parallel to Buckets).
 	Generations       map[string]uint64 `json:"generations,omitempty"`
 	BucketGenerations map[string]uint64 `json:"bucket_generations,omitempty"`
+}
+
+// MarshalJSON omits task-progress metrics from ready session updates without
+// changing the in-memory session used to resume a later working update.
+func (m PushMessage) MarshalJSON() ([]byte, error) {
+	type wireMessage PushMessage
+	wire := wireMessage(m)
+	wire.Session = wire.Session.ClientCopy()
+	return json.Marshal(wire)
 }
 
 // InputRequest is the payload of a PushTypeInputRequested message: the action

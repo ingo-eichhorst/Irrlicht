@@ -27,6 +27,10 @@ type RecordAssertion struct {
 	EqualPaths    []string                 `json:"equal_paths,omitempty"`
 	MinDistinct   map[string]int           `json:"min_distinct,omitempty"`
 	FieldContains []FieldContainsAssertion `json:"field_contains,omitempty"`
+	// Absent requires every selected record to omit each dotted path.
+	Absent []string `json:"absent,omitempty"`
+	// Present requires every selected record to contain each dotted path.
+	Present []string `json:"present,omitempty"`
 }
 
 // RelatedRecordAssertion requires each selected record to have a second
@@ -125,6 +129,27 @@ func ValidateEventsForProfile(scenarioDir string, profile matrix.ExecutionProfil
 	return evaluateRecordAssertions("event", meta.EventAssertions, records)
 }
 
+// ValidateSessionUpdatesForProfile checks the newest recording's captured API
+// session-update frames against assertions in expected.jsonl.
+func ValidateSessionUpdatesForProfile(scenarioDir string, profile matrix.ExecutionProfile) (*RecordReport, error) {
+	meta, err := loadExpectedMeta(scenarioDir)
+	if err != nil || meta == nil || len(meta.SessionUpdateAssertions) == 0 {
+		return nil, err
+	}
+	recording, ok, err := matrix.NewestRecording(scenarioDir, profile)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("session-update assertions configured but no %s recording exists", profile)
+	}
+	records, err := readJSONLRecords(filepath.Join(recording.Dir, "session_updates.jsonl"), "session-update")
+	if err != nil {
+		return nil, err
+	}
+	return evaluateRecordAssertions("session-update", meta.SessionUpdateAssertions, records)
+}
+
 func loadExpectedMeta(scenarioDir string) (*ExpectedMeta, error) {
 	b, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl"))
 	if os.IsNotExist(err) {
@@ -165,6 +190,18 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if !validFieldContainsRequirements(assertion.FieldContains) {
 		return fmt.Errorf("%s assertion %q has an incomplete field-contains requirement", kind, assertion.Name)
 	}
+	if !validDottedPaths(assertion.Absent) {
+		return fmt.Errorf("%s assertion %q has an invalid absent-path requirement", kind, assertion.Name)
+	}
+	if !validDottedPaths(assertion.Present) {
+		return fmt.Errorf("%s assertion %q has an invalid present-path requirement", kind, assertion.Name)
+	}
+	if len(assertion.Present) > 0 && assertion.MinCount < 1 {
+		return fmt.Errorf("%s assertion %q has present paths but no positive minimum count", kind, assertion.Name)
+	}
+	if len(assertion.Absent) > 0 && assertion.MinCount < 1 {
+		return fmt.Errorf("%s assertion %q has absent paths but no positive minimum count", kind, assertion.Name)
+	}
 	return nil
 }
 
@@ -200,6 +237,20 @@ func validFieldContainsRequirements(requirements []FieldContainsAssertion) bool 
 		}
 	}
 	return true
+}
+
+func validDottedPaths(paths []string) bool {
+	for _, path := range paths {
+		if !validDottedPath(path) {
+			return false
+		}
+	}
+	return true
+}
+
+func validDottedPath(path string) bool {
+	return path != "" && !strings.HasPrefix(path, ".") &&
+		!strings.HasSuffix(path, ".") && !strings.Contains(path, "..")
 }
 
 func readJSONLRecords(path, kind string) ([]map[string]any, error) {
@@ -241,6 +292,8 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	evaluation.checkEqualPaths(assertion.EqualPaths, matched)
 	evaluation.checkDistinct(assertion.MinDistinct, matched)
 	evaluation.checkFieldContains(assertion.FieldContains, matched)
+	evaluation.checkAbsent(assertion.Absent, matched)
+	evaluation.checkPresent(assertion.Present, matched)
 	name := assertion.Name
 	if name == "" {
 		name = "records"
@@ -248,6 +301,24 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	return RecordAssertResult{
 		Name: name, Expected: evaluation.expected, Actual: evaluation.actual, OK: evaluation.ok,
 		KnownFailing: assertion.KnownFailing,
+	}
+}
+
+func (evaluation *recordEvaluation) checkPresent(paths []string, records []map[string]any) {
+	for _, path := range paths {
+		if !allPathExists(records, path) {
+			evaluation.ok = false
+		}
+		evaluation.expected += ", each with " + path
+	}
+}
+
+func (evaluation *recordEvaluation) checkAbsent(paths []string, records []map[string]any) {
+	for _, path := range paths {
+		if anyPathExists(records, path) {
+			evaluation.ok = false
+		}
+		evaluation.expected += ", each without " + path
 	}
 }
 
@@ -413,6 +484,27 @@ func allPathValuesEqual(records []map[string]any, path string) bool {
 	for _, record := range records[1:] {
 		value, ok := valueAtPath(record, path)
 		if !ok || !reflect.DeepEqual(value, first) {
+			return false
+		}
+	}
+	return true
+}
+
+func anyPathExists(records []map[string]any, path string) bool {
+	for _, record := range records {
+		if _, ok := valueAtPath(record, path); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func allPathExists(records []map[string]any, path string) bool {
+	if len(records) == 0 {
+		return false
+	}
+	for _, record := range records {
+		if _, ok := valueAtPath(record, path); !ok {
 			return false
 		}
 	}

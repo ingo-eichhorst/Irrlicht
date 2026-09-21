@@ -40,6 +40,10 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Exercise DeepSeek Harness's bounded compaction poll. This test is separate
+# from transcript replay because it validates the live-recording driver.
+bash replaydata/agents/deepseek-harness/driver-interactive_test.sh
+
 # shellcheck source=onboarding-factory/scripts/lib/recording-profile.sh
 source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/recording-profile.sh"
 validate_execution_profile "$EXECUTION_PROFILE"

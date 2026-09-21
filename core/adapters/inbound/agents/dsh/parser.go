@@ -1,7 +1,9 @@
 package dsh
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +21,11 @@ const (
 	recordUserMessage      = "user/message"
 	recordToolCall         = "tool/call"
 	recordToolResult       = "tool/result"
+	recordTodoWrite        = "todo/write"
+	recordCompactionStart  = "compaction/start"
+	recordCompactionEnd    = "compaction/end"
+	recordLLMRetry         = "llm/retry"
+	recordLLMRetryStarted  = "llm/retry-started"
 	recordRequestHeader    = "request/header"
 	recordRequestContext   = "request/context"
 )
@@ -29,7 +36,11 @@ const (
 // after the header; the ledger already carries any earlier refusal.
 type Parser struct {
 	unsupportedVersion string
+	todos              tailer.TodoReconciler
+	backgroundCalls    map[string]struct{}
 }
+
+var backgroundJobNoticeRe = regexp.MustCompile(`^background job (bash-[[:alnum:]-]+)(?: .* )?finished \[status: ([^,\]]+)`)
 
 type recordHandler func(*Parser, map[string]any, *tailer.ParsedEvent)
 
@@ -47,8 +58,13 @@ var recordHandlers = map[string]recordHandler{
 	recordApprovalDecided:  statelessHandler(parseApprovalDecided),
 	recordAssistantMessage: statelessHandler(parseAssistantMessage),
 	recordUserMessage:      statelessHandler(parseUserMessage),
-	recordToolCall:         statelessHandler(parseToolCall),
-	recordToolResult:       statelessHandler(parseToolResult),
+	recordToolCall:         (*Parser).parseToolCall,
+	recordToolResult:       (*Parser).parseToolResult,
+	recordTodoWrite:        (*Parser).parseTodoWrite,
+	recordCompactionStart:  statelessHandler(parseCompactionStart),
+	recordCompactionEnd:    statelessHandler(parseCompactionEnd),
+	recordLLMRetry:         statelessHandler(parseLLMRetry),
+	recordLLMRetryStarted:  statelessHandler(parseLLMRetryStarted),
 	recordRequestHeader:    statelessHandler(parseRequestHeader),
 	recordRequestContext:   statelessHandler(parseRequestContext),
 }
@@ -198,7 +214,11 @@ func parseAssistantUsage(data map[string]any, model string, ev *tailer.ParsedEve
 
 func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	message := object(raw, "data")
-	if text(object(message, "source"), "kind") != "user" {
+	source := object(message, "source")
+	if sourceIsTerminalBackgroundNotice(source, messageText(message), ev) {
+		return
+	}
+	if text(source, "kind") != "user" {
 		ev.Skip = true
 		return
 	}
@@ -207,7 +227,7 @@ func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	ev.UserText = messageText(message)
 }
 
-func parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
+func (p *Parser) parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
 	data := object(raw, "data")
 	id := text(data, "callId")
 	name := text(data, "name")
@@ -217,23 +237,206 @@ func parseToolCall(raw map[string]any, ev *tailer.ParsedEvent) {
 	}
 	ev.EventType = "function_call"
 	ev.ToolUses = []tailer.ToolUse{{ID: id, Name: name}}
+	if name == "bash" && dshBackgroundBash(text(data, "arguments")) {
+		if p.backgroundCalls == nil {
+			p.backgroundCalls = make(map[string]struct{})
+		}
+		p.backgroundCalls[id] = struct{}{}
+	}
 }
 
-func parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
-	message := object(object(raw, "data"), "message")
-	id := text(object(message, "source"), "callId")
+func (p *Parser) parseToolResult(raw map[string]any, ev *tailer.ParsedEvent) {
+	id, message := toolResultIDAndMessage(raw)
 	if id == "" {
 		ev.Skip = true
 		return
 	}
 	ev.EventType = "function_call_output"
 	ev.ToolResultIDs = []string{id}
+	ev.IsError = toolResultHasError(message)
+	p.completeBackgroundCall(id, message, ev)
+}
+
+func toolResultIDAndMessage(raw map[string]any) (string, map[string]any) {
+	message := object(object(raw, "data"), "message")
+	return text(object(message, "source"), "callId"), message
+}
+
+func toolResultHasError(message map[string]any) bool {
 	for _, item := range array(message, "content") {
 		block, _ := item.(map[string]any)
-		if value, ok := block["isError"].(bool); ok && value {
-			ev.IsError = true
+		if isError, _ := block["isError"].(bool); isError {
+			return true
 		}
 	}
+	return false
+}
+
+func (p *Parser) completeBackgroundCall(id string, message map[string]any, ev *tailer.ParsedEvent) {
+	if _, background := p.backgroundCalls[id]; !background {
+		return
+	}
+	delete(p.backgroundCalls, id)
+	if ev.IsError {
+		return
+	}
+	jobID := dshBackgroundJobID(toolResultText(message))
+	if jobID == "" {
+		return
+	}
+	ev.BackgroundSpawns = []tailer.BackgroundSpawn{{BashID: jobID, NoProbeHold: true}}
+}
+
+func dshBackgroundBash(arguments string) bool {
+	var value struct {
+		RunInBackground bool `json:"run_in_background"`
+	}
+	return json.Unmarshal([]byte(arguments), &value) == nil && value.RunInBackground
+}
+
+func dshBackgroundJobID(value string) string {
+	prefix := "started background job bash-"
+	if !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimPrefix(value, "started background job "))
+	if len(fields) == 0 {
+		return ""
+	}
+	id := fields[0]
+	if !regexp.MustCompile(`^bash-[[:alnum:]-]+$`).MatchString(id) {
+		return ""
+	}
+	return id
+}
+
+func sourceIsTerminalBackgroundNotice(source map[string]any, value string, ev *tailer.ParsedEvent) bool {
+	if !sourceIsToolJobsNotice(source) {
+		return false
+	}
+	match := backgroundJobNoticeRe.FindStringSubmatch(value)
+	if !backgroundJobNoticeIsTerminal(match) {
+		return false
+	}
+	ev.Skip = true
+	ev.TerminatedBackgroundTaskIDs = []string{match[1]}
+	ev.OriginTaskNotification = true
+	return true
+}
+
+func sourceIsToolJobsNotice(source map[string]any) bool {
+	return text(source, "kind") == "plugin" &&
+		text(source, "plugin") == "tool-jobs" &&
+		text(source, "form") == "notice"
+}
+
+func backgroundJobNoticeIsTerminal(match []string) bool {
+	return len(match) == 3 && !strings.EqualFold(match[2], "running")
+}
+
+func toolResultText(message map[string]any) string {
+	var parts []string
+	for _, item := range array(message, "content") {
+		block, _ := item.(map[string]any)
+		for _, nested := range array(block, "content") {
+			textBlock, _ := nested.(map[string]any)
+			if value := strings.TrimSpace(text(textBlock, "text")); value != "" {
+				parts = append(parts, value)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// parseTodoWrite reconciles DSH's authoritative whole-list todo snapshot.
+// Each durable todo/write record replaces the agent's visible list.
+func (p *Parser) parseTodoWrite(raw map[string]any, ev *tailer.ParsedEvent) {
+	rawTodos, ok := object(raw, "data")["todos"].([]any)
+	if !ok {
+		ev.Skip = true
+		return
+	}
+	todos := make([]tailer.Todo, 0, len(rawTodos))
+	for _, rawTodo := range rawTodos {
+		todo, ok := rawTodo.(map[string]any)
+		if !ok || text(todo, "content") == "" {
+			ev.Skip = true
+			return
+		}
+		todos = append(todos, tailer.Todo{
+			Key:    text(todo, "content"),
+			Status: text(todo, "status"),
+		})
+	}
+	ev.EventType = "task_update"
+	if len(rawTodos) == 0 {
+		p.todos.ReconcileEmptySnapshot(ev)
+		return
+	}
+	p.todos.Reconcile(todos, ev)
+}
+
+// parseCompactionStart maps only standalone manual compaction. The installed
+// dsh-compaction-basic/lib/index.js `compactSurfaceRegion` gives manual
+// compactNow owner null, while automatic compaction owns an open numeric turn.
+// The latter already has turn/start and turn/end lifecycle records.
+func parseCompactionStart(raw map[string]any, ev *tailer.ParsedEvent) {
+	if !isStandaloneCompaction(raw) {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "turn_start"
+}
+
+func parseCompactionEnd(raw map[string]any, ev *tailer.ParsedEvent) {
+	if !isStandaloneCompaction(raw) {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "turn_done"
+}
+
+func isStandaloneCompaction(raw map[string]any) bool {
+	turn, exists := object(raw, "data")["turn"]
+	return exists && turn == nil
+}
+
+func parseLLMRetry(raw map[string]any, ev *tailer.ParsedEvent) {
+	data := object(raw, "data")
+	failure := object(data, "failure")
+	class := strings.ToLower(text(failure, "code"))
+	if class == "" {
+		ev.EventType = "retrying"
+		ev.SessionError = &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseUnknown,
+			Class:   "malformed_retry_record",
+			Message: "DeepSeek Harness llm/retry record has no failure code",
+		}
+		return
+	}
+	ev.EventType = "retrying"
+	err := &tailer.SessionError{
+		Phase:   tailer.ErrorPhaseRetrying,
+		Class:   class,
+		Message: text(failure, "message"),
+	}
+	if attempt := integer(data, "retry"); attempt > 0 {
+		value := int(attempt)
+		err.Attempt = &value
+	}
+	if maximum := integer(data, "maxRetries"); maximum > 0 {
+		value := int(maximum)
+		err.MaxAttempts = &value
+	}
+	if delay, ok := number(data, "delayMs"); ok && delay >= 0 {
+		value := time.Duration(delay * float64(time.Millisecond))
+		err.RetryIn = &value
+	}
+	ev.SessionError = err
+}
+
+func parseLLMRetryStarted(_ map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "retry_started"
 }
 
 func parseRequestHeader(raw map[string]any, ev *tailer.ParsedEvent) {

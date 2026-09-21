@@ -86,6 +86,8 @@ type ExpectedMeta struct {
 	// EventAssertions verify relationships between captured daemon events that
 	// lifecycle phases cannot express, such as distinct PIDs and path ownership.
 	EventAssertions []RecordAssertion `json:"event_assertions,omitempty"`
+	// SessionUpdateAssertions verify captured API session-update frames.
+	SessionUpdateAssertions []RecordAssertion `json:"session_update_assertions,omitempty"`
 }
 
 // ObservationSpec is the optional metric-assertion block of an expected.jsonl
@@ -104,6 +106,9 @@ type ObservationSpec struct {
 	TotalTokensNonzero        bool `json:"total_tokens_nonzero,omitempty"`        // summary.total_tokens > 0
 	ContextWindowNonzero      bool `json:"context_window_nonzero,omitempty"`      // summary.context_window > 0
 	ContextUtilizationNonzero bool `json:"context_utilization_nonzero,omitempty"` // summary.context_utilization_percentage > 0
+	// CumulativeTokensEquals asserts the replay's cumulative input plus output
+	// total. A pointer distinguishes an omitted assertion from an explicit zero.
+	CumulativeTokensEquals *int64 `json:"cumulative_tokens_equals,omitempty"`
 }
 
 // ExpectedPhase is one line of expected.jsonl after the meta line.
@@ -151,14 +156,18 @@ type ExpectedPhase struct {
 	// enumerating intermediate cycles purely as matcher anchors, which pins a
 	// count that is itself debounce-dependent. Composes with MaxDelayMs as a
 	// window: min filters candidates, max rejects the one that matched.
-	MinDelayMs        int64    `json:"min_delay_ms,omitempty"`
-	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
-	SameSessionAs     string   `json:"same_session_as,omitempty"`
-	NewSession        bool     `json:"new_session,omitempty"`
-	SessionIDPrefix   string   `json:"session_id_prefix,omitempty"`
-	Invariants        []string `json:"invariants,omitempty"`
-	Trigger           string   `json:"trigger,omitempty"` // documentation-only this iteration
-	Text              string   `json:"text,omitempty"`
+	MinDelayMs        int64  `json:"min_delay_ms,omitempty"`
+	DurationAtLeastMs int64  `json:"duration_at_least_ms,omitempty"`
+	SameSessionAs     string `json:"same_session_as,omitempty"`
+	// ParentSessionSameAs requires a lifecycle event's parent_session_id to
+	// equal the session ID matched by an earlier phase. It pins ownership,
+	// rather than merely proving that a child linked to some parent.
+	ParentSessionSameAs string   `json:"parent_session_same_as,omitempty"`
+	NewSession          bool     `json:"new_session,omitempty"`
+	SessionIDPrefix     string   `json:"session_id_prefix,omitempty"`
+	Invariants          []string `json:"invariants,omitempty"`
+	Trigger             string   `json:"trigger,omitempty"` // documentation-only this iteration
+	Text                string   `json:"text,omitempty"`
 
 	// Profiles refines this phase for one execution profile, keyed by the
 	// profile name ("cli-local", "desktop-local"). A profile with no entry
@@ -244,10 +253,11 @@ type ExpectedReport struct {
 // events.jsonl. Mirrors the daemon's lifecycle.Event JSON shape; we
 // don't pull in lifecycle to keep this package's deps thin.
 type recordedEvent struct {
-	Ts        time.Time `json:"ts"`
-	Kind      string    `json:"kind"`
-	SessionID string    `json:"session_id"`
-	NewState  string    `json:"new_state,omitempty"`
+	Ts              time.Time `json:"ts"`
+	Kind            string    `json:"kind"`
+	SessionID       string    `json:"session_id"`
+	ParentSessionID string    `json:"parent_session_id,omitempty"`
+	NewState        string    `json:"new_state,omitempty"`
 }
 
 // hasParentTraversal reports whether p contains a literal ".." — the same
@@ -763,8 +773,9 @@ func resolvePhaseAnchor(p ExpectedPhase, anchorTs map[string]time.Time) (name st
 // NewSession) — at most one of the two is populated per phase, since
 // SameSessionAs and NewSession are mutually exclusive.
 type sessionConstraint struct {
-	RequireSID string
-	SeenSIDs   map[string]struct{}
+	RequireSID       string
+	RequireParentSID string
+	SeenSIDs         map[string]struct{}
 }
 
 // resolveSessionConstraint computes the session-id filter for matching, up
@@ -779,6 +790,13 @@ func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (sc
 			return sessionConstraint{}, fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
 		}
 		sc.RequireSID = sid
+	}
+	if p.ParentSessionSameAs != "" {
+		sid, ok := matchedSid[p.ParentSessionSameAs]
+		if !ok {
+			return sessionConstraint{}, fmt.Sprintf("parent_session_same_as references unknown phase %q", p.ParentSessionSameAs)
+		}
+		sc.RequireParentSID = sid
 	}
 	if p.NewSession {
 		sc.SeenSIDs = make(map[string]struct{}, len(matchedSid))
@@ -848,6 +866,9 @@ func eventSatisfiesPhase(p ExpectedPhase, ev *recordedEvent, sc sessionConstrain
 		return false
 	}
 	if sc.RequireSID != "" && ev.SessionID != sc.RequireSID {
+		return false
+	}
+	if sc.RequireParentSID != "" && ev.ParentSessionID != sc.RequireParentSID {
 		return false
 	}
 	if p.NewSession {

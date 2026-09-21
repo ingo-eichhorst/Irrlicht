@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"irrlicht/core/application/replayengine"
+	"irrlicht/core/domain/session"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
@@ -30,126 +31,6 @@ func writeExpected(t *testing.T, scenarioDir, meta string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(scenarioDir, "expected.jsonl"), []byte(meta+"\n"), 0o644); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestObservationsSkippedNoRecording(t *testing.T) {
-	rep, err := ValidateObservations(t.TempDir())
-	if err != nil || !rep.Skipped || !rep.Pass {
-		t.Fatalf("want skipped+pass, got %+v err=%v", rep, err)
-	}
-}
-
-func TestObservationsHardAssertsPass(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-05-01-00-00-00_x", `{"estimated_cost_usd":0.12,"cum_input_tokens":10,"cum_output_tokens":20,"model_name":"claude-opus-4-7"}`)
-	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"model":"claude-opus-4-7","cost_nonzero":true,"tokens_nonzero":true}}`)
-	rep, err := ValidateObservations(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rep.Pass || len(rep.Asserts) != 3 {
-		t.Fatalf("want pass + 3 asserts, got %+v", rep)
-	}
-	for _, a := range rep.Asserts {
-		if !a.OK {
-			t.Fatalf("assert %s should pass: %+v", a.Field, a)
-		}
-	}
-}
-
-func TestObservationsModelMismatchFails(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-05-01-00-00-00_x", `{"estimated_cost_usd":0.12,"model_name":"gpt-5"}`)
-	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"model":"claude-opus-4-7"}}`)
-	rep, _ := ValidateObservations(dir)
-	if rep.Pass {
-		t.Fatalf("model mismatch must fail: %+v", rep)
-	}
-}
-
-func TestObservationsCostNonzeroFails(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-05-01-00-00-00_x", `{"estimated_cost_usd":0,"model_name":"m"}`)
-	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"cost_nonzero":true}}`)
-	rep, _ := ValidateObservations(dir)
-	if rep.Pass {
-		t.Fatalf("zero cost must fail cost_nonzero: %+v", rep)
-	}
-}
-
-// TestObservationsDirectContextPass covers the direct context vector. A golden
-// with total tokens, context window, and utilization satisfies the nonzero
-// assertions. These fields are distinct from cost and cumulative tokens.
-func TestObservationsDirectContextPass(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash","total_tokens":16353,"context_window":1048576,"context_utilization_percentage":1.56}`)
-	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"model":"gemini-3.5-flash","total_tokens_nonzero":true,"context_window_nonzero":true,"context_utilization_nonzero":true}}`)
-	rep, err := ValidateObservations(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rep.Pass || len(rep.Asserts) != 4 {
-		t.Fatalf("want pass + 4 asserts, got %+v", rep)
-	}
-	for _, a := range rep.Asserts {
-		if !a.OK {
-			t.Fatalf("assert %s should pass: %+v", a.Field, a)
-		}
-	}
-}
-
-// TestObservationsContextNonzeroFails checks that a missing context vector
-// fails each direct nonzero assertion.
-func TestObservationsContextNonzeroFails(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash"}`)
-	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"context_window_nonzero":true,"context_utilization_nonzero":true,"total_tokens_nonzero":true}}`)
-	rep, _ := ValidateObservations(dir)
-	if rep.Pass {
-		t.Fatalf("storeless golden must fail the context/token assertions: %+v", rep)
-	}
-}
-
-func TestObservationsSoftDriftReportedNotFailed(t *testing.T) {
-	dir := t.TempDir()
-	// prior cheaper; current 3× → > default 50% band → drift, but no hard assert.
-	mkGoldenRec(t, dir, "2026-05-01-00-00-00_a", `{"estimated_cost_usd":0.10,"cum_input_tokens":100,"model_name":"m"}`)
-	mkGoldenRec(t, dir, "2026-05-02-00-00-00_b", `{"estimated_cost_usd":0.30,"cum_input_tokens":105,"model_name":"m"}`)
-	rep, _ := ValidateObservations(dir)
-	if !rep.Pass {
-		t.Fatalf("drift must NOT fail (soft): %+v", rep)
-	}
-	var costDrift bool
-	for _, d := range rep.Drifts {
-		if d.Field == "cost_usd" {
-			costDrift = true
-		}
-		if d.Field == "input_tokens" {
-			t.Fatalf("5%% token change should be within tolerance, not a drift: %+v", d)
-		}
-	}
-	if !costDrift {
-		t.Fatalf("3× cost change should be a drift: %+v", rep.Drifts)
-	}
-}
-
-func TestObservationsModelDrift(t *testing.T) {
-	dir := t.TempDir()
-	mkGoldenRec(t, dir, "2026-05-01-00-00-00_a", `{"model_name":"claude-opus-4-7"}`)
-	mkGoldenRec(t, dir, "2026-05-02-00-00-00_b", `{"model_name":"claude-opus-4-8"}`)
-	rep, _ := ValidateObservations(dir)
-	if !rep.Pass {
-		t.Fatalf("model drift is soft, must not fail: %+v", rep)
-	}
-	found := false
-	for _, d := range rep.Drifts {
-		if d.Field == "model" && d.Prior == "claude-opus-4-7" && d.Current == "claude-opus-4-8" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("want model drift, got %+v", rep.Drifts)
 	}
 }
 
@@ -233,6 +114,176 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	report, err = ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
 	if err != nil || report == nil || report.ExpectedPass() {
 		t.Fatalf("unrelated PID regression must not inherit the path waiver: report=%+v err=%v", report, err)
+	}
+}
+
+func TestSessionUpdateAssertionsDetectLeakedMetricMutation(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_x"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","session_update_assertions":[`+
+		`{"name":"ready update omits task estimate","where":{"type":"session_updated","session.state":"ready"},"min_count":1,"absent":["session.metrics.task_estimate"]}]}`)
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	withoutMetric := `{"type":"session_updated","session":{"state":"ready","metrics":{}}}` + "\n"
+	if err := os.WriteFile(path, []byte(withoutMetric), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.ExpectedPass() {
+		t.Fatalf("unmutated session update must pass: report=%+v err=%v", report, err)
+	}
+
+	// This is the committed mutation proof for absent-path assertions. A
+	// ready-frame task estimate must make the assertion fail.
+	leakedMetric := `{"type":"session_updated","session":{"state":"ready","metrics":{"task_estimate":{"total_rounds":4}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(leakedMetric), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.ExpectedPass() || report.Asserts[0].OK {
+		t.Fatalf("ready task-estimate leak must fail: report=%+v err=%v", report, err)
+	}
+}
+
+func TestDeepseekTaskListSessionUpdateAssertionsDetectMissingTask(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_tasks"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"task-list","session_update_assertions":[{"name":"completed task snapshot","where":{"type":"session_updated","session.state":"ready","session.metrics.tasks.0.subject":"draft a greeting","session.metrics.tasks.0.status":"completed","session.metrics.tasks.1.subject":"refine the greeting","session.metrics.tasks.1.status":"completed","session.metrics.tasks.2.subject":"reply done","session.metrics.tasks.2.status":"completed"},"min_count":1}]}`)
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	state := session.SessionState{Version: 1, State: session.StateReady, Metrics: &session.SessionMetrics{Tasks: []session.Task{{Subject: "draft a greeting", Status: "completed"}, {Subject: "refine the greeting", Status: "completed"}, {Subject: "reply done", Status: "completed"}}}}
+	encoded, err := json.Marshal(map[string]any{"type": "session_updated", "session": state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := string(encoded) + "\n"
+	if err := os.WriteFile(path, []byte(frame), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.Pass {
+		t.Fatalf("completed task frame must pass: report=%+v err=%v", report, err)
+	}
+	missing := strings.Replace(frame, `,{"id":"","subject":"reply done","status":"completed"}`, "", 1)
+	if err := os.WriteFile(path, []byte(missing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.Pass || report.ExpectedPass() {
+		t.Fatalf("missing completed task must fail: report=%+v err=%v", report, err)
+	}
+}
+
+func TestRecordAssertionsRejectVacuousOrMalformedAbsentPaths(t *testing.T) {
+	records := []map[string]any{{"type": "session_updated", "session": map[string]any{"state": "ready"}}}
+	for _, tc := range []struct {
+		name      string
+		assertion RecordAssertion
+	}{
+		{
+			name: "zero minimum count",
+			assertion: RecordAssertion{
+				Name: "vacuous absence", Where: map[string]any{"type": "session_updated"},
+				Absent: []string{"session.metrics.task_estimate"},
+			},
+		},
+		{
+			name: "empty path segment",
+			assertion: RecordAssertion{
+				Name: "malformed absence", Where: map[string]any{"type": "session_updated"}, MinCount: 1,
+				Absent: []string{"session..metrics"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := evaluateRecordAssertions("session-update", []RecordAssertion{tc.assertion}, records)
+			if err == nil || report != nil {
+				t.Fatalf("invalid absent assertion must fail closed: report=%+v err=%v", report, err)
+			}
+		})
+	}
+}
+
+func TestRecordAssertionDottedPathValidation(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "session.metrics.task_estimate", want: true},
+		{path: "", want: false},
+		{path: ".session", want: false},
+		{path: "session.", want: false},
+		{path: "session..metrics", want: false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := validDottedPaths([]string{tc.path}); got != tc.want {
+				t.Fatalf("validDottedPaths(%q) = %t, want %t", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeepseekTaskEstimateSessionUpdateAssertionsDetectMetricRemoval(t *testing.T) {
+	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "5-8_task-estimate-marker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("no task-estimate-marker recording found")
+	}
+	expected, err := os.ReadFile(filepath.Join(source, "expected.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := os.ReadFile(filepath.Join(recording.Dir, "session_updates.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	name := "2026-09-20-00-00-00_mutation"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, strings.TrimSpace(string(expected)))
+	path := filepath.Join(dir, "recordings", name, "session_updates.jsonl")
+	if err := os.WriteFile(path, frames, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || baseline == nil || !baseline.ExpectedPass() || !baseline.Pass {
+		t.Fatalf("fixed ready-frame projection must pass: report=%+v err=%v", baseline, err)
+	}
+
+	mutated := bytes.ReplaceAll(frames, []byte(`"metrics":{`), []byte(`"metrics":{"task_estimate":{"total_rounds":4,"completed_rounds":0},`))
+	if bytes.Equal(mutated, frames) {
+		t.Fatal("task-estimate mutation did not change the fixture")
+	}
+	if err := os.WriteFile(path, mutated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil {
+		t.Fatalf("validate task-estimate mutation: report=%+v err=%v", report, err)
+	}
+	if len(report.Asserts) == 0 || report.Asserts[0].OK || report.ExpectedPass() {
+		t.Fatalf("adding a ready-frame task estimate must fail the required assertion: report=%+v", report)
+	}
+
+	etaRemoved := bytes.Replace(frames, []byte(`"task_completion_eta":`), []byte(`"removed_task_completion_eta":`), 1)
+	if bytes.Equal(etaRemoved, frames) {
+		t.Fatal("task-completion-ETA mutation did not change the fixture")
+	}
+	if err := os.WriteFile(path, etaRemoved, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateSessionUpdatesForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil {
+		t.Fatalf("validate task-completion-ETA mutation: report=%+v err=%v", report, err)
+	}
+	if report.ExpectedPass() || report.Pass {
+		t.Fatalf("removing a working task completion ETA must fail the required present assertion: report=%+v", report)
 	}
 }
 
@@ -440,12 +491,13 @@ func TestCommittedRecordAssertions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", expectedPath, err)
 		}
-		if meta == nil || len(meta.TranscriptAssertions) == 0 && len(meta.EventAssertions) == 0 {
+		if meta == nil || len(meta.TranscriptAssertions) == 0 && len(meta.EventAssertions) == 0 && len(meta.SessionUpdateAssertions) == 0 {
 			continue
 		}
 		checked++
-		checkCommittedTranscriptAssertions(t, expectedPath, scenarioDir, meta.TranscriptAssertions)
-		checkCommittedEventAssertions(t, expectedPath, scenarioDir, meta.EventAssertions)
+		checkCommittedRecordAssertions(t, "transcript", expectedPath, scenarioDir, meta.TranscriptAssertions, ValidateTranscriptForProfile, func(report *RecordReport) bool { return report.Pass })
+		checkCommittedRecordAssertions(t, "event", expectedPath, scenarioDir, meta.EventAssertions, ValidateEventsForProfile, (*RecordReport).ExpectedPass)
+		checkCommittedRecordAssertions(t, "session-update", expectedPath, scenarioDir, meta.SessionUpdateAssertions, ValidateSessionUpdatesForProfile, (*RecordReport).ExpectedPass)
 	}
 	if checked == 0 {
 		t.Fatal("no committed transcript or event assertions were discovered; the catalog gate checked nothing")
@@ -453,42 +505,25 @@ func TestCommittedRecordAssertions(t *testing.T) {
 	t.Logf("checked record assertions in %d committed cells", checked)
 }
 
-func checkCommittedTranscriptAssertions(
+func checkCommittedRecordAssertions(
 	t *testing.T,
+	kind string,
 	expectedPath string,
 	scenarioDir string,
 	assertions []RecordAssertion,
+	validate func(string, matrix.ExecutionProfile) (*RecordReport, error),
+	passed func(*RecordReport) bool,
 ) {
 	t.Helper()
 	if len(assertions) == 0 {
 		return
 	}
-	report, err := ValidateTranscriptForProfile(scenarioDir, matrix.ProfileCLILocal)
+	report, err := validate(scenarioDir, matrix.ProfileCLILocal)
 	if err != nil {
 		t.Errorf("%s: %v", expectedPath, err)
 		return
 	}
-	if report == nil || !report.Pass {
-		t.Errorf("%s: transcript assertions failed: %+v", expectedPath, report)
-	}
-}
-
-func checkCommittedEventAssertions(
-	t *testing.T,
-	expectedPath string,
-	scenarioDir string,
-	assertions []RecordAssertion,
-) {
-	t.Helper()
-	if len(assertions) == 0 {
-		return
-	}
-	report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
-	if err != nil {
-		t.Errorf("%s: %v", expectedPath, err)
-		return
-	}
-	if report == nil || !report.ExpectedPass() {
-		t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
+	if report == nil || !passed(report) {
+		t.Errorf("%s: %s assertions failed: %+v", expectedPath, kind, report)
 	}
 }

@@ -1,0 +1,2 @@
+{"type":"tool/call","seq":15,"time":1789782276637,"data":{"turn":1,"step":1,"callId":"245752248","name":"bash","arguments":"{\"command\":\"sleep 120 && echo BG_DONE\",\"description\":\"Run background proof\",\"run_in_background\":true}"}}
+{"type":"tool/result","seq":17,"time":1789782281000,"data":{"turn":1,"step":1,"message":{"source":{"kind":"tool","callId":"other-call"},"content":[{"type":"tool-result","toolCallId":"other-call","content":[{"type":"text","text":"started background job bash-1"}],"isError":false}]}}}

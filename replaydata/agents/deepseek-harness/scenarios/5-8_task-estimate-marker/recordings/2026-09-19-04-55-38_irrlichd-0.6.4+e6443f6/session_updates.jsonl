@@ -1,0 +1,2 @@
+{"type":"session_updated","seq":514,"session":{"adapter":"dsh","state":"ready","updated_at":1789787210,"metrics":{"task_estimate":{"total_rounds":4,"completed_rounds":0,"updated_at":1789787210,"source":"marker"},"task_completion_eta":1789788170}}}
+{"type":"session_updated","seq":1001,"session":{"adapter":"dsh","state":"ready","metrics":{"task_estimate":{"total_rounds":4,"completed_rounds":4,"source":"marker"},"task_completion_eta":1789787357}}}

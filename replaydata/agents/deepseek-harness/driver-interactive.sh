@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
+DRIVE_ELICITS="send slash wait_turn wait_compaction await_child_turn_end await_parent_ready capture_session_updates stop_session_updates sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session seed_instruction"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -47,6 +47,7 @@ DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
 REACHED_EPILOGUE=0
 FORK_WEB_PID=""
+UPDATES_CAPTURE_PID=""
 
 N_SLOTS=0
 ACTIVE=0
@@ -134,9 +135,32 @@ stop_fork_web() {
   return 0
 }
 
+stop_session_updates_process() {
+  local pid="${UPDATES_CAPTURE_PID:-}" i
+  [[ -n "$pid" ]] || return 0
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null || true
+    UPDATES_CAPTURE_PID=""
+    return 1
+  fi
+  kill -TERM "$pid" 2>/dev/null || return 1
+  for (( i = 0; i < 40; i++ )); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "[driver] session-update capture process $pid survived shutdown" >&2
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  UPDATES_CAPTURE_PID=""
+  return 0
+}
+
 # BEGIN cleanup
 cleanup() {
   local i
+  stop_session_updates_process || true
   stop_fork_web || true
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
@@ -195,6 +219,10 @@ resolve_transcript() {
 
 # shellcheck source=turn-count.sh
 source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
+# shellcheck source=child-turn.sh
+source "$(dirname "${BASH_SOURCE[0]}")/child-turn.sh"
+# shellcheck source=parent-ready.sh
+source "$(dirname "${BASH_SOURCE[0]}")/parent-ready.sh"
 
 boot_slot() { # [resume-session-id]
   local resume_id="${1:-}" command_text pane
@@ -275,6 +303,112 @@ step_wait_turn() {
   echo "[driver] wait_turn timed out at $now/$EXPECTED_TURNS" >&2
   EXIT_REASON="timeout"
   return 1
+}
+
+step_wait_compaction() {
+  resolve_transcript || return 1
+  local unreadable_since=0 zstd_status jq_status
+  local -a pipe_status
+  while (( $(remaining_seconds) > 0 )); do
+    if zstd -dc -- "$TRANSCRIPT" | jq -e 'select(.type == "compaction/end")' >/dev/null; then
+      echo "[driver] compaction complete[s$ACTIVE]" >&2
+      return 0
+    fi
+    pipe_status=("${PIPESTATUS[@]}")
+    zstd_status="${pipe_status[0]}"
+    jq_status="${pipe_status[1]}"
+    if [[ "$zstd_status" -eq 0 && "$jq_status" -eq 4 ]]; then
+      unreadable_since=0
+      sleep 0.25
+      continue
+    fi
+    [[ "$unreadable_since" -ne 0 ]] || unreadable_since=$(date +%s)
+    if (( $(date +%s) - unreadable_since >= 10 )); then
+      echo "[driver] DSH transcript is unreadable (zstd=$zstd_status jq=$jq_status): $TRANSCRIPT" >&2
+      EXIT_REASON="unreadable_transcript"
+      return 1
+    fi
+    sleep 0.25
+  done
+  echo "[driver] wait_compaction timed out without compaction/end" >&2
+  EXIT_REASON="timeout"
+  return 1
+}
+
+step_await_child_turn_end() {
+  local child_transcript
+  resolve_transcript || return 1
+  if ! child_transcript="$(dsh_await_child_turn_end "$DSH_SESSIONS_DIR" "$UUID" "$MARKER" "$DEADLINE")"; then
+    EXIT_REASON="child_turn_end_timeout"
+    return 1
+  fi
+  echo "[driver] native child completed turn: $child_transcript" >&2
+}
+
+step_capture_session_updates() {
+  local bind="${IRRLICHT_BIND_ADDR:-127.0.0.1:7837}"
+  local raw="$STAGING/session_updates.raw.jsonl" ready="$STAGING/session_updates.ready"
+  rm -f "$raw" "$ready"
+  node "$(dirname "$0")/capture-session-updates.mjs" "ws://$bind/api/v1/sessions/stream" "$raw" "$ready" &
+  UPDATES_CAPTURE_PID=$!
+  local until=$(( $(date +%s) + ${CAPTURE_READY_TIMEOUT_S:-10} ))
+  while [[ ! -s "$ready" && $(date +%s) -lt $until ]]; do sleep 0.1; done
+  [[ -s "$ready" ]] || { echo "[driver] session-update capture did not open" >&2; EXIT_REASON="capture_unready"; return 1; }
+  kill -0 "$UPDATES_CAPTURE_PID" 2>/dev/null || { echo "[driver] session-update capture closed after opening" >&2; EXIT_REASON="capture_dead"; return 1; }
+}
+
+step_stop_session_updates() { # [require-completed-tasks]
+  local require_completed="${1:-false}" raw="$STAGING/session_updates.raw.jsonl" jq_status
+  local predicate='select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready")'
+  if [[ "$require_completed" == "true" ]]; then
+    predicate='select(.type == "session_updated" and .session.session_id == $id and .session.state == "ready" and (.session.metrics.tasks | length == 3) and ([.session.metrics.tasks[].status] | all(. == "completed")))'
+  fi
+  while (( $(remaining_seconds) > 0 )); do
+    if jq -e --arg id "$UUID" "$predicate" "$raw" >/dev/null; then
+      break
+    else
+      jq_status=$?
+    fi
+    if [[ "$jq_status" -ne 4 ]]; then
+      echo "[driver] session-update capture contains invalid JSON (jq=$jq_status)" >&2
+      EXIT_REASON="capture_unreadable"
+      return 1
+    fi
+    sleep 0.25
+  done
+  if jq -e --arg id "$UUID" "$predicate" "$raw" >/dev/null; then
+    jq_status=0
+  else
+    jq_status=$?
+    if [[ "$jq_status" -ne 4 ]]; then
+      echo "[driver] session-update capture contains invalid JSON (jq=$jq_status)" >&2
+      EXIT_REASON="capture_unreadable"
+    else
+      echo "[driver] no matching ready DSH session_updated frame for $UUID" >&2
+      EXIT_REASON="capture_ready_timeout"
+    fi
+    return 1
+  fi
+  stop_session_updates_process || { echo "[driver] session-update capture is not running or did not stop" >&2; EXIT_REASON="capture_dead"; return 1; }
+  resolve_transcript || return 1
+  if jq -c --arg id "$UUID" 'select(.type == "session_updated" and .session.session_id == $id)' "$raw" > "$STAGING/session_updates.jsonl.tmp"; then
+    :
+  else
+    rm -f "$STAGING/session_updates.jsonl.tmp"
+    echo "[driver] session-update capture contains invalid JSON" >&2
+    EXIT_REASON="capture_unreadable"
+    return 1
+  fi
+  mv "$STAGING/session_updates.jsonl.tmp" "$STAGING/session_updates.jsonl"
+  [[ -s "$STAGING/session_updates.jsonl" ]] || { echo "[driver] no matching DSH session_updated frame for $UUID" >&2; EXIT_REASON="capture_empty"; return 1; }
+}
+
+step_await_parent_ready() {
+  resolve_transcript || return 1
+  if ! dsh_await_parent_ready "${IRRLICHT_BIND_ADDR:-}" "$UUID" "$DEADLINE"; then
+    EXIT_REASON="parent_ready_timeout"
+    return 1
+  fi
 }
 
 step_interrupt() {
@@ -489,6 +623,11 @@ while IFS= read -r step; do
     send)          step_send "$(jq -r '.text' <<<"$step")" ;;
     slash)         step_slash "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)     step_wait_turn || STEP_OK=false ;;
+    wait_compaction) step_wait_compaction || STEP_OK=false ;;
+    await_child_turn_end) step_await_child_turn_end || STEP_OK=false ;;
+    await_parent_ready) step_await_parent_ready || STEP_OK=false ;;
+    capture_session_updates) step_capture_session_updates || STEP_OK=false ;;
+    stop_session_updates) step_stop_session_updates "$(jq -r '.require_completed_tasks // false' <<<"$step")" || STEP_OK=false ;;
     sleep)         sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)     step_interrupt ;;
     keys)          step_keys "$(jq -r '.keys // .text // empty' <<<"$step")" || STEP_OK=false ;;

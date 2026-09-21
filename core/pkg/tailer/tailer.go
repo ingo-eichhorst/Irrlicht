@@ -1233,34 +1233,61 @@ const monitorPersistentHoldCeiling = 12 * time.Hour
 // KillShell, or a terminal task-notification removes it. See issues #445 and
 // #661.
 func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
-	for _, sp := range parsed.BackgroundSpawns {
+	t.applyBackgroundSpawns(parsed.BackgroundSpawns, parsed.Timestamp)
+	t.applyBashOutputPolls(parsed.BashOutputPolls)
+	t.applyTerminatedBashOutputPolls(parsed.TerminatedBashOutputIDs)
+	t.clearResolvedBashOutputPolls(parsed.ToolResultIDs)
+	t.applyKilledShells(parsed.KilledShellIDs)
+	t.applyTerminatedBackgroundTasks(parsed.TerminatedBackgroundTaskIDs)
+}
+
+func (t *TranscriptTailer) applyBackgroundSpawns(spawns []BackgroundSpawn, timestamp time.Time) {
+	for _, sp := range spawns {
 		if sp.BashID == "" {
 			continue
 		}
 		t.openBackgroundProcs[sp.BashID] = sp.OutputPath
-		if sp.IsMonitor {
-			t.openBackgroundDeadlines[sp.BashID] = monitorDeadline(sp, parsed.Timestamp)
+		if sp.IsMonitor || sp.NoProbeHold {
+			t.openBackgroundDeadlines[sp.BashID] = noProbeHoldDeadline(sp, timestamp)
 		}
 	}
-	for _, poll := range parsed.BashOutputPolls {
+}
+
+func (t *TranscriptTailer) applyBashOutputPolls(polls []BashOutputPoll) {
+	for _, poll := range polls {
 		if poll.ToolUseID != "" && poll.BashID != "" {
 			t.pendingBashPolls[poll.ToolUseID] = poll.BashID
 		}
 	}
-	for _, id := range parsed.TerminatedBashOutputIDs {
+}
+
+func (t *TranscriptTailer) applyTerminatedBashOutputPolls(ids []string) {
+	for _, id := range ids {
 		if bashID, ok := t.pendingBashPolls[id]; ok {
 			t.deleteBackgroundProc(bashID)
 		}
 	}
+}
+
+// clearResolvedBashOutputPolls drops a poll pairing when its tool result
+// arrives, regardless of whether that result reports a running or terminated
+// process. This bounds pendingBashPolls by concurrent polls.
+func (t *TranscriptTailer) clearResolvedBashOutputPolls(ids []string) {
 	// A poll is resolved once its tool_result arrives (terminated OR still
 	// running) — drop the pairing either way so pendingBashPolls only ever
 	// holds in-flight polls (bounded by concurrent polls, not total polls).
-	for _, id := range parsed.ToolResultIDs {
+	for _, id := range ids {
 		delete(t.pendingBashPolls, id)
 	}
-	for _, bashID := range parsed.KilledShellIDs {
+}
+
+func (t *TranscriptTailer) applyKilledShells(ids []string) {
+	for _, bashID := range ids {
 		t.deleteBackgroundProc(bashID)
 	}
+}
+
+func (t *TranscriptTailer) applyTerminatedBackgroundTasks(ids []string) {
 	// Terminal task-notification completion (orchestrated/SDK path): the
 	// <task-id> is the backgroundTaskId, or — since #1982 — a Monitor task id
 	// registered the same way. A non-matching id is a harmless no-op. See
@@ -1276,7 +1303,7 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	// only on the non-skip path". deleteBackgroundProc's delete-on-absent-key
 	// is a no-op, so running it from both call sites for the same event costs
 	// nothing beyond the redundant call.
-	for _, id := range parsed.TerminatedBackgroundTaskIDs {
+	for _, id := range ids {
 		t.deleteBackgroundProc(id)
 	}
 }
@@ -1296,17 +1323,18 @@ func (t *TranscriptTailer) deleteBackgroundProc(id string) {
 	delete(t.openBackgroundDeadlines, id)
 }
 
-// monitorDeadline computes when a Monitor spawn's clock-bound hold expires:
-// launchedAt + MonitorTimeoutMs for an ordinary Monitor, or
-// launchedAt + monitorPersistentHoldCeiling for a persistent one (which
-// reports MonitorTimeoutMs as 0). launchedAt is the spawn event's own
-// transcript timestamp; a zero timestamp (a synthesized event, or a parser
-// that doesn't set one) falls back to wall-clock now rather than computing
-// against the zero time, which would read as already-expired. See issue
-// #1982.
-func monitorDeadline(sp BackgroundSpawn, launchedAt time.Time) time.Time {
+// noProbeHoldDeadline bounds a clock-held background entry. Monitor tasks use
+// their reported timeout. Other adapters can use a measured timeout or the
+// same conservative ceiling while waiting for an explicit terminal notice.
+func noProbeHoldDeadline(sp BackgroundSpawn, launchedAt time.Time) time.Time {
 	if launchedAt.IsZero() {
 		launchedAt = time.Now()
+	}
+	if sp.NoProbeHold {
+		if sp.NoProbeHoldTimeoutMs > 0 {
+			return launchedAt.Add(time.Duration(sp.NoProbeHoldTimeoutMs) * time.Millisecond)
+		}
+		return launchedAt.Add(monitorPersistentHoldCeiling)
 	}
 	if sp.MonitorPersistent {
 		return launchedAt.Add(monitorPersistentHoldCeiling)

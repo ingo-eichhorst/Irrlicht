@@ -110,6 +110,13 @@ type BackgroundSpawn struct {
 	// for a Monitor with no timeout ("runs until TaskStop or session end"),
 	// which needs the tailer's own hold ceiling rather than MonitorTimeoutMs.
 	MonitorPersistent bool
+
+	// NoProbeHold is true for an adapter-specific background job that reports
+	// neither an output path nor a PID, but does persist an explicit terminal
+	// notification. The tailer holds it until that notification or its bounded
+	// deadline. It is not specific to Claude Code Monitor tasks.
+	NoProbeHold          bool
+	NoProbeHoldTimeoutMs int64
 }
 
 // BashOutputPoll records a `BashOutput` tool_use: the agent polling a
@@ -247,12 +254,11 @@ type ParsedEvent struct {
 	// non-background id (e.g. a subagent's) is a harmless no-op. See issue #445.
 	TerminatedBackgroundTaskIDs []string
 
-	// OriginTaskNotification is true only for Claude Code's user-role
-	// origin.kind="task-notification" shape. The tailer combines this flag
-	// with a TerminatedBackgroundTaskID that matches its open-process ledger:
-	// that pair starts a new inference turn. A subagent notification has no
-	// matching process entry, and a queued_command attachment leaves this
-	// false, so both remain passive. See issue #1899.
+	// OriginTaskNotification is true for an agent-origin terminal notification
+	// that resumes the owning session. The tailer combines this flag with a
+	// matching TerminatedBackgroundTaskID to start the next inference turn.
+	// A subagent notification has no matching process entry and stays passive.
+	// See issue #1899.
 	OriginTaskNotification bool
 
 	// TaskSnapshot, when non-nil, is the authoritative list of tasks Claude

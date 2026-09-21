@@ -274,7 +274,14 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root, testAdapter, 0)
+	// Header-backed adapters cannot derive an ID after removal because the
+	// transcript is gone. The watcher must use the ID it delivered at birth.
+	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(path string) string {
+		if _, err := os.Stat(path); err != nil {
+			return ""
+		}
+		return strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	})
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -318,6 +325,50 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 	cancel()
 	if err := <-watchErr; err != nil && err != context.Canceled {
 		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// A removal has no readable header. The watcher may therefore report it only
+// when a prior delivered event established the path-to-session mapping.
+func TestWatch_UnseenBareUUIDRemovalDoesNotEmit(t *testing.T) {
+	root := setupFakeProjects(t)
+	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
+	transcriptPath := filepath.Join(root, "-Users-test-myproject", childID+".jsonl")
+
+	// The callback would accept this path if called. The removal still must
+	// not emit because no earlier delivery established a path-to-ID mapping.
+	w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(string) string { return childID })
+	ch := w.Subscribe()
+	w.handleEvent(nil, fsnotify.Event{Name: transcriptPath, Op: fsnotify.Remove})
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpected event for unseen transcript removal: %#v", ev)
+	default:
+	}
+}
+
+func TestHandleEvent_RemovedPendingHeaderLinkedTranscriptClearsPendingState(t *testing.T) {
+	root := setupFakeProjects(t)
+	transcriptPath := filepath.Join(root, "-Users-test-myproject", "child.jsonl")
+	if err := os.WriteFile(transcriptPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWithRoot(root, testAdapter, 0).
+		WithSessionID(func(string) string { return "child" }).
+		WithParentSessionID(func(string) string { return "parent" })
+	w.handleTranscriptCreate(transcriptPath, "child", "-Users-test-myproject")
+	if _, pending := w.pendingNew[transcriptPath]; !pending {
+		t.Fatal("zero-byte header-linked transcript was not parked")
+	}
+
+	if err := os.Remove(transcriptPath); err != nil {
+		t.Fatal(err)
+	}
+	w.handleEvent(nil, fsnotify.Event{Name: transcriptPath, Op: fsnotify.Remove})
+	if _, pending := w.pendingNew[transcriptPath]; pending {
+		t.Fatal("removed unseen transcript remained pending")
 	}
 }
 
