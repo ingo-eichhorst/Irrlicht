@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "id": "openai",
+  "display_name": "OpenAI — ChatGPT subscriptions and Codex credits",
+  "_comment": [
+    "The other half of the native baseline. Codex writes rate_limits into its",
+    "own transcript on a token_count event, so this route reads a file the",
+    "agent already wrote rather than receiving a push or dialling anything.",
+    "",
+    "This is the one axis set with a committed capture of a real session, so",
+    "it is the manifest that shows what live-verified means here: the",
+    "evidence is a recording, not a fixture."
+  ],
+  "products": [
+    {
+      "id": "chatgpt-subscription",
+      "name": "ChatGPT Plus / Pro / Team subscription",
+      "quota_scope": "account"
+    },
+    {
+      "id": "codex-credits",
+      "name": "Codex prepaid credits",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "native-transcript",
+    "destination_keys": [],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/inbound/agents/codex",
+      "permission_name": "codex",
+      "tests": [
+        "core/adapters/inbound/agents/codex/parser_test.go"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "none"
+  },
+  "credential_resolvers": [
+    {
+      "kind": "none"
+    }
+  ],
+  "platforms": ["darwin", "linux"],
+  "redaction": {
+    "allowed_fields": [
+      "limit_id",
+      "limit_name",
+      "primary",
+      "secondary",
+      "credits",
+      "individual_limit",
+      "spend_control_reached",
+      "plan_type",
+      "rate_limit_reached_type"
+    ],
+    "note": "The rate_limits block itself carries no credential or personal datum; the allowlist is the block's own key set at schema v3, so a field Codex adds later is reported rather than absorbed silently."
+  },
+  "fixtures": [
+    {
+      "name": "token-count-rate-limits",
+      "kind": "response",
+      "path": "fixtures/token-count-rate-limits.json",
+      "note": "Copied verbatim out of the committed 2026-08-18 codex recording named in the evidence below."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "live-verified",
+      "evidence": ["codex-transcript-rate-limits-2026-08-18", "codex-rate-limits-fixture"],
+      "note": "plan_type was 'plus' in the recorded session."
+    },
+    "quota_windows": {
+      "claim": "live-verified",
+      "evidence": ["codex-transcript-rate-limits-2026-08-18", "codex-parser-source"],
+      "note": "primary carried used_percent 68.0 over a 10080-minute window with an absolute reset. Measure is unset: this route reports a percentage, never an absolute used/limit pair."
+    },
+    "balance": {
+      "claim": "fixture-verified",
+      "evidence": ["codex-rate-limits-fixture", "codex-parser-source"],
+      "note": "The credits block is present and parsed, but the recorded account reported has_credits=false and balance \"0\". Deliberately claimed one rung below what the recording would earn: no non-zero balance and no currency has been observed through this route, so calling it live-verified would overstate what was seen."
+    },
+    "account_identity": {
+      "claim": "unassessed",
+      "note": "RateLimitSnapshot.ConfirmedAccountRef has no producer on this route."
+    }
+  },
+  "evidence": [
+    {
+      "id": "codex-transcript-rate-limits-2026-08-18",
+      "kind": "recording",
+      "date": "2026-08-18",
+      "ref": "replaydata/agents/codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-18-00-42-27_irrlichd-0.5.10+1869727/transcript.jsonl",
+      "note": "A committed recording of a real codex session whose token_count events carry rate_limits."
+    },
+    {
+      "id": "codex-rate-limits-fixture",
+      "kind": "fixture",
+      "date": "2026-08-18",
+      "ref": "replaydata/providers/openai/fixtures/token-count-rate-limits.json"
+    },
+    {
+      "id": "codex-parser-source",
+      "kind": "source",
+      "date": "2026-09-22",
+      "ref": "core/adapters/inbound/agents/codex/parser.go",
+      "note": "extractCodexRateLimits and the three schema versions it tolerates."
+    }
+  ]
+}

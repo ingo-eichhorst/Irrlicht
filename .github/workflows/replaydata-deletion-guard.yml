@@ -11,6 +11,10 @@ name: Replaydata deletion guard
 #   - ANY file (except assessment.json) under a scenarios/ recording whose folder
 #     IS STILL A LIVE CELL at HEAD (it holds a metadata.json)
 #   - any orchestrator scenario fixture   replaydata/orchestrators/*/scenarios/*  (#268)
+#   - ANY file under the provider catalog   replaydata/providers/**   (#2008)
+#     (one manifest + its redacted fixtures per billing provider; `of provider
+#     verify` and the `of validate` gate both read them, and a deleted fixture
+#     is a claim losing the evidence behind it)
 #
 # What is ALLOWED:
 #   - deleting any scenarios/ recording whose folder holds NO metadata.json at
@@ -149,6 +153,13 @@ jobs:
                 violations="$violations  - $f  (matrix catalog)"$'\n' ;;
               replaydata/orchestrators/*/scenarios/*)
                 violations="$violations  - $f  (orchestrator scenario fixture)"$'\n' ;;
+              replaydata/providers/*)
+                # The whole provider catalog (#2008): manifests, their redacted
+                # fixtures, and the tree's README. Before this arm existed every
+                # path under replaydata/providers/ fell through to the allow arm
+                # at the bottom, so the tree was unguarded in fact while
+                # docs/providers/catalog.md said it was covered.
+                violations="$violations  - $f  (provider manifest or fixture)"$'\n' ;;
               replaydata/agents/*/regressions/*)
                 # Everything under a regression recording is load-bearing,
                 # INCLUDING assessment.json (regression cells aren't in the

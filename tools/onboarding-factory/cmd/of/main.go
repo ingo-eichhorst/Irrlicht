@@ -12,6 +12,12 @@
 //	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 //	of hookcheck --agent a --events e                                     one staged recording's hook coverage
 //
+// Provider domain (issue #2008) — replaydata/providers/, the BILLING-PRODUCT
+// catalog, deliberately separate from the agent x scenario matrix above:
+//
+//	of provider verify [--json]                                           provider manifest schema + fixture replay
+//	of provider status [--json]                                           claimed vs earned capability, per axis
+//
 // Exit codes (matching the sibling cmd tools):
 //
 //	0  — success / validation clean
@@ -53,7 +59,9 @@ const usage = `usage:
   of record run --agent a --scenario s [--attach] [--dry-run]
   of record prereq-check --agent a
   of record verify --agent a --scenario s
-  of hookcheck --agent a --events events.jsonl`
+  of hookcheck --agent a --events events.jsonl
+  of provider verify [--json] [--repo-root .]
+  of provider status [--json] [--repo-root .]`
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -81,6 +89,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRecord(args[1:], stdout, stderr)
 	case "hookcheck":
 		return runHookCheck(args[1:], stdout, stderr)
+	case "provider":
+		return runProvider(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, usage)
 		return exitUsage

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "id": "anthropic",
+  "display_name": "Anthropic — Claude subscriptions",
+  "_comment": [
+    "Half of the native baseline issue #2008 extracts from. Claude Code is",
+    "configured to POST its statusline payload to the daemon; the handler",
+    "reads rate_limits and nothing else. API-key, Bedrock and Vertex sessions",
+    "get no rate_limits block, which the handler records as nothing rather",
+    "than as zero usage.",
+    "",
+    "No credential of Irrlicht's own is involved and nothing is dialled: the",
+    "agent hands us the payload inside the permission its adapter already",
+    "declares. That is why credential_resolvers is 'none' and",
+    "destination_keys is empty, and it is the axis separation #1977 §8 asks",
+    "for — a transport axis is not a credential axis."
+  ],
+  "products": [
+    {
+      "id": "claude-subscription",
+      "name": "Claude Pro / Max subscription",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "native-hook",
+    "destination_keys": [],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/inbound/agents/claudecode",
+      "permission_name": "claude-code",
+      "tests": [
+        "core/adapters/inbound/agents/claudecode/statusline_test.go"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "none"
+  },
+  "credential_resolvers": [
+    {
+      "kind": "none"
+    }
+  ],
+  "platforms": ["darwin", "linux"],
+  "redaction": {
+    "allowed_fields": ["five_hour", "seven_day"],
+    "note": "The statusline payload also carries session_id and transcript_path. Only the rate_limits block is retained, so the committed fixture is that block alone."
+  },
+  "fixtures": [
+    {
+      "name": "statusline-rate-limits",
+      "kind": "shape",
+      "path": "fixtures/statusline-rate-limits.json",
+      "note": "The rate_limits block, in the wire shape statusline.go documents and statusline_test.go exercises. A shape fixture, not a capture: grepping replaydata/ for five_hour returns no statusline payload. The one committed claudecode capture that mentions five_hour is the 1858-usage-limit-stuck-in-error regression transcript, and it carries a quotaLimits REJECTION object (rateLimitType/resetsAt on a 429), which is a different shape on a different route and is not what this handler reads."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "unassessed",
+      "note": "The handler reads only rate_limits, and no full statusline payload is committed here, so whether this route reports the plan or product has not been looked at. Not a negative finding — nothing looked."
+    },
+    "quota_windows": {
+      "claim": "fixture-verified",
+      "evidence": ["claudecode-statusline-source", "claudecode-statusline-shape-fixture"],
+      "note": "five_hour maps to a 300-minute window and seven_day to 10080, each with an absolute reset. fixture-verified rather than live-verified: this repository holds no dated capture of a real statusline response, and #1977 §11.11 forbids claiming live verification from a fixture alone."
+    },
+    "balance": {
+      "claim": "unassessed",
+      "note": "The statusline payload has no credits or balance block."
+    },
+    "account_identity": {
+      "claim": "unassessed",
+      "note": "RateLimitSnapshot.ConfirmedAccountRef has no producer on this route."
+    }
+  },
+  "evidence": [
+    {
+      "id": "claudecode-statusline-source",
+      "kind": "source",
+      "date": "2026-09-22",
+      "ref": "core/adapters/inbound/agents/claudecode/statusline.go",
+      "note": "The documented wire shape and the window mapping."
+    },
+    {
+      "id": "claudecode-statusline-shape-fixture",
+      "kind": "fixture",
+      "date": "2026-09-22",
+      "ref": "replaydata/providers/anthropic/fixtures/statusline-rate-limits.json"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import (
 
 	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+	"irrlicht/tools/onboarding-factory/internal/provider"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -57,6 +58,10 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	// Resolved here for the reason absRoot's own doc comment gives. runValidate
+	// was the one command that did not do it, so a relative "--repo-root .."
+	// reported a catalog in which nothing is recorded -- exit 0, no warning.
+	*repoRoot = absRoot(*repoRoot)
 
 	var findings []finding
 	add := func(path, msg string) { findings = append(findings, finding{Path: path, Msg: msg}) }
@@ -66,6 +71,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	validateCells(*repoRoot, names, add)
 	validateDesktopResults(*repoRoot, add)
 	validateMaturityModel(*repoRoot, names, add)
+	validateProviders(*repoRoot, add)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Path != findings[j].Path {
@@ -81,7 +87,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		}
 		_ = writeJSON(stdout, out)
 	} else if len(findings) == 0 {
-		fmt.Fprintln(stdout, "of validate: OK — catalog + cells are schema-valid and referentially consistent")
+		fmt.Fprintln(stdout, "of validate: OK — catalog + cells + provider manifests are schema-valid and referentially consistent")
 	} else {
 		fmt.Fprintf(stderr, "of validate: %d violation(s):\n", len(findings))
 		for _, f := range findings {
@@ -92,6 +98,36 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 	return exitOK
+}
+
+// validateProviders runs the replaydata/providers/ gate against a tree that
+// has one.
+//
+// Scoping is by EXISTENCE alone, and that is worth explaining because the
+// obvious stronger predicate does not work here. `of validate` runs against
+// small fixture trees, and validate_maturity_test.go's maturityRepo carries
+// BOTH an adapters.json and the whole core-12 scenario set while having no
+// provider catalog -- so neither of the two predicates validateMaturityModel
+// uses ("the model file exists", "this is a full catalog") separates the
+// production repository from a fixture. Measured rather than assumed: wiring
+// this gate to "adapters.json exists" failed six tests in
+// validate_maturity_test.go, one per fixture that writes that file.
+//
+// The hole that leaves -- deleting the whole tree scopes the gate out -- is
+// closed twice over, by mechanisms better suited to it than a validator that
+// must also run on fixtures. `.github/workflows/replaydata-deletion-guard.yml`
+// fails a PR deleting anything under replaydata/providers/ (its arm and the
+// matching fixture in tools/lib/replaydata-deletion-guard_test.sh were added
+// by #2008), and TestTheShippedProviderCatalogExists fails outright if this
+// repository stops carrying the tree.
+func validateProviders(repoRoot string, add func(path, msg string)) {
+	root := absRoot(repoRoot)
+	if !provider.Exists(root) {
+		return
+	}
+	for _, f := range provider.ValidateRepo(root) {
+		add(f.Path, f.Message)
+	}
 }
 
 func validateDesktopResults(repoRoot string, add func(path, msg string)) {

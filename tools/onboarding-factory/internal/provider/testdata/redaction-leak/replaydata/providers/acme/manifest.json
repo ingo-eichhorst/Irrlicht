@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "acme",
+  "display_name": "Acme \u2014 coding plan",
+  "products": [
+    {
+      "id": "acme-plan",
+      "name": "Acme Coding Plan",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "account-api",
+    "destination_keys": [
+      "acme-account-api"
+    ],
+    "implementation": {
+      "kind": "data-only"
+    }
+  },
+  "authentication": {
+    "method": "api-key"
+  },
+  "credential_resolvers": [
+    {
+      "kind": "file",
+      "location": "~/.acme/key",
+      "format": "text"
+    }
+  ],
+  "platforms": [
+    "darwin"
+  ],
+  "redaction": {
+    "allowed_fields": [
+      "plan",
+      "active"
+    ]
+  },
+  "fixtures": [
+    {
+      "name": "response",
+      "kind": "response",
+      "path": "fixtures/response.json"
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "fixture-verified",
+      "evidence": [
+        "acme-response"
+      ]
+    },
+    "quota_windows": {
+      "claim": "unassessed"
+    },
+    "balance": {
+      "claim": "unassessed"
+    },
+    "account_identity": {
+      "claim": "unassessed"
+    }
+  },
+  "evidence": [
+    {
+      "id": "acme-response",
+      "kind": "fixture",
+      "date": "2026-09-22",
+      "ref": "replaydata/providers/acme/fixtures/response.json"
+    }
+  ]
+}
