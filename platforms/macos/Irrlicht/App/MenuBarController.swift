@@ -118,6 +118,9 @@ final class MenuBarController: NSObject {
         // And carry #909's single quota provider into #1955's ordered list,
         // for the same reason and before the same read.
         MenuBarQuotaProviders.migrateLegacySingleProvider(in: UserDefaults.standard)
+        // Then move any pre-#1995 `unknown:<adapter>` slot onto the provider
+        // key its snapshots now carry, or the slot renders empty (#2030).
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: UserDefaults.standard)
         // Only now is the store settled enough to snapshot as "last seen".
         self.lastIconSettings = MenuBarIconSettings.current(in: .standard)
 

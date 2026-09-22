@@ -330,4 +330,26 @@ final class SettingsViewTests: XCTestCase {
             "#1854: the expanded section reaches x=\(expandedTrailing), past the \(SessionListView.panelWidth - IrrSpacing.sp4)pt trailing margin."
         )
     }
+
+    // MARK: - #2030: a selected quota slot with no live data
+
+    /// `MenuBarImageBuilder.quotaImage` skips a slot with no snapshot and
+    /// leaves no trace, so the Settings row must say why the slot is missing.
+    /// Mutation-proved: with the " — no data" suffix replaced by "" in
+    /// `SettingsView.quotaProviderRowLabel`, the first assertion went red.
+    func testASelectedQuotaProviderWithNoLiveDataIsMarked() {
+        XCTAssertEqual(
+            SettingsView.quotaProviderRowLabel("unknown:codex", slot: 1, hasLiveData: false),
+            "2. Codex — no data"
+        )
+        // Locks: a selected slot with data and an unselected row stay plain.
+        XCTAssertEqual(
+            SettingsView.quotaProviderRowLabel("anthropic", slot: 0, hasLiveData: true),
+            "1. Claude"
+        )
+        XCTAssertEqual(
+            SettingsView.quotaProviderRowLabel("openai", slot: nil, hasLiveData: true),
+            "Codex"
+        )
+    }
 }

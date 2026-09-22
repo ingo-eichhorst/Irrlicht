@@ -488,6 +488,60 @@ enum MenuBarQuotaProviders {
         defaults.set(encode([legacy]), forKey: storageKey)
         return true
     }
+
+    /// The `unknown:<adapter>` slot keys that Settings offered before #1995,
+    /// for the adapters whose snapshots now arrive with a confirmed provider:
+    /// `claudecode/statusline.go` stamps `anthropic` and `codex/parser.go`
+    /// stamps `openai` (read for #2030). After #1995 no session keys as these
+    /// fallbacks any more, so a stored one selects nothing and its slot
+    /// renders empty.
+    ///
+    /// This rewrites a user's saved preference. It is not provider inference:
+    /// `RateLimitInfo.providerKey(adapter:)` still never reads the adapter.
+    static let legacyUnattributedKeys: [String: String] = [
+        "unknown:claude-code": "anthropic",
+        "unknown:codex": "openai",
+    ]
+
+    /// Set once `migrateLegacyUnattributedKeys` has run, so a user who picks a
+    /// legacy key again afterwards keeps that choice.
+    static let unattributedKeysMigratedKey = "menuBarQuotaProvidersUnattributedKeysMigrated"
+
+    /// Carry pre-#1995 `unknown:<adapter>` slots onto their attributed
+    /// provider key, once (#2030). Runs after `migrateLegacySingleProvider`,
+    /// so a legacy single key it copied across is rewritten too. A rewritten
+    /// key that the list already holds collapses into the existing slot
+    /// (`decode` keeps the first occurrence).
+    ///
+    /// - Returns: whether the stored list changed.
+    @discardableResult
+    static func migrateLegacyUnattributedKeys(in defaults: UserDefaults) -> Bool {
+        guard defaults.object(forKey: unattributedKeysMigratedKey) == nil else { return false }
+        defaults.set(true, forKey: unattributedKeysMigratedKey)
+        migrateProviderModes(in: defaults)
+        guard let raw = defaults.string(forKey: storageKey) else { return false }
+
+        let keys = decode(raw)
+        let migrated = decode(encode(keys.map { legacyUnattributedKeys[$0] ?? $0 }))
+        guard migrated != keys else { return false }
+        defaults.set(encode(migrated), forKey: storageKey)
+        return true
+    }
+
+    /// The per-provider display mode (`ProviderModePreference`) is stored
+    /// under the same provider key, so it moves with the slot. A mode the
+    /// user already set for the attributed key wins over the legacy one.
+    private static func migrateProviderModes(in defaults: UserDefaults) {
+        for (legacy, attributed) in legacyUnattributedKeys {
+            let from = ProviderModePreference.storageKey(providerKey: legacy)
+            guard let mode = defaults.string(forKey: from) else { continue }
+            let to = ProviderModePreference.storageKey(providerKey: attributed)
+            if defaults.object(forKey: to) == nil {
+                defaults.set(mode, forKey: to)
+            }
+            defaults.removeObject(forKey: from)
+        }
+    }
 }
 
 /// How the quota portion of the icon renders when MenuBarStyle is `.usage`

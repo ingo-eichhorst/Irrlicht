@@ -1652,6 +1652,90 @@ final class MenuBarAppearanceTests: XCTestCase {
         )
     }
 
+    // MARK: - #2030: pre-#1995 `unknown:<adapter>` slot keys
+
+    /// Red-first for #2030: the reporter's store held
+    /// `"anthropic,unknown:codex"`. Codex snapshots now arrive attributed as
+    /// `openai`, so `unknown:codex` selects nothing and its slot renders empty.
+    func testLegacyUnattributedSlotKeysMigrateToTheirAttributedProvider() {
+        let defaults = InMemoryDefaults()
+        defaults.set("anthropic,unknown:codex,unknown:claude-code",
+                     forKey: MenuBarQuotaProviders.storageKey)
+
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults))
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["anthropic", "openai"],
+                       "unknown:codex must become openai, and unknown:claude-code must fold "
+                       + "into the anthropic slot already present")
+    }
+
+    /// Red-first: the migrated key must actually select a confirmed Codex
+    /// snapshot, not just decode back out of the store.
+    func testAMigratedCodexSlotSelectsAConfirmedOpenAISnapshot() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+        let key = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
+
+        let codex = MenuBarFixtures.sessionWithQuota(adapter: "codex")
+        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key),
+                        "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
+    }
+
+    /// Red-first: a per-provider display mode saved under a legacy key
+    /// (`providerMode_unknown:codex`, `ProviderModePreference.storageKey`)
+    /// moves with the slot, unless the user already set one for the new key.
+    func testLegacySlotKeyMigrationCarriesTheProviderMode() {
+        let defaults = InMemoryDefaults()
+        let legacyCodex = ProviderModePreference.storageKey(providerKey: "unknown:codex")
+        let legacyClaude = ProviderModePreference.storageKey(providerKey: "unknown:claude-code")
+        let anthropic = ProviderModePreference.storageKey(providerKey: "anthropic")
+        defaults.set(ProviderModePreference.usage.rawValue, forKey: legacyCodex)
+        defaults.set(ProviderModePreference.usage.rawValue, forKey: legacyClaude)
+        defaults.set(ProviderModePreference.subscription.rawValue, forKey: anthropic)
+
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: ProviderModePreference.storageKey(providerKey: "openai")),
+                       ProviderModePreference.usage.rawValue)
+        XCTAssertNil(defaults.object(forKey: legacyCodex))
+        XCTAssertEqual(defaults.string(forKey: anthropic), ProviderModePreference.subscription.rawValue,
+                       "a mode the user already set for the new key must win")
+    }
+
+    /// The launch order as a behaviour, not only as source text: a #909-era
+    /// store that holds only the single legacy key `unknown:codex` must end
+    /// on `openai`. Run the other way round, the unattributed migration sets
+    /// its done-flag with no list present, and the carried key stays stale.
+    func testSingleProviderThenUnattributedMigrationRewritesTheCarriedKey() {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProvider.storageKey)
+
+        MenuBarQuotaProviders.migrateLegacySingleProvider(in: defaults)
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["openai"])
+    }
+
+    /// Lock: an adapter with no attributed successor keeps its fallback key,
+    /// and the migration runs once — a user who re-selects a legacy key
+    /// afterwards keeps that choice.
+    func testLegacySlotKeyMigrationLeavesOtherKeysAndRunsOnce() {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:aider,unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults))
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["unknown:aider", "openai"])
+
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        XCTAssertFalse(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults),
+                       "the migration must not run twice")
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["unknown:codex"])
+
+        let fresh = InMemoryDefaults()
+        XCTAssertFalse(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: fresh))
+        XCTAssertNil(fresh.object(forKey: MenuBarQuotaProviders.storageKey),
+                     "the migration must not invent a providers key on a fresh install")
+    }
+
     /// The delimited-`String` encoding is a serializer, so AGENTS.md asks for a
     /// property test over generated input rather than only hand-written cases.
     ///
@@ -1926,7 +2010,7 @@ final class MenuBarAppearanceTests: XCTestCase {
                       "the migration must run BEFORE the status item is created")
     }
 
-    /// Both preference migrations have their own deadline, and it is a
+    /// The preference migrations have their own deadline, and it is a
     /// different one: they must run before the controller snapshots
     /// `MenuBarIconSettings` as "last seen". Snapshotting first would capture
     /// the pre-migration values, so the very next unrelated defaults write
@@ -1936,25 +2020,34 @@ final class MenuBarAppearanceTests: XCTestCase {
     /// Pinned by source for the same reason as the identity wiring above: no
     /// test constructs a real `MenuBarController`.
     ///
-    /// Mutation-proved (source): delete either migration call from
+    /// Mutation-proved (source): delete any migration call from
     /// `MenuBarController.swift`, or move it below the `lastIconSettings`
-    /// assignment, and this goes red.
-    func testMenuBarControllerRunsBothMigrationsBeforeSnapshotting() throws {
+    /// assignment, and this goes red. #2030 adds one more ordering: the
+    /// unattributed-key migration must follow the single-provider one, or a
+    /// key the latter carries across is never rewritten (see
+    /// `testSingleProviderThenUnattributedMigrationRewritesTheCarriedKey`).
+    func testMenuBarControllerRunsTheMigrationsInOrderBeforeSnapshotting() throws {
         let code = try Self.codeLines(at: Self.menuBarControllerPath)
         let calls = [
             "MenuBarAppearance.migrateLegacyCompactSetting(in: UserDefaults.standard)",
             "MenuBarQuotaProviders.migrateLegacySingleProvider(in: UserDefaults.standard)",
+            "MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: UserDefaults.standard)",
         ]
         let snapshot = try XCTUnwrap(
             code.range(of: "self.lastIconSettings = MenuBarIconSettings"),
             "MenuBarController must snapshot the icon settings at launch"
         )
+        // `calls` is listed in the order the migrations must run; each must
+        // follow the previous one and precede the snapshot.
+        var previous = code.startIndex
         for call in calls {
-            XCTAssertTrue(code.contains(call),
-                          "MenuBarController must run \(call) at launch")
-            let migrate = try XCTUnwrap(code.range(of: call))
+            let migrate = try XCTUnwrap(code.range(of: call),
+                                        "MenuBarController must run \(call) at launch")
+            XCTAssertTrue(previous <= migrate.lowerBound,
+                          "\(call) runs before a migration listed ahead of it")
             XCTAssertTrue(migrate.lowerBound < snapshot.lowerBound,
                           "\(call) must run BEFORE the settings snapshot is taken")
+            previous = migrate.upperBound
         }
     }
 
