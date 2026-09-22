@@ -1652,6 +1652,72 @@ final class MenuBarAppearanceTests: XCTestCase {
         )
     }
 
+    // MARK: - #2030: pre-#1995 `unknown:<adapter>` slot keys
+
+    /// Red-first for #2030: the reporter's store held
+    /// `"anthropic,unknown:codex"`. Codex snapshots now arrive attributed as
+    /// `openai`, so `unknown:codex` selects nothing and its slot renders empty.
+    func testLegacyUnattributedSlotKeysMigrateToTheirAttributedProvider() {
+        let defaults = InMemoryDefaults()
+        defaults.set("anthropic,unknown:codex,unknown:claude-code",
+                     forKey: MenuBarQuotaProviders.storageKey)
+
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults))
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["anthropic", "openai"],
+                       "unknown:codex must become openai, and unknown:claude-code must fold "
+                       + "into the anthropic slot already present")
+    }
+
+    /// Red-first: the migrated key must actually select a confirmed Codex
+    /// snapshot, not just decode back out of the store.
+    func testAMigratedCodexSlotSelectsAConfirmedOpenAISnapshot() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+        let key = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
+
+        let codex = SessionState(
+            id: "sess_codex", state: .working, model: "gpt-5", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            firstSeen: now, updatedAt: now,
+            metrics: SessionMetrics(
+                elapsedSeconds: 0, totalTokens: 0, modelName: "gpt-5",
+                contextWindow: nil, contextUtilization: 0, pressureLevel: "safe",
+                contextWindowUnknown: nil, estimatedCostUSD: nil, lastAssistantText: nil,
+                tasks: nil,
+                rateLimit: RateLimitInfo(
+                    windows: [RateLimitWindowInfo(usedPercent: 30, windowMinutes: 300,
+                                                  resetsAt: now.addingTimeInterval(3600))],
+                    sampledAt: now,
+                    provider: "openai",
+                    attributionQuality: RateLimitInfo.attributionQualityConfirmed
+                )
+            ),
+            adapter: "codex"
+        )
+        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key),
+                        "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
+    }
+
+    /// Lock: an adapter with no attributed successor keeps its fallback key,
+    /// and the migration runs once — a user who re-selects a legacy key
+    /// afterwards keeps that choice.
+    func testLegacySlotKeyMigrationLeavesOtherKeysAndRunsOnce() {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:aider,unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults))
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["unknown:aider", "openai"])
+
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProviders.storageKey)
+        XCTAssertFalse(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults),
+                       "the migration must not run twice")
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["unknown:codex"])
+
+        let fresh = InMemoryDefaults()
+        XCTAssertFalse(MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: fresh))
+        XCTAssertNil(fresh.object(forKey: MenuBarQuotaProviders.storageKey),
+                     "the migration must not invent a providers key on a fresh install")
+    }
+
     /// The delimited-`String` encoding is a serializer, so AGENTS.md asks for a
     /// property test over generated input rather than only hand-written cases.
     ///
@@ -1944,6 +2010,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         let calls = [
             "MenuBarAppearance.migrateLegacyCompactSetting(in: UserDefaults.standard)",
             "MenuBarQuotaProviders.migrateLegacySingleProvider(in: UserDefaults.standard)",
+            "MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: UserDefaults.standard)",
         ]
         let snapshot = try XCTUnwrap(
             code.range(of: "self.lastIconSettings = MenuBarIconSettings"),

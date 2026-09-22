@@ -86,7 +86,29 @@ func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, err
 	}
+	dropLegacyRateLimit(&state)
 	return &state, nil
+}
+
+// dropLegacyRateLimit clears a restored rate-limit snapshot that carries no
+// attribution at all — the shape a pre-#1994 daemon persisted. Kept, it is
+// carried forward by MergeMetrics until the next live sample replaces it, and
+// every client keys it as "unknown:<adapter>" next to the same subscription's
+// confirmed key, so one subscription reads as two quota providers (#2030).
+//
+// Runs on the disk-decode path only (Load and ListAll), never in
+// MergeMetrics: a stale reading is all that is lost, and the adapter's next
+// sample fills it back in, attributed. Checked for #2030 by grepping
+// `RateLimitSnapshot{` under core/: every non-test producer
+// (claudecode/statusline.go, codex/parser.go, pi/parser.go,
+// museaccountapi/parser.go) stamps AttributionQuality "confirmed".
+func dropLegacyRateLimit(state *session.SessionState) {
+	m := state.Metrics
+	if m == nil || m.RateLimit == nil || m.RateLimit.AttributionQuality != "" {
+		return
+	}
+	m.RateLimit = nil
+	m.RateLimitForecastEta = nil
 }
 
 // Save atomically writes a session state to disk.
@@ -146,6 +168,7 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 		if err := json.Unmarshal(data, &state); err != nil {
 			continue
 		}
+		dropLegacyRateLimit(&state)
 		if !session.IsCanonicalState(state.State) {
 			// #1797: an unrecognised state is a value THIS build does not
 			// understand — a session written by a newer daemon, read after a

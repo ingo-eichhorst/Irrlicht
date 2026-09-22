@@ -789,10 +789,18 @@ struct SettingsView: View {
     /// A selected provider carries its slot position, so the order the user
     /// built is visible in the list rather than only in the icon.
     private func quotaProviderRowLabel(_ key: String) -> String {
-        guard let position = selectedQuotaProviders.firstIndex(of: key) else {
+        Self.quotaProviderRowLabel(key, selected: selectedQuotaProviders, live: knownQuotaProviderKeys)
+    }
+
+    /// A selected key with no live snapshot is marked, because
+    /// `MenuBarImageBuilder.quotaImage` skips its slot without a trace — the
+    /// row is the only place the user can see why a slot is missing (#2030).
+    static func quotaProviderRowLabel(_ key: String, selected: [String], live: [String]) -> String {
+        guard let position = selected.firstIndex(of: key) else {
             return quotaProviderLabel(key)
         }
-        return "\(position + 1). \(quotaProviderLabel(key))"
+        let noData = live.contains(key) ? "" : " — no data"
+        return "\(position + 1). \(quotaProviderLabel(key))\(noData)"
     }
 
     /// Provider keys with a rate_limit-carrying session right now, for the
@@ -823,7 +831,7 @@ struct SettingsView: View {
     /// bucket key. Surface the adapter name instead of that internal-looking
     /// string so the picker still reads as a plausible option rather than
     /// leaking implementation detail.
-    private func quotaProviderLabel(_ key: String) -> String {
+    static func quotaProviderLabel(_ key: String) -> String {
         switch key {
         case "anthropic": return "Claude"
         case "openai": return "Codex"
