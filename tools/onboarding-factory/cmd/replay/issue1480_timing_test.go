@@ -212,60 +212,57 @@ func runTimingCorpusCase(t *testing.T, dir, name string) bool {
 // is the measurement; what to do about the populations it reveals is argued in
 // each PR with this list in hand.
 var knownFirstTransitionDrift = map[string]string{
-	"deepseek-harness/scenarios/2-5_synchronous-slash-command/recordings/2026-09-19-01-18-31_irrlichd-0.6.4+b4a1949/transcript.jsonl.zstd": "#1985 core fixture, measured during #1986: -3.910s at pair 0 (ready→working); replay first activity is 01:18:36.216, while events.jsonl records the daemon transition at 01:18:40.126. The source of the read delay is not established.",
-	"deepseek-harness/scenarios/2-7_autonomous-loop/recordings/2026-09-19-01-24-19_irrlichd-0.6.4+860f6c4/transcript.jsonl.zstd":           "#1986 measured: -2.101s at pair 0 (ready→working); the replay fires on first turn_start at 01:24:20.166, while events.jsonl records the daemon transition at 01:24:22.267. The source of the read delay is not established.",
-	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-09-07-22-36-31_irrlichd-0.6.2+c858d61/transcript.jsonl":      "the first Desktop recording driven by a `slash` step: +2.489s at pair 0 (ready→working). Claude Desktop creates the session only when the prompt is SUBMITTED, so the row is born and goes working within milliseconds, while the replay reconstructs the boundary from the transcript it can read. Same shape as every other desktop-local first pair.",
-	"antigravity/scenarios/1-1_session-start/recordings/2026-06-20-12-33-40_irrlichd-0.5.2+be45695/transcript.jsonl":                       "pre-dates #1476: -6.609s at pair 0 (ready→working)",
-	"antigravity/scenarios/1-2_session-end/recordings/2026-06-20-12-36-01_irrlichd-0.5.2+a00b826/transcript.jsonl":                         "pre-dates #1476: -4.304s at pair 0 (ready→working)",
-	"antigravity/scenarios/1-3_long-idle-live-session/recordings/2026-06-20-17-58-44_irrlichd-0.5.2+1fcae3a/transcript.jsonl":              "pre-dates #1476: -3.937s at pair 0 (ready→working)",
-	"antigravity/scenarios/1-4_session-resume/recordings/2026-06-20-12-43-04_irrlichd-0.5.2+bb79f4c/transcript.jsonl":                      "pre-dates #1476: -3.771s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-11_auto-classified-permission/recordings/2026-06-20-13-41-55_irrlichd-0.5.2+b756a52/transcript.jsonl":         "pre-dates #1476: -5.774s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-12_context-compaction/recordings/2026-06-20-13-46-30_irrlichd-0.5.2+77308b9/transcript.jsonl":                 "pre-dates #1476: -3.809s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-13_turn-end-terminal-text/recordings/2026-06-20-02-50-41_irrlichd-0.5.2+2900672/transcript.jsonl":             "pre-dates #1476: -3.522s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-15_shell-escape-command/recordings/2026-06-20-13-49-04_irrlichd-0.5.2+349bafc/transcript.jsonl":               "pre-dates #1476: -4.067s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-16_oversized-transcript-line/recordings/2026-06-20-13-18-38_irrlichd-0.5.2+76d805a/transcript.jsonl":          "pre-dates #1476: -67.369s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-1_basic-turn/recordings/2026-06-20-02-48-55_irrlichd-0.5.2+daeb6e1/transcript.jsonl":                          "pre-dates #1476: -3.199s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-21_streaming-partial-writes/recordings/2026-06-20-13-21-01_irrlichd-0.5.2+c7f1c6d/transcript.jsonl":           "pre-dates #1476: -5.111s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-4_self-correction-iteration/recordings/2026-06-20-13-14-32_irrlichd-0.5.2+a489d47/transcript.jsonl":           "pre-dates #1476: -4.859s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-5_synchronous-slash-command/recordings/2026-06-20-13-38-51_irrlichd-0.5.2+7a48e0d/transcript.jsonl":           "pre-dates #1476: -3.726s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-7_autonomous-loop/recordings/2026-06-20-14-00-16_irrlichd-0.5.2+250cd02/transcript.jsonl":                     "pre-dates #1476: -4.521s at pair 0 (ready→working)",
-	"antigravity/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-06-20-14-02-53_irrlichd-0.5.2+2de7ce6/transcript.jsonl":     "pre-dates #1476: -5.681s at pair 0 (ready→working)",
-	"antigravity/scenarios/3-1_foreground-subagent/recordings/2026-06-20-18-04-13_irrlichd-0.5.2+09e9cf9/transcript.jsonl":                 "pre-dates #1476: -6.595s at pair 0 (ready→working)",
-	"antigravity/scenarios/3-2_background-subagent/recordings/2026-06-20-18-15-41_irrlichd-0.5.2+b305884/transcript.jsonl":                 "pre-dates #1476: -4.468s at pair 0 (ready→working)",
-	"antigravity/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-06-20-16-53-31_irrlichd-0.5.2+2eb84fb/transcript.jsonl":      "pre-dates #1476: -5.079s at pair 0 (ready→working)",
-	"antigravity/scenarios/5-1_token-accounting/recordings/2026-06-28-11-54-27_irrlichd-0.5.3+7f52a76/transcript.jsonl":                    "pre-dates #1476: -3.343s at pair 0 (ready→working)",
-	"claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-47-11_irrlichd-0.4.5+8499138/transcript.jsonl":                      "#1476 accepted: -5.075s at pair 0 (ready→working)",
-	"claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/transcript.jsonl":                      "#1476 accepted: -4.561s at pair 0 (ready→working)",
-	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/transcript.jsonl":      "#1476 accepted: -9.012s at pair 0 (ready→working)",
-	"claudecode/scenarios/5-8_task-estimate-marker/recordings/2026-06-03-21-50-21_irrlichd-0.4.8+defb4d8/transcript.jsonl":                 "pre-dates #1476: -1.167s at pair 0 (ready→working)",
-	"codex/regressions/fork-conversation/recordings/2026-05-23-19-39-41_irrlichd-0.4.7+3c6427c/transcript.jsonl":                           "#1476 accepted: -3.759s at pair 0 (ready→working)",
-	"codex/regressions/turn-end-terminal-text-pre-hooks/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl":            "#1476 accepted: -2.246s at pair 0 (ready→working)",
-	"codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/transcript.jsonl":                            "#1476 accepted: -4.007s at pair 0 (ready→working)",
-	"codex/scenarios/1-5_session-reset/recordings/2026-05-25-00-26-42_irrlichd-0.4.7+9d1ef56.dirty/transcript.jsonl":                       "#1476 accepted: -3.673s at pair 0 (ready→working)",
-	"codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/transcript.jsonl":                     "#1476 accepted: -2.032s at pair 0 (ready→working)",
-	"codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/transcript.jsonl":         "#1476 accepted: -5.670s at pair 0 (ready→working)",
-	"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl":                                "#1476 accepted: -3.691s at pair 0 (ready→working)",
-	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-14-23-36-59_irrlichd-dev/transcript.jsonl":                                   "pre-dates #1476: +2.187s at pair 0 (ready→working)",
-	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-53-47_irrlichd-0.3.13+4662be4/transcript.jsonl":                        "pre-dates #1476: +2.214s at pair 0 (ready→working)",
-	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/transcript.jsonl":                        "pre-dates #1476: +2.652s at pair 0 (ready→working)",
-	"codex/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-23-22-48-46_irrlichd-0.4.7+14e1e7a/transcript.jsonl":                   "#1476 accepted: -2.234s at pair 0 (ready→working)",
-	"codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/transcript.jsonl":                 "#1476 accepted: -3.615s at pair 0 (ready→working)",
-	"codex/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-23-23-03-45_irrlichd-0.4.7+ccb564c/transcript.jsonl":               "#1476 accepted: -2.230s at pair 0 (ready→working)",
-	"codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl":                           "#1476 accepted: -2.287s at pair 0 (ready→working)",
-	"codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/transcript.jsonl":           "#1476 accepted: -6.782s at pair 0 (ready→working)",
-	"codex/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-24-21-42-19_irrlichd-0.4.7+83509be.dirty/transcript.jsonl":          "#1476 accepted: -3.775s at pair 0 (ready→working)",
-	"codex/scenarios/5-3_model-switch-midsession/recordings/2026-05-23-21-34-12_irrlichd-0.4.7+b8b1cfc/transcript.jsonl":                   "#1476 accepted: -4.079s at pair 0 (ready→working)",
-	"copilot/scenarios/1-1_session-start/recordings/2026-08-03-12-06-21_irrlichd-0.5.9+4c1b2e4/transcript.jsonl":                           "pre-dates #1476: -3.842s at pair 0 (ready→working)",
-	"copilot/scenarios/1-2_session-end/recordings/2026-08-03-12-07-28_irrlichd-0.5.9+57d59de/transcript.jsonl":                             "pre-dates #1476: -10.828s at pair 0 (ready→working)",
-	"copilot/scenarios/1-4_session-resume/recordings/2026-08-05-19-02-01_irrlichd-0.5.9+4b58365/transcript.jsonl":                          "pre-dates #1476: -18.621s at pair 1 (working→ready)",
-	"copilot/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-03-12-16-12_irrlichd-0.5.9+ced85ef/transcript.jsonl":                 "pre-dates #1476: -4.190s at pair 0 (ready→working)",
-	"gemini-cli/scenarios/2-12_context-compaction/recordings/2026-06-12-10-36-37_irrlichd-0.5.1+93db11a/transcript.jsonl":                  "pre-dates #1476: +2.001s at pair 0 (ready→working)",
-	"mistral-vibe/scenarios/2-12_context-compaction/recordings/2026-07-07-17-22-57_irrlichd-0.5.5+bc77a37.dirty/transcript.jsonl":          "#1476 accepted: -30.976s at pair 0 (ready→working)",
-	"mistral-vibe/scenarios/2-15_shell-escape-command/recordings/2026-07-07-17-41-58_irrlichd-0.5.5+22a01d2.dirty/transcript.jsonl":        "#1476 accepted: -8.599s at pair 0 (ready→working)",
-	"mistral-vibe/regressions/1846-retired-terminal-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl":  "#1476 accepted: -27.522s at pair 0 (ready→working)",
-	"muse/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad/transcript.jsonl":                 "#1960: -32.388s at pair 0 (ready→working). Pre-fix capture (predates fix commit 9abf13d1) hitting the SAME assignPIDLocked PID-eviction bug that blocked 2-14/2-17: session 01a09e16 born ready at seq152, evicted by a late-arriving proc-53461 pre-session claim at seq170, re-discovered only via a LATER, different session's own birth at seq456. 4-1's own cell assertions don't key on this transition (stayed a clean 5/5 pass), so it was not re-recorded as part of #1960's fix.",
-	"muse/scenarios/2-15_shell-escape-command/recordings/2026-09-14-20-47-26_irrlichd-0.6.3+d2dc680/transcript.jsonl":                      "#1960: -2.242s at pair 0 (ready\u2192working). The 2s debounce window, same mechanism this file already documents for claudecode's Stop above \u2014 not a muse defect and not a classifier change. Measured in this recording's own events.jsonl: a burst of transcript_activity at 20:47:33.659-33.667 (seq 521-528) is coalesced on every write (debounce_coalesced at each), each one re-opening the window, and the daemon's state_transition lands at 20:47:35.708 (seq 529) \u2014 2.041s after the last coalesced write, i.e. at the next debounce boundary. The replay sidecar flips at the transcript bytes themselves, which is where the 2.242s comes from. A bound that absorbed it would hide the next one.",
-	"muse/scenarios/2-5_synchronous-slash-command/recordings/2026-09-14-21-41-15_irrlichd-0.6.3+3b16079/transcript.jsonl":                  "#1960: -5.623s at pair 0 (ready\u2192working). NOT a debounce boundary alone \u2014 the two sides pick DIFFERENT writes as the turn start, which is worth stating because it is the one entry here that is a genuine classification divergence rather than a timer. Measured in this recording's own events.jsonl: the sidecar flips at the first transcript_activity, 21:41:20.031, which is the LOCAL slash command's own write (/usage and /status resolve in-process, emitting command.invoked and no turn). The daemon does not treat that write as a turn start, correctly; it flips at 21:41:25.654 (seq 526), 2.233s after the real prompt's coalesced burst at 21:41:23.407-23.421, i.e. at that burst's own debounce boundary. 25.654 - 20.031 = 5.623 exactly. Left as committed evidence that the replay sidecar starts a turn on a local-command write where the daemon does not.",
+	"deepseek-harness/scenarios/2-7_autonomous-loop/recordings/2026-09-19-01-24-19_irrlichd-0.6.4+860f6c4/transcript.jsonl.zstd":          "#1986 measured: -2.101s at pair 0 (ready→working); the replay fires on first turn_start at 01:24:20.166, while events.jsonl records the daemon transition at 01:24:22.267. The source of the read delay is not established.",
+	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-09-07-22-36-31_irrlichd-0.6.2+c858d61/transcript.jsonl":     "the first Desktop recording driven by a `slash` step: +2.489s at pair 0 (ready→working). Claude Desktop creates the session only when the prompt is SUBMITTED, so the row is born and goes working within milliseconds, while the replay reconstructs the boundary from the transcript it can read. Same shape as every other desktop-local first pair.",
+	"antigravity/scenarios/1-1_session-start/recordings/2026-06-20-12-33-40_irrlichd-0.5.2+be45695/transcript.jsonl":                      "pre-dates #1476: -6.609s at pair 0 (ready→working)",
+	"antigravity/scenarios/1-2_session-end/recordings/2026-06-20-12-36-01_irrlichd-0.5.2+a00b826/transcript.jsonl":                        "pre-dates #1476: -4.304s at pair 0 (ready→working)",
+	"antigravity/scenarios/1-3_long-idle-live-session/recordings/2026-06-20-17-58-44_irrlichd-0.5.2+1fcae3a/transcript.jsonl":             "pre-dates #1476: -3.937s at pair 0 (ready→working)",
+	"antigravity/scenarios/1-4_session-resume/recordings/2026-06-20-12-43-04_irrlichd-0.5.2+bb79f4c/transcript.jsonl":                     "pre-dates #1476: -3.771s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-11_auto-classified-permission/recordings/2026-06-20-13-41-55_irrlichd-0.5.2+b756a52/transcript.jsonl":        "pre-dates #1476: -5.774s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-12_context-compaction/recordings/2026-06-20-13-46-30_irrlichd-0.5.2+77308b9/transcript.jsonl":                "pre-dates #1476: -3.809s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-13_turn-end-terminal-text/recordings/2026-06-20-02-50-41_irrlichd-0.5.2+2900672/transcript.jsonl":            "pre-dates #1476: -3.522s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-15_shell-escape-command/recordings/2026-06-20-13-49-04_irrlichd-0.5.2+349bafc/transcript.jsonl":              "pre-dates #1476: -4.067s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-16_oversized-transcript-line/recordings/2026-06-20-13-18-38_irrlichd-0.5.2+76d805a/transcript.jsonl":         "pre-dates #1476: -67.369s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-1_basic-turn/recordings/2026-06-20-02-48-55_irrlichd-0.5.2+daeb6e1/transcript.jsonl":                         "pre-dates #1476: -3.199s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-21_streaming-partial-writes/recordings/2026-06-20-13-21-01_irrlichd-0.5.2+c7f1c6d/transcript.jsonl":          "pre-dates #1476: -5.111s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-4_self-correction-iteration/recordings/2026-06-20-13-14-32_irrlichd-0.5.2+a489d47/transcript.jsonl":          "pre-dates #1476: -4.859s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-5_synchronous-slash-command/recordings/2026-06-20-13-38-51_irrlichd-0.5.2+7a48e0d/transcript.jsonl":          "pre-dates #1476: -3.726s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-7_autonomous-loop/recordings/2026-06-20-14-00-16_irrlichd-0.5.2+250cd02/transcript.jsonl":                    "pre-dates #1476: -4.521s at pair 0 (ready→working)",
+	"antigravity/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-06-20-14-02-53_irrlichd-0.5.2+2de7ce6/transcript.jsonl":    "pre-dates #1476: -5.681s at pair 0 (ready→working)",
+	"antigravity/scenarios/3-1_foreground-subagent/recordings/2026-06-20-18-04-13_irrlichd-0.5.2+09e9cf9/transcript.jsonl":                "pre-dates #1476: -6.595s at pair 0 (ready→working)",
+	"antigravity/scenarios/3-2_background-subagent/recordings/2026-06-20-18-15-41_irrlichd-0.5.2+b305884/transcript.jsonl":                "pre-dates #1476: -4.468s at pair 0 (ready→working)",
+	"antigravity/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-06-20-16-53-31_irrlichd-0.5.2+2eb84fb/transcript.jsonl":     "pre-dates #1476: -5.079s at pair 0 (ready→working)",
+	"antigravity/scenarios/5-1_token-accounting/recordings/2026-06-28-11-54-27_irrlichd-0.5.3+7f52a76/transcript.jsonl":                   "pre-dates #1476: -3.343s at pair 0 (ready→working)",
+	"claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-47-11_irrlichd-0.4.5+8499138/transcript.jsonl":                     "#1476 accepted: -5.075s at pair 0 (ready→working)",
+	"claudecode/scenarios/2-7_autonomous-loop/recordings/2026-05-18-22-52-38_irrlichd-0.4.5+8499138/transcript.jsonl":                     "#1476 accepted: -4.561s at pair 0 (ready→working)",
+	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-18-22-56-34_irrlichd-0.4.5+6898561/transcript.jsonl":     "#1476 accepted: -9.012s at pair 0 (ready→working)",
+	"claudecode/scenarios/5-8_task-estimate-marker/recordings/2026-06-03-21-50-21_irrlichd-0.4.8+defb4d8/transcript.jsonl":                "pre-dates #1476: -1.167s at pair 0 (ready→working)",
+	"codex/regressions/fork-conversation/recordings/2026-05-23-19-39-41_irrlichd-0.4.7+3c6427c/transcript.jsonl":                          "#1476 accepted: -3.759s at pair 0 (ready→working)",
+	"codex/regressions/turn-end-terminal-text-pre-hooks/recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl":           "#1476 accepted: -2.246s at pair 0 (ready→working)",
+	"codex/scenarios/1-4_session-resume/recordings/2026-05-23-20-30-54_irrlichd-0.4.7+c461eef/transcript.jsonl":                           "#1476 accepted: -4.007s at pair 0 (ready→working)",
+	"codex/scenarios/1-5_session-reset/recordings/2026-05-25-00-26-42_irrlichd-0.4.7+9d1ef56.dirty/transcript.jsonl":                      "#1476 accepted: -3.673s at pair 0 (ready→working)",
+	"codex/scenarios/2-15_shell-escape-command/recordings/2026-05-23-22-23-45_irrlichd-0.4.7+7075bff/transcript.jsonl":                    "#1476 accepted: -2.032s at pair 0 (ready→working)",
+	"codex/scenarios/2-18_user-blocking-plan-mode-approval/recordings/2026-05-23-23-48-22_irrlichd-0.4.7+eb984db/transcript.jsonl":        "#1476 accepted: -5.670s at pair 0 (ready→working)",
+	"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl":                               "#1476 accepted: -3.691s at pair 0 (ready→working)",
+	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-14-23-36-59_irrlichd-dev/transcript.jsonl":                                  "pre-dates #1476: +2.187s at pair 0 (ready→working)",
+	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-53-47_irrlichd-0.3.13+4662be4/transcript.jsonl":                       "pre-dates #1476: +2.214s at pair 0 (ready→working)",
+	"codex/scenarios/2-20_interrupted-turn/recordings/2026-05-16-22-56-57_irrlichd-0.3.13+4662be4/transcript.jsonl":                       "pre-dates #1476: +2.652s at pair 0 (ready→working)",
+	"codex/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-23-22-48-46_irrlichd-0.4.7+14e1e7a/transcript.jsonl":                  "#1476 accepted: -2.234s at pair 0 (ready→working)",
+	"codex/scenarios/2-5_synchronous-slash-command/recordings/2026-05-23-21-53-28_irrlichd-0.4.7+6934b22/transcript.jsonl":                "#1476 accepted: -3.615s at pair 0 (ready→working)",
+	"codex/scenarios/2-6_long-agentic-session-stress/recordings/2026-05-23-23-03-45_irrlichd-0.4.7+ccb564c/transcript.jsonl":              "#1476 accepted: -2.230s at pair 0 (ready→working)",
+	"codex/scenarios/2-7_autonomous-loop/recordings/2026-05-23-23-15-25_irrlichd-0.4.7+774c575/transcript.jsonl":                          "#1476 accepted: -2.287s at pair 0 (ready→working)",
+	"codex/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-05-23-23-20-25_irrlichd-0.4.7+6a1a098/transcript.jsonl":          "#1476 accepted: -6.782s at pair 0 (ready→working)",
+	"codex/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-05-24-21-42-19_irrlichd-0.4.7+83509be.dirty/transcript.jsonl":         "#1476 accepted: -3.775s at pair 0 (ready→working)",
+	"codex/scenarios/5-3_model-switch-midsession/recordings/2026-05-23-21-34-12_irrlichd-0.4.7+b8b1cfc/transcript.jsonl":                  "#1476 accepted: -4.079s at pair 0 (ready→working)",
+	"copilot/scenarios/1-1_session-start/recordings/2026-08-03-12-06-21_irrlichd-0.5.9+4c1b2e4/transcript.jsonl":                          "pre-dates #1476: -3.842s at pair 0 (ready→working)",
+	"copilot/scenarios/1-2_session-end/recordings/2026-08-03-12-07-28_irrlichd-0.5.9+57d59de/transcript.jsonl":                            "pre-dates #1476: -10.828s at pair 0 (ready→working)",
+	"copilot/scenarios/1-4_session-resume/recordings/2026-08-05-19-02-01_irrlichd-0.5.9+4b58365/transcript.jsonl":                         "pre-dates #1476: -18.621s at pair 1 (working→ready)",
+	"copilot/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-03-12-16-12_irrlichd-0.5.9+ced85ef/transcript.jsonl":                "pre-dates #1476: -4.190s at pair 0 (ready→working)",
+	"gemini-cli/scenarios/2-12_context-compaction/recordings/2026-06-12-10-36-37_irrlichd-0.5.1+93db11a/transcript.jsonl":                 "pre-dates #1476 and #1447: +16.634s at pair 0 (ready→working). The 0.5.1 daemon decided working at birth on no transcript evidence (the #1447 defect); since #2034 the replay also refuses that verdict and first reaches working on the first user_message, 16.6s later.",
+	"mistral-vibe/scenarios/2-12_context-compaction/recordings/2026-07-07-17-22-57_irrlichd-0.5.5+bc77a37.dirty/transcript.jsonl":         "#1476 accepted: -30.976s at pair 0 (ready→working)",
+	"mistral-vibe/scenarios/2-15_shell-escape-command/recordings/2026-07-07-17-41-58_irrlichd-0.5.5+22a01d2.dirty/transcript.jsonl":       "#1476 accepted: -8.599s at pair 0 (ready→working)",
+	"mistral-vibe/regressions/1846-retired-terminal-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl": "#1476 accepted: -27.522s at pair 0 (ready→working)",
+	"muse/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad/transcript.jsonl":                "#1960: -32.388s at pair 0 (ready→working). Pre-fix capture (predates fix commit 9abf13d1) hitting the SAME assignPIDLocked PID-eviction bug that blocked 2-14/2-17: session 01a09e16 born ready at seq152, evicted by a late-arriving proc-53461 pre-session claim at seq170, re-discovered only via a LATER, different session's own birth at seq456. 4-1's own cell assertions don't key on this transition (stayed a clean 5/5 pass), so it was not re-recorded as part of #1960's fix.",
 }
 
 // aggregate ratchets. The named list above keys on the FIRST kind-matched pair,
@@ -451,9 +448,19 @@ const (
 //
 // Same frozen-sidecar cost as #1799's, for the same reason, and it resolves the
 // same way: on re-record.
+// #2034 lowers both floors by one. The no-evidence guard (ClassifyStateOnEvidence)
+// removes the replay's only ready→working in codex/4-2's recording: it was
+// decided before any transcript line was readable, so that recording now
+// replays zero transitions and yields no pair (see knownZeroTransition). The
+// same guard deletes three knownFirstTransitionDrift entries (deepseek-harness
+// 2-5, muse 2-15, muse 2-5): their early no-evidence working is gone, and the
+// first working now lands within 41ms of the daemon's. `go test
+// ./tools/onboarding-factory/cmd/replay -run
+// 'TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog' -count=1` measured
+// 1093 pairs over 365 recordings.
 const (
-	minKindMatchedPairs   = 1094
-	minMeasuredRecordings = 366
+	minKindMatchedPairs   = 1093
+	minMeasuredRecordings = 365
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,
