@@ -338,19 +338,17 @@ final class SettingsViewTests: XCTestCase {
     /// Mutation-proved: with the " — no data" suffix replaced by "" in
     /// `SettingsView.quotaProviderRowLabel`, the first assertion went red.
     func testASelectedQuotaProviderWithNoLiveDataIsMarked() {
-        let selected = ["anthropic", "unknown:codex"]
-        let live = ["anthropic"]
         XCTAssertEqual(
-            SettingsView.quotaProviderRowLabel("unknown:codex", selected: selected, live: live),
+            SettingsView.quotaProviderRowLabel("unknown:codex", slot: 1, hasLiveData: false),
             "2. Codex — no data"
         )
         // Locks: a selected slot with data and an unselected row stay plain.
         XCTAssertEqual(
-            SettingsView.quotaProviderRowLabel("anthropic", selected: selected, live: live),
+            SettingsView.quotaProviderRowLabel("anthropic", slot: 0, hasLiveData: true),
             "1. Claude"
         )
         XCTAssertEqual(
-            SettingsView.quotaProviderRowLabel("openai", selected: selected, live: ["openai"]),
+            SettingsView.quotaProviderRowLabel("openai", slot: nil, hasLiveData: true),
             "Codex"
         )
     }

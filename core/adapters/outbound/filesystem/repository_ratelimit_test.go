@@ -100,8 +100,14 @@ func TestRepository_DropsLegacyUnattributedRateLimit(t *testing.T) {
 func TestRepository_KeepsConfirmedRateLimit(t *testing.T) {
 	for name, s := range loadBothWays(t, "confirmed", confirmedRateLimitSession) {
 		rl := s.Metrics.RateLimit
-		if rl == nil || rl.Provider != session.ProviderAnthropic || len(rl.Windows) != 1 {
-			t.Errorf("%s: confirmed rate_limit changed on load: %+v", name, rl)
+		if rl == nil {
+			t.Fatalf("%s: confirmed rate_limit was dropped on load", name)
+		}
+		if rl.Provider != session.ProviderAnthropic {
+			t.Errorf("%s: provider changed on load: %q", name, rl.Provider)
+		}
+		if len(rl.Windows) != 1 {
+			t.Errorf("%s: windows changed on load: %+v", name, rl.Windows)
 		}
 		if s.Metrics.RateLimitForecastEta == nil {
 			t.Errorf("%s: forecast ETA of a confirmed snapshot was dropped", name)
