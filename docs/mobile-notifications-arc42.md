@@ -313,6 +313,12 @@ and a DNS record that never changed, not a database.
 
 ### 7.1 Distribution
 
+> **Status:** The distribution gap below is closed. Release v0.6.3 and later
+> publish separate `irrlichtrelay-linux-amd64.tar.gz` and
+> `irrlichtrelay-linux-arm64.tar.gz` archives with `bin/` and `Resources/web/`.
+> `site/relay.sh` now installs these archives on Linux with systemd. The text
+> below records the plan that led to the release packaging.
+
 The operator story exists: `examples/relay/` carries a Dockerfile, docker-compose, a systemd unit, and `DEPLOY.md` with the two auth/TLS postures and the reverse-proxy pattern — Shape A is documented today. What does **not** exist is shipped bits: `DEPLOY.md` itself states "built from source — there is no published release yet", and `irrlichtrelay` appears nowhere in `tools/build-release.sh`, `site/install.sh`, or the Homebrew tap (verified). P1 closes exactly that gap:
 
 1. `build-release.sh` cross-compiles `irrlichtrelay` into the **existing** darwin/linux tarballs — their `web/` payload is already what the relay serves, via the same `resolveUIDir` walk as the daemon (`cmd/irrlichtrelay/main.go:443`).

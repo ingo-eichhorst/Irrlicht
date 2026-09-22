@@ -457,8 +457,14 @@ else
          "one run_gate_scoped line starting ^tools/lib/" "no such line — the scan has gone blind, not the trigger wrong"
   else
     pass "read the tools-gate trigger regex from $PF"
+    # site/install.sh and site/relay.sh are probed because their harnesses
+    # (install-uninstall_test.sh, relay-install_test.sh) live in this directory
+    # and run under this gate, while the scripts themselves do not match
+    # `^tools/`. Narrowing the alternation back to one installer would un-gate
+    # the other silently — #1416's shape, arriving a second time.
     for probe in tools/lib/workflow-step.sh tools/lib/workflow-step_test.sh \
-                 "$DATA/no-shell.yml" .github/workflows/macos-swift.yml; do
+                 "$DATA/no-shell.yml" .github/workflows/macos-swift.yml \
+                 site/install.sh site/relay.sh; do
       if printf '%s\n' "$probe" | grep -qE "$tools_re"; then
         pass "...it fires on a diff touching $probe"
       else
