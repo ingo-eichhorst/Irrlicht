@@ -18,7 +18,7 @@
     {
       "id": "muse-code-subscription",
       "name": "Muse Code subscription",
-      "quota_scope": "session"
+      "quota_scope": "account"
     }
   ],
   "observation": {
@@ -92,7 +92,7 @@
     "account_identity": {
       "claim": "source-specific-unavailable",
       "evidence": ["muse-live-probe-2026-09-20", "muse-parser-source"],
-      "note": "The response carries no stable provider account id, so accountRef() returns the empty string by construction and the poller falls back to a session-scoped key. Hashing the access token was rejected as an account id."
+      "note": "The response carries no stable provider account id, so accountRef() returns the empty string by construction and the poller falls back to a session-scoped key — which is a degradation in Irrlicht's dedup, not a property of the product. The product's quota_scope above stays \"account\" for that reason: it says what the subscription bills against, not what Irrlicht can currently key on. Hashing the access token was rejected as an account id."
     }
   },
   "evidence": [

@@ -270,6 +270,13 @@ type Manifest struct {
 }
 
 // Product is one billing product.
+//
+// QuotaScope says what the PRODUCT bills against — #1977 §7 files it under
+// billing identity, next to the product and the confirmed account reference.
+// It is not what Irrlicht currently manages to key a poll on: Muse's poller
+// falls back to a session-scoped key because the probe found no stable
+// provider account id, and that degradation belongs in the account_identity
+// axis (where meta's manifest records it), not in the product's scope.
 type Product struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
