@@ -12,6 +12,49 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-09-22
+
+### Quota shows one row per subscription again, DeepSeek Harness joins the supported agents, and a relay you can install with one command
+
+### Also in this release
+
+**Added**
+- DeepSeek Harness is a supported agent: its compressed transcripts are read as sessions, with lifecycle replay evidence behind the core states (#1983, #1991, #2000, #2026)
+- Relay enrollment codes: `irrlichtrelay enroll new --label <name> --public-url <url>` mints a one-time `/enroll/<code>` link and redeems it through `POST /api/v1/enroll/redeem`. This is the relay side only: the desktop app has no field to paste the link into yet (#1963, #2014)
+- A one-command relay installer for Linux with systemd: `curl -fsSL https://irrlicht.io/relay.sh | sh -s -- --domain relay.example.com` (or `--tailscale`, or loopback) verifies the release checksum, writes a hardened unit and issues the first token (#1964, #1990)
+- Muse subscription quota read from Meta's account API, behind its own `account-api` consent permission and a reviewed credential, egress and polling contract (#2003, #2019, #2007, #2025)
+- Pi keeps the provider it reports on a model change, instead of discarding it (#2017)
+
+**Fixed**
+- One subscription no longer shows as two quota providers ("Claude" and "Claude-Code") after an upgrade, and a menu bar quota slot saved under an old key no longer renders empty (#2030, #2032)
+- Billing identity comes from session evidence, never from the adapter name, and both clients read identity, units and freshness from the daemon: a Copilot Pro session no longer brands as Anthropic (#1994, #1997, #1995, #1998)
+- Unattributed spend stays in the cost totals, and cost rows written before attribution existed no longer read as confirmed (#1996, #1999)
+- Claude Code: a Bash call the harness moves to the background after 120 s, and a Monitor task, now count as open background work instead of letting the session read as idle (#2028, #2033, #1984)
+- Muse no longer shows `waiting` while its own LLM judge reviews a tool approval, and its subscription capability matches the scenario evidence (#1978, #1981, #2015)
+- Sessions that share one OS process: `process_exited` reaches every session bound to the PID, and duplicate PID holders are retired on the periodic sweep, not only at startup (#1962, #1979, #1992, #1993)
+- DeepSeek Harness: concurrent web sessions that share a PID stay separate, and its own one-shot provider processes no longer show as sessions (#2001, #2024)
+- Price one more non-Anthropic frontend correctly: added the `grokbot-auto` alias synced from codeburn
+
+**Changed / Docs / Distribution**
+- Process-environment reads are scoped to the key set of the permission that asked for them, and endpoint routes are observed (#2018)
+- A billing-product catalog under `docs/providers/`, built from six pinned open-source provider lists (#2016)
+- Maintainer tooling: the `ir:fleet` orchestrator runs several `ir:exec` tickets at once and checks each hand-back with a checker (#2022, #2023)
+- Replay data: DeepSeek Harness's two open-question traits are pinned explicitly, so `of validate` passes on main (#2027)
+- Dependency bumps: `modernc.org/sqlite` 1.59.0, and vitest 5.0.1 plus jsdom in both web trees (#2020, #2021)
+- Docs: DeepSeek Harness and Muse added to every agent list; relay enrollment, three environment variables, five WebSocket message types and the per-adapter hook routes documented; stale state-machine, light-system and session-detection descriptions corrected
+
+### Technical appendix
+
+- **Quota providers after the attribution change (#2030, PR #2032).** The filesystem session repository drops a restored `rate_limit` snapshot whose `attribution_quality` is empty (`RateLimitSnapshot.IsUnattributed`), the shape a pre-#1994 daemon persisted; `MergeMetrics` used to carry it forward until the next live sample, and every client keyed it as `unknown:claude-code`. The drop runs on the disk-decode path only (`Load`, `ListAll`). The macOS app migrates saved slot keys once (`unknown:claude-code` → `anthropic`, `unknown:codex` → `openai`, with the per-provider display mode moved along), and Settings marks a selected slot with no live data as "— no data". A relay or remote daemon older than this release still strips the attribution fields when it decodes and re-encodes a session, so update the relay host as well.
+- **Billing identity from evidence (#1994, #1995; PRs #1997 and #1998).** `ProviderForSession` no longer maps an adapter name to a provider; a snapshot names its provider only when an adapter observed native evidence (`claude_code_statusline`, the Codex rate-limit event, Pi's own provider field) and stamps `attribution_quality: confirmed`. The macOS and web clients read the provider, units and freshness from that field instead of inferring them from the plan type, which several providers reuse.
+- **Cost totals (#1996, PR #1999).** The per-provider cost breakdown keeps the empty-provider bucket so it sums to the project total, and a legacy cost row that names a provider without an `attribution_quality` reads as guessed, never as confirmed.
+- **Account-quota contract and Muse (#2003, #2007; PRs #2019 and #2025).** `core/ports/outbound/accountquota.go` declares a credential resolver and transport with a fixed destination allowlist; the HTTP transport refuses redirects, bounds the read to 1 MiB and keeps credentials and response bodies out of errors. Muse's endpoint needs a POST with a fixed body, so it ships as its own adapter (`museaccountapi`) behind the shared `account-api` permission, polled by the daemon-wide account poller.
+- **Relay enrollment and installer (#1963, #1964; PRs #2014 and #1990).** The pairing-code algorithm moved into `core/pkg/onetimecode`; desktop codes persist as SHA-256 hashes in `<data-dir>/enroll-codes.json` (mode 0600) and are redeemed through `POST /api/v1/enroll/redeem`. `site/relay.sh` selects the amd64 or arm64 `irrlichtrelay-linux-*.tar.gz` asset, verifies it against `checksums.sha256`, and supports Caddy (`--domain`), `tailscale serve` (`--tailscale`) and loopback.
+- **Background work in Claude Code (#2028, #1984; PRs #2033 and #1984).** `backgroundSpawnRe` now also matches the launch text of a Bash call the harness auto-backgrounds after its 120 s timeout, and Monitor tasks register in the #445 background-process ledger, so both hold the session in `working` while they run.
+- **Shared-PID sessions (#1962, #1992; PRs #1979 and #1993).** `process_exited` is delivered to every session bound to the exiting PID (a Muse parent and its in-process reminder subagents share one), and `dedupeByPID` also runs on the periodic sweep, so a duplicate root minted after startup is retired.
+- **DeepSeek Harness (#1980; PRs #1983, #1991, #2000, #2001, #2024, #2026, #2027).** A compressed-transcript adapter under `core/adapters/inbound/agents/dsh`, onboarded in the replay matrix (core and non-core columns plus lifecycle evidence). Concurrent web sessions sharing one PID stay distinct, and owned one-shot provider processes are suppressed.
+- **Release tooling note.** The alias sync found 4 changed GLM canonicals upstream (`glm-5.2`/`GLM-5.2` → `z-ai/glm-5.2`, `glm-5.3`/`GLM-5.3` → `z-ai/glm-5.3`). Neither the old nor the new targets are in the LiteLLM snapshot, so they are left unchanged for maintainer review; `gpt-4.1 → gpt-4.1` was skipped as a self-mapping.
+
 ## [0.6.4] — 2026-09-15
 
 ### A menu bar icon you can budget, Muse joins the supported agents, and a relay link that survives standby
@@ -1950,7 +1993,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.5
 [0.6.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.4
 [0.6.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.3
 [0.6.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.2

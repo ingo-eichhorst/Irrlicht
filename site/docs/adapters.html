@@ -257,6 +257,20 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>DeepSeek Harness Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/dsh/</code></li>
+        <li><strong>Watches:</strong> <code>session.v&lt;N&gt;.jsonl.zstd</code> under <code>~/.dsh/sessions/&lt;workspace&gt;/session-&lt;uuid&gt;/</code>, relocatable via <code>$DSH_HOME</code> (then <code>$DSH_HOME/sessions/</code>); only the highest transcript generation in a session directory is read</li>
+        <li>Transcripts are concatenated, checksummed zstd frames; the shared tailer decodes them before the parser sees the JSONL records</li>
+        <li>The session ID comes from the <code>session-&lt;uuid&gt;</code> directory rather than the file. A native in-process subagent is linked to its parent from its transcript&rsquo;s first record (<code>origin: subagent</code> plus <code>parentSession</code>); forks carry a parent too but stay top-level</li>
+        <li>Process discovery via command-line match on <code>dsh</code>, because the OS process name is <code>node</code>. The PID is bound by checking which process holds the session&rsquo;s sibling <code>session.lock</code> open for writing, and concurrent sessions that share one PID stay separate</li>
+        <li>DeepSeek Harness&rsquo;s own one-shot Codex and Claude Code provider processes are recognised by argv and parent PID, so they do not show up as duplicate sessions</li>
+        <li>The adapter is observe-only, gated behind a single <code>transcripts</code> permission</li>
+        <li><strong>Adapter name:</strong> <code>"dsh"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Junie Adapter</h3>
 
       <ul>
@@ -559,7 +573,7 @@ type Watcher interface {
 
       <p>Adapters and platforms in the compatibility grid share the same four-tier ladder: <code>planned</code>, <code>alpha</code>, <code>beta</code>, <code>stable</code>. Each tier states a <strong>common ladder</strong> (time, bug count, real-world use) once and then a small set of component-specific artefact checks. Every box can be ticked from public artefacts (the repo, GitHub issues, tagged releases) -- stage assignment reduces to running through the checklist.</p>
 
-      <p>Since #1369 each <em>adapter</em> tier above <code>planned</code> has a <strong>machine-checked floor</strong> alongside its human criteria (platform tiers remain editorial). The floor is a set of <em>core</em> scenarios drawn from the 48 in the matrix &mdash; twelve of them, chosen for discriminating power rather than coverage (the set and the reasoning per scenario live in <code>tools/onboarding-factory/internal/matrix/vocabulary.go</code>). A scenario <em>settles</em> when it is recorded and observed, or when <code>replaydata/agents/adapters.json</code> declares a capability the adapter structurally lacks. The other 34 scenarios are <strong>optional</strong> and never block a promotion. <code>of validate</code> fails when an adapter claims a tier its core standing has not earned; claiming <em>less</em> is always allowed, because the time-and-adoption criteria below are invisible to it.</p>
+      <p>Since #1369 each <em>adapter</em> tier above <code>planned</code> has a <strong>machine-checked floor</strong> alongside its human criteria (platform tiers remain editorial). The floor is a set of <em>core</em> scenarios drawn from the 50 in the matrix &mdash; twelve of them, chosen for discriminating power rather than coverage (the set and the reasoning per scenario live in <code>tools/onboarding-factory/internal/matrix/vocabulary.go</code>). A scenario <em>settles</em> when it is recorded and observed, or when <code>replaydata/agents/adapters.json</code> declares a capability the adapter structurally lacks. The other 38 scenarios are <strong>optional</strong> and never block a promotion. <code>of validate</code> fails when an adapter claims a tier its core standing has not earned; claiming <em>less</em> is always allowed, because the time-and-adoption criteria below are invisible to it.</p>
 
       <p>The shape borrows from <a href="https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/">Kubernetes feature stages</a> (alpha experimental, beta opt-out-able, GA stable) and the <a href="https://github.com/cncf/toc/blob/main/process/graduation_criteria.md">CNCF graduation criteria</a> (real adopters, time at the previous tier).</p>
 
@@ -581,7 +595,7 @@ type Watcher interface {
       <ul class="checklist">
         <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
         <li>Exports an <code>agent.Agent</code> from <code>Agent()</code> with the right <code>Source</code> variant (<code>FilesUnderRoot</code> / <code>FilesUnderCWD</code> / <code>ProcessOwnedStore</code>), parser, and PID-discovery hook</li>
-        <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Registered in the <code>All()</code> slice in <code>core/adapters/inbound/agents/all.go</code></li>
         <li>Emits the ordinary lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code> (<code>error</code> additionally requires a failure signal the adapter can parse)</li>
         <li>Scenario cells assessed via the <code>assess</code> verb of <code>/ir:onboarding-factory</code>, recorded in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
         <li><strong>Machine-checked (#1369):</strong> the four <em>alpha-floor</em> core scenarios are settled &mdash; <code>session-start</code>, <code>basic-turn</code>, <code>auto-executed-tool-call</code>, <code>turn-end-terminal-text</code>. All four are reachable from lifecycle hooks alone, which is what makes <code>alpha</code> a day-one tier for an adapter that has hooks and no transcript parser: it asserts <strong>state only, no metrics</strong>.</li>
@@ -608,7 +622,7 @@ type Watcher interface {
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
         <li><strong>Machine-checked (#1369):</strong> all <strong>nine</strong> <em>state-core</em> scenarios settled &mdash; the four alpha-floor ones plus <code>session-end</code>, <code>long-idle-live-session</code>, <code>user-blocking-question</code>, <code>turn-aborted-by-error</code>, <code>multiple-sessions-same-cwd</code>. Still no metrics scenario: that is the <code>beta</code>/<code>stable</code> line.</li>
-        <li>Remaining scenario cells assessed &mdash; verdict recorded per cell in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code>. Since #1369 these <strong>34 non-core scenarios are optional</strong>: they are still assessed, recorded and rendered, but they do not hold a promotion back.</li>
+        <li>Remaining scenario cells assessed &mdash; verdict recorded per cell in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code>. Since #1369 these <strong>38 non-core scenarios are optional</strong>: they are still assessed, recorded and rendered, but they do not hold a promotion back.</li>
         <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
         <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
       </ul>

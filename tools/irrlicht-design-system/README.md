@@ -2,14 +2,15 @@
 
 > *In Goethe's Faust, an Irrlicht guides the way through the night. This one guides you through your agents — who's working, who's waiting, and where you're needed next.*
 
-**Irrlicht** (German: *will-o'-the-wisp*; IPA /eer-likht/) is an open-source macOS menu-bar telemetry app that monitors AI coding agents — Claude Code, OpenAI Codex, Pi, and the Gas Town orchestrator (a coordinator process that dispatches and supervises work across multiple agent workers) — in real time. Each session is a single colored light:
+**Irrlicht** (German: *will-o'-the-wisp*; IPA /eer-likht/) is an open-source macOS menu-bar telemetry app that monitors AI coding agents — Claude Code, OpenAI Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness, and the Gas Town orchestrator (a coordinator process that dispatches and supervises work across multiple agent workers) — in real time. Each session is a single colored light:
 
 - 🟣 **working** — the agent is thinking, building, streaming
 - 🟠 **waiting** — it needs you; the story pauses for your judgment
 - 🟢 **ready** — the path ahead is clear, ready for new work
+- **error** — the session's own machinery failed; red (`--error`, #1802)
 - **no sessions** — clean slate, dimmed grey flame
 
-The brand is built entirely around that **three-light vocabulary**. Purple, orange, green — everywhere, always in that semantic role.
+The brand is built entirely around the **three-light vocabulary**. Purple, orange, green — everywhere, always in that semantic role; `error` red appears only on a session whose own machinery failed.
 
 ---
 
@@ -84,7 +85,7 @@ Irrlicht writes like a quietly confident German open-source maintainer. Copy is 
 
 - **Calm, ambient, occult-adjacent.** The product *is* a will-o'-the-wisp — light, guidance, night, lanterns. Leans into that without becoming mystical.
 - **No hype, no "game-changing," no rocketship emoji.** If the docs call something "zero configuration" it's because there's nothing to configure, full stop.
-- **Slight dry humour.** *"Follow the right light."* *"Three states. No ambiguity."* *"In the dark"* (cost tracking).
+- **Slight dry humour.** *"Follow the right light."* *"One light per session. No ambiguity."* *"In the dark"* (cost tracking).
 
 ### Casing & punctuation
 
@@ -99,10 +100,10 @@ Irrlicht writes like a quietly confident German open-source maintainer. Copy is 
 
 - "Follow the right light." *(footer / tagline)*
 - "Menu-bar telemetry for AI coding agents" *(header subtitle)*
-- "Three states. No ambiguity."
+- "One light per session. No ambiguity."
 - "Ambient, always visible, nothing to click through."
 - "Local-first, ~5MB RAM, no telemetry leaves your machine."
-- "Zero configuration. No hooks. No SDK."
+- "No SDK wrappers, no collectors, no dashboard tab to keep open."
 
 ### Emoji & unicode
 
@@ -127,17 +128,18 @@ Dark, starry, deliberately **off the usual SaaS trail**. Think: telescope observ
 
 ### Colors
 
-Three semantic lights, on near-black navy. **Never invent new accent colors** — everything non-state leans on the purple or a neutral grey.
+Four semantic state colors (working, waiting, ready, error), on near-black navy. **Never invent new accent colors** — everything non-state leans on the purple or a neutral grey.
 
 - `--working:   #8B5CF6` · violet 500-ish
 - `--waiting:   #FF9500` · iOS orange
 - `--ready:     #34C759` · iOS green
+- `--error:     #FF3B30` · iOS red — the session's own machinery failed (#1802)
 - `--bg:        #050a14` · near-black navy (deepest)
 - `--bg-surface:#0a1020` · raised panels
 - `--text:      #c8cdd8` · cool off-white body
 - `--text-dim:  #5a6378` · label/meta
 
-Semantic pressure scale adds: `#FF3B30` (high) and `#D70015` (critical) — **only for context-pressure UI**, not general error states.
+Semantic pressure scale adds: `#FF3B30` (high) and `#D70015` (critical) — **only for context-pressure UI** and, for `#FF3B30`, the `error` session state (`--error`, #1802); never as a general accent.
 
 ### Type
 
@@ -264,11 +266,13 @@ Six small outline SVGs appear on the marketing feature grid (real-time monitorin
 
 ### 4. State icons in the web dashboard
 
-Three small 12×12 SVGs live inline in `platforms/web/formatters.js` (see the `svgIcons` object):
+Six small 12×12 SVGs live inline in `platforms/web/formatters.js` (see the `svgIcons` object) — one per state (working, waiting, ready, error) plus two non-state entries:
 - **working**: dashed-stroke circle, spinning.
 - **waiting**: two vertical bars (pause).
 - **ready**: circle + checkmark.
-- **cancelled**: circle + X.
+- **error**: circle + exclamation mark, in `--error` red; deliberately not animated.
+- **unknown**: circle + question mark — the client-side fallback for a state value this build does not recognise (#1797), not a daemon state.
+- **cancelled**: circle + X — a legacy entry; `cancelled` is not a state.
 
 Copy these verbatim for any session-row UI.
 

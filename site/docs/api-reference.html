@@ -168,8 +168,24 @@
             <td>Session removed</td>
           </tr>
           <tr>
-            <td><code>orchestrator_state</code></td>
-            <td>Orchestrator state snapshot</td>
+            <td><code>focus_requested</code></td>
+            <td>A client asked to raise a session's terminal window (sent after <code>POST /api/v1/sessions/{id}/focus</code>); the macOS app acts on it</td>
+          </tr>
+          <tr>
+            <td><code>history_snapshot_v2</code></td>
+            <td>One session's encoded 60-bucket state history across all three granularities; sent on connect, on session creation, and after a reconnect</td>
+          </tr>
+          <tr>
+            <td><code>history_tick_v2</code></td>
+            <td>Bulk per-granularity delta: the wire code of the bucket that just rolled, one entry per session</td>
+          </tr>
+          <tr>
+            <td><code>history_upgrade_v2</code></td>
+            <td>A state transition landed mid-bucket; clients merge it into the current bucket of all three rings</td>
+          </tr>
+          <tr>
+            <td><code>permissions_updated</code></td>
+            <td>Consent state changed; carries no payload &mdash; clients re-fetch <code>GET /api/v1/permissions</code></td>
           </tr>
         </tbody>
       </table>
@@ -186,7 +202,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.5.10"
+  "version": "0.6.5"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -370,7 +386,7 @@ curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
 
       <h3>POST /api/v1/hooks/claudecode</h3>
 
-      <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, and <code>PreCompact</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays) and to force <code>working</code> during a manual <code>/compact</code>. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>
+      <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>PreCompact</code>, <code>Stop</code>, and <code>Notification</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays, and blocking <code>Notification</code> types such as <code>idle_prompt</code>), to force <code>working</code> during a manual <code>/compact</code>, and to take <code>Stop</code> as the authoritative turn-done signal. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>
 
       <p>Request body (only the fields the daemon reads; unknown fields are ignored):</p>
 
@@ -396,7 +412,7 @@ curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
           <tr>
             <td><code>hook_event_name</code></td>
             <td>string</td>
-            <td><code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, or <code>PreCompact</code></td>
+            <td><code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>PreCompact</code>, <code>Stop</code>, or <code>Notification</code></td>
           </tr>
           <tr>
             <td><code>tool_name</code></td>
@@ -427,6 +443,16 @@ curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
             <td><code>trigger</code></td>
             <td>string</td>
             <td><code>manual</code> or <code>auto</code> on <code>PreCompact</code> events (the compaction cause); empty otherwise</td>
+          </tr>
+          <tr>
+            <td><code>last_assistant_message</code></td>
+            <td>string</td>
+            <td>The turn's final assistant message, on <code>Stop</code> events</td>
+          </tr>
+          <tr>
+            <td><code>notification_type</code></td>
+            <td>string</td>
+            <td>Discriminator on <code>Notification</code> events; the blocking types (e.g. <code>idle_prompt</code>) drive state, every other type is accepted and ignored</td>
           </tr>
         </tbody>
       </table>
@@ -490,6 +516,10 @@ curl -X POST http://127.0.0.1:7837/api/v1/hooks/claudecode/statusline \
     }
   }'</code></pre>
 
+      <h3>POST /api/v1/hooks/{adapter} (other agents)</h3>
+
+      <p>Every other hook-capable adapter has its own receiver, one route per adapter: <code>/api/v1/hooks/codex</code>, <code>/api/v1/hooks/copilot</code>, <code>/api/v1/hooks/gemini-cli</code>, <code>/api/v1/hooks/mistral-vibe</code>, <code>/api/v1/hooks/kiro-cli</code>, <code>/api/v1/hooks/pi</code>, <code>/api/v1/hooks/opencode</code>, <code>/api/v1/hooks/hermes</code>, and <code>/api/v1/hooks/antigravity</code>. The body is that agent&rsquo;s own hook-event JSON, delivered by the hook entry, extension, or plugin the daemon installs for it &mdash; for agents that can only run a command, that entry is <code>irrlichd hook-post &lt;adapter&gt;</code>, which reads the payload on stdin and POSTs it to the running daemon&rsquo;s address. The daemon uses the events to refine that adapter&rsquo;s session state. Each route accepts <code>POST</code> only and is consent-gated behind the adapter&rsquo;s hook permission: while that permission is pending or denied, payloads are dropped. These routes are local and unauthenticated; a <code>transcript_path</code> in a body is only opened when it lies under the adapter&rsquo;s own watched root. See <a href="adapters.html">Adapters</a> for what each agent installs.</p>
+
       <h3>GET /debug/bundle</h3>
 
       <p>Collects a redacted diagnostics snapshot for bug reports and returns it as a gzipped tar (<code>Content-Disposition: attachment; filename="irrlicht-diag-&lt;version&gt;.tar.gz"</code>). The bundle captures the daemon's resolved stores and config with sensitive values redacted. <strong>Loopback only.</strong> Headless installs that can't hit this route can produce the same bundle from the CLI with <code>irrlichd --diagnose</code>, which writes <code>irrlicht-diag.tar.gz</code> to the current directory without starting the daemon.</p>
@@ -497,9 +527,20 @@ curl -X POST http://127.0.0.1:7837/api/v1/hooks/claudecode/statusline \
       <pre><code># Download a diagnostics bundle
 curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
 
+      <h3>GET /debug/pprof/</h3>
+
+      <p>Go runtime profiling from the standard <code>net/http/pprof</code> handlers: <code>/debug/pprof/</code> (index, including the named heap/goroutine/&hellip; profiles), <code>/debug/pprof/cmdline</code>, <code>/debug/pprof/profile</code> (CPU; <code>?seconds=N</code>), <code>/debug/pprof/symbol</code>, and <code>/debug/pprof/trace</code>. <strong>Loopback only.</strong></p>
+
+      <pre><code># 10-second CPU profile of the running daemon
+go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre>
+
       <h3>GET /</h3>
 
       <p>Serves the web dashboard UI from disk &mdash; <code>resolveUIDir</code> in <code>core/cmd/irrlichd/paths.go</code> walks up from the executable to find <code>platforms/web/index.html</code>, with the production .app bundle layout and the curl <code>--daemon-only</code> install path as fallbacks.</p>
+
+      <h3>Relay endpoints</h3>
+
+      <p>The standalone relay (<code>irrlichtrelay</code>, default <code>127.0.0.1:7839</code>) re-serves <code>GET /api/v1/sessions</code>, <code>/api/v1/agents</code>, <code>/api/v1/version</code>, and the WebSocket stream from its cache, and adds its own routes: phone pairing and Web Push (<code>/api/v1/push/*</code>, <code>/pair/{code}/</code>) and desktop enrollment (<code>POST /api/v1/enroll/redeem</code>, <code>POST /api/v1/enroll/requests</code>, <code>GET /enroll/{code}</code>). Those are documented in <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/docs/relay-protocol.md"><code>docs/relay-protocol.md</code></a>.</p>
 
       <h2>SessionState Schema</h2>
 

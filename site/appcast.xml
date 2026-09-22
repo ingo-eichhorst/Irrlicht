@@ -6,6 +6,19 @@
         <description>Auto-update feed for the Irrlicht macOS app.</description>
         <language>en</language>
     <item>
+      <title>Version 0.6.5</title>
+      <pubDate>Tue, 22 Sep 2026 21:41:05 +0000</pubDate>
+      <sparkle:version>0.6.5</sparkle:version>
+      <sparkle:shortVersionString>0.6.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://irrlicht.io/docs/changelog.html#v0-6-5</sparkle:releaseNotesLink>
+      <enclosure
+        url="https://github.com/ingo-eichhorst/Irrlicht/releases/download/v0.6.5/Irrlicht-0.6.5.dmg"
+        sparkle:edSignature="fALieu88r/FIv93+zi6ELyRUceLQGAIphIGQmfBVWClvPjMQ+YRR0a9dDUms0RuDH7+YmPeYe36MY5T5jPA0Cw=="
+        length="50346740"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Version 0.6.4</title>
       <pubDate>Tue, 15 Sep 2026 20:49:05 +0000</pubDate>
       <sparkle:version>0.6.4</sparkle:version>

@@ -53,7 +53,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works (state only, metrics not claimed) · `planned` on the roadmap.
 
-The **13 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Junie has an adapter but remains `planned` until recordings earn its maturity claims. Other orchestrator, platform, and `planned` rows are editorial and have no adapter.
+The **14 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Junie has an adapter but remains `planned` until recordings earn its maturity claims. Other orchestrator, platform, and `planned` rows are editorial and have no adapter.
 
 **Coding agents**
 
@@ -71,6 +71,7 @@ The **13 onboarded coding agents** below declare their stage in [`replaydata/age
 | GitHub Copilot | alpha   |
 | Hermes Agent   | alpha   |
 | Muse           | alpha   |
+| DeepSeek Harness | alpha |
 | Junie          | planned |
 | Cursor Agent   | planned |
 | Amp            | planned |
@@ -108,16 +109,18 @@ first:
 1. **Cmd-drag it somewhere you can see.** Hold ⌘ and drag the icon along the
    menu bar. Irrlicht asks macOS to remember the spot, so it should still be
    there after a quit and a relaunch.
-2. **Turn on Compact.** Settings → *Menu Bar Icon* → **Compact**. It is a
-   toggle on whichever style you already use, not a style of its own, so you
-   keep the content you picked and only change how densely it is drawn: every
-   project collapses into one dot with a session count, and on *Usage* the
-   quota bars switch to the narrow, label-less layout *Combined* already uses.
-   Its width then stops growing with your project count.
+2. **Set Grouping to Combined.** Settings → *Menu Bar Icon* → *Grouping* →
+   **Combined**. Grouping applies to whichever style you already use, not a
+   style of its own, so you keep the content you picked and only change how
+   densely it is drawn: every project collapses into one dot with a session
+   count, and on *Usage* the quota bars switch to the narrow, label-less
+   layout the *Combined* style already uses. Its width then stops growing
+   with your project count.
 
    Measured in points, by `cd platforms/macos && swift test --filter
    testMeasuredWidthOfEachStyle` (a committed test, not numbers typed by
-   hand) — `+C` is Compact on:
+   hand) — `+C` is Grouping set to Combined, the other columns the default
+   *By project*:
 
    | projects | Lights | Lights+C | Usage | Usage+C | Combined | Combined+C |
    |---|---|---|---|---|---|---|
@@ -128,15 +131,16 @@ first:
    | 6 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
    | 8 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
 
-   Lights plateaus at 90.00 because only five dot-groups plus an overflow
-   marker are ever drawn. Compact costs width only in the trivial
-   one-project case (18.50 against 10.00) and wins from two projects on,
-   which is the crowded menu bar this section is about. With Compact **off**,
-   every style renders exactly what it always did.
+   Lights plateaus at 90.00 because the default slot budget draws five
+   dot-groups plus an overflow marker (Settings → *Menu Bar Icon* → **Max
+   projects**, 1–10). Combined costs width only in the trivial one-project
+   case (18.50 against 10.00) and wins from two projects on, which is the
+   crowded menu bar this section is about. On the default **By project**
+   grouping, every style renders exactly what it always did.
 3. **Mind the notch.** On a notched Mac the menu bar has a dead zone in the
    middle. macOS does not flow icons around it — an icon pushed into that
-   range is simply not drawn. Removing any other status item, or turning on
-   Compact, moves Irrlicht back out.
+   range is simply not drawn. Removing any other status item, or switching
+   Grouping to Combined, moves Irrlicht back out.
 4. **Use a menu bar manager** if you run a lot of status items:
    [Ice](https://github.com/jordanbaird/Ice) (free, open source),
    [Bartender](https://www.macbartender.com/), or
@@ -156,7 +160,7 @@ Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · trans
 - **Observability stacks** ([Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/)) need SDK instrumentation and a dashboard tab.
 - **Single-agent monitors** ([Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions)) lock you to one CLI or one terminal.
 
-Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent / Muse / Junie, plus the Gas Town orchestrator, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
+Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent / Muse / Junie / DeepSeek Harness, plus the Gas Town orchestrator, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
 
 ## The problem (why this exists)
 

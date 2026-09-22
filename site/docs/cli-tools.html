@@ -107,6 +107,7 @@
         <li><code>--diagnose</code> &mdash; Write a redacted diagnostics bundle (<code>irrlicht-diag.tar.gz</code>) to the current directory and exit, without starting the daemon. For headless installs that can't reach the <code>GET /debug/bundle</code> endpoint. Honors <code>IRRLICHT_HOME</code></li>
         <li><code>--uninstall-hooks</code> &mdash; Remove irrlicht's hooks from every agent config file it installs into (today <code>~/.claude/settings.json</code> and <code>$CODEX_HOME/hooks.json</code>, enumerated from the daemon's consent catalog so a newly added agent is covered automatically), record each hooks permission as denied if it was previously granted (so it isn't silently re-installed on next start), tell a daemon that is already running to re-read that decision (without it, the running daemon keeps the consent it read at startup and re-installs the entries within one re-verification interval), and exit without starting the daemon. It works with or without a daemon running &mdash; a notification that cannot be delivered is reported and ignored, since the recorded decision takes effect on the next start either way</li>
         <li><code>--print-managed-files</code> &mdash; Print the resolved absolute path of every shared, user-owned file irrlicht writes, one per line, and exit &mdash; the agent hook configs above plus <code>~/.claude/CLAUDE.md</code> (the managed task-progress blocks) and <code>~/.config/kitty/kitty.conf</code> (the remote-control block). Used by the onboarding recording rig to back those files up before running a <code>grant-all</code> recording daemon against your real home directory, which grants every permission and therefore writes all of them. Use it the same way before setting <code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1</code> on a grant-all daemon of your own &mdash; without that variable those writes are refused rather than performed. Renamed from <code>--print-hook-configs</code>, which listed only the hook configs</li>
+        <li><code>--print-advisory-files</code> &mdash; Print one <code>&lt;path&gt;&lt;TAB&gt;&lt;reason&gt;</code> line for every file a granted permission is known to write that holds no irrlicht content and is unsafe to back up and restore (today kiro-cli&rsquo;s own agent data store), and exit without starting the daemon. Kept separate from <code>--print-managed-files</code> because those paths are reported for visibility only, never snapshotted. Empty output is normal</li>
         <li><code>--uninstall-task-eta</code> &mdash; Remove every irrlicht-managed block from <code>~/.claude/CLAUDE.md</code> (the set is the installer's, so a block a previous version wrote is swept too), record the instructions permission as denied if it was previously granted (so it isn't silently re-installed on next start), tell a daemon that is already running to re-read that decision, and exit without starting the daemon. Only the content between irrlicht's <code>BEGIN</code>/<code>END</code> sentinels is removed &mdash; everything else in that file is yours and is preserved byte-for-byte. Like <code>--uninstall-hooks</code>, it works with or without a daemon running</li>
         <li><code>--record</code> &mdash; Enable lifecycle recording of session events to <code>&lt;dataDir&gt;/recordings</code> (equivalent to <code>IRRLICHT_RECORD=1</code>); the daemon starts normally otherwise</li>
       </ul>
@@ -127,7 +128,7 @@ irrlichd --record</code></pre>
       <h3>What It Does</h3>
 
       <ul>
-        <li>Watches Claude Code, Codex, Pi, Aider, Kiro CLI, Antigravity, Mistral Vibe, GitHub Copilot, Junie, Muse, and Gemini CLI transcripts; OpenCode's and Hermes Agent's SQLite stores; plus the Gas Town orchestrator (a multi-agent coordinator layer distinct from the per-agent <a href="adapters.html">adapters</a> above)</li>
+        <li>Watches Claude Code, Codex, Pi, Aider, Kiro CLI, Antigravity, Mistral Vibe, GitHub Copilot, Junie, Muse, DeepSeek Harness, and Gemini CLI transcripts; OpenCode's and Hermes Agent's SQLite stores; plus the Gas Town orchestrator (a multi-agent coordinator layer distinct from the per-agent <a href="adapters.html">adapters</a> above)</li>
         <li>Tracks session state via deterministic state machine</li>
         <li>Serves HTTP API on <code>localhost:7837</code></li>
         <li>Serves WebSocket stream for real-time updates</li>
@@ -243,9 +244,10 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <pre><code>irrlichtrelay [serve] [flags]
 irrlichtrelay token issue|list|revoke [flags]
+irrlichtrelay enroll new [flags]
 irrlichtrelay --version</code></pre>
 
-      <p>The default subcommand is <code>serve</code> (used when the first argument is a flag or absent); it runs the relay until <code>SIGINT</code>/<code>SIGTERM</code>. The <code>token</code> subcommand manages the hashed bearer-token store used by <code>--auth tokens-file</code>.</p>
+      <p>The default subcommand is <code>serve</code> (used when the first argument is a flag or absent); it runs the relay until <code>SIGINT</code>/<code>SIGTERM</code>. The <code>token</code> subcommand manages the hashed bearer-token store used by <code>--auth tokens-file</code>. The <code>enroll</code> subcommand mints one-time desktop enrollment codes. Any other subcommand exits with status <code>2</code>.</p>
 
       <h3>serve Flags</h3>
 
@@ -259,6 +261,8 @@ irrlichtrelay --version</code></pre>
         <li><code>--max-msg-bytes</code> &mdash; Max inbound WebSocket message size in bytes; <code>0</code> disables (default <code>1048576</code>)</li>
         <li><code>--max-conns</code> &mdash; Max total concurrent connections; <code>0</code> disables (default <code>256</code>)</li>
         <li><code>--max-conns-per-ip</code> &mdash; Max concurrent connections per remote IP; <code>0</code> disables (meaningless behind a proxy/NAT &mdash; see <code>--max-conns</code>) (default <code>32</code>)</li>
+        <li><code>--public-url</code> &mdash; Phone-reachable HTTPS origin (e.g. <code>https://relay.example.com</code>) used to build phone-pairing QR/URLs and desktop enrollment URLs (default empty &rarr; manual codes only; see <a href="elfdans.html">Phone Notifications</a>)</li>
+        <li><code>--vapid-subject</code> &mdash; Contact URI signed into every Web Push JWT as the VAPID <code>sub</code> claim; must be a <code>mailto:</code> or <code>https:</code> URI, and any other set value stops the relay at startup (default: <code>$IRRLICHT_RELAY_VAPID_SUBJECT</code>, else <code>https://github.com/ingo-eichhorst/Irrlicht</code>)</li>
         <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
       </ul>
 
@@ -283,6 +287,21 @@ irrlichtrelay serve --max-msg-bytes 524288 --max-conns-per-ip 8</code></pre>
       <p>Example:</p>
 
       <pre><code>irrlichtrelay token issue --label "laptop" --workspace default</code></pre>
+
+      <h3>enroll Flags</h3>
+
+      <p><code>irrlichtrelay enroll new</code> mints a one-time <strong>enrollment code</strong> for a desktop joining the relay, with no relay running &mdash; the code is stored hashed in <code>&lt;data-dir&gt;/enroll-codes.json</code>, where a relay started later (with <code>--auth tokens-file</code> and the same data directory) can redeem it. With <code>--public-url</code> it prints <code>&lt;public-url&gt;/enroll/&lt;code&gt;</code>; without it, it prints the bare <code>XXXX-XXXX</code> code plus the reason no URL could be built. Either way it then prints the expiry: a code lasts 10 minutes and works once. Redeeming it (<code>POST /api/v1/enroll/redeem</code>, see <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/docs/relay-protocol.md"><code>docs/relay-protocol.md</code></a>) issues an ordinary bearer token, so the enrolled desktop appears in <code>token list</code> and <code>token revoke</code> removes it.</p>
+
+      <ul>
+        <li><code>--label</code> &mdash; Human label for the desktop being enrolled; becomes the issued token's label unless the redeeming desktop names itself</li>
+        <li><code>--workspace</code> &mdash; Tenant workspace the enrolled desktop's token is scoped to (empty means the default single-tenant workspace)</li>
+        <li><code>--data-dir</code> &mdash; State directory for the enrollment code store (default empty &rarr; <code>$IRRLICHT_HOME</code> or <code>~/.local/share/irrlicht</code>)</li>
+        <li><code>--public-url</code> &mdash; Phone-reachable HTTPS origin the printed enrollment URL is built from; pass the same value as the serving relay's <code>--public-url</code></li>
+      </ul>
+
+      <p>Example:</p>
+
+      <pre><code>irrlichtrelay enroll new --label "studio-mac" --public-url https://relay.example.com</code></pre>
 
       <h3>Security Note</h3>
 

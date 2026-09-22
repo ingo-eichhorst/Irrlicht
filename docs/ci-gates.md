@@ -6,7 +6,7 @@ contract family (those live in
 [testing-contracts.md](testing-contracts.md)) or a replay/Swift-specific
 suite (those live in [replay-testing.md](replay-testing.md) and
 [swift-testing.md](swift-testing.md)): the core `go test` + architecture +
-ARS score + CodeScene gates; the skill-file, POSIX-shell, and bash linters and
+ARS score + CodeScene gates; the skill-file, static-site, POSIX-shell, and bash linters and
 the recording-driver teardown tripwire and the sourced-shell-library and
 shell-lib-suite-runner tripwires; the
 extract-and-execute harnesses over the ARS badge job, the two other gist
@@ -40,7 +40,7 @@ CI parity section (chunking, the budget, and what it makes visible).
   `core/adapters/inbound/agents/...` an inbound `*http.Request`'s body may be
   read only by `hookjson.readBody`, the single decode both of that package's
   entry points (`DecodeConfined`, `DecodeSealed`) funnel through — see "Hook
-  path confinement" below for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
+  path confinement" in [testing-contracts.md](testing-contracts.md) for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
   per spelling (decoder in a variable, `io.ReadAll`, an aliased body, a helper
   in another file, `r.FormValue`, a request stashed in a struct field) pinned
   to the verdict the detector must return, plus two `want:false` cases —
@@ -117,6 +117,12 @@ CI parity section (chunking, the budget, and what it makes visible).
   `tools/lib/testdata/skill-lint/` — so the assertions never move when a real
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
+- Static site: `tools/site-lint.sh` (#1894) checks every page under `site/`
+  for a dead local `href`/`src`, an unclosed block element, a missing `<title>`
+  or canonical link, and a sitemap URL naming no file (errors), plus a docs page
+  absent from `site/sitemap.xml` (a warning; `--strict` promotes it). Runs as
+  linux.yml's "Lint the static site" step and as `tools/preflight.sh`'s `site`
+  group; its mutation corpus is `tools/lib/site-lint_test.sh`.
 - POSIX shell scripts: `tools/posix-lint.sh` checks every file git knows
   about — tracked, plus **untracked and not gitignored** (#1611) — whose
   **first line** is a `#!/bin/sh` shebang; today `site/install.sh`,
@@ -801,7 +807,7 @@ CI parity section (chunking, the budget, and what it makes visible).
 ### Local CI parity — catch failures before pushing
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
-ars-gate.yml + linux.yml's replay-fixtures step natively, plus the full Linux
+ars-gate.yml + macos-swift.yml + linux.yml's replay-fixtures step natively, plus the full Linux
 build+test gate via Docker under `--linux`) locally and prints a pass/fail
 summary instead of stopping at the first failure — so before opening a PR, run
 it once instead of round-tripping through GitHub Actions per fix. Gates run
@@ -829,7 +835,7 @@ debugging convenience — the unscoped run does not reliably fit a foreground
 `Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
 pole is the `go` group's core suite + replay fixtures). Run each group as its
 own **foreground** invocation instead of the single unscoped command:
-`tools/preflight.sh --only go|web|arch|tools|skills|posix|bash|security|swift` (see
+`tools/preflight.sh --only go|web|arch|tools|skills|site|posix|bash|security|swift` (see
 `tools/preflight.sh --help` for the current group list; `linux` stays opt-in
 and needs Docker). Every gate still runs — chunking only changes how many
 invocations it takes. **Do not background the unscoped run to make it fit**:

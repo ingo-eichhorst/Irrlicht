@@ -144,7 +144,8 @@ case no longer arises -- the row is deleted instead.
 ### `NeedsUserAttention()` -> triggers `waiting`
 
 ```
-HasOpenToolCall=true AND any LastOpenToolNames entry in {AskUserQuestion, ExitPlanMode}
+HasOpenToolCall=true AND any LastOpenToolNames entry is a user-blocking tool
+  (AskUserQuestion, ExitPlanMode, question, ask_user_question, exit_plan_mode, ask_user, request_user_input)
 ```
 
 ### `IsAgentDone()` -> triggers `ready`
@@ -180,8 +181,12 @@ The transcript tailer maps these system events to `LastEventType = "turn_done"`:
 |------|-------------|
 | `AskUserQuestion` | Explicitly asks the user a question |
 | `ExitPlanMode` | Asks the user to approve the plan |
+| `question`, `ask_user_question`, `ask_user`, `request_user_input` | Other adapters' spellings of the ask-the-user tool |
+| `exit_plan_mode` | GitHub Copilot's spelling of the plan-approval gate |
 
-Note: transcript silence on a non-blocking open tool call (e.g. a long-running build) is **not** used as a signal. Earlier versions of irrlicht had a 15s stale-tool timer that tried to infer permission-pending state from silence, but it could not distinguish a modal from a long-running tool and produced spurious `working → waiting` flicker. If a real permission-pending signal is ever needed it will come from an adapter-specific marker (e.g. a Claude Code Notification hook), not a wall-clock timer.
+The set is `isUserBlockingTool` (`core/domain/session/metrics.go`); the match is exact, not case-folded.
+
+Note: transcript silence on a non-blocking open tool call (e.g. a long-running build) is **not** used as a signal. Earlier versions of irrlicht had a 15s stale-tool timer that tried to infer permission-pending state from silence, but it could not distinguish a modal from a long-running tool and produced spurious `working → waiting` flicker. A narrower duration-based fallback does exist: an open permission-gated edit tool (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `write_file`) that has stayed open past `stalledEditToolThreshold` (30s) sets `OpenToolStalled`, which the classifier routes to `waiting` (#488, #1130). Long-running tools (Bash, WebFetch, MCP) are excluded and rely on the adapter's hooks.
 
 ---
 
@@ -206,7 +211,7 @@ Subagent sessions run independent state machines with the same states.
 
 | Axis | Values |
 |------|--------|
-| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` / `copilot` / `hermes` / `junie` -- identifies source agent |
+| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` / `copilot` / `hermes` / `junie` / `muse` / `dsh` -- identifies source agent |
 | **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 
 ---
@@ -234,3 +239,38 @@ Memory store merges disk on `ListAll` to pick up sessions created externally (e.
 | GitHub Copilot | `~/.copilot/session-state/<session-id>/events.jsonl` |
 | Hermes Agent | `~/.hermes/state.db` (SQLite, polled — no transcript files) |
 | Junie | `~/.junie/sessions/<session-id>/events.jsonl` (plus process sidecars under `~/.junie/processes/`) |
+| Muse | `~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<session-id>/session.jsonl` (nested subagent copies under each session's `subagent/<child-id>/`) |
+| DeepSeek Harness | `~/.dsh/sessions/<cwd-key>/session-<uuid>/session.v<N>.jsonl.zstd` (zstd-compressed; relocatable via `$DSH_HOME`) |
+
+---
+
+## Lifecycle Event Kinds (recording/replay)
+
+Underneath the state machine the daemon records typed lifecycle events for
+session recording and replay. The vocabulary is declared once, in
+`canonicalKinds` (`core/domain/lifecycle/event.go`); this list mirrors its 21
+`Kind` values in declaration order.
+
+| Kind | When it is recorded |
+|------|---------------------|
+| `transcript_new` | A session's transcript file appears for the first time |
+| `transcript_activity` | Further writes to an already-known transcript |
+| `transcript_removed` | A tracked transcript file is deleted |
+| `pid_discovered` | A PID is bound to a session (`PIDManager.HandlePIDAssigned`) |
+| `process_spawned` | Declared in the vocabulary; no current daemon path emits it |
+| `process_exited` | A tracked agent process exits and its session row is deleted |
+| `file_event` | Reserved for debounced working-directory file events; declared, not emitted yet |
+| `state_transition` | `ClassifyState` changes a session's state |
+| `parent_linked` | A child session is linked to its parent via `ParentSessionID` |
+| `debounce_coalesced` | Rapid events inside the debounce window are coalesced into one |
+| `debounce_terminal` | A terminal event bypasses the debounce window |
+| `hook_received` | An agent hook request reaches the daemon |
+| `presession_created` | The process scanner creates a `proc-<pid>` pre-session |
+| `presession_removed` | A pre-session is superseded by its transcript or cleaned up |
+| `task_delta` | The tailer folds one task-list change into a session |
+| `ui_detected` | Retired terminal read-back of a UI dialog; no daemon path emits it since #1875, kept so frozen recordings stay readable |
+| `cache_bloat_detected` | A cache-creation regression is first detected for a (project, version) pair (#374) |
+| `hold_expired` | An out-of-band signal hold is dropped because its wall-clock ceiling elapsed (#1360) |
+| `hook_channel_silent` | A granted, installed hook channel delivered nothing for N turns; the adapter falls back to transcript signals (#1368) |
+| `hook_channel_recovered` | A hook receipt arrives for an adapter previously declared silent |
+| `hook_hold_released` | A hook-tier hold is dropped because its channel was declared silent |

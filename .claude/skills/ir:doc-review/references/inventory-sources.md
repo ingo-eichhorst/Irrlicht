@@ -12,7 +12,7 @@ parentheses are illustrative, not assertions to trust blindly — recompute ever
 
 ---
 
-## 1. Agent adapters (11 at the time of writing — recompute, never trust this number)
+## 1. Agent adapters (14 at the time of writing — recompute, never trust this number)
 
 Authoritative: `core/adapters/inbound/agents/all.go`, function `All()`. The slice order is the
 canonical order.
@@ -20,7 +20,7 @@ canonical order.
 ```bash
 sed -n '/^func All()/,/^}/p' core/adapters/inbound/agents/all.go \
   | grep -oE '[a-z]+\.Agent\(\)' | sed 's/\.Agent()//' | sort
-# → aider antigravity claudecode codex copilot geminicli hermes kirocli opencode pi vibe
+# → aider antigravity claudecode codex copilot dsh geminicli hermes junie kirocli muse opencode pi vibe
 ```
 
 Per-adapter `Capabilities`/`Permissions` follow the `agent.Agent` struct idiom in
@@ -35,7 +35,8 @@ Per-adapter `Capabilities`/`Permissions` follow the `agent.Agent` struct idiom i
 
 Authoritative: directories under `core/cmd/*` and `tools/*/cmd/*`. Flags use the Go stdlib
 `flag` package (`flag.StringVar` / `flag.BoolVar` / `FlagSet`). `irrlichd` is the exception —
-it parses a few flags manually via a `hasFlag()` helper.
+it parses its flags manually (`hasFlag()` / `hasFlagIn(args, ...)`), and every flag it accepts
+is declared once in the `knownFlags` slice in `core/cmd/irrlichd/main.go`.
 
 ```bash
 # binaries
@@ -47,8 +48,11 @@ grep -rhoE 'flag\.[A-Za-z]+Var\([^,]+,\s*"[^"]+"' core tools --include='*.go' \
   | grep -oE '"[^"]+"' | sort -u
 grep -rhoE '\b[A-Za-z_]+\.(String|Bool|Int|Duration|Int64|Float64)\("[^"]+"' core tools --include='*.go' \
   | grep -v '_test.go' | grep -oE '"[^"]+"' | sort -u
-# irrlichd's manual flags
-grep -oE 'hasFlag\("[^"]+"' core/cmd/irrlichd/main.go | sed 's/hasFlag("//' | sort -u
+# irrlichd's manual flags — read the knownFlags slice, not the hasFlag call sites
+# (most are hasFlagIn(args, "...") in selectAction; grepping `hasFlag("` finds only --record)
+sed -n '/^var knownFlags = \[\]string{/,/^}/p' core/cmd/irrlichd/main.go \
+  | grep -oE '"-[^"]+"' | tr -d '"' | sort -u
+# → --diagnose --print-advisory-files --print-managed-files --record --uninstall-hooks --uninstall-task-eta --version -v
 ```
 
 User-facing binaries: `irrlichd`, `irrlicht-ls`, `irrlicht-focus`, `irrlichtrelay`. Treat the
@@ -99,6 +103,11 @@ grep -rhoE 'mux\.HandleFunc\("[A-Z]+ [^"]+"' core/cmd/irrlichd/*.go \
   | sed 's/mux.HandleFunc("//' | sort -u
 # method-agnostic routes (no leading HTTP verb) registered the same way:
 grep -n 'mux\.HandleFunc("/api' core/cmd/irrlichd/startup.go
+# per-adapter hook routes, registered via mux.Handle with the path held in an adapter-package
+# const or var (<pkg>.HookEndpointPath → /api/v1/hooks/<adapter name>, most via
+# hookbeacon.EndpointPath(AdapterName)); resolve each one in core/adapters/inbound/agents/<pkg>/:
+grep -oE 'mux\.Handle\("[A-Z]+ "\+[a-z]+\.[A-Za-z]+EndpointPath' core/cmd/irrlichd/startup.go \
+  | sed 's/mux.Handle("//; s/ "+/ /' | sort -u
 ```
 
 Public API routes are the `/api/v1/*` set; `/debug/pprof/*` and `/state` are internal

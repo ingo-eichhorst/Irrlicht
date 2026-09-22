@@ -40,9 +40,9 @@ mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
 Evidence living only in a merged PR body is re-run by nothing; for the
 `contracttesting` families #1479 committed it beside each assertion, in
 `core/internal/contracttesting/<family>_selftest_test.go` — the paragraph
-closing the contract-family bullets below carries the shape and its limits. And a guard that *rewrites* an existing one owes
-its predecessor's cases as locks on top of its own — "Guarded construction" below
-carries that rule and the incident that earned it.
+closing the contract-family bullets in [testing-contracts.md](testing-contracts.md) carries the shape and its limits. And a guard that *rewrites* an existing one owes
+its predecessor's cases as locks on top of its own — "Guarded construction" in
+[testing-contracts.md](testing-contracts.md) carries that rule and the incident that earned it.
 
 **A verification mechanism must fail loudly when it cannot run.** Absence of a finding
 and inability to look must never produce the same output: "the thing under test never
@@ -52,14 +52,14 @@ signal, assert that the operation actually happened — not merely that it repor
 nothing. The guard is one line each time. Three of them caught something real the
 moment they were added: `posix-lint.sh` refusing rather than skipping when it finds no
 POSIX shell, no static linter, or no files, after its first draft printed `ALL PASS`
-over an installer carrying a deliberate `[[ ]]` (below); a mutation harness asserting
+over an installer carrying a deliberate `[[ ]]` ([ci-gates.md](ci-gates.md)'s POSIX-shell bullet); a mutation harness asserting
 its mutation changed the file, which then caught two more stale mutations (#1390); and
 an e2e test waiting on a signal narrower than "the daemon published its addr file",
 which fires *before* the consent effects under test run, so a deliberately-broken
 binary came back green (#1449; `ir:exec`'s "Prove and verify" section carries the recipe). Two more
 were added before they could catch anything and carry the weaker evidence that they
 *can* fire: the architecture corpus asserting every case still contains the construct
-it plants (below), and the harness built on #1390's lesson from the start, carrying a
+it plants ([ci-gates.md](ci-gates.md)'s hook-body architecture bullet), and the harness built on #1390's lesson from the start, carrying a
 deliberate no-match row that must report `STALE` (#1450).
 
 **A figure that documents behaviour states the command that produces it, or it
@@ -68,7 +68,7 @@ the other direction: that one is about a check going silently blind, this one
 is about a *number* silently drifting away from what it once measured — typed
 once, then repeated by hand until it no longer describes anything. First
 named for the replay tree's own catalog counts ("Replay's measured figures"
-below, where `knownFirstTransitionDrift` and `censusOfTheCommittedCatalog` are
+in [replay-testing.md](replay-testing.md), where `knownFirstTransitionDrift` and `censusOfTheCommittedCatalog` are
 the machine-generated shape to copy), it is not scoped to replay and was
 violated twice in one day outside it (#1726). PR #1724's version-floor
 rationale claimed two source-read versions were *"seven months apart with
@@ -167,7 +167,7 @@ and deterministically at 100% by injecting ~400µs at the identified point.
 cannot read with confidence is neither a quiet pass nor a skip: it is the case where
 the validator has the least idea what it is looking at, so it is the last place to
 drop checks. `skill-lint.sh`'s fence and frontmatter checks exist for exactly that
-reason (below) — skipping is how it tells "documents a marker" from "has one", and an
+reason ([ci-gates.md](ci-gates.md)'s skill-file bullet) — skipping is how it tells "documents a marker" from "has one", and an
 unbalanced delimiter would otherwise silence every check after it.
 
 **Code that emits bytes from a structural diff gets a property test.** Anything that

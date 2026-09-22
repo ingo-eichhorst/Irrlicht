@@ -183,7 +183,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 ### Local CI parity — catch failures before pushing
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
-ars-gate.yml + linux.yml's replay-fixtures step natively, plus the full
+ars-gate.yml + macos-swift.yml + linux.yml's replay-fixtures step natively, plus the full
 Linux build+test gate via Docker under `--linux`) locally and prints a
 pass/fail summary instead of stopping at the first failure — so before
 opening a PR, run it once instead of round-tripping through GitHub Actions

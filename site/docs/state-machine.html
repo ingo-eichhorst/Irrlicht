@@ -156,7 +156,7 @@
 
       <div class="callout callout-info">
         <strong>Deterministic, not heuristic</strong>
-        Every transition is triggered by a concrete event &mdash; a file appearing, a process exiting, a transcript line written. The state machine never polls for ambiguous signals or applies timeouts.
+        Every transition is triggered by a concrete event &mdash; a file appearing, a process exiting, a transcript line written. Time-based rules are narrow fallbacks, for example: a permission-gated edit tool left open past 30s reads as a permission prompt, and out-of-band signal holds have a wall-clock ceiling (see <code>hold_expired</code> below).
       </div>
 
       <!-- ─── State Transitions ─── -->
@@ -249,12 +249,12 @@
  |                  |    \                 v
  |      AskUser /   |     \ provider  +---------+
  |      ExitPlan    |      \ failure  |  ready  |
- |                  v       \ or      +---------+
- |            +-----------+ \ death        ^
+ |                  v       \         +---------+
+ |            +-----------+ \              ^
  |            |           |  \             |
- +------------|  waiting  |   \ (process exit
-  user        |           |    \  only)    |
-  answers     +-----------+     \----------+
+ +------------|  waiting  |   \            |
+  user        |           |    \           |
+  answers     +-----------+     \          |
                                  v         ^
                             +---------+    | retrying
                             |  error  |----+ failure's
@@ -267,7 +267,7 @@
       <h2>Impossible Transitions</h2>
       <p>Two transitions are structurally impossible and the state machine enforces this. Both constrain only <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span> and <span class="badge badge-ready">ready</span> &mdash; no impossibility is claimed about <span class="badge badge-error">error</span> in either direction.</p>
 
-      <p>Whether <span class="badge badge-error">error</span> or <span class="badge badge-waiting">waiting</span> wins is decided per cause, not once. A <strong>dead process</strong> outranks waiting: it leaves any open question unanswerable forever, and sending someone to answer a question in a process that no longer exists is worse than saying nothing. A <strong>provider failure on a live session</strong> is the other way round &mdash; if that session then opens a blocking tool, it reads <span class="badge badge-waiting">waiting</span>.</p>
+      <p><span class="badge badge-waiting">waiting</span> outranks <span class="badge badge-error">error</span>: a live session that hit a provider failure and then opens a blocking tool reads <span class="badge badge-waiting">waiting</span>, because the user really is being asked something. A dead process produces no <span class="badge badge-error">error</span> at all &mdash; its session row is deleted.</p>
 
       <table>
         <thead>
@@ -283,7 +283,7 @@
           </tr>
           <tr>
             <td><span class="badge badge-waiting">waiting</span> &rarr; <span class="badge badge-ready">ready</span> via content</td>
-            <td>The agent cannot finish a turn while a blocking tool call is open. The only path from waiting to ready is process exit.</td>
+            <td>The agent cannot finish a turn while a blocking tool call is open. The only way out of waiting other than an answer is process exit, which deletes the session rather than moving it to ready.</td>
           </tr>
         </tbody>
       </table>
@@ -301,7 +301,7 @@
       <p>Evaluates to <code>true</code> when all of the following hold:</p>
       <ul>
         <li><code>HasOpenToolCall = true</code></li>
-        <li><code>LastOpenToolName</code> is one of <code>{AskUserQuestion, ExitPlanMode}</code></li>
+        <li>An entry of <code>LastOpenToolNames</code> is a user-blocking tool: <code>AskUserQuestion</code>, <code>ExitPlanMode</code>, or another adapter&rsquo;s spelling of the same tools (<code>question</code>, <code>ask_user_question</code>, <code>exit_plan_mode</code>, <code>ask_user</code>, <code>request_user_input</code>)</li>
       </ul>
       <p>When this predicate fires, the session transitions to <span class="badge badge-waiting">waiting</span>. The light turns orange.</p>
 
@@ -362,7 +362,7 @@
       <ul>
         <li><code>claude-code</code> &mdash; Anthropic's Claude Code CLI</li>
         <li><code>codex</code> &mdash; OpenAI's Codex CLI</li>
-        <li><code>pi</code> &mdash; Pi (Inflection) agent</li>
+        <li><code>pi</code> &mdash; Pi coding agent</li>
         <li><code>aider</code> &mdash; Aider (transcript-driven REPL)</li>
         <li><code>opencode</code> &mdash; OpenCode (SQLite-backed storage)</li>
         <li><code>kiro-cli</code> &mdash; AWS Kiro CLI (JSONL transcripts + metadata sidecar)</li>
@@ -373,6 +373,7 @@
         <li><code>hermes</code> &mdash; Hermes Agent (no transcript files; one shared SQLite store at <code>~/.hermes/state.db</code>, relocatable via <code>$HERMES_HOME</code>)</li>
         <li><code>muse</code> &mdash; Muse (JSONL <code>session.jsonl</code> under <code>~/.local/share/muse/sessions/&lt;YYYY&gt;/&lt;MM&gt;/&lt;DD&gt;/&lt;session-id&gt;</code>, with nested subagent copies under each session&rsquo;s <code>subagent/</code> directory)</li>
         <li><code>junie</code> &mdash; JetBrains Junie (JSONL <code>events.jsonl</code> under <code>~/.junie/sessions</code>, plus process sidecars under <code>~/.junie/processes</code>)</li>
+        <li><code>dsh</code> &mdash; DeepSeek Harness (zstd-compressed <code>session.v&lt;N&gt;.jsonl.zstd</code> under <code>~/.dsh/sessions/&lt;cwd-key&gt;/session-&lt;uuid&gt;</code>, relocatable via <code>$DSH_HOME</code>)</li>
       </ul>
       <p>The adapter determines which transcript format is parsed and which process signatures are scanned. Frontends should look up adapter display name and icon via <code>GET /api/v1/agents</code> rather than hardcoding switches.</p>
 
@@ -419,7 +420,7 @@
 
       <!-- ─── Lifecycle Event Kinds ─── -->
       <h2>Lifecycle Event Kinds</h2>
-      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 22 constants, grouped as the source file itself groups them.</p>
+      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 21 constants, grouped as the source file itself groups them.</p>
 
       <table>
         <thead>
@@ -448,12 +449,12 @@
           <tr>
             <td><code>pid_discovered</code></td>
             <td>Process lifecycle</td>
-            <td>The process scanner (e.g. <code>pgrep -x claude</code>) finds a new agent PID that isn't already tracked.</td>
+            <td>A PID is bound to a session (<code>PIDManager.HandlePIDAssigned</code>), before it is registered for exit monitoring.</td>
           </tr>
           <tr>
             <td><code>process_spawned</code></td>
             <td>Process lifecycle</td>
-            <td>A new agent process is observed starting.</td>
+            <td>Declared in the vocabulary; no current daemon path emits it.</td>
           </tr>
           <tr>
             <td><code>process_exited</code></td>
@@ -508,12 +509,7 @@
           <tr>
             <td><code>ui_detected</code></td>
             <td>Terminal / UI</td>
-            <td>A terminal-backend read-back finds a transcript-invisible UI state on the rendered terminal screen (today: the trust/permission dialog); <code>UIKind</code> is empty on the clearing edge.</td>
-          </tr>
-          <tr>
-            <td><code>terminal_frame</code></td>
-            <td>Terminal / UI</td>
-            <td>Reserved for raw terminal frame capture (pipe-pane plus a screen-buffer parser); defined but not emitted yet.</td>
+            <td>Retired: recorded a transcript-invisible UI state (the trust/permission dialog) read off the rendered terminal. No daemon path emits it since terminal read-back was removed (#1875); the kind is kept so frozen recordings stay readable.</td>
           </tr>
           <tr>
             <td><code>cache_bloat_detected</code></td>

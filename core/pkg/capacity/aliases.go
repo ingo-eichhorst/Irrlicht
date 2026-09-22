@@ -188,6 +188,11 @@ var modelAliases = map[string]string{
 	"GPT-5.3 Codex (high reasoning)":       modelGPT53Codex,
 	"GPT-5.3 Codex (extra high reasoning)": modelGPT53Codex,
 
+	// Grokbot auto-router — codeburn routes it to "grok-4.6", which the
+	// LiteLLM snapshot does not ship yet (checked against the capacity cache
+	// for v0.6.5), so it resolves to a zero-value capacity until it does.
+	"grokbot-auto": "grok-4.6",
+
 	// Human-readable display-name forms emitted by some frontends.
 	"Claude Sonnet 4.6": modelClaudeSonnet46,
 	"Claude Sonnet 4.5": modelClaudeSonnet45,

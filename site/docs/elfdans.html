@@ -278,7 +278,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         <li>What the sessions actually did. A session that never left <span class="badge badge-working">working</span> is not a missed notification.</li>
       </ul>
 
-      <p><strong>Keep the relay&rsquo;s four files.</strong> The relay&rsquo;s data directory holds <code>tokens.json</code>, <code>vapid-keys.json</code>, <code>push-subscriptions.json</code> and <code>daemon-roster.json</code>, all mode <code>0600</code>. Copy those and keep the hostname, and every paired phone survives a host rebuild untouched. No session content is ever written to the relay host &mdash; before this feature or after it.</p>
+      <p><strong>Keep the relay&rsquo;s four files.</strong> The relay&rsquo;s data directory holds <code>tokens.json</code>, <code>vapid-keys.json</code>, <code>push-subscriptions.json</code> and <code>daemon-roster.json</code>, all mode <code>0600</code> &mdash; plus <code>enroll-codes.json</code> once a desktop enrollment code has been minted (<code>irrlichtrelay enroll new</code>), which holds only hashed desktop enrollment codes that expire after ten minutes and need no backup. Copy the four and keep the hostname, and every paired phone survives a host rebuild untouched. No session content is ever written to the relay host &mdash; before this feature or after it.</p>
 
       <div class="callout callout-tip">
         <strong>Back up <code>vapid-keys.json</code> in particular</strong>

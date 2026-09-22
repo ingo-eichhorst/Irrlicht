@@ -26,10 +26,11 @@ Irrlicht doubles as a hands-on learning platform — the skill on offer is
 Irrlicht app itself. This repo's own contribution loop is the practice ground,
 and `/ir:exec` is the starting point for it:
 
-- **Start here.** `/ir:exec <issue-number>` runs the full loop end to end —
-  investigate → plan → (approve →) implement → review → PR — deciding how
-  much oversight to ask for from the issue itself (`/ir:exec plan <N>` always
-  asks first, if you'd rather control that explicitly). This is the practice
+- **Start here.** `/ir:triage #<N>` (where `<N>` is the issue number)
+  investigates the issue and posts a plan — high-level design, testing
+  strategy, process — and, when it is ready, labels it `ready-for-agent`; `/ir:exec <N>` then
+  executes that approved plan end to end — implement → review → verify →
+  ready PR (it never merges). This is the practice
   rep, whether you're a maintainer or a first-time contributor. Issues labeled
   [`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue)
   or [`ready-for-agent`](https://github.com/ingo-eichhorst/Irrlicht/labels/ready-for-agent)
