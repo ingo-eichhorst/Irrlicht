@@ -57,15 +57,15 @@ func writeInstance(t *testing.T, dir, id, body string) {
 	}
 }
 
-// Red-first for #2030: a restored unattributed snapshot made every client key
-// the session as "unknown:claude-code" next to the confirmed "anthropic"
-// sessions — one subscription, two quota providers.
-func TestRepository_DropsLegacyUnattributedRateLimit(t *testing.T) {
+// loadBothWays writes one instance file and returns the state as Load and as
+// ListAll decode it, so each test asserts both restore paths.
+func loadBothWays(t *testing.T, id, body string) map[string]*session.SessionState {
+	t.Helper()
 	dir := t.TempDir()
-	writeInstance(t, dir, "legacy", legacyRateLimitSession)
+	writeInstance(t, dir, id, body)
 	repo := filesystem.NewWithDir(dir)
 
-	loaded, err := repo.Load("legacy")
+	loaded, err := repo.Load(id)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -76,8 +76,14 @@ func TestRepository_DropsLegacyUnattributedRateLimit(t *testing.T) {
 	if len(listed) != 1 {
 		t.Fatalf("ListAll: got %d states, want 1", len(listed))
 	}
+	return map[string]*session.SessionState{"Load": loaded, "ListAll": listed[0]}
+}
 
-	for name, s := range map[string]*session.SessionState{"Load": loaded, "ListAll": listed[0]} {
+// Red-first for #2030: a restored unattributed snapshot made every client key
+// the session as "unknown:claude-code" next to the confirmed "anthropic"
+// sessions — one subscription, two quota providers.
+func TestRepository_DropsLegacyUnattributedRateLimit(t *testing.T) {
+	for name, s := range loadBothWays(t, "legacy", legacyRateLimitSession) {
 		if s.Metrics == nil {
 			t.Fatalf("%s: metrics dropped entirely; only the rate-limit fields should go", name)
 		}
@@ -92,19 +98,7 @@ func TestRepository_DropsLegacyUnattributedRateLimit(t *testing.T) {
 
 // Lock: a confirmed snapshot is the current shape and must load unchanged.
 func TestRepository_KeepsConfirmedRateLimit(t *testing.T) {
-	dir := t.TempDir()
-	writeInstance(t, dir, "confirmed", confirmedRateLimitSession)
-	repo := filesystem.NewWithDir(dir)
-
-	loaded, err := repo.Load("confirmed")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	listed, err := repo.ListAll()
-	if err != nil {
-		t.Fatalf("ListAll: %v", err)
-	}
-	for name, s := range map[string]*session.SessionState{"Load": loaded, "ListAll": listed[0]} {
+	for name, s := range loadBothWays(t, "confirmed", confirmedRateLimitSession) {
 		rl := s.Metrics.RateLimit
 		if rl == nil || rl.Provider != session.ProviderAnthropic || len(rl.Windows) != 1 {
 			t.Errorf("%s: confirmed rate_limit changed on load: %+v", name, rl)

@@ -1676,26 +1676,30 @@ final class MenuBarAppearanceTests: XCTestCase {
         MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
         let key = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
 
-        let codex = SessionState(
-            id: "sess_codex", state: .working, model: "gpt-5", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
-            firstSeen: now, updatedAt: now,
-            metrics: SessionMetrics(
-                elapsedSeconds: 0, totalTokens: 0, modelName: "gpt-5",
-                contextWindow: nil, contextUtilization: 0, pressureLevel: "safe",
-                contextWindowUnknown: nil, estimatedCostUSD: nil, lastAssistantText: nil,
-                tasks: nil,
-                rateLimit: RateLimitInfo(
-                    windows: [RateLimitWindowInfo(usedPercent: 30, windowMinutes: 300,
-                                                  resetsAt: now.addingTimeInterval(3600))],
-                    sampledAt: now,
-                    provider: "openai",
-                    attributionQuality: RateLimitInfo.attributionQualityConfirmed
-                )
-            ),
-            adapter: "codex"
-        )
+        let codex = MenuBarFixtures.sessionWithQuota(adapter: "codex")
         XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key),
                         "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
+    }
+
+    /// Red-first: a per-provider display mode saved under a legacy key
+    /// (`providerMode_unknown:codex`, `ProviderModePreference.storageKey`)
+    /// moves with the slot, unless the user already set one for the new key.
+    func testLegacySlotKeyMigrationCarriesTheProviderMode() {
+        let defaults = InMemoryDefaults()
+        let legacyCodex = ProviderModePreference.storageKey(providerKey: "unknown:codex")
+        let legacyClaude = ProviderModePreference.storageKey(providerKey: "unknown:claude-code")
+        let anthropic = ProviderModePreference.storageKey(providerKey: "anthropic")
+        defaults.set(ProviderModePreference.usage.rawValue, forKey: legacyCodex)
+        defaults.set(ProviderModePreference.usage.rawValue, forKey: legacyClaude)
+        defaults.set(ProviderModePreference.subscription.rawValue, forKey: anthropic)
+
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: ProviderModePreference.storageKey(providerKey: "openai")),
+                       ProviderModePreference.usage.rawValue)
+        XCTAssertNil(defaults.object(forKey: legacyCodex))
+        XCTAssertEqual(defaults.string(forKey: anthropic), ProviderModePreference.subscription.rawValue,
+                       "a mode the user already set for the new key must win")
     }
 
     /// The launch order as a behaviour, not only as source text: a #909-era
@@ -2022,7 +2026,7 @@ final class MenuBarAppearanceTests: XCTestCase {
     /// unattributed-key migration must follow the single-provider one, or a
     /// key the latter carries across is never rewritten (see
     /// `testSingleProviderThenUnattributedMigrationRewritesTheCarriedKey`).
-    func testMenuBarControllerRunsBothMigrationsBeforeSnapshotting() throws {
+    func testMenuBarControllerRunsTheMigrationsInOrderBeforeSnapshotting() throws {
         let code = try Self.codeLines(at: Self.menuBarControllerPath)
         let calls = [
             "MenuBarAppearance.migrateLegacyCompactSetting(in: UserDefaults.standard)",
@@ -2033,17 +2037,18 @@ final class MenuBarAppearanceTests: XCTestCase {
             code.range(of: "self.lastIconSettings = MenuBarIconSettings"),
             "MenuBarController must snapshot the icon settings at launch"
         )
+        // `calls` is listed in the order the migrations must run; each must
+        // follow the previous one and precede the snapshot.
+        var previous = code.startIndex
         for call in calls {
-            XCTAssertTrue(code.contains(call),
-                          "MenuBarController must run \(call) at launch")
-            let migrate = try XCTUnwrap(code.range(of: call))
+            let migrate = try XCTUnwrap(code.range(of: call),
+                                        "MenuBarController must run \(call) at launch")
+            XCTAssertTrue(previous <= migrate.lowerBound,
+                          "\(call) runs before a migration listed ahead of it")
             XCTAssertTrue(migrate.lowerBound < snapshot.lowerBound,
                           "\(call) must run BEFORE the settings snapshot is taken")
+            previous = migrate.upperBound
         }
-        let single = try XCTUnwrap(code.range(of: calls[1]))
-        let unattributed = try XCTUnwrap(code.range(of: calls[2]))
-        XCTAssertTrue(single.lowerBound < unattributed.lowerBound,
-                      "the unattributed-key migration must run AFTER the single-provider one (#2030)")
     }
 
     /// The Settings gate that decides whether the quota sub-controls appear

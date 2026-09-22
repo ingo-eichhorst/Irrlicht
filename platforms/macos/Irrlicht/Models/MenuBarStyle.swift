@@ -518,6 +518,7 @@ enum MenuBarQuotaProviders {
     static func migrateLegacyUnattributedKeys(in defaults: UserDefaults) -> Bool {
         guard defaults.object(forKey: unattributedKeysMigratedKey) == nil else { return false }
         defaults.set(true, forKey: unattributedKeysMigratedKey)
+        migrateProviderModes(in: defaults)
         guard let raw = defaults.string(forKey: storageKey) else { return false }
 
         let keys = decode(raw)
@@ -525,6 +526,21 @@ enum MenuBarQuotaProviders {
         guard migrated != keys else { return false }
         defaults.set(encode(migrated), forKey: storageKey)
         return true
+    }
+
+    /// The per-provider display mode (`ProviderModePreference`) is stored
+    /// under the same provider key, so it moves with the slot. A mode the
+    /// user already set for the attributed key wins over the legacy one.
+    private static func migrateProviderModes(in defaults: UserDefaults) {
+        for (legacy, attributed) in legacyUnattributedKeys {
+            let from = ProviderModePreference.storageKey(providerKey: legacy)
+            guard let mode = defaults.string(forKey: from) else { continue }
+            let to = ProviderModePreference.storageKey(providerKey: attributed)
+            if defaults.object(forKey: to) == nil {
+                defaults.set(mode, forKey: to)
+            }
+            defaults.removeObject(forKey: from)
+        }
     }
 }
 

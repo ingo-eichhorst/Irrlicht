@@ -104,7 +104,7 @@ func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error
 // museaccountapi/parser.go) stamps AttributionQuality "confirmed".
 func dropLegacyRateLimit(state *session.SessionState) {
 	m := state.Metrics
-	if m == nil || m.RateLimit == nil || m.RateLimit.AttributionQuality != "" {
+	if m == nil || !m.RateLimit.IsUnattributed() {
 		return
 	}
 	m.RateLimit = nil

@@ -227,6 +227,17 @@ type CreditsSnapshot struct {
 	ToppedUp *float64 `json:"topped_up,omitempty"`
 }
 
+// IsUnattributed reports whether the snapshot carries no AttributionQuality
+// at all — the "" state described on the AttributionQuality constants above.
+// The filesystem repository drops such a snapshot when it restores a session
+// from disk (#2030). This differs from the cost tracker's legacy-row rule
+// (rowAttributionQuality in filesystem/cost_tracker.go), which keeps an
+// unstamped row and reads it as guessed when it names a provider: a cost row is history to sum, but a restored quota snapshot is a
+// stale reading that the next live sample replaces.
+func (s *RateLimitSnapshot) IsUnattributed() bool {
+	return s != nil && s.AttributionQuality == ""
+}
+
 // ImminentWindow returns the window with the soonest projected cap given the
 // current snapshot — defined as the one with the highest UsedPercent. Returns
 // nil when the snapshot has no windows or every window is at zero (rendering
