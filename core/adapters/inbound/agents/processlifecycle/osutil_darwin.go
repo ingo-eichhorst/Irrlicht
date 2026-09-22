@@ -75,19 +75,48 @@ func processTTYVia(ctx context.Context, pid int, build shelloutCmd) (tty string,
 	return tty, true
 }
 
+// errEnvHidden reports that KERN_PROCARGS2 answered but carried zero env
+// entries of ANY kind (not merely none of the caller's keys) — the signature
+// of a hardened-runtime process (e.g. Anthropic's signed `claude` binary),
+// where the kernel strips env from the response entirely. Without this
+// signal that case is indistinguishable from a normal process that simply
+// has none of the caller's keys set, which is exactly the "absent" vs.
+// "unreadable" collapse #2002 §1's fixture table forbids — and it is the
+// process this matters most for, since claude is the primary target this
+// package observes. ReadLauncherEnv discards the error either way (its
+// ancestry fallback already exists for this exact case), so callers other
+// than the endpoint-route reader are unaffected by this becoming an error
+// rather than an empty map.
+var errEnvHidden = fmt.Errorf("kern.procargs2 answered with zero env entries — env is hidden, not merely lacking the requested keys")
+
 // readProcessEnv reads the exec-time env of pid via KERN_PROCARGS2 sysctl
-// and returns the whitelisted entries. Modern macOS disables env visibility
-// in `ps e`, so this is the only non-cgo, non-TCC path.
+// and returns the entries whose key is in keys — selective RETENTION, not
+// selective reading by the kernel: the sysctl call always returns the whole
+// procargs2 buffer, and the filtering happens here. Modern macOS disables env
+// visibility in `ps e`, so this is the only non-cgo, non-TCC path.
 //
-// On hardened-runtime processes (e.g. Anthropic's signed `claude` binary)
-// the kernel strips argv and env from the response; the returned map is
-// empty and callers fall back to resolveTermProgramFromAncestry.
-func readProcessEnv(pid int) (map[string]string, error) {
+// A nil or empty keys returns an empty map (nothing to retain, but the read
+// still ran) rather than errEnvHidden — that distinction needs at least one
+// requested key to be meaningful.
+func readProcessEnv(pid int, keys map[string]struct{}) (map[string]string, error) {
 	buf, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil {
 		return nil, fmt.Errorf("sysctl kern.procargs2 pid %d: %w", pid, err)
 	}
-	return parseProcargs2(buf), nil
+	out, scanned := parseProcargs2(buf, keys)
+	return envHiddenOrAbsent(out, scanned, keys)
+}
+
+// envHiddenOrAbsent applies the errEnvHidden sentinel to parseProcargs2's
+// result. Split out of readProcessEnv so the hidden-vs-absent decision is
+// testable against a synthetic buffer's (out, scanned) pair, with no real
+// sysctl call (and therefore no dependency on a live hardened-runtime
+// process being available to test against).
+func envHiddenOrAbsent(out map[string]string, scanned int, keys map[string]struct{}) (map[string]string, error) {
+	if scanned == 0 && len(keys) > 0 {
+		return nil, errEnvHidden
+	}
+	return out, nil
 }
 
 // maxAncestry caps how far up the parent-process chain we walk when

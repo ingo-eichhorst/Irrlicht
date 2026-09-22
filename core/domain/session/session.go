@@ -478,6 +478,14 @@ type SessionState struct {
 	// or no recognized env vars were present.
 	Launcher *Launcher `json:"launcher,omitempty"`
 
+	// Route is the last-observed provider-endpoint evidence for this
+	// session (issue #2002), captured once when PID is first assigned —
+	// the same point Launcher is. Nil only for a session that predates this
+	// field or was never reached by PID assignment; once captured it is
+	// always non-nil, since RouteObservation.Status names even a denied or
+	// unreadable attempt rather than leaving the field empty.
+	Route *RouteObservation `json:"route,omitempty"`
+
 	// Background marks a detached background agent (e.g. a Claude Code Agent
 	// View bg agent living in the daemon pool). Nil for normal sessions (#744).
 	Background *BackgroundAgent `json:"background,omitempty"`

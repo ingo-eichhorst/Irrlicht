@@ -47,6 +47,18 @@ type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
 // a revoked consent — returns false rather than true.
 type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 
+// RouteReader observes a session's provider-endpoint route from pid's
+// process env (issue #2002). Unlike LauncherEnvReader it carries no
+// hostKnown-style completeness flag: an env-based read has no later signal
+// that would change its answer (no herdr-style external indirection), so it
+// is captured once at first PID assignment (captureRoute) and never
+// re-evaluated. Always returns a non-nil observation — the reader itself
+// distinguishes denied/unreadable/absent/malformed/observed
+// (processlifecycle.ObserveRoute) rather than collapsing any of them to nil.
+// The real implementation lives in the processlifecycle adapter and is
+// injected to preserve the hexagonal layering.
+type RouteReader func(pid int) *session.RouteObservation
+
 // BackgroundReader reports adapter-specific background-agent metadata for a PID
 // (e.g. Claude Code's kind:"bg" registry entry for an Agent-View background
 // agent). Returns nil for ordinary interactive sessions or PIDs the adapter
@@ -100,6 +112,10 @@ type PIDManager struct {
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
+
+	// routeEnv observes a session's provider-endpoint route from a PID
+	// (#2002). Optional — nil skips capture.
+	routeEnv RouteReader
 
 	// herdrPaneRecorder forwards a session's own report of the herdr pane it
 	// runs in to the launcher reader. Optional — nil skips the self-report
@@ -269,6 +285,14 @@ func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
 }
 
+// SetRouteReader installs a reader that observes a session's provider
+// endpoint from its PID (#2002). Called once at startup. Nil disables route
+// capture — captureRoute then leaves state.Route nil, same as a session that
+// predates this field.
+func (pm *PIDManager) SetRouteReader(fn RouteReader) {
+	pm.routeEnv = fn
+}
+
 // SetHerdrPaneRecorder installs the seam that hands a session's own report of
 // its herdr pane to the launcher reader (#1936). Nil disables the self-report
 // path. Called once at startup.
@@ -368,6 +392,36 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if l, _ := pm.launcherEnv(pid); l != nil {
 		state.Launcher = l
 	}
+}
+
+// captureRoute invokes the route reader if one is installed and the session
+// does not yet have an INFORMATIVE route recorded. Safe to call multiple
+// times.
+//
+// RouteDenied is deliberately NOT locked in the way every other status is:
+// it means "the permission was pending or denied at read time", a fact about
+// consent state, not about the process's environment — and consent can
+// change after this capture runs. Every other status
+// (observed/absent/unreadable/malformed) reflects the process's env at exec
+// time, which is fixed for the process's life, so those ARE locked in on
+// first read, matching captureLauncher's own set-once shape for Launcher.
+//
+// Before this guard existed, ObserveRoute's non-nil-on-every-call contract
+// (unlike LauncherEnvReader, which returns nil on denial) meant the very
+// first capture attempt under a pending grant stored `denied` permanently:
+// state.Route != nil was already true, so no later call — including
+// backfillRoute below — ever looked again, even after the user granted the
+// permission. A caller must still supply a FRESH grant-state read each call
+// (the wiring in startup.go reads permService.Granted per invocation) for
+// the retry to see the grant.
+func (pm *PIDManager) captureRoute(state *session.SessionState, pid int) {
+	if pm.routeEnv == nil || state == nil || pid <= 0 {
+		return
+	}
+	if state.Route != nil && state.Route.Status != session.RouteDenied {
+		return
+	}
+	state.Route = pm.routeEnv(pid)
 }
 
 // captureBackground flags state as a background agent when the reader recognizes
@@ -977,6 +1031,7 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string, confirmed map[s
 	state.PID = pid
 	pm.captureLauncher(state, pid)
 	pm.captureBackground(state, pid) // after captureLauncher: needs the TTY (#744)
+	pm.captureRoute(state, pid)      // independent of the two above (#2002)
 	state.UpdatedAt = time.Now().Unix()
 	_ = pm.repo.Save(state)
 
@@ -1636,6 +1691,7 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 		}
 	}
 	pm.backfillLauncher(state)
+	pm.backfillRoute(state) // independent of Launcher (#2002)
 	// Re-attach the background-agent badge to sessions persisted before the
 	// field existed, or restored after a daemon restart (#744). Runs after
 	// backfillLauncher so Detached reflects the refreshed TTY.
@@ -1693,6 +1749,30 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 		return
 	}
 	if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
+		pm.touchAndSave(state)
+	}
+}
+
+// backfillRoute reattempts Route capture for a session carrying no
+// informative observation yet: nil (predates the field) or RouteDenied (the
+// endpoint permission was pending or denied the last time this session was
+// read). Mirrors backfillLauncher's top branch, minus its per-field merge —
+// Route is one atomic value, not a struct assembled from independently
+// missing parts.
+//
+// This is what makes a permission granted AFTER a session's first PID
+// assignment actually take effect for that already-running session: nothing
+// re-probes a live process's env continuously, so seeding at the next daemon
+// startup is the sole retry path (#2002 review finding — captureRoute alone,
+// called only from assignPIDLocked on a NEW pid, would otherwise never run
+// again for a session whose PID never changes).
+func (pm *PIDManager) backfillRoute(state *session.SessionState) {
+	if state.Route != nil && state.Route.Status != session.RouteDenied {
+		return
+	}
+	before := state.Route
+	pm.captureRoute(state, state.PID)
+	if state.Route != before {
 		pm.touchAndSave(state)
 	}
 }

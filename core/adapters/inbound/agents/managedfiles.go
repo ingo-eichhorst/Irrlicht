@@ -59,8 +59,8 @@ type ManagedUserFile struct {
 // It takes the catalog rather than calling All() itself, matching the other
 // registry projections in maps.go — and, since #1383, because the catalog it
 // must run over is strictly LARGER than All(): the daemon's consent catalog is
-// All() plus three daemon-wide declarations composed in core/cmd/irrlichd
-// (gastown, launcher, kitty), and package agents cannot import
+// All() plus four daemon-wide declarations composed in core/cmd/irrlichd
+// (gastown, launcher, kitty, endpoint), and package agents cannot import
 // processlifecycle, which imports it back. consentCatalog there is the one
 // place that composition lives.
 func ManagedUserFiles(catalog []agent.Agent) ([]ManagedUserFile, error) {

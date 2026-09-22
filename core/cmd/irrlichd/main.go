@@ -390,7 +390,7 @@ func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store
 // permissions that actually write them.
 //
 // It projects the full consent catalog rather than agents.All(): the kitty
-// patch is one of three daemon-wide declarations appended outside the adapter
+// patch is one of four daemon-wide declarations appended outside the adapter
 // registry, and projecting only the registry is how it stayed unprotected.
 //
 // An empty result is an error, not an empty list: the rig would read "nothing

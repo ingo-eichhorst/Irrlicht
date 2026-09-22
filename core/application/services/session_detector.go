@@ -539,6 +539,12 @@ func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 
+// SetRouteReader installs a reader that observes a session's provider
+// endpoint from its PID when the PID is first assigned (#2002).
+func (d *SessionDetector) SetRouteReader(fn RouteReader) {
+	d.pidMgr.SetRouteReader(fn)
+}
+
 // SetHerdrPaneRecorder installs the seam that hands a session's own report of
 // its herdr pane to the launcher reader (#1936). Production wires
 // processlifecycle.RememberHerdrPane behind the launcher consent; nil (the

@@ -207,12 +207,15 @@ func pidHasFileOpenForWrite(pid int, want string) bool {
 	return false
 }
 
-// EnvOf returns the whitelisted launcher env of pid via /proc/<pid>/environ
-// (readProcessEnv, defined in osutil_linux.go). Per the port contract an
-// unreadable env (process exited, root-owned) is an empty map, not an error.
-func (linuxObserver) EnvOf(pid int) (map[string]string, error) {
-	m, _ := readProcessEnv(pid)
-	return m, nil
+// EnvOf returns the values of keys retained from pid's env, via
+// /proc/<pid>/environ (readProcessEnv, defined in osutil_linux.go) —
+// selective RETENTION, not selective reading: the kernel exposes the whole
+// environ file, and readProcessEnv keeps only the entries named in keys
+// (#2002 §1.2). Per the port contract, an unreadable env (process exited,
+// root-owned) is a non-nil error, distinct from a readable env holding none
+// of keys (empty map, nil error).
+func (linuxObserver) EnvOf(pid int, keys map[string]struct{}) (map[string]string, error) {
+	return readProcessEnv(pid, keys)
 }
 
 // procPIDs returns the PIDs of every process currently in /proc.

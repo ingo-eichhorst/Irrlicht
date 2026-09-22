@@ -467,10 +467,12 @@ type ttyProbe func(ctx context.Context, pid int) (string, bool)
 
 // hostIdentityVia is hostIdentity with the TTY read injected.
 func hostIdentityVia(ctx context.Context, pid int, readTTY ttyProbe) (l *session.Launcher, complete bool) {
-	// Env may be empty — hardened-runtime processes hide it from sysctl.
-	// Don't bail here: the ancestry fallback below is the only signal we
-	// have in that case.
-	env, _ := osProc.EnvOf(pid)
+	// Env may be empty (err != nil) — hardened-runtime processes hide it
+	// from sysctl. Don't bail here: the ancestry fallback below is the only
+	// signal we have in that case. launcherEnvKeys is this reader's own
+	// extraction set; the endpoint-route reader (endpoint_route.go) passes
+	// its own, disjoint set instead (#2002).
+	env, _ := osProc.EnvOf(pid, launcherEnvKeys)
 
 	l = launcherFromEnv(env)
 	complete = true
@@ -974,15 +976,21 @@ func ReadArgv(pid int) []string {
 //
 // Modern macOS disables `ps e` envvar output, so sysctl is the only
 // non-cgo / non-TCC path to read another process's env.
-func parseProcargs2(buf []byte) map[string]string {
-	out := map[string]string{}
+// parseProcargs2 parses a KERN_PROCARGS2 buffer and returns the envp entries
+// whose key is in keys. scanned is the total number of envp entries seen
+// REGARDLESS of whether they matched keys — readProcessEnv uses scanned == 0
+// to tell "this process's env is hidden from the kernel entirely" apart from
+// "this process's env has none of the caller's keys" (errEnvHidden,
+// osutil_darwin.go).
+func parseProcargs2(buf []byte, keys map[string]struct{}) (out map[string]string, scanned int) {
+	out = map[string]string{}
 	argc, p, ok := procargs2ArgvOffset(buf)
 	if !ok {
-		return out
+		return out, 0
 	}
 	p = skipProcargs2ArgvEntries(buf, argc, p)
-	collectProcargs2EnvEntries(buf, p, out)
-	return out
+	scanned = collectProcargs2EnvEntries(buf, p, keys, out)
+	return out, scanned
 }
 
 // skipProcargs2ArgvEntries advances past the argc NUL-terminated argv[]
@@ -1002,20 +1010,23 @@ func skipProcargs2ArgvEntries(buf []byte, argc, p int) int {
 
 // collectProcargs2EnvEntries reads NUL-terminated "KEY=VALUE" envp entries
 // starting at offset p until an empty string or the end of the buffer,
-// recording the whitelisted ones into out.
-func collectProcargs2EnvEntries(buf []byte, p int, out map[string]string) {
+// recording the ones named in keys into out. Returns the total number of
+// envp entries seen, matched or not — parseProcargs2's caller uses that
+// count, not len(out), to tell an empty result from a hidden env.
+func collectProcargs2EnvEntries(buf []byte, p int, keys map[string]struct{}, out map[string]string) (scanned int) {
 	for p < len(buf) {
 		start := p
 		for p < len(buf) && buf[p] != 0 {
 			p++
 		}
 		if p == start {
-			return
+			return scanned
 		}
+		scanned++
 		entry := string(buf[start:p])
 		if eq := strings.IndexByte(entry, '='); eq > 0 {
 			key := entry[:eq]
-			if _, ok := launcherEnvKeys[key]; ok {
+			if _, ok := keys[key]; ok {
 				out[key] = entry[eq+1:]
 			}
 		}
@@ -1023,6 +1034,7 @@ func collectProcargs2EnvEntries(buf []byte, p int, out map[string]string) {
 			p++
 		}
 	}
+	return scanned
 }
 
 // procargs2ArgvOffset reads the int32 argc header of a KERN_PROCARGS2 buffer

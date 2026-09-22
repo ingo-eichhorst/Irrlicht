@@ -786,6 +786,138 @@ func TestHandlePIDAssigned_LauncherCaptureIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestHandlePIDAssigned_RouteCaptureIsIdempotent mirrors
+// TestHandlePIDAssigned_LauncherCaptureIsIdempotent for #2002's route
+// reader: captured once at first PID assignment, never re-invoked once
+// state.Route is set — matching captureLauncher's set-once shape, minus its
+// repair path (an env-based route read has nothing new to learn on a second
+// look, so there is no equivalent of backfillLauncher for it).
+func TestHandlePIDAssigned_RouteCaptureIsIdempotent(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+		calls++
+		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.example.com"}
+	})
+
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Fatalf("first assign: reader calls = %d, want 1", calls)
+	}
+	if repo.states["s"].Route == nil || repo.states["s"].Route.Status != session.RouteObserved {
+		t.Fatalf("first assign: route not captured, got %+v", repo.states["s"].Route)
+	}
+
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Errorf("repeat same PID: reader re-invoked (%d calls)", calls)
+	}
+
+	pm.HandlePIDAssigned(99, "s")
+	if calls != 1 {
+		t.Errorf("new PID with existing route: reader re-invoked (%d calls)", calls)
+	}
+	if repo.states["s"].Route.Endpoint != "https://api.example.com" {
+		t.Errorf("route clobbered by later PID assignment: %+v", repo.states["s"].Route)
+	}
+}
+
+// TestHandlePIDAssigned_NilRouteReaderLeavesRouteNil confirms a nil
+// RouteReader (the default when SetRouteReader is never called) disables
+// capture entirely rather than panicking — matching captureLauncher's own
+// nil-reader guard.
+func TestHandlePIDAssigned_NilRouteReaderLeavesRouteNil(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		UpdatedAt: time.Now().Unix(),
+	}
+	pm := newPIDManagerForTest(repo)
+
+	pm.HandlePIDAssigned(42, "s")
+
+	if repo.states["s"].Route != nil {
+		t.Errorf("no reader installed: want Route nil, got %+v", repo.states["s"].Route)
+	}
+}
+
+// TestBackfillRoute_DeniedIsRetriedAfterGrant is the regression test for the
+// #2002 review finding: a route captured while the endpoint permission was
+// pending/denied must NOT be locked in forever — once the permission is
+// granted, the next look (SeedPIDs → handleAlivePIDState → backfillRoute, the
+// same "next daemon startup" path backfillLauncher uses to heal a
+// pre-existing session) must re-read and replace it. Before the fix,
+// captureRoute's `state.Route != nil` guard treated a stored RouteDenied
+// exactly like a stored RouteObserved: permanent, never looked at again.
+func TestBackfillRoute_DeniedIsRetriedAfterGrant(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		PID:       os.Getpid(), // alive — handleAlivePIDState's syscall.Kill probe must succeed
+		UpdatedAt: 0,
+		// Simulates the first capture, taken while the permission was
+		// pending or denied.
+		Route: &session.RouteObservation{Status: session.RouteDenied},
+	}
+
+	pm := newPIDManagerForTest(repo)
+	// Simulates the permission having since been granted: the reader now
+	// performs a real read and finds an override.
+	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.example.com"}
+	})
+
+	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
+
+	got := repo.states["s"].Route
+	if got == nil || got.Status != session.RouteObserved {
+		t.Fatalf("denied route was not retried after grant: got %+v, want Status=observed", got)
+	}
+	if got.Endpoint != "https://api.example.com" {
+		t.Errorf("Endpoint = %q, want https://api.example.com", got.Endpoint)
+	}
+}
+
+// TestBackfillRoute_ObservedIsNotRetried is TestBackfillRoute_DeniedIsRetriedAfterGrant's
+// converse: an already-informative observation (anything but denied) must
+// stay locked in — the process's env at exec time doesn't change on a later
+// look, so re-reading would only cost a redundant probe.
+func TestBackfillRoute_ObservedIsNotRetried(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		PID:       os.Getpid(),
+		UpdatedAt: 0,
+		Route:     &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://original.example.com"},
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+		calls++
+		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://should-not-appear.example.com"}
+	})
+
+	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
+
+	if calls != 0 {
+		t.Errorf("reader invoked %d times, want 0 — an already-observed route must not be re-read", calls)
+	}
+	if repo.states["s"].Route.Endpoint != "https://original.example.com" {
+		t.Errorf("Endpoint = %q, want the original value preserved", repo.states["s"].Route.Endpoint)
+	}
+}
+
 // TestBackfillLauncher_KittyFieldsMergedFromFreshEnv exercises the
 // SeedPIDs → handleAlivePIDState → backfillLauncher path for issue #326:
 // pre-existing kitty sessions that shipped with KittyPID == 0 (because
