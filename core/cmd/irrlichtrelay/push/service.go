@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"irrlicht/core/pkg/onetimecode"
 	"irrlicht/core/pkg/webpush"
 )
 
@@ -30,14 +31,19 @@ import (
 const vapidFilename = "vapid-keys.json"
 
 // Service is the relay's push-side state, safe for concurrent use. The
-// VAPID identity is immutable after construction; codes, redeem-failure
-// timestamps, the subscription registry, the daemon roster and the delivery
-// health map share one mutex.
+// VAPID identity is immutable after construction; pairing codes have their
+// own lock inside the shared onetimecode.Manager (#1963); the subscription
+// registry, the daemon roster and the delivery health map share mu.
 type Service struct {
 	dir string
 	now func() time.Time
 
 	vapid *webpush.VAPIDKey
+
+	// codes mints and redeems pairing codes over an in-memory
+	// onetimecode.Store — see codes.go's package comment for why the
+	// algorithm lives in core/pkg/onetimecode rather than here.
+	codes *onetimecode.Manager
 
 	// writeFile performs every persisted write. It is a field so a test can
 	// stand in a slow or failing disk: what these files have to get right
@@ -47,8 +53,6 @@ type Service struct {
 	writeFile func(path string, data []byte, perm os.FileMode) error
 
 	mu        sync.Mutex
-	codes     []pairingCode
-	failures  []time.Time               // failed Redeem timestamps within the rolling window
 	subs      map[string]Entry          // device token id → registered subscription
 	roster    map[rosterKey]RosterEntry // known daemons for the §6.4 watchdog
 	health    map[string]DeliveryStatus // device token id → last send outcome (RAM only, §8.6)
@@ -102,6 +106,7 @@ func NewService(dir string, now func() time.Time) (*Service, error) {
 	s := &Service{
 		dir:       dir,
 		now:       now,
+		codes:     onetimecode.NewManager(now, onetimecode.NewMemoryStore()),
 		writeFile: writeFileAtomic,
 		subs:      map[string]Entry{},
 		roster:    map[rosterKey]RosterEntry{},

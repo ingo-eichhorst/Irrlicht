@@ -478,6 +478,7 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Session cache | RAM | no | Repopulated by daemon reconnects within seconds |
 | Policy state (cooldowns, hold-downs, burst windows) | RAM | no | **A restart is amnesia, not recovery.** The engine's session map is RAM-only and nothing seeds it, so after a restart every session is an unknown id — a first sighting, which is silent by design. A `ready` that landed during the restart is therefore *not* delivered; the next genuine transition is. §6.3's diff rule covers a daemon reconnect, not a relay restart |
 | Pairing codes | RAM | no | 10 min TTL, single use; a restart mid-pairing just means regenerating the code |
+| Enrollment codes (#1963) | `enroll-codes.json` | yes | SHA-256 hashes only, never the plaintext code — same shape as `tokens.json`. Unlike pairing codes, must survive: `irrlichtrelay enroll new` mints with no relay running, so the code has to outlive that process for a later-started relay to redeem it |
 | Delivery health (last attempt per subscription) | RAM | no | Shown as "unknown since restart" — honest, per §8.3 |
 | Notification payloads | **nowhere** | — | No outbox, no durable queue, by design: a stale notification is an anti-feature. Apple/Google *are* the queue; TTL (§8.4) is its bound |
 

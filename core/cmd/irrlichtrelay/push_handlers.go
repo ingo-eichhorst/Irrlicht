@@ -43,6 +43,19 @@ const pairDefaultLabel = "elfdans"
 // endpoint is no oracle for which codes exist.
 const pairCodeInvalidMsg = "invalid or expired pairing code"
 
+// pairTooManyCodesMsg and pairRateLimitedMsg are pairing's own 429 wire
+// text — restored, word for word, from push/codes.go's pre-#1963
+// ErrTooManyCodes/ErrRateLimited (verified by reading that file's history:
+// "push: too many outstanding pairing codes" and "push: too many failed
+// pairing attempts, retry later"). The #1963 lift moved that generator into
+// core/pkg/onetimecode, whose sentinel errors now carry a generic,
+// flow-agnostic .Error() text ("onetimecode: ...") shared with enrollment —
+// an internal package name is not what a client-facing 429 body should
+// name, and nothing asserted on the old text, so a naive `err.Error()`
+// forward would have silently shipped the wrong string.
+const pairTooManyCodesMsg = "push: too many outstanding pairing codes"
+const pairRateLimitedMsg = "push: too many failed pairing attempts, retry later"
+
 // maxPairLabelRunes caps a device label: it lands verbatim in tokens.json
 // and `token list` prints it into the operator's terminal, so it gets a
 // length bound and no control characters (ANSI escapes included) — a paired
@@ -204,7 +217,7 @@ func handleMintPairing(svc *push.Service, handoff pairingHandoff) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, ttl, err := svc.MintCode(workspaceOf(r))
 		if errors.Is(err, push.ErrTooManyCodes) {
-			pushError(w, http.StatusTooManyRequests, err.Error())
+			pushError(w, http.StatusTooManyRequests, pairTooManyCodesMsg)
 			return
 		}
 		if err != nil {
@@ -256,7 +269,7 @@ func handlePair(svc *push.Service, store *authStore) http.HandlerFunc {
 		}
 		workspace, err := svc.Redeem(req.Code)
 		if errors.Is(err, push.ErrRateLimited) {
-			pushError(w, http.StatusTooManyRequests, err.Error())
+			pushError(w, http.StatusTooManyRequests, pairRateLimitedMsg)
 			return
 		}
 		if err != nil {
