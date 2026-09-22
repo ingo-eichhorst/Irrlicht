@@ -20,7 +20,7 @@ If the user invokes this skill without any other guidance, ask them what they wa
 - `assets/` — logos and icon sources
 
 ## Non-negotiables
-- Three semantic colors only: **working (#8B5CF6 purple)**, **waiting (#FF9500 orange)**, **ready (#34C759 green)**. Never decorative.
+- Four semantic state colors only: **working (#8B5CF6 purple)**, **waiting (#FF9500 orange)**, **ready (#34C759 green)**, **error (#FF3B30 red)**. Never decorative.
 - Type pairing: **Cormorant Garamond 300** (display, italic) + **Outfit 300/500** (UI sans) + **DM Mono** (data, labels, logo)
 - Background is near-black with a subtle purple-to-black radial and fixed fractal-noise overlay at ~3% opacity
 - Lowercase UI prose. Em-dashes over colons. Never exclamation points.

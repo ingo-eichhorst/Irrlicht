@@ -122,11 +122,13 @@
 
       <p>A user-blocking tool is open &mdash; the agent has stopped and needs your judgment before it can continue. The story pauses until you respond.</p>
 
-      <p>Only two tools trigger the waiting state:</p>
+      <p>Two kinds of user-blocking tool trigger the waiting state:</p>
       <ul>
-        <li><code>AskUserQuestion</code> &mdash; the agent is asking you a clarifying question</li>
-        <li><code>ExitPlanMode</code> &mdash; the agent wants to leave plan mode and start executing</li>
+        <li><code>AskUserQuestion</code> &mdash; the agent is asking you a clarifying question (other adapters spell it <code>question</code>, <code>ask_user_question</code>, <code>ask_user</code> or <code>request_user_input</code>)</li>
+        <li><code>ExitPlanMode</code> &mdash; the agent wants to leave plan mode and start executing (GitHub Copilot spells it <code>exit_plan_mode</code>)</li>
       </ul>
+
+      <p>A pending permission prompt also reads <span class="badge badge-waiting">waiting</span> when the adapter can see it &mdash; through the agent&rsquo;s hooks, a permission record in its transcript, or, as a fallback, a permission-gated edit tool left open for more than 30 seconds.</p>
 
       <div class="callout callout-warning">
         <strong>This one needs you</strong>
@@ -135,11 +137,10 @@
 
       <h3><span class="badge badge-ready">ready</span></h3>
 
-      <p>The agent is idle at the prompt, waiting for your next instruction. The turn is complete &mdash; either the agent finished its work, the process exited, or a task was cancelled. The session is available for new work.</p>
+      <p>The agent is idle at the prompt, waiting for your next instruction. The turn is complete &mdash; either the agent finished its work or a task was cancelled. The session is available for new work.</p>
 
       <ul>
         <li>The agent completed its response and is showing the prompt</li>
-        <li>The agent process exited (gracefully or otherwise)</li>
         <li>You cancelled a running task with ESC &mdash; the agent is back at the prompt</li>
         <li>The session has been idle beyond the grace period</li>
       </ul>
@@ -159,7 +160,7 @@
         A <code>grep</code> that matched nothing, a failing build, a <code>find</code> hitting a protected directory &mdash; those are the agent working normally and stay <span class="badge badge-working">working</span>. A red light is about the session, not about what the agent found.
       </div>
 
-      <p>Nothing clears <span class="badge badge-error">error</span> except the next <em>successful</em> turn &mdash; there is no timeout and no minimum hold. Starting a retry moves the session to <span class="badge badge-working">working</span>; only completing one takes it to <span class="badge badge-ready">ready</span>. The tradeoff is accepted and named: a provider error that recovers within a few hundred milliseconds can enter and leave <span class="badge badge-error">error</span> inside one poll interval and never be seen.</p>
+      <p>Two things clear <span class="badge badge-error">error</span>, and neither is a timeout or has a minimum hold. Your next message clears it immediately and moves the session to <span class="badge badge-working">working</span>; a completed turn takes it to <span class="badge badge-ready">ready</span>, but only when the failure was a retrying one &mdash; a terminal failure is not retired by a turn boundary. The tradeoff is accepted and named: a provider error that recovers within a few hundred milliseconds can enter and leave <span class="badge badge-error">error</span> inside one poll interval and never be seen.</p>
 
       <div class="callout callout-info">
         <strong>No "cancelled" state</strong>
@@ -174,7 +175,7 @@
       <ol class="steps">
         <li>
           <strong>Is there an open user-blocking tool?</strong><br>
-          If the last tool result is pending and the tool is <code>AskUserQuestion</code> or <code>ExitPlanMode</code>, the state is <span class="badge badge-waiting">waiting</span>.
+          If the last tool result is pending and the tool is a user-blocking tool (<code>AskUserQuestion</code>, <code>ExitPlanMode</code>, or another adapter&rsquo;s spelling of them), the state is <span class="badge badge-waiting">waiting</span>.
         </li>
         <li>
           <strong>Is there an unrecovered session-level failure?</strong><br>
@@ -293,12 +294,12 @@
             <td>A single dimmed grey flame &mdash; clean slate, no active sessions</td>
           </tr>
           <tr>
-            <td>1 &ndash; 5</td>
+            <td>1 &ndash; 5 (default)</td>
             <td>One group per project, left to right; &le;3-session groups show individual dots, &gt;3-session groups show an aggregated count circle</td>
           </tr>
           <tr>
-            <td>6+</td>
-            <td>The first 5 groups are shown, then an ellipsis (&hellip;) &mdash; the cap is on project groups, not raw session count</td>
+            <td>6+ (default)</td>
+            <td>The first 5 groups are shown, then an ellipsis (&hellip;) &mdash; the cap is on project groups, not raw session count, and is adjustable from 1 to 10 in Settings (default 5)</td>
           </tr>
         </tbody>
       </table>

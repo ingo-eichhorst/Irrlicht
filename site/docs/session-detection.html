@@ -106,7 +106,7 @@
         <li><strong>Technology:</strong> fsnotify (kqueue on macOS)</li>
         <li>Recursively watches transcript directories for changes</li>
         <li><strong>Events:</strong> <code>CREATE</code> -- new session, <code>WRITE</code> -- activity, <code>REMOVE</code> -- session ended</li>
-        <li><strong>Filters:</strong> only <code>.jsonl</code> files, ignores files older than max age (5 days default)</li>
+        <li><strong>Filters:</strong> only <code>.jsonl</code> files unless an adapter supplies its own session-ID rule (DeepSeek Harness reads <code>.jsonl.zstd</code>), ignores files older than max age (5 days default)</li>
       </ul>
 
       <h3>Process Scanning</h3>
@@ -122,7 +122,7 @@
 
       <ul>
         <li>kqueue <code>EVFILT_PROC</code> <code>NOTE_EXIT</code> for instant (~1ms) exit detection</li>
-        <li><strong>Fallback:</strong> periodic liveness sweep via <code>syscall.Kill(pid, 0)</code> every 5s</li>
+        <li><strong>Fallback:</strong> periodic liveness sweep via <code>syscall.Kill(pid, 0)</code> every 5s, backing off to 15s after 3 consecutive clean sweeps</li>
         <li><strong>Startup cleanup:</strong> synchronous dead PID check in <code>seedFromDisk()</code></li>
       </ul>
 
@@ -264,6 +264,17 @@
         <li><strong>Adapter name:</strong> <code>junie</code></li>
       </ul>
 
+      <h3>DeepSeek Harness</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>session.v&lt;N&gt;.jsonl.zstd</code> under <code>~/.dsh/sessions/&lt;cwd-key&gt;/session-&lt;uuid&gt;/</code>, relocatable via <code>$DSH_HOME</code> (the adapter watches <code>$DSH_HOME/sessions</code>)</li>
+        <li>The log is concatenated zstd frames; the shared tailer decodes them before the adapter parses the JSONL records. Only the highest <code>session.v&lt;N&gt;</code> generation in a session directory is read</li>
+        <li>The session ID is the <code>session-&lt;uuid&gt;</code> directory name. Native subagents write to a bare-UUID directory whose log header carries <code>origin: "subagent"</code> and the parent session ID, which provides the parent link</li>
+        <li>Discovery matches the command line (<code>dsh</code>) because the OS process name is <code>node</code>; the PID comes from the process that holds the session&rsquo;s <code>session.lock</code> open</li>
+        <li>A <code>turn/end</code> record is the explicit turn boundary; an <code>approval/asked</code> record routes the session to <code>waiting</code>, and <code>approval/decided</code> releases it</li>
+        <li><strong>Adapter name:</strong> <code>dsh</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>
@@ -288,7 +299,7 @@
           </tr>
           <tr>
             <td>Liveness sweep</td>
-            <td><code>syscall.Kill(pid, 0)</code> every 5s</td>
+            <td><code>syscall.Kill(pid, 0)</code> every 5s, backing off to 15s after 3 consecutive clean sweeps</td>
           </tr>
           <tr>
             <td>Startup cleanup</td>

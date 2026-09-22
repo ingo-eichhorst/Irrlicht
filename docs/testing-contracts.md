@@ -4,8 +4,9 @@ Referenced from [AGENTS.md](../AGENTS.md)'s Testing section. This is the
 detailed write-up for the `core/internal/contracttesting` package and the
 related package-local guards it sits beside: the seven contract families that
 bind permission gating, hook delivery, hook disclosure, hook path
-confinement, hook version floors, unrecognized hook events, hook entry
-presence, and hook receipts to runtime behavior rather than to a static rule;
+confinement, hook version floors, unrecognized hook events, and hook
+receipts to runtime behavior rather than to a static rule; the hook entry
+presence registry tripwire;
 the managed-user-file declaration that backs `--print-managed-files` /
 `--uninstall-hooks` / `--uninstall-task-eta` and the grant-all daemon's
 shared-config refusal; the guarded-construction pair of guards in
@@ -46,21 +47,23 @@ below.
     NOT reproduce: silence.** Deleting a receiver's own `transcripts` gate used
     to fail `…/transcripts/gated_on_the_named_key` plus that adapter's #1466
     defect test; after #1488 the chokepoint drops the same payload, so every
-    dispatch-shaped assertion stays green (measured on all seven receivers —
-    claudecode's hooks and statusline, codex, copilot, geminicli, kirocli,
-    vibe; reproduce the count with `git grep -rl hookjson.RequireConsent
-    core/adapters/inbound/agents/` rather than trusting this list once an
-    eighth adapter ships). It is not silent about
+    dispatch-shaped assertion stays green (measured at #1488 on the seven
+    receivers that existed then — claudecode's hooks and statusline, codex,
+    copilot, geminicli, kirocli, vibe; antigravity, hermes, opencode and pi
+    have since joined, eleven in all — reproduce the count with `git grep -rl
+    hookjson.RequireConsent core/adapters/inbound/agents/` rather than
+    trusting this list). It is not silent about
     it: reaching the backstop means a receiver skipped a check or consent was
     revoked mid-request, so it logs an error, where a receiver's own gate
     answers a quiet 200. That difference is both the surviving discriminator
     and a real user-facing property — an ordinary denied session must not
-    collect an error line per tool call — so each of the seven receivers' hand-
-    written consent tests now asserts **no error was logged**, and each was
+    collect an error line per tool call — so every receiver's hand-written
+    consent test now asserts **no error was logged** (all eleven carry the
+    `len(log.Errors()) != 0` check), and each of the original seven was
     seen red again with its gate deleted. Statusline is the receiver to watch
     here: it declares ONE permission and keeps no second gate, so that
     assertion is the whole of its live per-adapter proof.
-  - Beside those seven, the coverage is one shared proof plus one lock per
+  - Beside those per-receiver tests, the coverage is one shared proof plus one lock per
     adapter: `hookjson/consent_test.go`'s committed `forgetfulReceiver`
     (declares two keys, checks one) grades the backstop for every receiver at
     once, and `AssertDeclaredPermissions` / each adapter's
@@ -137,10 +140,10 @@ below.
   that CARRIES the daemon's address.
   `DeliveryAddressFree` is an entry that carries none, because it names the
   `irrlichd hook-post` beacon (`core/pkg/hookbeacon`, #1373), which reads the
-  addr file at fire time — `geminicli` (#1724), `kirocli` (#1732) and `vibe`
-  (#1733) all declare it (`git grep -n "Delivery:
-  contracttesting.DeliveryAddressFree" core/adapters/`, the other half of
-  the six adapters above); three of the four port obligations then fail by
+  addr file at fire time — `geminicli` (#1724), `kirocli` (#1732), `vibe`
+  (#1733), `pi`, `opencode`, `hermes` and `antigravity` all declare it (`git grep -n "Delivery:
+  contracttesting.DeliveryAddressFree" core/adapters/`, the other seven of
+  the ten hook-installing adapters); three of the four port obligations then fail by
   construction, measured against a working beacon. That is the good outcome
   rather than an exemption: the beacon makes the whole stale-port class
   INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
@@ -171,7 +174,7 @@ below.
   That an adapter with no config document at all fits the seam unchanged is
   the strongest evidence #1734 generalised it far enough.
   Real adapters now exercise every route and entry shape this family grades —
-  `DeliveryAddressFree` (geminicli, kirocli, vibe, pi), the flat `EntriesOf` shape
+  `DeliveryAddressFree` (geminicli, kirocli, vibe, pi, opencode, hermes, antigravity), the flat `EntriesOf` shape
   kiro-cli's schema needs (#1716), and the raw-bytes TOML shape vibe's
   `hooktoml` needs (#1718) — but none of the three reference-wiring fixtures
   those adoptions were supposed to retire has been touched since. All three
@@ -573,8 +576,8 @@ below.
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
   All three project the **full consent catalog** (`consentCatalog` in
-  `core/cmd/irrlichd`), not `agents.All()`: four daemon-wide declarations —
-  gastown, launcher, kitty, endpoint — are appended outside the adapter registry, and
+  `core/cmd/irrlichd`), not `agents.All()`: five daemon-wide declarations —
+  gastown, launcher, kitty, endpoint, and Muse's account API (#2007) — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
   offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is

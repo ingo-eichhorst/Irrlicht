@@ -385,7 +385,7 @@ from `gh api`, the token is missing the `security_events` scope:
 > PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
 > do them by hand afterward:
 > 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`
-> 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, and the three tarballs.
+> 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, and the five tarballs (three daemon + two relay).
 > 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 6's Sparkle block).
 > 4. **Smoke-test** the bundle (Step 6 step 7) — but see the port hazard below.
 >
@@ -587,17 +587,19 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 1. Copy Swift binary → `$APP_STAGING/Contents/MacOS/Irrlicht` (from path above).
 2. Copy universal daemon → `$APP_STAGING/Contents/MacOS/irrlichd`.
 3. Copy `AppIcon.icns` → `$APP_STAGING/Contents/Resources/AppIcon.icns`.
-4. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
+4. **Copy the dashboard web tree** → `$APP_STAGING/Contents/Resources/web/`
+   (every file in `WEB_FILES` — `index.html` alone boots nothing, see above).
    The daemon resolves it at runtime via `<exe>/../Resources/web/`
    (`resolveUIDir` in `core/cmd/irrlichd/paths.go`). Without this copy,
    `GET /` returns the 503 "Dashboard UI not found" fallback — every
    v0.4.4 install shipped without this file and the dashboard at
    `http://127.0.0.1:7837/` was unreachable until v0.4.5 re-spun the assets.
-   The smoke test at step 8 asserts the dashboard responds; do not skip it.
+   The smoke test at step 7 asserts the dashboard responds; do not skip it.
    ```bash
    mkdir -p "$APP_STAGING/Contents/Resources/web"
-   cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
-      "$APP_STAGING/Contents/Resources/web/index.html"
+   ( cd /Users/ingo/projects/irrlicht && \
+     sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
+     while read -r f; do cp "platforms/web/$f" "$APP_STAGING/Contents/Resources/web/"; done )
    ```
 5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
    This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
@@ -1346,7 +1348,7 @@ without `--push`; the verification will report a mismatch you can ignore.
 The install script at `site/install.sh` is version-agnostic — it queries the
 GitHub API for the latest version and downloads `Irrlicht-<version>.zip`
 (full install) or `irrlichd-darwin-universal.tar.gz` (daemon-only) from the
-matching release, then extracts the daemon binary plus `web/index.html`.
+matching release, then extracts the daemon binary plus the whole `web/` tree.
 **It does not need to be edited on every release.**
 
 However, every release must:

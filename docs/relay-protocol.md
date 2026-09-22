@@ -30,9 +30,10 @@ irrlichd ──(daemon role)──▶ irrlichtrelay ◀──(client role)──
   daemon.** Auth and TLS are supported but off by default (see
   [Auth, TLS, and origins](#auth-tls-and-origins)). Relay state is in-memory
   and rebuilt from each daemon's reconnect `daemon_snapshot`. The relay does
-  write a few small files — hashed tokens, and the push identity/registry once
-  a phone is paired ([Push endpoints](#push-endpoints-elfdans)) — but **no
-  session content is ever at rest on the relay host.**
+  write a few small files — hashed tokens, the push identity/registry once
+  a phone is paired ([Push endpoints](#push-endpoints-elfdans)), and hashed
+  desktop enrollment codes ([Enrollment endpoints](#enrollment-endpoints-desktops))
+  — but **no session content is ever at rest on the relay host.**
 
 ## Versioning
 
@@ -190,6 +191,34 @@ code's workspace, the code decides the device token's, and dispatch resolves
 each subscription's workspace **live** from the token store — so
 `token revoke <device>` drops both stream access and the delivery address,
 with no stale copy to disagree.
+
+### Enrollment endpoints (desktops)
+
+A desktop joins a relay the way a phone pairs: a one-time code (same
+`XXXX-XXXX` shape, 10-minute TTL, single use, at most 32 outstanding, and its
+own rolling redeem-failure lockout) is exchanged for an **ordinary bearer
+token** in the code's workspace, so `token list` shows the enrolled desktop and
+`token revoke` is the whole revocation story. Unlike pairing codes, enrollment
+codes are persisted — hashed, never in plaintext — in
+`<data-dir>/enroll-codes.json`, because `irrlichtrelay enroll new` mints one
+with no relay running (it prints `<public-url>/enroll/<code>`, or the bare code
+plus the reason when `--public-url` is unset).
+
+| Endpoint | Credential | Body / response |
+| --- | --- | --- |
+| `POST /api/v1/enroll/requests` | client token | No body → `201 {"code":"XXXX-XXXX","expires_in":600,"enroll_url":"https://…/enroll/XXXX-XXXX"}` — a code in **the caller's own workspace**, minted with no label. `enroll_url` is omitted when no valid `--public-url` is configured, and `enroll_url_reason` then says why. `429` past 32 outstanding codes; `500` when the code store itself cannot be read or written. |
+| `POST /api/v1/enroll/redeem` | **the code** | `{"code":"…","label":"…"}` (`label` optional) → `200 {"token":"…","token_id":"…"}`. The token's label is the request's `label`, else the one the code was minted with (`enroll new --label`), else `desktop`. `401` for unknown, expired and already-used codes alike (no oracle), `429` once failures saturate. |
+| `GET /enroll/<code>` | code in path | A `text/plain` page naming the code and what to do with it, for someone who follows the URL by hand. `404` for a malformed code or when no valid `--public-url` is configured. Validity and expiry are decided only by `redeem`. |
+
+**Enrollment requires `--auth`**, independently of push: under `--auth off`
+both API routes answer `403` naming the fix, since there is no token store to
+issue the desktop's token into.
+
+```sh
+irrlichtrelay enroll new --label studio-mac --public-url https://relay.example.com
+curl -X POST https://relay.example.com/api/v1/enroll/redeem \
+  -d '{"code":"ABCD-2345","label":"studio-mac"}'
+```
 
 ## Auth, TLS, and origins
 

@@ -219,6 +219,12 @@
             <td>How often the daemon re-reads every granted hook install to check its entries are still present, re-installing them if an agent's own settings UI removed them. Lower values write to your agent config files more often; used by test harnesses to observe a pass in seconds rather than five minutes</td>
           </tr>
           <tr>
+            <td><code>IRRLICHT_HOOK_SILENT_TURNS</code></td>
+            <td>Integer (turns)</td>
+            <td><code>5</code></td>
+            <td>Hook-liveness watchdog: after this many consecutive completed turns with zero hook receipts, an adapter&rsquo;s hook channel is declared silent and the adapter falls back to transcript-only state detection (releasing any hook-tier holds); the first hook that arrives recovers it. <code>0</code> disables the watchdog; negative or non-integer values fall back to the default</td>
+          </tr>
+          <tr>
             <td><code>IRRLICHT_HOME</code></td>
             <td>Path</td>
             <td><code>~/.local/share/irrlicht</code></td>
@@ -241,6 +247,12 @@
             <td>Path</td>
             <td><code>&lt;dataDir&gt;/recordings</code></td>
             <td>Override the directory lifecycle recordings are written to. Wins even when <code>IRRLICHT_HOME</code> is set, so a recording run can be pinned somewhere specific (only used while recording is enabled)</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_RECORD_ADAPTERS</code></td>
+            <td>Comma-separated adapter names</td>
+            <td>unset</td>
+            <td>Narrows a <code>grant-all</code> daemon&rsquo;s auto-grant, by adapter identity name (e.g. <code>claude-code</code> or <code>claude-code,codex</code>): permissions of any other adapter that write a shared user file (hook installers, the <code>CLAUDE.md</code> block, the kitty patch) are left ungranted, while transcript-reading permissions are still granted for every adapter. Unset grants everything. Used by the onboarding recording rig so recording one agent doesn&rsquo;t install hooks for unrelated ones</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_RELAY_URL</code></td>
@@ -320,6 +332,12 @@
             <td><code>32</code></td>
             <td>Env fallback for <code>irrlichtrelay serve --max-conns-per-ip</code> &mdash; max concurrent connections per remote IP; <code>0</code> disables the cap (meaningless behind a proxy/NAT)</td>
           </tr>
+          <tr>
+            <td><code>IRRLICHT_RELAY_VAPID_SUBJECT</code></td>
+            <td>URI (<code>mailto:</code> or <code>https:</code>)</td>
+            <td><code>https://github.com/ingo-eichhorst/Irrlicht</code></td>
+            <td>Env fallback for <code>irrlichtrelay serve --vapid-subject</code> &mdash; the contact URI signed into every Web Push JWT as the VAPID <code>sub</code> claim (RFC 8292). A set value that is neither <code>mailto:</code> nor <code>https:</code> stops the relay at startup. Example: <code>IRRLICHT_RELAY_VAPID_SUBJECT=mailto:ops@example.com irrlichtrelay serve --auth tokens-file</code></td>
+          </tr>
         </tbody>
       </table>
 
@@ -344,7 +362,7 @@ launchctl setenv IRRLICHT_MDNS 1
 
       <p><strong>Security note:</strong> the daemon has no authentication today. Anyone on the network you bind to can read all your transcripts. Only do this on networks you trust (your home LAN, your tailnet) &mdash; never on a coffee-shop WiFi. See <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/SECURITY.md">SECURITY.md</a> for the full posture.</p>
 
-      <p><strong>Future:</strong> these two knobs will be replaced by a single explicit <em>hub mode</em>. See the <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server">Relay Server design</a> for the planned consolidation.</p>
+      <p><strong>Beyond the LAN:</strong> the daemon itself never gains a hub mode &mdash; that was rejected. Reaching sessions from other networks, or aggregating several machines, goes through the standalone <code>irrlichtrelay</code> binary, which the daemon pushes out to via <code>IRRLICHT_RELAY_URL</code>. See <a href="cli-tools.html">CLI Tools</a> and the <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server">Relay Server design</a>.</p>
 
       <h3>The dashboard returned "Dashboard UI not found"</h3>
 
@@ -425,6 +443,8 @@ launchctl setenv IRRLICHT_DEBUG 1
         <li><strong>GitHub Copilot:</strong> <code>~/.copilot/session-state/&lt;session-id&gt;/events.jsonl</code></li>
         <li><strong>Hermes Agent:</strong> <code>~/.hermes/state.db</code> (one shared SQLite store for every session &mdash; Hermes writes no transcript files)</li>
         <li><strong>Junie:</strong> <code>~/.junie/sessions/&lt;session-id&gt;/events.jsonl</code> (plus process sidecars under <code>~/.junie/processes/</code>)</li>
+        <li><strong>Muse:</strong> <code>~/.local/share/muse/sessions/YYYY/MM/DD/&lt;session-uuid&gt;/session.jsonl</code></li>
+        <li><strong>DeepSeek Harness:</strong> <code>~/.dsh/sessions/&lt;cwd-key&gt;/session-&lt;uuid&gt;/session.v3.jsonl.zstd</code> (zstd-compressed JSONL; <code>$DSH_HOME</code>, when set to an absolute path, replaces <code>~/.dsh</code>)</li>
       </ul>
 
       <!-- ── App Settings ── -->

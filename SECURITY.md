@@ -65,13 +65,14 @@ In scope:
 - The Go daemon (`irrlichd`) and its HTTP/WebSocket API on port 7837
 - The Swift macOS app and its IPC with the daemon
 - Local state files under `~/Library/Application Support/Irrlicht/`
-- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe) and the Gas Town orchestrator
+- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness) and the Gas Town orchestrator
 - Build and release scripts in `tools/`
 
 Out of scope:
 
 - Vulnerabilities in upstream coding agents (Claude Code, Codex, Pi, Aider,
-  OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, Gas Town) themselves — please report those to their respective projects
+  OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot,
+  Hermes Agent, Junie, Muse, DeepSeek Harness, Gas Town) themselves — please report those to their respective projects
 - Issues that require an attacker already running code as your user on your Mac
 - Social-engineering or physical-access scenarios
 - Findings from automated scanners without a demonstrated impact
@@ -103,7 +104,9 @@ daemon-spawning logic in the macOS app.
   handshakes: only requests from loopback origins (or with no `Origin`
   header, as native clients send) are accepted. This holds even when the
   daemon is bound to a non-loopback address.
-- Planned: both knobs will be retired in favor of an explicit hub mode.
-  See the [Relay Server design](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
+- A hub mode inside `irrlichd` was rejected: cross-machine aggregation goes
+  through the standalone `irrlichtrelay` binary, to which the daemon pushes
+  out (see [docs/relay-protocol.md](docs/relay-protocol.md) and the
+  [Relay Server design](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server)).
 
 Thanks for helping keep Irrlicht users safe.
