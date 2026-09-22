@@ -313,6 +313,12 @@ and a DNS record that never changed, not a database.
 
 ### 7.1 Distribution
 
+> **Status:** The distribution gap below is closed. Release v0.6.3 and later
+> publish separate `irrlichtrelay-linux-amd64.tar.gz` and
+> `irrlichtrelay-linux-arm64.tar.gz` archives with `bin/` and `Resources/web/`.
+> `site/relay.sh` now installs these archives on Linux with systemd. The text
+> below records the plan that led to the release packaging.
+
 The operator story exists: `examples/relay/` carries a Dockerfile, docker-compose, a systemd unit, and `DEPLOY.md` with the two auth/TLS postures and the reverse-proxy pattern — Shape A is documented today. What does **not** exist is shipped bits: `DEPLOY.md` itself states "built from source — there is no published release yet", and `irrlichtrelay` appears nowhere in `tools/build-release.sh`, `site/install.sh`, or the Homebrew tap (verified). P1 closes exactly that gap:
 
 1. `build-release.sh` cross-compiles `irrlichtrelay` into the **existing** darwin/linux tarballs — their `web/` payload is already what the relay serves, via the same `resolveUIDir` walk as the daemon (`cmd/irrlichtrelay/main.go:443`).
@@ -472,6 +478,7 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Session cache | RAM | no | Repopulated by daemon reconnects within seconds |
 | Policy state (cooldowns, hold-downs, burst windows) | RAM | no | **A restart is amnesia, not recovery.** The engine's session map is RAM-only and nothing seeds it, so after a restart every session is an unknown id — a first sighting, which is silent by design. A `ready` that landed during the restart is therefore *not* delivered; the next genuine transition is. §6.3's diff rule covers a daemon reconnect, not a relay restart |
 | Pairing codes | RAM | no | 10 min TTL, single use; a restart mid-pairing just means regenerating the code |
+| Enrollment codes (#1963) | `enroll-codes.json` | yes | SHA-256 hashes only, never the plaintext code — same shape as `tokens.json`. Unlike pairing codes, must survive: `irrlichtrelay enroll new` mints with no relay running, so the code has to outlive that process for a later-started relay to redeem it |
 | Delivery health (last attempt per subscription) | RAM | no | Shown as "unknown since restart" — honest, per §8.3 |
 | Notification payloads | **nowhere** | — | No outbox, no durable queue, by design: a stale notification is an anti-feature. Apple/Google *are* the queue; TTL (§8.4) is its bound |
 

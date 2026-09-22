@@ -27,6 +27,7 @@ import (
 
 	"irrlicht/core/cmd/irrlichtrelay/push"
 	"irrlicht/core/domain/notify"
+	"irrlicht/core/pkg/onetimecode"
 	"irrlicht/core/pkg/webpush"
 )
 
@@ -96,8 +97,10 @@ func main() {
 		runServe(args)
 	case "token":
 		runToken(args)
+	case "enroll":
+		runEnroll(args)
 	default:
-		fmt.Fprintf(os.Stderr, "irrlichtrelay: unknown command %q (want serve|token)\n", cmd)
+		fmt.Fprintf(os.Stderr, "irrlichtrelay: unknown command %q (want serve|token|enroll)\n", cmd)
 		os.Exit(2)
 	}
 }
@@ -226,6 +229,19 @@ type relayServices struct {
 	push     *push.Service
 	notifier testNotifier
 	pairing  pairingHandoff
+	enroll   *onetimecode.Manager
+}
+
+// buildEnrollManager constructs the relay's enrollment code manager for an
+// auth-enabled relay, or nil with --auth off — enrollment mints an ordinary
+// bearer token, so like buildPushService it presupposes a token store, but
+// independently of push: it is built and gated on store alone, not on
+// whether pushSvc is non-nil (docs/mobile-notifications-arc42.md §8.1).
+func buildEnrollManager(store *authStore, ddir string) *onetimecode.Manager {
+	if store == nil {
+		return nil
+	}
+	return newEnrollManager(ddir, nil)
 }
 
 // buildMux wires the relay's WS, JSON, push, pairing, and dashboard routes.
@@ -241,6 +257,8 @@ func buildMux(h *hub, services relayServices) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
 	registerPushRoutes(mux, services)
 	registerPairingHandoffRoutes(mux, services.pairing)
+	registerEnrollRoutes(mux, services.enroll, services.store, services.pairing)
+	registerEnrollHandoffRoute(mux, services.pairing)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -334,6 +352,7 @@ func runServe(args []string) {
 	store := buildAuthStore(cfg.auth, ddir)
 	warnIfExposedWithoutAuth(cfg.addr, store)
 	pushSvc := buildPushService(store, ddir)
+	enrollMgr := buildEnrollManager(store, ddir)
 	pairing := resolvePairingHandoff(cfg.publicURL)
 	if cfg.publicURL != "" && pairing.publicURL == "" {
 		log.Printf("WARNING: %s", pairing.unavailableReason)
@@ -355,7 +374,7 @@ func runServe(args []string) {
 	if pushSvc != nil {
 		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 	}
-	mux := buildMux(h, relayServices{store: store, push: pushSvc, notifier: obs, pairing: pairing})
+	mux := buildMux(h, relayServices{store: store, push: pushSvc, notifier: obs, pairing: pairing, enroll: enrollMgr})
 
 	stop := make(chan struct{})
 	if store != nil {
@@ -476,6 +495,52 @@ func runToken(args []string) {
 	default:
 		log.Fatalf("token: unknown subcommand %q (want issue|list|revoke)", sub)
 	}
+}
+
+// runEnroll implements `enroll new`, operating directly on the file-backed
+// enrollment code store — no running relay required, mirroring how
+// runToken's `token issue` operates directly on the tokens file.
+func runEnroll(args []string) {
+	if len(args) == 0 {
+		log.Fatal("enroll: want a subcommand (new)")
+	}
+	sub, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("irrlichtrelay enroll "+sub, flag.ExitOnError)
+	dataDirFlag := fs.String("data-dir", "", "state directory for the enrollment code store (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
+	label := fs.String("label", "", "human label for the desktop being enrolled (new only)")
+	workspace := fs.String("workspace", "", "tenant workspace the enrolled desktop's token is scoped to (new only; empty = default single-tenant workspace)")
+	publicURL := fs.String("public-url", "", "phone-reachable HTTPS origin the printed enrollment URL is built from (for example https://relay.example.com); matches the serving relay's --public-url")
+	_ = fs.Parse(rest)
+
+	ddir := resolveDataDir(*dataDirFlag)
+
+	switch sub {
+	case "new":
+		runEnrollNew(ddir, *label, *workspace, *publicURL)
+	default:
+		log.Fatalf("enroll: unknown subcommand %q (want new)", sub)
+	}
+}
+
+// runEnrollNew mints an enrollment code with no relay running and prints
+// the URL a desktop pastes into its enrollment field. With no --public-url
+// it prints the bare code plus enrollment's own reason (not pairing's QR
+// text — there is no QR anywhere on this path) — it does not fail: the
+// code is minted and usable by hand either way.
+func runEnrollNew(dataDir, label, workspace, publicURL string) {
+	mgr := newEnrollManager(dataDir, nil)
+	code, ttl, err := mgr.Mint(workspace, label)
+	if err != nil {
+		log.Fatalf("enroll new: %v", err)
+	}
+	handoff := resolvePairingHandoff(publicURL)
+	if url := handoff.enrollURL(code); url != "" {
+		fmt.Println(url)
+	} else {
+		fmt.Println(code)
+		fmt.Println(enrollUnavailableReason(handoff))
+	}
+	fmt.Printf("Expires in %s. Paste it into the desktop app's enrollment field — it works once.\n", ttl)
 }
 
 // requireToken wraps an HTTP API handler with the bearer-token gate. With auth

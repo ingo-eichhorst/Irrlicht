@@ -200,6 +200,7 @@ out=$("$LINT" 2>&1)
 rc=$?
 assert_eq "discovery: the repo's real #!/bin/sh scripts pass (exit 0)" "0" "$rc"
 assert_contains "discovery: site/install.sh is in scope" "site/install.sh" "$out"
+assert_contains "discovery: site/relay.sh is in scope" "site/relay.sh" "$out"
 assert_not_contains "discovery: testdata fixtures are excluded" "testdata/posix-lint" "$out"
 
 # ===========================================================================

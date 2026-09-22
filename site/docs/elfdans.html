@@ -141,13 +141,17 @@
       <!-- ── Relay setup ── -->
       <h2 id="relay-setup">Setting up the relay</h2>
 
+      <p>On a Linux host with systemd, the installer does the download, checksum verification, service setup, first token, and HTTPS proxy setup:</p>
+      <pre><code>curl -fsSL https://irrlicht.io/relay.sh | sh -s -- --domain relay.example.com</code></pre>
+      <p>Use <code>--tailscale</code> instead when Tailscale is already installed. The installer prints the relay URL and bearer token for the Mac. It never changes the firewall. The manual steps below remain useful for a custom deployment.</p>
+
       <ol class="steps">
         <li>
           <strong>Get the binary</strong>
           <p>Building from a checkout works everywhere and needs only Go:</p>
           <pre><code>cd core
 go build -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay</code></pre>
-          <p>The release build also produces Linux tarballs, <code>irrlichtrelay-linux-amd64.tar.gz</code> and <code>irrlichtrelay-linux-arm64.tar.gz</code>; check the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">latest release</a> for the version you want and build from source if it is not there yet. If you use a tarball, keep its <code>bin/</code> and <code>Resources/web/</code> directories together &mdash; the relay finds the dashboard it serves at <code>../Resources/web</code> relative to the binary, and a lone binary answers <code>503</code> on <code>/</code>. A from-source build installs no dashboard at all, so point <code>IRRLICHT_UI_DIR</code> at a copy of <code>platforms/web/</code>; the operator guide below has the details.</p>
+          <p>Release v0.6.3 and later publish <code>irrlichtrelay-linux-amd64.tar.gz</code> and <code>irrlichtrelay-linux-arm64.tar.gz</code>. If you use a tarball, keep its <code>bin/</code> and <code>Resources/web/</code> directories together &mdash; the relay finds the dashboard it serves at <code>../Resources/web</code> relative to the binary, and a lone binary answers <code>503</code> on <code>/</code>. A from-source build installs no dashboard at all, so point <code>IRRLICHT_UI_DIR</code> at a copy of <code>platforms/web/</code>; the operator guide below has the details.</p>
         </li>
         <li>
           <strong>Serve it over TLS, with auth on</strong>
