@@ -808,6 +808,13 @@ type setupPermissionServiceDeps struct {
 	Home             string
 	StartGastown     func() error
 	StopGastown      func() error
+	// StartMuseAccountAPI/StopMuseAccountAPI are Muse's account-quota
+	// permission effects (issue #2007, museaccountapi_effects.go's
+	// museAccountAPIEffects) — the same "daemon wiring builds what a
+	// pseudo-adapter package cannot construct for itself" shape as
+	// StartGastown/StopGastown above.
+	StartMuseAccountAPI func() error
+	StopMuseAccountAPI  func() error
 }
 
 // herdrPaneRecorder returns the seam that stores the herdr pane a pi session
@@ -850,7 +857,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// and --uninstall-hooks flag paths on purpose: what the wizard offers is
 	// what grant-all grants, so it has to be the same list the recorder's
 	// protected file set is projected from (#1383).
-	permissionAgents := consentCatalog(allAgents, deps.StartGastown, deps.StopGastown)
+	permissionAgents := consentCatalog(allAgents, deps.StartGastown, deps.StopGastown, deps.StartMuseAccountAPI, deps.StopMuseAccountAPI)
 	permService := services.NewPermissionService(services.PermissionServiceDeps{
 		Agents:    permissionAgents,
 		Store:     permStore,

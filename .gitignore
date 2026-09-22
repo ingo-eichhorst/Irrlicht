@@ -158,3 +158,11 @@ opencode.json
 # history the way the tool worked whenever that binary was built — silently.
 # Run it as `go run ./tools/autonomy-backfill` instead.
 /autonomy-backfill
+
+# Default output of museaccountapi's go:build live_probe test
+# (museaccountapi_live_probe_test.go) when MUSE_LIVE_PROBE_OUT is unset — a
+# per-run capture that must never be committed unredacted by accident. The
+# committed evidence lives at
+# core/adapters/outbound/museaccountapi/testdata/live_probe_*.json instead,
+# written by hand after review, not by the probe program directly.
+core/adapters/outbound/museaccountapi/museaccountapi_live_probe_result.json

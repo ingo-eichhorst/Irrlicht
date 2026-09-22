@@ -112,6 +112,43 @@ type FixedDestination struct {
 	Key string
 	// URL is the fully-qualified https URL reviewed at code-review time.
 	URL string
+
+	// --- Additive request-shape fields (issue #2007). ---
+	//
+	// #2003 shipped this port with exactly one request shape: an
+	// unauthenticated-body GET plus one auth header. Issue #2007 (Muse, the
+	// epic's first real provider) is a POST with a fixed JSON body and
+	// static headers beyond the auth one — verified against the pinned
+	// herdr-agent-quota source (POST, `{}` body, `x-api-version`, `Accept`,
+	// `Content-Type`) and matching the deviation instructions on #2007's own
+	// ticket, which name the exact request. Method/Body/Headers are placed
+	// HERE, on FixedDestination, rather than on AccountQuotaRequest: this
+	// port's own framing is "reviewed at daemon-wiring time by code a
+	// reviewer read" (FixedDestination's doc comment above), and a request's
+	// method, static body, and static headers are properties of the
+	// DESTINATION a provider ticket reviews once, not something a caller
+	// supplies per Poll — keeping accountpoller.go's PollRequest and
+	// AccountQuotaRequest untouched, so #2003's own reviewed poller code
+	// stays byte-for-byte as merged. This is transport request-CONSTRUCTION
+	// (method, static body, static headers), not the transport POLICY
+	// #2003's non-goal #1 reserves ("redirect policy, bounded read,
+	// timeouts, redaction") — that policy (refuse-all-redirects, the size
+	// ceiling, the 10s timeout, and classifying status before reading the
+	// body) is unchanged by this addition; see transport.go's Fetch.
+
+	// Method is the HTTP method to use. Empty defaults to GET — every
+	// existing FixedDestination (constructed before this field existed)
+	// keeps behaving exactly as before.
+	Method string
+	// Body is sent as the request body when non-nil, and sets
+	// Content-Type: application/json (this port's destinations are all JSON
+	// APIs). nil (the zero value) sends no body, matching the pre-#2007 GET
+	// shape.
+	Body []byte
+	// Headers are static request headers beyond the Auth header set on
+	// every request to this destination (e.g. an API-version header a
+	// provider's own CLI sends). nil sends none.
+	Headers map[string]string
 }
 
 // AccountQuotaRequest is one poll attempt against a single fixed destination.

@@ -245,29 +245,58 @@ func TestBareUUIDWithoutNativeHeaderIsNeverADSHSession(t *testing.T) {
 	}
 }
 
-// dshWatchDeadline bounds the two waits in the fswatcher test below. It is
-// generous on purpose: a healthy run satisfies both in milliseconds, so the
-// value costs nothing when the code works, and only a real failure waits it
-// out. The previous 2s was tight enough to fail under CI load — the same test
-// failed on main@34578d78a (linux build-test), on #2018 (macOS go-test) and
-// twice on #2027 (linux build-test), while passing on #2026's own PR and 10/10
-// locally under -race. It does not weaken the mutation fixture it guards: the
-// run mutation that disables the emitted-ID cache makes the event never
-// arrive, so any finite deadline catches it.
-const dshWatchDeadline = 15 * time.Second
+// dshWatchDeadline bounds the waits in the fswatcher test below. Every wait it
+// guards is satisfied by construction (see that test's comment), so a healthy
+// run never approaches it — it only bounds a genuine hang.
+const dshWatchDeadline = 10 * time.Second
 
 // TestNativeSubagentRemovalEmitsTheChildLifecycleEvent verifies the actual
 // fswatcher removal path. The run mutation that disabled its emitted-ID cache
 // made this test time out because the deleted bare child no longer had an ID.
+//
+// The child transcript is laid down BEFORE Watch starts, and it is removed only
+// after Ready(). That ordering is what makes the removal observable at all, and
+// it is not a stylistic choice:
+//
+//   - fsnotify's kqueue backend arms a per-file kevent for every file already in
+//     a directory at the moment the directory is added — watchDirectoryFiles,
+//     called synchronously from addWatch (fsnotify v1.10.1
+//     backend_kqueue.go:582-620, read). Watch's startup scan adds a watch for
+//     every pre-existing subdirectory and emits every pre-existing transcript
+//     before it calls signalReady (fswatcher addExistingDirs, read), so by
+//     Ready() this file's kevent is armed and its EventNewSession is already
+//     broadcast.
+//   - A file created AFTER its directory is armed takes a different path:
+//     sendCreateIfNew sends the Create event on an unbuffered channel FIRST and
+//     registers the kevent only once that send returns (backend_kqueue.go:656-670,
+//     read). The earlier shape of this test removed the file the instant it saw
+//     the resulting EventNewSession — inside that window. The arming os.Lstat
+//     then failed with ENOENT, dirChange swallowed it, and NOTE_DELETE was never
+//     delivered, so no Remove event was ever produced. An instrumented run showed
+//     exactly that: the CREATE line and the emission, then no REMOVE line at all
+//     (1 failure in 120 runs, -race, load average 42). A larger deadline cannot
+//     fix an event that does not exist, and reconcile deliberately does not
+//     recover deletions (see its doc comment), so nothing else recovers it.
+//
+// The runtime-appearance shape this test used to carry is covered generically by
+// fswatcher's own TestWatch_NewProjectDir.
+//
+// The reconcile sweep is disabled so that both assertions are about the fsnotify
+// path alone: a pass cannot come from a sweep that happened to run.
 func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
 	const parentID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
 	const childID = "a0e1b2c3-d4e5-4f67-89a0-b1c2d3e4f5a6"
 	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
+	dir := filepath.Join(root, "workspace", childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
+	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
+
 	watcher := fswatcher.NewWithRoot(root, AdapterName, 0).
+		WithReconcileInterval(-1).
 		WithSessionID(sessionIDFromPath).
 		WithParentSessionID(parentSessionIDFromPath)
 	events := watcher.Subscribe()
@@ -281,13 +310,6 @@ func TestNativeSubagentRemovalEmitsTheChildLifecycleEvent(t *testing.T) {
 		t.Fatal("watcher did not become ready")
 	}
 
-	dir := filepath.Join(workspace, childID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	transcript := filepath.Join(dir, "session.v3.jsonl.zstd")
-	writeZstdFrame(t, transcript, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
-		`{"type":"session","version":3,"id":"`+childID+`","cwd":"/work","origin":"subagent","parentSession":"`+parentID+`"}`+"\n")
 	waitForDSHEvent(t, events, agent.EventNewSession, childID)
 	if err := os.Remove(transcript); err != nil {
 		t.Fatal(err)

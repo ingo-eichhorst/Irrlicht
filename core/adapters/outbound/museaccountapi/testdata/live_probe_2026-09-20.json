@@ -1,0 +1,30 @@
+{
+  "_comment": "Issue #2007's ONE authorized live request to POST https://api.meta.ai/muse-code/key, captured by museaccountapi_live_probe_test.go (go:build live_probe). Redacted through RedactSubscriptionResponse before this file was written — no raw response byte, credential, cookie, token, or personal datum was ever written to disk. raw_top_level_keys names what the RAW response carried beyond the approved allowlist (NAMES ONLY, never values) for the record; only redacted_body's own two fields were retained anywhere.",
+  "date": "2026-09-20T14:36:45Z",
+  "muse_version": "Muse Code 1.3.0 (1.3.0-R3401.1)",
+  "command": "POST https://api.meta.ai/muse-code/key via accountquota.HTTPTransport.Fetch (one call)",
+  "credential_resolved": true,
+  "request_made": true,
+  "status_code": 200,
+  "latency_ms": 2869,
+  "redacted_body": {
+    "is_subs_active": true,
+    "subs_tier_name": "Muse Code Everyday Usage"
+  },
+  "raw_top_level_keys": [
+    "action_url",
+    "api_key",
+    "base_url",
+    "can_subscribe",
+    "has_payment_method",
+    "is_subs_active",
+    "is_subs_upgrade_available",
+    "payment_method",
+    "require_payment",
+    "show_subs_upsell",
+    "subs_tier_id",
+    "subs_tier_name",
+    "user_email",
+    "user_full_name"
+  ]
+}

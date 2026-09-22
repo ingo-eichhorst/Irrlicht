@@ -219,6 +219,98 @@ func TestHTTPTransport_SuccessReturnsBody(t *testing.T) {
 	}
 }
 
+// TestHTTPTransport_UsesDestinationMethodBodyAndHeaders is #2007's addition:
+// FixedDestination.Method/Body/Headers, added because Muse's account-quota
+// endpoint (verified against the pinned herdr-agent-quota source, issue
+// #2007) is a POST with a fixed JSON body and a static header beyond the
+// auth one — a shape #2003's GET-only transport could not send. Asserts the
+// server actually RECEIVED the POST method, the exact body bytes, and the
+// extra header — not just that Fetch returned no error — and that a
+// destination built the old way (Method/Body/Headers all zero, as every
+// pre-#2007 FixedDestination literal is) still sends a bodyless GET with no
+// Content-Type, which is what keeps this additive rather than a breaking
+// change to every other FixedDestination in this package's other tests.
+func TestHTTPTransport_UsesDestinationMethodBodyAndHeaders(t *testing.T) {
+	var gotMethod, gotBody, gotAPIVersion, gotContentType string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAPIVersion = r.Header.Get("X-Api-Version")
+		gotContentType = r.Header.Get("Content-Type")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	guard := &loopbackDialGuard{}
+	rt := newLoopbackOnlyTransport(guard, certPool(server))
+	dest := outbound.FixedDestination{
+		Key:     "primary",
+		URL:     server.URL,
+		Method:  http.MethodPost,
+		Body:    []byte(`{}`),
+		Headers: map[string]string{"X-Api-Version": "1.0.0"},
+	}
+	tr, err := newHTTPTransport([]outbound.FixedDestination{dest}, rt)
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+
+	if _, err := tr.Fetch(t.Context(), testRequest("s1")); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("server saw method %q, want POST", gotMethod)
+	}
+	if gotBody != "{}" {
+		t.Errorf("server saw body %q, want {}", gotBody)
+	}
+	if gotAPIVersion != "1.0.0" {
+		t.Errorf("server saw X-Api-Version %q, want 1.0.0", gotAPIVersion)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("server saw Content-Type %q, want application/json", gotContentType)
+	}
+}
+
+// TestHTTPTransport_ZeroMethodBodyHeadersStillSendsBodylessGET locks the
+// backward-compatible default: a FixedDestination built the pre-#2007 way
+// (only Key/URL set) still sends a bodyless GET with no Content-Type header
+// — every existing destinationFor(...) literal in this file relies on this.
+func TestHTTPTransport_ZeroMethodBodyHeadersStillSendsBodylessGET(t *testing.T) {
+	var gotMethod, gotContentType string
+	var gotContentLength int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotContentType = r.Header.Get("Content-Type")
+		gotContentLength = r.ContentLength
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	guard := &loopbackDialGuard{}
+	rt := newLoopbackOnlyTransport(guard, certPool(server))
+	tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, rt)
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+
+	if _, err := tr.Fetch(t.Context(), testRequest("s1")); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("server saw method %q, want GET", gotMethod)
+	}
+	if gotContentType != "" {
+		t.Errorf("server saw Content-Type %q, want none", gotContentType)
+	}
+	if gotContentLength > 0 {
+		t.Errorf("server saw Content-Length %d, want 0/unset — no body was set", gotContentLength)
+	}
+}
+
 func TestHTTPTransport_UnknownDestinationRefusedBeforeAnyDial(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("server was contacted for an unknown destination key")
