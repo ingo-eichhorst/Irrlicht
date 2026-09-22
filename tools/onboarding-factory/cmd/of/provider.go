@@ -57,7 +57,10 @@ func parseProviderRequest(name string, args []string) (providerRequest, bool) {
 	return providerRequest{RepoRoot: absRoot(*repoRoot), JSON: *asJSON}, true
 }
 
-// runProviderVerify checks schema, fixtures and the shared obligations.
+// runProviderVerify checks the manifest schema, the presence and top-level
+// shape of every fixture and cited path, and the shared obligations #2003 and
+// #2007 established. It does not run a fixture through a provider parser --
+// "verify" here means the data is well-formed and the claims are earned.
 //
 // An ABSENT replaydata/providers/ is a failure here, unlike in `of validate`:
 // this command was asked about providers, so "there is no tree" answers the
@@ -72,7 +75,7 @@ func runProviderVerify(args []string, stdout, stderr io.Writer) int {
 		out := map[string]any{"ok": len(findings) == 0, "findings": emptyIfNil(findings)}
 		_ = writeJSON(stdout, out)
 	} else if len(findings) == 0 {
-		fmt.Fprintln(stdout, "of provider verify: OK — every provider manifest is schema-valid, its fixtures replay, and no claim outruns its evidence")
+		fmt.Fprintln(stdout, "of provider verify: OK — every provider manifest is schema-valid, every fixture and cited path is present, and no claim outruns its evidence")
 	} else {
 		fmt.Fprintf(stderr, "of provider verify: %d violation(s):\n", len(findings))
 		for _, f := range findings {

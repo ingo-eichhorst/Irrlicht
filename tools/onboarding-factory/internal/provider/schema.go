@@ -250,7 +250,7 @@ type Manifest struct {
 	// the reason this is a list under a single Observation.
 	CredentialResolvers []CredentialResolver `json:"credential_resolvers"`
 
-	// Platforms names the GOOSit values the route works on.
+	// Platforms names the GOOS values the route works on.
 	Platforms []string `json:"platforms"`
 
 	// Redaction is the shared obligation from #2003/#2007 that is checkable at

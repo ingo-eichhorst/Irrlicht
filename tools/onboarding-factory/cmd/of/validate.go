@@ -58,9 +58,11 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	// Resolved here for the reason absRoot's own doc comment gives. runValidate
-	// was the one command that did not do it, so a relative "--repo-root .."
-	// reported a catalog in which nothing is recorded -- exit 0, no warning.
+	// Resolved here for the reason absRoot's own doc comment gives: a relative
+	// "--repo-root .." otherwise reported a catalog in which nothing is
+	// recorded -- exit 0, no warning. runValidate did not do it. `of verify`,
+	// the three `of record` verbs and the `of scenario`/`of agent`/`of cell`
+	// writers still don't; they are out of scope here.
 	*repoRoot = absRoot(*repoRoot)
 
 	var findings []finding
@@ -120,12 +122,18 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 // matching fixture in tools/lib/replaydata-deletion-guard_test.sh were added
 // by #2008), and TestTheShippedProviderCatalogExists fails outright if this
 // repository stops carrying the tree.
+//
+// The predicate is "something is at that path", not "a directory is". A
+// replaydata/providers that has been clobbered into a regular file is then
+// handed to ValidateRepo, which reports it -- whereas a directory test would
+// have scoped the gate out in silence, which is the one answer this must not
+// give. runValidate resolves --repo-root at the flag boundary, so root is
+// already absolute here.
 func validateProviders(repoRoot string, add func(path, msg string)) {
-	root := absRoot(repoRoot)
-	if !provider.Exists(root) {
+	if _, err := os.Stat(provider.Root(repoRoot)); err != nil {
 		return
 	}
-	for _, f := range provider.ValidateRepo(root) {
+	for _, f := range provider.ValidateRepo(repoRoot) {
 		add(f.Path, f.Message)
 	}
 }

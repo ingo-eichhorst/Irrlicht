@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,9 +32,14 @@ type Finding struct {
 // Root returns the absolute path of the provider tree.
 func Root(repoRoot string) string { return filepath.Join(repoRoot, "replaydata", "providers") }
 
-// Exists reports whether the provider tree is a directory. A path that exists
-// but is not a directory returns false; Verify turns that into its own finding
-// rather than letting it read as "no tree".
+// Exists reports whether the provider tree is a DIRECTORY. A path that exists
+// but is not one returns false.
+//
+// That makes it the wrong predicate for deciding whether to look: `of
+// validate` scopes its provider arm on os.Stat instead, so a tree clobbered
+// into a regular file still reaches ValidateRepo and is reported. Exists is
+// for callers asking "is there a usable catalog here" -- the shipped-catalog
+// tripwire, and the locks that assert a fixture tree has none.
 func Exists(repoRoot string) bool {
 	info, err := os.Stat(Root(repoRoot))
 	return err == nil && info.IsDir()
@@ -142,10 +148,60 @@ func loadEntry(root string, e os.DirEntry) loadResult {
 		})
 	}
 
+	findings = append(findings, unknownNestedFieldFindings(rel+"/"+ManifestFile, b, raw)...)
+
 	return loadResult{
 		Providers: []Loaded{{ID: name, Dir: filepath.Join(root, name), RelDir: rel, Manifest: m, Raw: raw}},
 		Findings:  findings,
 	}
+}
+
+// unknownNestedFieldFindings catches a field the schema does not define
+// ANYWHERE in the manifest, not only at the top level.
+//
+// The top-level closed-key check in verifyIdentity compares raw's keys against
+// manifestKeys, which says nothing about the nested objects; they decode into
+// structs that discard what they do not recognise. The failure that matters is
+// a misspelled OPTIONAL field — "mutation_fixtuers" under implementation drops
+// four mutation-fixture claims and every required-field check still passes.
+//
+// DisallowUnknownFields stops at the FIRST unknown field rather than listing
+// them all, so this is a diagnostic that reveals one per run. It is filtered
+// to unknown-field errors: a type error is already reported by the caller's
+// own decode, and reporting it twice would say nothing new.
+func unknownNestedFieldFindings(at string, b []byte, raw map[string]json.RawMessage) []Finding {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var strict Manifest
+	err := dec.Decode(&strict)
+	if err == nil {
+		return nil
+	}
+	const prefix = "json: unknown field "
+	idx := strings.Index(err.Error(), prefix)
+	if idx < 0 {
+		return nil
+	}
+	name := strings.Trim(err.Error()[idx+len(prefix):], `"`)
+	if _, topLevel := raw[name]; topLevel {
+		// verifyIdentity already names this one, with the allowed set.
+		return nil
+	}
+	return []Finding{{
+		Path:    at,
+		Message: fmt.Sprintf("nested field %q is not part of the manifest schema (a misspelled optional field reads as an absent one)", name),
+	}}
+}
+
+// evidenceResolves reports whether an evidence entry's ref names something
+// that is actually on disk. Used by Status to stop a dead citation earning a
+// claim; ValidateRepo reports the dead citation itself.
+func evidenceResolves(repoRoot string, e EvidenceEntry) bool {
+	if !safeRelPath(e.Ref) {
+		return false
+	}
+	p := filepath.Join(repoRoot, e.Ref)
+	return fileExists(p) || dirExists(p)
 }
 
 // manifestKeys is the closed top-level field set. A key outside it is a

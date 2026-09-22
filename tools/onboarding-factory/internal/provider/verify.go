@@ -33,7 +33,7 @@ func ValidateRepo(repoRoot string) []Finding {
 	for _, p := range res.Providers {
 		findings = append(findings, verifyOne(repoRoot, p)...)
 	}
-	findings = append(findings, statusGapFindings(res.Providers)...)
+	findings = append(findings, statusGapFindings(repoRoot, res.Providers)...)
 	sortFindings(findings)
 	return findings
 }
@@ -67,24 +67,34 @@ func verifyOne(repoRoot string, p Loaded) []Finding {
 }
 
 func verifyIdentity(p Loaded, add func(string, ...any)) {
-	m := p.Manifest
-	for k := range p.Raw {
+	verifyTopLevelKeys(p.Raw, add)
+	if p.Manifest.SchemaVersion != SchemaVersion {
+		add("schema_version is %d, expected %d", p.Manifest.SchemaVersion, SchemaVersion)
+	}
+	verifyManifestID(p, add)
+	if p.Manifest.DisplayName == "" {
+		add("missing display_name")
+	}
+}
+
+// verifyTopLevelKeys enforces the closed field set. Nested objects are covered
+// separately, by load.go's unknownNestedFieldFindings.
+func verifyTopLevelKeys(raw map[string]json.RawMessage, add func(string, ...any)) {
+	for k := range raw {
 		if !inSet(k, manifestKeys) {
 			add("unexpected field %q (allowed: %s)", k, oneOf(manifestKeys))
 		}
 	}
-	if m.SchemaVersion != SchemaVersion {
-		add("schema_version is %d, expected %d", m.SchemaVersion, SchemaVersion)
-	}
-	if m.ID == "" {
+}
+
+func verifyManifestID(p Loaded, add func(string, ...any)) {
+	switch id := p.Manifest.ID; {
+	case id == "":
 		add("missing id")
-	} else if !idRe.MatchString(m.ID) {
-		add("id %q is not a kebab slug", m.ID)
-	} else if m.ID != p.ID {
-		add("id %q does not match its directory name %q", m.ID, p.ID)
-	}
-	if m.DisplayName == "" {
-		add("missing display_name")
+	case !idRe.MatchString(id):
+		add("id %q is not a kebab slug", id)
+	case id != p.ID:
+		add("id %q does not match its directory name %q", id, p.ID)
 	}
 }
 
@@ -136,6 +146,13 @@ func verifyImplementation(repoRoot string, o Observation, add func(string, ...an
 		}
 		if len(impl.Tests) > 0 || len(impl.MutationFixtures) > 0 {
 			add("a data-only route names tests or mutation fixtures — the code it would exercise is someone else's")
+		}
+		if impl.PermissionName != "" || impl.PermissionKey != "" {
+			// Same reason as the package: a consent row belongs to the code
+			// that declares it. A data-only manifest naming one reads to the
+			// next person as evidence that the row exists.
+			add("a data-only route names a permission (%q/%q) — the consent row belongs to the adapter that declares it",
+				impl.PermissionName, impl.PermissionKey)
 		}
 		return
 	}
@@ -203,9 +220,13 @@ func verifyPlatforms(m Manifest, add func(string, ...any)) {
 	}
 }
 
-// verifyFixtures replays every committed fixture: it must be there, it must
-// parse, and its top-level keys must sit inside the redaction allowlist. The
-// third check is the #2003/#2007 redaction contract re-exercised on data — a
+// verifyFixtures checks every committed fixture: it is present, it parses as a
+// JSON object, and its TOP-LEVEL keys sit inside the redaction allowlist.
+//
+// Deliberately not more than that, and worth saying so because "fixture
+// replay" would suggest otherwise: no fixture is fed to a parser here, and
+// nested values are never typed. The third check is the one that earns its
+// keep — it is the #2003/#2007 redaction contract re-exercised on data, and a
 // fixture is the one place a non-approved field can reach a committed file.
 func verifyFixtures(p Loaded) []Finding {
 	var out []Finding
@@ -285,14 +306,18 @@ func verifyCapabilities(m Manifest, add func(string, ...any)) {
 		}
 	}
 	for _, id := range AxisIDs() {
-		c, ok := m.Capabilities[id]
-		if !ok {
-			add("capability axis %q is not declared — every manifest declares all four, %q included", id, ClaimUnassessed)
-			continue
-		}
-		if !IsValidClaim(c.Claim) {
-			add("capability %q claims %q, which is not one of: %s", id, c.Claim, oneOf(ClaimStates))
-		}
+		verifyOneCapability(id, m.Capabilities, add)
+	}
+}
+
+func verifyOneCapability(id string, caps map[string]Capability, add func(string, ...any)) {
+	c, ok := caps[id]
+	if !ok {
+		add("capability axis %q is not declared — every manifest declares all four, %q included", id, ClaimUnassessed)
+		return
+	}
+	if !IsValidClaim(c.Claim) {
+		add("capability %q claims %q, which is not one of: %s", id, c.Claim, oneOf(ClaimStates))
 	}
 }
 

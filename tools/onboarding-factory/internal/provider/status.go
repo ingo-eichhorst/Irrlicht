@@ -41,7 +41,7 @@ func Status(repoRoot string) StatusReport {
 	res := load(repoRoot)
 	report := StatusReport{Findings: res.Findings}
 	for _, p := range res.Providers {
-		row := statusOf(p)
+		row := statusOf(repoRoot, p)
 		report.Gaps += row.Gaps
 		report.Providers = append(report.Providers, row)
 	}
@@ -50,7 +50,7 @@ func Status(repoRoot string) StatusReport {
 	return report
 }
 
-func statusOf(p Loaded) ProviderStatus {
+func statusOf(repoRoot string, p Loaded) ProviderStatus {
 	m := p.Manifest
 	row := ProviderStatus{
 		ID:             p.ID,
@@ -58,9 +58,16 @@ func statusOf(p Loaded) ProviderStatus {
 		Strategy:       m.Observation.Strategy,
 		Implementation: m.Observation.Implementation.Kind,
 	}
+	// Evidence whose ref is not on disk is dropped here rather than counted.
+	// A citation naming a file that is gone is an inability to look, and this
+	// report exits non-zero, so letting it keep earning its rank would make
+	// "nothing to find" and "could not look" print identically. ValidateRepo
+	// reports the absent ref separately, through verifyEvidence.
 	byID := map[string]EvidenceEntry{}
 	for _, e := range m.Evidence {
-		byID[e.ID] = e
+		if evidenceResolves(repoRoot, e) {
+			byID[e.ID] = e
+		}
 	}
 	for _, axis := range AxisIDs() {
 		as := axisStatus(axis, m.Capabilities[axis], byID)
@@ -82,16 +89,31 @@ func axisStatus(axis string, c Capability, byID map[string]EvidenceEntry) AxisSt
 	cited := citedEvidence(c, byID)
 	out.Earned = earnedFrom(cited)
 
+	if !IsValidClaim(c.Claim) {
+		// claimRank answers -1 for an unknown token, so the rank comparison
+		// below would read a claim outside the vocabulary as "not above what
+		// it earns" -- i.e. as no gap at all. Reported here instead, because
+		// a state nobody defined is the last one to take on trust.
+		out.Gap = true
+		out.Reason = fmt.Sprintf("%q is not one of: %s", c.Claim, oneOf(ClaimStates))
+		return out
+	}
 	if c.Claim == ClaimSourceUnavailable {
 		// Off-ladder: this is a positive finding about a negative result, so
 		// it is not compared by rank. It still has to name its evidence —
 		// #1977 §5, "Negative findings must name the route, version, command
 		// or file".
 		out.Earned = ClaimSourceUnavailable
-		if len(cited) == 0 {
+		// A source citation alone cannot establish that a ROUTE reports
+		// nothing: reading a parser tells you what the parser handles, not
+		// what the endpoint answered. docs/providers/catalog.md says the same
+		// of the census -- source-verified "is a label for evidence quality,
+		// not one of the four result states".
+		if !hasObservationalEvidence(cited) {
 			out.Gap = true
 			out.Earned = ClaimUnassessed
-			out.Reason = "cites no evidence; a route that reports nothing still has to say where that was observed"
+			out.Reason = "cites no observation; a route that reports nothing still has to say where that was observed, " +
+				"and a source citation alone does not observe a route"
 		}
 		return out
 	}
@@ -112,17 +134,35 @@ func citedEvidence(c Capability, byID map[string]EvidenceEntry) []EvidenceEntry 
 	return out
 }
 
+// earnedFrom maps cited evidence to the highest state it supports.
+//
+// EvidenceSource earns NOTHING on its own, which is the whole distinction
+// docs/providers/catalog.md draws: reading a pinned source at a revision is
+// "source-verified", an evidence-quality label, and never one of the four
+// result states. A source citation is still worth carrying -- it says where
+// the shape came from -- it just cannot be what a claim rests on.
 func earnedFrom(cited []EvidenceEntry) string {
 	earned := ClaimUnassessed
 	for _, e := range cited {
 		if inSet(e.Kind, liveEvidenceKinds) {
 			return ClaimLiveVerified
 		}
-		if inSet(e.Kind, EvidenceKinds) {
+		if e.Kind == EvidenceFixture {
 			earned = ClaimFixtureVerified
 		}
 	}
 	return earned
+}
+
+// hasObservationalEvidence reports whether any citation observed the route
+// itself, rather than describing it.
+func hasObservationalEvidence(cited []EvidenceEntry) bool {
+	for _, e := range cited {
+		if e.Kind != EvidenceSource && inSet(e.Kind, EvidenceKinds) {
+			return true
+		}
+	}
+	return false
 }
 
 func gapReason(claim string, cited []EvidenceEntry) string {
@@ -133,8 +173,9 @@ func gapReason(claim string, cited []EvidenceEntry) string {
 	for _, e := range cited {
 		kinds = append(kinds, e.Kind)
 	}
-	return fmt.Sprintf("claims %s but its evidence is %s; %s is earned only by %s",
-		claim, oneOf(kinds), ClaimLiveVerified, oneOf(liveEvidenceKinds))
+	return fmt.Sprintf("claims %s but its evidence is %s; %s is earned only by %s, and %s by %s",
+		claim, oneOf(kinds), ClaimLiveVerified, oneOf(liveEvidenceKinds),
+		ClaimFixtureVerified, EvidenceFixture)
 }
 
 // statusGapFindings turns every claimed-but-unearned axis into a validation
@@ -142,10 +183,10 @@ func gapReason(claim string, cited []EvidenceEntry) string {
 // fails on an adapter claiming a maturity tier its core standing has not
 // earned. Reporting the gap rather than believing the claim is issue #2008's
 // completion criterion.
-func statusGapFindings(providers []Loaded) []Finding {
+func statusGapFindings(repoRoot string, providers []Loaded) []Finding {
 	var out []Finding
 	for _, p := range providers {
-		for _, as := range statusOf(p).Axes {
+		for _, as := range statusOf(repoRoot, p).Axes {
 			if !as.Gap {
 				continue
 			}

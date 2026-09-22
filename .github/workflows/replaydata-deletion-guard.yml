@@ -199,6 +199,10 @@ jobs:
             echo "are load-bearing regression fixtures. To retire a cell, delete its whole folder"
             echo "(metadata.json included, so it stops being a live cell), or git mv the recording"
             echo "to regression/. For a genuine removal, open an issue and get maintainer sign-off."
+            echo
+            echo "replaydata/providers/ has NO retirement path of its own (#2008): the whole tree"
+            echo "is protected, deliberately. Rename with git mv (renames are not deletions), or"
+            echo "open an issue and get maintainer sign-off to remove a manifest or a fixture."
             exit 1
           fi
 

@@ -80,15 +80,40 @@ func TestProviderVerifyAndStatusPassOnTheShippedCatalog(t *testing.T) {
 		}
 	}
 
-	// status must actually have rendered the three shipped providers — an
-	// empty table would exit 0 too, which is the shape a misread --repo-root
-	// produces.
+	// status must actually have rendered every shipped provider — an empty
+	// table would exit 0 too, which is the shape a misread --repo-root
+	// produces. The expected set is read off the tree rather than typed here,
+	// so adding a provider does not break a test that is not about counting.
 	_, out, _ := runOf("provider", "status", "--repo-root", root)
-	for _, want := range []string{"anthropic", "openai", "meta", "0 capability gap(s)"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("of provider status output should mention %q; got:\n%s", want, out)
+	for _, id := range shippedProviderIDs(t) {
+		if !strings.Contains(out, id) {
+			t.Errorf("of provider status output should mention %q; got:\n%s", id, out)
 		}
 	}
+	if !strings.Contains(out, "0 capability gap(s)") {
+		t.Errorf("the shipped catalog should report no gap; got:\n%s", out)
+	}
+}
+
+// shippedProviderIDs reads the provider directory names off disk. It fails
+// loudly on an empty listing: a helper that returned nothing would make every
+// caller's loop pass without asserting anything.
+func shippedProviderIDs(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(repoRootFromTest(t), "replaydata", "providers"))
+	if err != nil {
+		t.Fatalf("cannot list the provider tree: %v", err)
+	}
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			ids = append(ids, e.Name())
+		}
+	}
+	if len(ids) == 0 {
+		t.Fatal("the provider tree holds no provider directories")
+	}
+	return ids
 }
 
 // TestProviderVerifyFailsOnAnAbsentTree pins the scoping decision that
@@ -159,6 +184,25 @@ func TestValidateSkipsProvidersOnASmallFixtureTree(t *testing.T) {
 	}
 }
 
+// TestValidateReportsAProviderTreeClobberedIntoAFile: `of validate` scopes its
+// provider arm on "something is at that path", not "a directory is". A tree
+// that has been replaced by a regular file must be reported, because a
+// directory test would scope the merge gate out in silence — the one answer a
+// verification mechanism must never give.
+func TestValidateReportsAProviderTreeClobberedIntoAFile(t *testing.T) {
+	root := validRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "replaydata", "providers"), []byte("not a tree"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := runOf("validate", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("of validate with replaydata/providers as a file: want exit %d, got %d\nstderr:\n%s", exitFail, code, errs)
+	}
+	if !strings.Contains(errs, "cannot read the provider tree") {
+		t.Errorf("the finding should name the unreadable tree; stderr:\n%s", errs)
+	}
+}
+
 // TestValidateReportsAProviderFindingFromTheFixtureTree closes the wiring
 // loop: a provider violation has to surface through `of validate`, not only
 // through `of provider verify`. Uses the committed corrupt-schema fixture, so
@@ -200,8 +244,8 @@ func TestProviderStatusJSONCarriesClaimedAndEarned(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatalf("status --json must be decodable: %v\n%s", err, out)
 	}
-	if len(report.Providers) != 3 {
-		t.Fatalf("want the three shipped providers, got %d", len(report.Providers))
+	if want := len(shippedProviderIDs(t)); len(report.Providers) != want {
+		t.Fatalf("want every shipped provider (%d), got %d", want, len(report.Providers))
 	}
 	for _, p := range report.Providers {
 		if len(p.Axes) != len(provider.AxisIDs()) {

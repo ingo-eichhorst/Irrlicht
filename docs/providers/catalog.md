@@ -84,8 +84,9 @@ not true of the guard as it was written. Its classification `case` in
 [`.github/workflows/replaydata-deletion-guard.yml`](../../.github/workflows/replaydata-deletion-guard.yml)
 had arms for `replaydata/agents/scenarios.json`,
 `replaydata/orchestrators/*/scenarios/*`, `replaydata/agents/*/regressions/*`
-and the two `replaydata/agents/*/scenarios/*` arms — and nothing else; every
-other path fell through to `*) : ;;`, the allow arm. So a deletion anywhere
+and three `replaydata/agents/*/scenarios/*` arms (one of which, for
+`assessment.json`, is itself an allow) — and nothing else; every other path
+fell through to `*) : ;;`, the allow arm. So a deletion anywhere
 under `replaydata/providers/` would have triggered the workflow (its `paths:`
 filter is `replaydata/**`) and passed it. #2008 added the missing arm and the
 matching fixture line in

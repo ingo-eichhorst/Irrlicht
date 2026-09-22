@@ -8,16 +8,22 @@ import (
 	"testing"
 )
 
-// This file holds the committed mutation fixtures issue #2008 §7 requires.
+// This file holds the committed mutation fixtures issue #2008 §7 requires,
+// plus one lock.
 //
-// A verifier has no "before the fix" to run red, so each fixture under
-// testdata/ mutates the thing the verifier protects — a provider manifest or
-// one of its fixtures — and the test asserts the SPECIFIC finding, never merely
-// "some finding". A fixture that went red because its path was mistyped would
-// pass a `len(findings) > 0` assertion vacuously, which is the failure mode
-// these tests exist to avoid.
+// A verifier has no "before the fix" to run red, so four of the fixtures under
+// testdata/ mutate the thing the verifier protects — a provider manifest or
+// one of its fixtures — and each test asserts the SPECIFIC finding, never
+// merely "some finding". A fixture that went red because its path was mistyped
+// would pass a `len(findings) > 0` assertion vacuously, which is the failure
+// mode these tests exist to avoid.
 //
-// Every fixture below was run against the verifier as this file was written,
+// testdata/no-quota is the exception and is labelled as such below: it is a
+// LOCK, asserting that a shape KEEPS validating, and it passes by construction.
+// It is here because it is what the ticket must not get wrong, not because it
+// is red-first evidence.
+//
+// Every mutation below was run against the verifier as this file was written,
 // and the messages asserted are the ones it printed.
 
 // mutationRoot returns the repo root of one committed fixture tree. It fails
@@ -111,8 +117,9 @@ func TestVerifyFailsLoudlyOnAFixtureItCannotRead(t *testing.T) {
 	}
 }
 
-// Mutation 4 (the one this ticket must not get wrong): a provider with a
-// billing mode and NO quota is a first-class valid shape.
+// LOCK (passes by construction, not red-first evidence), and the one this
+// ticket must not get wrong: a provider with a billing mode and NO quota is a
+// first-class valid shape.
 //
 // Muse is why. Its account API answers 200 with an active subscription, a named
 // tier, and no usage field of any kind, so a schema that required a quota block
@@ -158,8 +165,118 @@ func TestVerifyRejectsAnUnevidencedSourceUnavailableClaim(t *testing.T) {
 
 	wantFindings(t, "unevidenced-source-unavailable", ValidateRepo(root),
 		`capability "quota_windows" claims "source-specific-unavailable" but earns "unassessed"`,
-		"cites no evidence",
+		"cites no observation",
 	)
+}
+
+// The same arm, one step subtler: a SOURCE citation is evidence, and it used
+// to satisfy the off-ladder claim. It must not — reading a parser tells you
+// what the parser handles, never what the endpoint answered.
+func TestVerifyRejectsASourceOnlySourceUnavailableClaim(t *testing.T) {
+	root := t.TempDir()
+	m := loadFixtureManifest(t, "no-quota")
+	m.Evidence = append(m.Evidence, EvidenceEntry{
+		ID: "acme-parser", Kind: EvidenceSource, Date: "2026-09-22",
+		Ref: "replaydata/providers/acme/manifest.json",
+	})
+	cap := m.Capabilities["quota_windows"]
+	cap.Evidence = []string{"acme-parser"}
+	m.Capabilities["quota_windows"] = cap
+	writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+
+	wantFindings(t, "source-only-source-unavailable", ValidateRepo(root),
+		"a source citation alone does not observe a route")
+}
+
+// A source citation alone earns NOTHING on the ladder either. Without this,
+// `fixture-verified` could rest on having read a file that describes the
+// route rather than on a fixture that exercises it.
+func TestVerifyRejectsAFixtureClaimBackedOnlyByASource(t *testing.T) {
+	root := t.TempDir()
+	m := loadFixtureManifest(t, "no-quota")
+	m.Evidence = append(m.Evidence, EvidenceEntry{
+		ID: "acme-parser", Kind: EvidenceSource, Date: "2026-09-22",
+		Ref: "replaydata/providers/acme/manifest.json",
+	})
+	cap := m.Capabilities["billing_mode"]
+	cap.Evidence = []string{"acme-parser"}
+	m.Capabilities["billing_mode"] = cap
+	writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+
+	wantFindings(t, "source-only-fixture-claim", ValidateRepo(root),
+		`capability "billing_mode" claims "fixture-verified" but earns "unassessed"`)
+}
+
+// An evidence entry whose ref is gone must not keep earning its claim in the
+// status report. `of provider status` exits non-zero on a gap, so a dead
+// citation that still counted would make "could not look" and "nothing to
+// find" print identically.
+func TestStatusDoesNotLetADeadCitationEarnAClaim(t *testing.T) {
+	root := t.TempDir()
+	m := loadFixtureManifest(t, "no-quota")
+	m.Evidence = append(m.Evidence, EvidenceEntry{
+		ID: "acme-ghost", Kind: EvidenceLiveProbe, Date: "2026-09-22",
+		Ref: "replaydata/providers/acme/fixtures/deleted.json",
+	})
+	cap := m.Capabilities["account_identity"]
+	cap.Claim = ClaimLiveVerified
+	cap.Evidence = []string{"acme-ghost"}
+	m.Capabilities["account_identity"] = cap
+	writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+
+	report := Status(root)
+	if report.Gaps != 1 {
+		t.Fatalf("a dead citation must leave its claim unearned; gaps=%d %+v", report.Gaps, report.Providers)
+	}
+	wantFindings(t, "dead-citation", ValidateRepo(root),
+		`evidence "acme-ghost" cites replaydata/providers/acme/fixtures/deleted.json, which does not exist`,
+		`capability "account_identity" claims "live-verified" but earns "unassessed"`)
+}
+
+// A claim outside the closed vocabulary must read as a gap. claimRank answers
+// -1 for an unknown token, so the rank comparison alone would call it "not
+// above what it earns" and report nothing.
+func TestStatusReportsAnOffVocabularyClaimAsAGap(t *testing.T) {
+	root := filepath.Join("testdata", "corrupt-schema")
+	report := Status(root)
+	if report.Gaps == 0 {
+		t.Fatalf("an off-vocabulary claim must be a gap; %+v", report.Providers)
+	}
+	var found bool
+	for _, ax := range report.Providers[0].Axes {
+		if ax.Axis == "quota_windows" && ax.Gap && strings.Contains(ax.Reason, "is not one of") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("quota_windows should be a gap naming the closed set; %+v", report.Providers[0].Axes)
+	}
+}
+
+// A field the schema does not define ANYWHERE is reported, not only one at the
+// top level. A misspelled optional field is the case that matters: every
+// required-field check still passes while the claim it carried is dropped.
+func TestVerifyGoesRedOnAMisspelledNestedField(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(Root(root), "acme", "fixtures")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(mutationRoot(t, "no-quota"), "replaydata", "providers", "acme", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.Replace(string(b), `"destination_keys"`, `"destination_kesy"`, 1)
+	if mutated == string(b) {
+		t.Fatal("fixture error: the field to misspell was not found")
+	}
+	if err := os.WriteFile(filepath.Join(Root(root), "acme", ManifestFile), []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(dir, "response.json"), map[string]any{"plan": "acme-pro", "active": true})
+
+	wantFindings(t, "misspelled-nested-field", ValidateRepo(root),
+		`nested field "destination_kesy" is not part of the manifest schema`)
 }
 
 // An absent tree, an unreadable tree and an empty tree are three different
@@ -204,6 +321,23 @@ func TestVerifyRejectsACodeBackedRouteWithoutCodeOrTests(t *testing.T) {
 		`observation.implementation.package "core/adapters/outbound/doesnotexist" does not exist`,
 		"a code-backed route names no tests",
 	)
+}
+
+// A data-only route may not name a permission either. The consent row belongs
+// to the code that declares it, and a manifest naming one reads to the next
+// person as evidence that the row exists.
+func TestVerifyRejectsADataOnlyRouteNamingAPermission(t *testing.T) {
+	root := t.TempDir()
+	m := loadFixtureManifest(t, "no-quota")
+	m.Observation.Implementation = Implementation{
+		Kind:           ImplDataOnly,
+		PermissionName: "acme-account-api",
+		PermissionKey:  "account-api",
+	}
+	writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+
+	wantFindings(t, "data-only-permission", ValidateRepo(root),
+		"a data-only route names a permission")
 }
 
 // A path that escapes the tree is a finding rather than an empty read. The
