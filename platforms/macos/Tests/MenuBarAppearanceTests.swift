@@ -1698,6 +1698,20 @@ final class MenuBarAppearanceTests: XCTestCase {
                         "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
     }
 
+    /// The launch order as a behaviour, not only as source text: a #909-era
+    /// store that holds only the single legacy key `unknown:codex` must end
+    /// on `openai`. Run the other way round, the unattributed migration sets
+    /// its done-flag with no list present, and the carried key stays stale.
+    func testSingleProviderThenUnattributedMigrationRewritesTheCarriedKey() {
+        let defaults = InMemoryDefaults()
+        defaults.set("unknown:codex", forKey: MenuBarQuotaProvider.storageKey)
+
+        MenuBarQuotaProviders.migrateLegacySingleProvider(in: defaults)
+        MenuBarQuotaProviders.migrateLegacyUnattributedKeys(in: defaults)
+
+        XCTAssertEqual(MenuBarQuotaProviders.current(in: defaults), ["openai"])
+    }
+
     /// Lock: an adapter with no attributed successor keeps its fallback key,
     /// and the migration runs once — a user who re-selects a legacy key
     /// afterwards keeps that choice.
@@ -1992,7 +2006,7 @@ final class MenuBarAppearanceTests: XCTestCase {
                       "the migration must run BEFORE the status item is created")
     }
 
-    /// Both preference migrations have their own deadline, and it is a
+    /// The preference migrations have their own deadline, and it is a
     /// different one: they must run before the controller snapshots
     /// `MenuBarIconSettings` as "last seen". Snapshotting first would capture
     /// the pre-migration values, so the very next unrelated defaults write
@@ -2002,9 +2016,12 @@ final class MenuBarAppearanceTests: XCTestCase {
     /// Pinned by source for the same reason as the identity wiring above: no
     /// test constructs a real `MenuBarController`.
     ///
-    /// Mutation-proved (source): delete either migration call from
+    /// Mutation-proved (source): delete any migration call from
     /// `MenuBarController.swift`, or move it below the `lastIconSettings`
-    /// assignment, and this goes red.
+    /// assignment, and this goes red. #2030 adds one more ordering: the
+    /// unattributed-key migration must follow the single-provider one, or a
+    /// key the latter carries across is never rewritten (see
+    /// `testSingleProviderThenUnattributedMigrationRewritesTheCarriedKey`).
     func testMenuBarControllerRunsBothMigrationsBeforeSnapshotting() throws {
         let code = try Self.codeLines(at: Self.menuBarControllerPath)
         let calls = [
@@ -2023,6 +2040,10 @@ final class MenuBarAppearanceTests: XCTestCase {
             XCTAssertTrue(migrate.lowerBound < snapshot.lowerBound,
                           "\(call) must run BEFORE the settings snapshot is taken")
         }
+        let single = try XCTUnwrap(code.range(of: calls[1]))
+        let unattributed = try XCTUnwrap(code.range(of: calls[2]))
+        XCTAssertTrue(single.lowerBound < unattributed.lowerBound,
+                      "the unattributed-key migration must run AFTER the single-provider one (#2030)")
     }
 
     /// The Settings gate that decides whether the quota sub-controls appear
