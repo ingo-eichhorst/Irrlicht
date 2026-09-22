@@ -82,6 +82,31 @@ func TestParser_BackgroundSpawn_FromResultText(t *testing.T) {
 	}
 }
 
+// TestParser_BackgroundSpawn_AutoBackgroundedOnTimeout covers the second
+// launch shape Claude Code writes into a Bash tool_result: the harness's own
+// 120s-timeout auto-background, not a `run_in_background: true` launch. The
+// prose differs ("…was moved to the background (ID: X)…" vs "…running in
+// background with ID: X…"), but the structured toolUseResult.backgroundTaskId
+// is present exactly as it is for a real launch. Exact transcript text from
+// issue #2028 (session ecca8475-a20b-4f58-98cf-4e303a6f91c7).
+func TestParser_BackgroundSpawn_AutoBackgroundedOnTimeout(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(bgSpawnResult("toolu_1", "b5d7261fo",
+		"Command did not complete within its 120s timeout and was moved to the background (ID: b5d7261fo). "+
+			"Output is being written to: /private/tmp/claude-501/-Users-ingo-projects-irrlicht/ecca8475-a20b-4f58-98cf-4e303a6f91c7/tasks/b5d7261fo.output. "+
+			"You will be notified when it completes. To check interim output, use Read on that file path."))
+	if len(ev.BackgroundSpawns) != 1 {
+		t.Fatalf("BackgroundSpawns = %d, want 1", len(ev.BackgroundSpawns))
+	}
+	sp := ev.BackgroundSpawns[0]
+	if sp.BashID != "b5d7261fo" {
+		t.Errorf("BashID = %q, want b5d7261fo", sp.BashID)
+	}
+	if sp.OutputPath != "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/ecca8475-a20b-4f58-98cf-4e303a6f91c7/tasks/b5d7261fo.output" {
+		t.Errorf("OutputPath = %q (must not include the sentence-ending period)", sp.OutputPath)
+	}
+}
+
 // TestParser_BackgroundSpawn_OutputPathIsStatable closes the parser↔probe
 // contract that the trailing-period bug broke: the path extracted from Claude's
 // launch text must be the real on-disk file, because the daemon's lsof liveness
@@ -263,6 +288,42 @@ func TestTailer_BackgroundProcessCount_SpawnAndTerminate(t *testing.T) {
 		})
 		assertBackgroundState(t, m, 0, nil)
 	})
+}
+
+// TestTailer_BackgroundProcessCount_AutoBackgroundedSurvivesTurnEnd covers
+// issue #2028: a Bash command the harness auto-backgrounds after its 120s
+// foreground timeout must keep the session in `working` across the turn
+// boundary, exactly like a real `run_in_background: true` launch. Before the
+// fix, backgroundSpawnRe matched only the run_in_background launch prose, so
+// this shape recorded no spawn and the tailer's open-background-process count
+// stayed 0 straight through turn_duration — the wrong-ready bug from #2028.
+func TestTailer_BackgroundProcessCount_AutoBackgroundedSurvivesTurnEnd(t *testing.T) {
+	autoBgResult := "Command did not complete within its 120s timeout and was moved to the background (ID: b5d7261fo). " +
+		"Output is being written to: /private/tmp/x/tasks/b5d7261fo.output. " +
+		"You will be notified when it completes. To check interim output, use Read on that file path."
+
+	path := writeBgTranscript(t, []map[string]interface{}{
+		bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "tools/preflight.sh --only go"}),
+		bgSpawnResult("toolu_1", "b5d7261fo", autoBgResult),
+		{"type": "system", "subtype": "turn_duration"},
+	})
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	assertBackgroundState(t, m, 1, []string{"/private/tmp/x/tasks/b5d7261fo.output"})
+
+	// The terminal <task-notification> for the auto-backgrounded id clears the
+	// ledger the same way it does for a real run_in_background launch.
+	appendTranscript(t, path, []map[string]interface{}{
+		taskNotifOriginEvent("b5d7261fo", "completed"),
+	})
+	m2, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess after task-notification: %v", err)
+	}
+	assertBackgroundState(t, m2, 0, nil)
 }
 
 // --- Task-notification completion (orchestrated / SDK-harnessed claude) ---

@@ -17,15 +17,22 @@ const eventTypeAssistantStreaming = "assistant_streaming"
 // carry in prompt/tool-result text.
 const xmlFieldTaskID = "task-id"
 
-// backgroundSpawnRe matches the text Claude Code writes in a `Bash`
-// tool_result when the command was launched with `run_in_background: true`:
+// backgroundSpawnRe matches the output-path clause Claude Code writes in a
+// `Bash` tool_result for either way a shell ends up backgrounded:
 //
-//	Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/.../tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path.
+//   - a real `run_in_background: true` launch:
+//     Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/.../tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path.
+//   - the harness's own auto-background on the 120s foreground timeout (issue
+//     #2028), a differently-worded sentence carrying the same clause:
+//     Command did not complete within its 120s timeout and was moved to the background (ID: b5d7261fo). Output is being written to: /private/tmp/.../tasks/b5d7261fo.output. You will be notified when it completes. To check interim output, use Read on that file path.
 //
-// Group 1 is the background id; group 2 is the output-file path. The
-// background id and output path are read from the *result* because the Bash
-// tool_use input carries only the run_in_background flag — the id is assigned
-// at launch and reported back here. See issue #445.
+// Group 1 is the output-file path. The background id is never read from this
+// text — it comes only from the structured toolUseResult.backgroundTaskId
+// (see backgroundTaskIDOf and collectToolResult's bgTaskID gate), which both
+// shapes above set identically. Anchoring the regex on "Output is being
+// written to:" rather than on either launch sentence lets one pattern cover
+// both current shapes and survive a future wording change before the path,
+// as long as that clause and the structured id stay put. See issue #445.
 //
 // The path is a single whitespace-delimited token, but Claude writes it
 // mid-sentence ("…output. You will be notified…"), so `(\S+)` captures the
@@ -35,7 +42,7 @@ const xmlFieldTaskID = "task-id"
 // still-running background session to `ready`. Matching the whole token (rather
 // than anchoring on a `.output` suffix) keeps detection working even if Claude
 // ever names the file differently.
-var backgroundSpawnRe = regexp.MustCompile(`running in background with ID: (\S+?)\.\s+Output is being written to:\s+(\S+)`)
+var backgroundSpawnRe = regexp.MustCompile(`Output is being written to:\s+(\S+)`)
 
 // monitorLaunchPrefix is the text Claude Code writes at the start of a
 // Monitor tool_result when a Monitor background task starts:
@@ -763,9 +770,10 @@ func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgT
 	if text == "" {
 		return
 	}
-	// A real Bash run_in_background launch (gated on the structured
-	// backgroundTaskId). The output path comes from the result text; we record
-	// the spawn only when both the id and a path are known, so the
+	// A Bash background launch — either a real run_in_background: true launch
+	// or the harness's own 120s-timeout auto-background (#2028) — gated on the
+	// structured backgroundTaskId. The output path comes from the result text;
+	// we record the spawn only when both the id and a path are known, so the
 	// transcript-derived count never includes a process the daemon can't probe.
 	if bgTaskID != "" {
 		if m := backgroundSpawnRe.FindStringSubmatch(text); m != nil {
@@ -774,7 +782,7 @@ func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgT
 				// Strip the sentence-ending period the launch text places after
 				// the path ("…output. You will be notified…") so the recorded
 				// path is the real file the lsof liveness probe must check.
-				OutputPath: strings.TrimSuffix(m[2], "."),
+				OutputPath: strings.TrimSuffix(m[1], "."),
 			})
 		}
 	}
