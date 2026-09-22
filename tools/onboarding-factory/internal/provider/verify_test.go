@@ -136,8 +136,14 @@ func TestVerifyAcceptsAProviderWithNoQuota(t *testing.T) {
 		t.Fatalf("a no-quota provider must report no gap; got %d", report.Gaps)
 	}
 	quota := report.Providers[0].Axes[1]
-	if quota.Axis != "quota_windows" || quota.Claimed != ClaimSourceUnavailable || quota.Earned != ClaimSourceUnavailable {
-		t.Errorf("quota_windows should be %q claimed and earned, got %+v", ClaimSourceUnavailable, quota)
+	if quota.Axis != "quota_windows" {
+		t.Fatalf("axis 1 should be quota_windows, got %q", quota.Axis)
+	}
+	if quota.Claimed != ClaimSourceUnavailable {
+		t.Errorf("quota_windows claimed %q, want %q", quota.Claimed, ClaimSourceUnavailable)
+	}
+	if quota.Earned != ClaimSourceUnavailable {
+		t.Errorf("quota_windows earned %q, want %q", quota.Earned, ClaimSourceUnavailable)
 	}
 }
 
@@ -242,14 +248,12 @@ func TestStatusReportsAnOffVocabularyClaimAsAGap(t *testing.T) {
 	if report.Gaps == 0 {
 		t.Fatalf("an off-vocabulary claim must be a gap; %+v", report.Providers)
 	}
-	var found bool
-	for _, ax := range report.Providers[0].Axes {
-		if ax.Axis == "quota_windows" && ax.Gap && strings.Contains(ax.Reason, "is not one of") {
-			found = true
-		}
+	quota := axisByID(t, report.Providers[0], "quota_windows")
+	if !quota.Gap {
+		t.Errorf("quota_windows should be a gap; %+v", quota)
 	}
-	if !found {
-		t.Errorf("quota_windows should be a gap naming the closed set; %+v", report.Providers[0].Axes)
+	if !strings.Contains(quota.Reason, "is not one of") {
+		t.Errorf("the reason should name the closed set; got %q", quota.Reason)
 	}
 }
 
@@ -388,4 +392,18 @@ func writeJSON(t *testing.T, path string, v any) {
 	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// axisByID finds one axis in a provider's row, failing loudly when it is not
+// there. A helper returning a zero AxisStatus would let a caller assert
+// against an axis that was never reported.
+func axisByID(t *testing.T, p ProviderStatus, id string) AxisStatus {
+	t.Helper()
+	for _, ax := range p.Axes {
+		if ax.Axis == id {
+			return ax
+		}
+	}
+	t.Fatalf("provider %q reports no axis %q; got %+v", p.ID, id, p.Axes)
+	return AxisStatus{}
 }

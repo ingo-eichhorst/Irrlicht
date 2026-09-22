@@ -35,37 +35,41 @@ func repoRootFromTest(t *testing.T) string {
 // off-ladder source-specific-unavailable state, and the tree validates.
 func TestTheRealMetaManifestHasNoQuotaAndValidates(t *testing.T) {
 	root := repoRootFromTest(t)
-
 	b, err := os.ReadFile(filepath.Join(root, "replaydata", "providers", "meta", "manifest.json"))
 	if err != nil {
 		t.Fatalf("the shipped meta manifest must be readable: %v", err)
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		t.Fatalf("the shipped meta manifest must parse: %v", err)
-	}
-	for _, forbidden := range []string{"quota", "quota_windows", "usage"} {
-		if _, ok := raw[forbidden]; ok {
-			t.Errorf("the manifest schema grew a top-level %q field; quota is an AXIS, not a field, "+
-				"and a provider that reports none must stay expressible", forbidden)
+
+	t.Run("no quota field at the top level", func(t *testing.T) {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatalf("the shipped meta manifest must parse: %v", err)
 		}
-	}
+		for _, forbidden := range []string{"quota", "quota_windows", "usage"} {
+			if _, ok := raw[forbidden]; ok {
+				t.Errorf("the manifest schema grew a top-level %q field; quota is an AXIS, not a field, "+
+					"and a provider that reports none must stay expressible", forbidden)
+			}
+		}
+	})
 
-	var m provider.Manifest
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatalf("the shipped meta manifest must decode: %v", err)
-	}
-	if got := m.Capabilities["quota_windows"].Claim; got != provider.ClaimSourceUnavailable {
-		t.Errorf("meta's quota_windows claim is %q, want %q — the live probe found no usage field, "+
-			"which is a finding about the route, not an unassessed axis", got, provider.ClaimSourceUnavailable)
-	}
+	t.Run("the quota axis is the off-ladder state", func(t *testing.T) {
+		var m provider.Manifest
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("the shipped meta manifest must decode: %v", err)
+		}
+		if got := m.Capabilities["quota_windows"].Claim; got != provider.ClaimSourceUnavailable {
+			t.Errorf("meta's quota_windows claim is %q, want %q — the live probe found no usage field, "+
+				"which is a finding about the route, not an unassessed axis", got, provider.ClaimSourceUnavailable)
+		}
+	})
 
-	if findings := provider.ValidateRepo(root); len(findings) != 0 {
+	t.Run("the shipped catalog verifies clean", func(t *testing.T) {
+		findings := provider.ValidateRepo(root)
 		for _, f := range findings {
 			t.Errorf("%s: %s", f.Path, f.Message)
 		}
-		t.Fatal("the shipped provider catalog must verify clean")
-	}
+	})
 }
 
 // TestProviderVerifyAndStatusPassOnTheShippedCatalog runs both verbs through

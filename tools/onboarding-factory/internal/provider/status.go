@@ -58,17 +58,7 @@ func statusOf(repoRoot string, p Loaded) ProviderStatus {
 		Strategy:       m.Observation.Strategy,
 		Implementation: m.Observation.Implementation.Kind,
 	}
-	// Evidence whose ref is not on disk is dropped here rather than counted.
-	// A citation naming a file that is gone is an inability to look, and this
-	// report exits non-zero, so letting it keep earning its rank would make
-	// "nothing to find" and "could not look" print identically. ValidateRepo
-	// reports the absent ref separately, through verifyEvidence.
-	byID := map[string]EvidenceEntry{}
-	for _, e := range m.Evidence {
-		if evidenceResolves(repoRoot, e) {
-			byID[e.ID] = e
-		}
-	}
+	byID := resolvableEvidence(repoRoot, m.Evidence)
 	for _, axis := range AxisIDs() {
 		as := axisStatus(axis, m.Capabilities[axis], byID)
 		if as.Gap {
@@ -77,6 +67,24 @@ func statusOf(repoRoot string, p Loaded) ProviderStatus {
 		row.Axes = append(row.Axes, as)
 	}
 	return row
+}
+
+// resolvableEvidence indexes the evidence entries whose ref is actually on
+// disk, and DROPS the rest.
+//
+// A citation naming a file that is gone is an inability to look, and this
+// report exits non-zero, so letting it keep earning its rank would make
+// "nothing to find" and "could not look" print identically (AGENTS.md).
+// ValidateRepo reports the absent ref itself, through verifyEvidence;
+// TestStatusDoesNotLetADeadCitationEarnAClaim pins both halves.
+func resolvableEvidence(repoRoot string, entries []EvidenceEntry) map[string]EvidenceEntry {
+	byID := make(map[string]EvidenceEntry, len(entries))
+	for _, e := range entries {
+		if evidenceResolves(repoRoot, e) {
+			byID[e.ID] = e
+		}
+	}
+	return byID
 }
 
 // axisStatus derives what one axis's cited evidence actually earns.
