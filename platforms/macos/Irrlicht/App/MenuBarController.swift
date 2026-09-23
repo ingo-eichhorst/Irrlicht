@@ -404,6 +404,19 @@ final class MenuBarController: NSObject {
         return !statusButtonRect.contains(location)
     }
 
+    /// The global monitor's action: hide the panel unless
+    /// `globalClickShouldDismiss` exempts this click (our own status item,
+    /// #2038). Pulled out of the monitor closure so `installDismissMonitors`
+    /// keeps the same flat, one-line-per-monitor shape as the escape and
+    /// resign-active monitors below it.
+    private func handleGlobalMouseDown() {
+        guard Self.globalClickShouldDismiss(
+            at: NSEvent.mouseLocation,
+            statusButtonRect: statusButtonScreenRect()
+        ) else { return }
+        hidePanel()
+    }
+
     private func installDismissMonitors() {
         // Both NSEvent global monitors and NotificationCenter observers
         // with queue=.main deliver on the main thread — assumeIsolated
@@ -413,14 +426,7 @@ final class MenuBarController: NSObject {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown]
             ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    guard Self.globalClickShouldDismiss(
-                        at: NSEvent.mouseLocation,
-                        statusButtonRect: self.statusButtonScreenRect()
-                    ) else { return }
-                    self.hidePanel()
-                }
+                MainActor.assumeIsolated { self?.handleGlobalMouseDown() }
             }
         }
         if escapeMonitor == nil {
