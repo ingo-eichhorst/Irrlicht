@@ -389,10 +389,7 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 //   - something substantive has actually been parsed off the transcript, so
 //     the ladder has evidence to reason from rather than defaulting (#1447).
 func shouldClassifyAtBirth(state *session.SessionState) bool {
-	if state.Metrics == nil {
-		return false
-	}
-	return state.ParentSessionID != "" || state.Metrics.LastEventType != ""
+	return hasClassifiableEvidence(state.Metrics, state.ParentSessionID != "")
 }
 
 // finalizeNewSession persists a freshly built session, records its creation
@@ -919,9 +916,10 @@ func (d *SessionDetector) recordTaskDeltas(id agent.Identity, ev agent.Event, st
 // overlays the hook/transcript-derived signals ClassifyState reads, computes
 // the candidate next state, applies the parent-child and same-pass-collapse
 // corrections, and — if the corrected state differs from the current one —
-// records and applies the transition with its side effects. Only called
-// when this pass's metrics show substantive activity (see
-// processActivityLocked's skipClassification guard).
+// records and applies the transition with its side effects. Not called when
+// this pass's metrics set NoSubstantiveActivity (see processActivityLocked's
+// skipClassification guard). A zero-line hook pass still reaches it, which is
+// why the verdict comes from ClassifyStateOnEvidence (#2034).
 func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev agent.Event) {
 	// Ready→working (if applicable) already ran in processActivityLocked,
 	// before applyBackgroundLiveness — see that call site.
@@ -965,7 +963,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// here) so the deciding rule and its authority tier reach the recorded
 	// lifecycle event as provenance (#1288).
 	now := passStart.Unix()
-	verdict := ClassifyStateTiered(state.State, state.Metrics)
+	verdict := ClassifyStateOnEvidence(state.State, state.Metrics, state.ParentSessionID != "")
 	newState, reason := verdict.State, verdict.Reason
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
 

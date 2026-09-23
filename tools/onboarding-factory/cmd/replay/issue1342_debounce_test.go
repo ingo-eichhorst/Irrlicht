@@ -175,7 +175,8 @@ func TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened(t *testing.T) 
 // which is strictly worse than one that asserts nothing. Clearing it honestly
 // needs a re-recording, not a wider window — see #1478.
 var knownZeroTransition = map[string]string{
-	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl": "68.875ms burst — unreachable without fabricating in codex/2-1_basic-turn and codex/1-1_session-start (#1478)",
+	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl":                       "68.875ms burst — unreachable without fabricating in codex/2-1_basic-turn and codex/1-1_session-start (#1478)",
+	"codex/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-05-24-22-02-34_irrlichd-0.4.7+7bdc06c.dirty/transcript.jsonl": "#2034: the replay's only transition was ready→working at 22:02:50.557, before any transcript line was readable (LastEventType empty); the no-evidence guard now refuses it. The recorded fswatch stream for the primary session ends before its user_message, so the replay never sees the turn the daemon logged at 22:02:50.597",
 }
 
 // knownFabricated lists recordings where replay emits transitions the daemon

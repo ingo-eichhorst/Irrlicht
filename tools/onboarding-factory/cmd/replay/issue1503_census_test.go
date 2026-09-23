@@ -261,9 +261,13 @@ type catalogCensus struct {
 // `go test ./tools/onboarding-factory/cmd/replay -run
 // TestCatalogCensusMatchesTheCommittedFigures -count=1` produced these
 // literals on the final fixture tree.
+// #2034 moves Zero 1 -> 2: codex/4-2_multiple-agents-same-workspace's only
+// replayed transition was a ready→working decided on no transcript evidence,
+// which the no-evidence guard now refuses (see knownZeroTransition). The same
+// census command measured it; no other field moved.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                433,
-	Zero:                      1,
+	Zero:                      2,
 	Fabricated:                3,
 	Divergent:                 191,
 	DivergentByCountsAndKinds: 190,

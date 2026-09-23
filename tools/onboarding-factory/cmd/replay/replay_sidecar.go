@@ -115,6 +115,7 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 		return nil, err
 	}
 	defer cleanup()
+	r.isChild = buckets.isChild
 
 	if err := r.runDebouncedTimeline(buckets, cfg.DebounceWindow); err != nil {
 		return nil, err
@@ -201,6 +202,9 @@ type sidecarBuckets struct {
 	// parent_linked. finalState carries the last recorded state; state
 	// is the mutable field the timeline walk updates.
 	children map[string]*childInfo
+	// isChild is true when a parent_linked event names the primary session
+	// as the child (a SessionFilter can name a subagent).
+	isChild bool
 }
 
 // childInfo tracks a single subagent for the parent-hold check. finalState
@@ -255,6 +259,8 @@ func bucketPrimaryEvents(sidecarEvents []lifecycle.Event, primarySessionID strin
 // bucketPrimaryEventByKind routes one primary-session event into its stream.
 func bucketPrimaryEventByKind(ev lifecycle.Event, b *sidecarBuckets) {
 	switch ev.Kind {
+	case lifecycle.KindParentLinked:
+		b.isChild = true
 	case lifecycle.KindTranscriptActivity:
 		if ev.FileSize > 0 {
 			b.fswatches = append(b.fswatches, ev)
@@ -339,6 +345,10 @@ type sidecarReplayer struct {
 	// with the classifier (#1288). Sharing the mechanism makes that class of
 	// drift unrepresentable.
 	signals *session.SignalHolds
+
+	// isChild mirrors sidecarBuckets.isChild: the daemon exempts a child from
+	// the no-evidence guard, so the replay must know it too (#2034, #889).
+	isChild bool
 
 	// fswatches is the primary session's recorded transcript_activity stream,
 	// kept so classifyAt can widen a clamped read to the next stat the daemon
@@ -529,8 +539,10 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, c
 		r.state = session.StateWorking
 	}
 
-	newState, reason := services.ClassifyState(r.state, domainMetrics)
-	r.applyParentHoldAndSynthesizedWaiting(newState, reason, domainMetrics, ctx)
+	// The shared function keeps a hook pass with no transcript evidence from
+	// deciding working on the ladder's default rung, as the daemon does (#2034).
+	v := services.ClassifyStateOnEvidence(r.state, domainMetrics, r.isChild)
+	r.applyParentHoldAndSynthesizedWaiting(v.State, v.Reason, domainMetrics, ctx)
 }
 
 // shouldForceReadyToWorking mirrors SessionDetector's force-r→w guard (issue

@@ -15,12 +15,16 @@
     "last_event_time": "2026-09-14T21:41:31.035502+02:00",
     "wall_clock_session_duration": 15446684000,
     "state_durations": {
-      "ready": 4442848000,
-      "working": 11003836000
+      "ready": 10030881000,
+      "working": 5415803000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
     "cum_input_tokens": 32697,
     "cum_output_tokens": 139,
     "model_name": "muse-spark-1.2"
@@ -42,13 +46,13 @@
     },
     {
       "index": 1,
-      "event_index": 17,
-      "virtual_time": "2026-09-14T21:41:20.031666+02:00",
-      "cause": "event",
+      "event_index": 78,
+      "virtual_time": "2026-09-14T21:41:25.619699+02:00",
+      "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (ready → working)",
-      "last_event_type": "",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,

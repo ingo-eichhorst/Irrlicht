@@ -345,7 +345,7 @@ var stateRules = []stateRule{
 	{
 		// Default: transcript activity → working. A nil `when` means it always
 		// fires, so the ladder is total and every pass has a decision.
-		id:   "transcript_activity",
+		id:   ruleTranscriptActivity,
 		tier: session.TierTranscript,
 		decide: func(cur string, _ *session.SessionMetrics) (string, string) {
 			return transitionTo(cur, session.StateWorking,
@@ -353,6 +353,9 @@ var stateRules = []stateRule{
 		},
 	},
 }
+
+// ruleTranscriptActivity is the id of the ladder's total last rung.
+const ruleTranscriptActivity = "transcript_activity"
 
 // tierAgentDone reports the tier the agent-done verdict rests on: TierHook
 // when a Stop hook delivered it, TierTranscript when it was inferred from the
@@ -393,6 +396,33 @@ func ClassifyStateTiered(currentState string, metrics *session.SessionMetrics) S
 	// future edit that removes it degrades to "no transition" rather than to
 	// an out-of-range panic.
 	return StateVerdict{State: currentState}
+}
+
+// ClassifyStateOnEvidence is ClassifyStateTiered with the ladder's total
+// default refused when there is nothing to reason from: a transcript_activity
+// verdict for a session without classifiable evidence (see
+// hasClassifiableEvidence) is discarded, and currentState stands (#2034). The
+// live detector and the sidecar replay both call it. Only transcript_activity
+// is discarded: every rung above it has a `when` that needs a metrics field to
+// be set, so a hook-tier verdict still stands on a zero-line hook pass.
+func ClassifyStateOnEvidence(currentState string, metrics *session.SessionMetrics, isChild bool) StateVerdict {
+	v := ClassifyStateTiered(currentState, metrics)
+	if v.Rule == ruleTranscriptActivity && !hasClassifiableEvidence(metrics, isChild) {
+		return StateVerdict{State: currentState}
+	}
+	return v
+}
+
+// hasClassifiableEvidence reports whether the ladder has something to reason
+// from: a substantive transcript event has been parsed (LastEventType is
+// cumulative), or the session is a child, which must read working so
+// hasActiveChildren counts it (#889). The birth guard (#1447) and
+// ClassifyStateOnEvidence (#2034) share it, so the two cannot drift apart.
+func hasClassifiableEvidence(metrics *session.SessionMetrics, isChild bool) bool {
+	if metrics == nil {
+		return false
+	}
+	return isChild || metrics.LastEventType != ""
 }
 
 // hasTerminalSessionError reports whether the adapter said that the current
