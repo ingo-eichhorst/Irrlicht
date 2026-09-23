@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "id": "meta",
+  "display_name": "Meta — Muse Code",
+  "_comment": [
+    "The billing provider is 'meta'; the coding-agent adapter is 'muse'; the",
+    "pseudo-adapter holding the consent row is 'muse-account-api'. Three",
+    "identifiers, one integration — see core/domain/session/rate_limit.go,",
+    "which spells ProviderMeta 'distinct from the muse adapter name'.",
+    "",
+    "This is the account-API half of what issue #2008 extracts from. Its",
+    "quota_windows axis is source-specific-unavailable, NOT unassessed: the",
+    "one authorized live probe returned 200 with an active subscription, a",
+    "named tier, and no usage field of any kind. A schema that could not",
+    "express that would express Muse as an incomplete provider."
+  ],
+  "products": [
+    {
+      "id": "muse-code-subscription",
+      "name": "Muse Code subscription",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "account-api",
+    "destination_keys": ["muse-account-api"],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/outbound/museaccountapi",
+      "permission_name": "muse-account-api",
+      "permission_key": "account-api",
+      "tests": [
+        "core/adapters/outbound/museaccountapi/parser_test.go",
+        "core/adapters/outbound/museaccountapi/credential_test.go",
+        "core/adapters/outbound/museaccountapi/redact_test.go",
+        "core/adapters/outbound/museaccountapi/live_probe_fixture_test.go",
+        "core/adapters/outbound/museaccountapi/transport_integration_test.go"
+      ],
+      "mutation_fixtures": [
+        "tools/lib/museaccountapi-redact-nonapproved-field-mutations_test.sh",
+        "tools/lib/museaccountapi-share-unknown-identity-mutations_test.sh",
+        "tools/lib/museaccountapi-token-hash-account-id-mutations_test.sh",
+        "tools/lib/museaccountapi-zero-quota-on-auth-failure-mutations_test.sh"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "oauth-bearer",
+    "header": "Authorization",
+    "prefix": "Bearer "
+  },
+  "credential_resolvers": [
+    {
+      "kind": "file",
+      "location": "$MUSE_AUTH_PATH, else $XDG_CONFIG_HOME/muse/auth.json, else ~/.config/muse/auth.json",
+      "format": "json"
+    },
+    {
+      "kind": "keychain",
+      "location": "service ai.meta.dev.credentials, account meta",
+      "format": "json"
+    }
+  ],
+  "platforms": ["darwin"],
+  "redaction": {
+    "allowed_fields": ["is_subs_active", "subs_tier_name"],
+    "note": "The raw response carries fourteen top-level keys including api_key, user_email and user_full_name. Only these two are ever retained; the live-probe fixture records the other names, never their values."
+  },
+  "fixtures": [
+    {
+      "name": "account-api-response",
+      "kind": "response",
+      "path": "fixtures/account-api-response.redacted.json",
+      "note": "The redacted body from the 2026-09-20 live probe, verbatim."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "live-verified",
+      "evidence": ["muse-live-probe-2026-09-20", "muse-account-api-response-fixture"],
+      "note": "is_subs_active plus subs_tier_name identify the billed product."
+    },
+    "quota_windows": {
+      "claim": "source-specific-unavailable",
+      "evidence": ["muse-live-probe-2026-09-20"],
+      "note": "200 OK on an active subscription with no subs_usage key at all. This says nothing about whether Muse has a quota source elsewhere — only that this route does not carry one (#1977 §5)."
+    },
+    "balance": {
+      "claim": "unassessed",
+      "note": "No balance or credit route has been probed for this provider."
+    },
+    "account_identity": {
+      "claim": "source-specific-unavailable",
+      "evidence": ["muse-live-probe-2026-09-20", "muse-parser-source"],
+      "note": "The response carries no stable provider account id, so accountRef() returns the empty string by construction and the poller falls back to a session-scoped key — which is a degradation in Irrlicht's dedup, not a property of the product. The product's quota_scope above stays \"account\" for that reason: it says what the subscription bills against, not what Irrlicht can currently key on. Hashing the access token was rejected as an account id."
+    }
+  },
+  "evidence": [
+    {
+      "id": "muse-live-probe-2026-09-20",
+      "kind": "live-probe",
+      "date": "2026-09-20",
+      "ref": "core/adapters/outbound/museaccountapi/testdata/live_probe_2026-09-20.json",
+      "note": "Issue #2007's one authorized live request, Muse Code 1.3.0 (1.3.0-R3401.1), redacted before it was written."
+    },
+    {
+      "id": "muse-account-api-response-fixture",
+      "kind": "fixture",
+      "date": "2026-09-20",
+      "ref": "replaydata/providers/meta/fixtures/account-api-response.redacted.json"
+    },
+    {
+      "id": "muse-parser-source",
+      "kind": "source",
+      "date": "2026-09-22",
+      "ref": "core/adapters/outbound/museaccountapi/parser.go",
+      "note": "The allowlist decode and accountRef()."
+    }
+  ]
+}

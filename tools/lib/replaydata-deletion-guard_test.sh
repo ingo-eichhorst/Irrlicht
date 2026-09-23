@@ -354,6 +354,8 @@ else
     for probe in \
       "replaydata/agents/scenarios.json|(matrix catalog)" \
       "replaydata/orchestrators/gastown/scenarios/1-1.json|(orchestrator scenario fixture)" \
+      "replaydata/providers/meta/manifest.json|(provider manifest or fixture)" \
+      "replaydata/providers/meta/fixtures/account-api-response.redacted.json|(provider manifest or fixture)" \
       "replaydata/agents/claudecode/regressions/8-8_frozen/assessment.json|(regression recording)" \
       "$LIVE/metadata.json|(metadata.json of live cell" \
       "$LIVE/recordings/r1/events.jsonl|(recording of live cell" \

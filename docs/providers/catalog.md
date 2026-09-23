@@ -67,16 +67,41 @@ candidate.
 ## Why `docs/`, not `replaydata/providers/`
 
 Issue #2006 §9 raised this as an open question; the triage comment settled
-it: `replaydata/providers/` does not exist at the epic's inspected revision
-(`6427a2c55`) and is covered by the replaydata deletion guard (#268), which
-makes creating it here close to irreversible in CI terms. `prov(factory)`
-(#2008) is the ticket that designs that manifest's layout; committing to it
-here would fix the shape before its owner exists. A document plus a
-machine-readable list under `docs/` is reversible. `replaydata/agents/` is
-untouched by this ticket, and this catalog is deliberately kept separate
-from the agent scenario matrix there — a provider limitation is not an
-agent capability, and vice versa (`prov(muse-claims)` is the ticket that
-corrects a place this was conflated).
+it: `replaydata/providers/` did not exist at the epic's inspected revision
+(`6427a2c55`), and `prov(factory)` (#2008) is the ticket that designs that
+manifest's layout — committing to it here would have fixed the shape before
+its owner existed. A document plus a machine-readable list under `docs/` is
+reversible. `replaydata/agents/` is untouched by this ticket, and this
+catalog is deliberately kept separate from the agent scenario matrix there —
+a provider limitation is not an agent capability, and vice versa
+(`prov(muse-claims)` is the ticket that corrects a place this was
+conflated).
+
+**Correction, #2008.** The paragraph above originally also said that
+`replaydata/providers/` "is covered by the replaydata deletion guard (#268),
+which makes creating it here close to irreversible in CI terms." That was
+not true of the guard as it was written. Its classification `case` in
+[`.github/workflows/replaydata-deletion-guard.yml`](../../.github/workflows/replaydata-deletion-guard.yml)
+had arms for `replaydata/agents/scenarios.json`,
+`replaydata/orchestrators/*/scenarios/*`, `replaydata/agents/*/regressions/*`
+and three `replaydata/agents/*/scenarios/*` arms (one of which, for
+`assessment.json`, is itself an allow) — and nothing else; every other path
+fell through to `*) : ;;`, the allow arm. So a deletion anywhere
+under `replaydata/providers/` would have triggered the workflow (its `paths:`
+filter is `replaydata/**`) and passed it. #2008 added the missing arm and the
+matching fixture line in
+[`tools/lib/replaydata-deletion-guard_test.sh`](../../tools/lib/replaydata-deletion-guard_test.sh),
+so the claim is now true; it was an unverified dismissal when written.
+
+The tree itself now exists — `replaydata/providers/` holds one manifest per
+billing provider, read by `of provider verify` / `of provider status` and by
+the `of validate` gate. **This census does not move into it.** The two answer
+different questions: the census is an import of six pinned upstream provider
+*lists*, every entry `unassessed`, and it is a research input; a manifest is a
+declaration about a route Irrlicht has actually looked at, and it has to carry
+evidence. The manifests reference this document rather than absorbing it —
+which is exactly what #2008's triage decided. See
+[`replaydata/providers/README.md`](../../replaydata/providers/README.md).
 
 ## Sources
 

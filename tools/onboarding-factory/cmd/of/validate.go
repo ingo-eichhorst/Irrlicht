@@ -12,6 +12,7 @@ import (
 
 	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+	"irrlicht/tools/onboarding-factory/internal/provider"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -57,6 +58,12 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	// Resolved here for the reason absRoot's own doc comment gives: a relative
+	// "--repo-root .." otherwise reported a catalog in which nothing is
+	// recorded -- exit 0, no warning. runValidate did not do it. `of verify`,
+	// the three `of record` verbs and the `of scenario`/`of agent`/`of cell`
+	// writers still don't; they are out of scope here.
+	*repoRoot = absRoot(*repoRoot)
 
 	var findings []finding
 	add := func(path, msg string) { findings = append(findings, finding{Path: path, Msg: msg}) }
@@ -66,6 +73,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	validateCells(*repoRoot, names, add)
 	validateDesktopResults(*repoRoot, add)
 	validateMaturityModel(*repoRoot, names, add)
+	validateProviders(*repoRoot, add)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Path != findings[j].Path {
@@ -81,7 +89,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		}
 		_ = writeJSON(stdout, out)
 	} else if len(findings) == 0 {
-		fmt.Fprintln(stdout, "of validate: OK — catalog + cells are schema-valid and referentially consistent")
+		fmt.Fprintln(stdout, "of validate: OK — catalog + cells + provider manifests are schema-valid and referentially consistent")
 	} else {
 		fmt.Fprintf(stderr, "of validate: %d violation(s):\n", len(findings))
 		for _, f := range findings {
@@ -92,6 +100,42 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 	return exitOK
+}
+
+// validateProviders runs the replaydata/providers/ gate against a tree that
+// has one.
+//
+// Scoping is by EXISTENCE alone, and that is worth explaining because the
+// obvious stronger predicate does not work here. `of validate` runs against
+// small fixture trees, and validate_maturity_test.go's maturityRepo carries
+// BOTH an adapters.json and the whole core-12 scenario set while having no
+// provider catalog -- so neither of the two predicates validateMaturityModel
+// uses ("the model file exists", "this is a full catalog") separates the
+// production repository from a fixture. Measured rather than assumed: wiring
+// this gate to "adapters.json exists" failed six tests in
+// validate_maturity_test.go, one per fixture that writes that file.
+//
+// The hole that leaves -- deleting the whole tree scopes the gate out -- is
+// closed twice over, by mechanisms better suited to it than a validator that
+// must also run on fixtures. `.github/workflows/replaydata-deletion-guard.yml`
+// fails a PR deleting anything under replaydata/providers/ (its arm and the
+// matching fixture in tools/lib/replaydata-deletion-guard_test.sh were added
+// by #2008), and TestTheShippedProviderCatalogExists fails outright if this
+// repository stops carrying the tree.
+//
+// The predicate is "something is at that path", not "a directory is". A
+// replaydata/providers that has been clobbered into a regular file is then
+// handed to ValidateRepo, which reports it -- whereas a directory test would
+// have scoped the gate out in silence, which is the one answer this must not
+// give. runValidate resolves --repo-root at the flag boundary, so root is
+// already absolute here.
+func validateProviders(repoRoot string, add func(path, msg string)) {
+	if _, err := os.Stat(provider.Root(repoRoot)); err != nil {
+		return
+	}
+	for _, f := range provider.ValidateRepo(repoRoot) {
+		add(f.Path, f.Message)
+	}
 }
 
 func validateDesktopResults(repoRoot string, add func(path, msg string)) {

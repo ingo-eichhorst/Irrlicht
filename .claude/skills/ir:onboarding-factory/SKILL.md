@@ -317,7 +317,16 @@ of verify --agent a --scenario s [--json]
 of record prereq-check --agent a
 of record run    --agent a --scenario s [--attach] [--dry-run]
 of record verify --agent a --scenario s
+of provider verify [--json]                                           provider manifest schema + fixture replay
+of provider status [--json]                                           claimed vs earned capability, per axis
 ```
+
+The `provider` verbs read `replaydata/providers/`, the billing-product
+catalog — a different tree from the agent x scenario matrix, with its own
+four-state vocabulary (`unassessed` / `fixture-verified` / `live-verified` /
+`source-specific-unavailable`) rather than the maturity ladder. A provider
+limitation is not an agent capability; never move one into the other. The
+tree's own README documents the manifest shape.
 
 Exit codes: `0` ok, `1` validation/operation failed, `2` usage error. Every
 write verb validates-then-writes atomically and forces the foreign keys
