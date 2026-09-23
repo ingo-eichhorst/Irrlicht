@@ -336,18 +336,30 @@ final class MenuBarController: NSObject {
         panel.setFrameOrigin(origin)
     }
 
-    /// Compute the panel origin anchored to the status item button.
-    /// Returns nil when the button isn't hosted in a window (hidden
-    /// from the menu bar), or when its on-screen rect doesn't
-    /// intersect any screen — both cases mean the icon is effectively
-    /// invisible (e.g. swallowed by the notch) and the caller should
-    /// fall back to the primary screen's top-right.
-    private func statusItemOrigin(panelSize: NSSize) -> NSPoint? {
+    /// The status item button's bounds, converted to screen coordinates.
+    /// Returns nil when the button isn't hosted in a window (hidden from
+    /// the menu bar), or when its on-screen rect doesn't intersect any
+    /// screen — both cases mean the icon is effectively invisible (e.g.
+    /// swallowed by the notch).
+    ///
+    /// Shared by `statusItemOrigin` (panel placement) and
+    /// `globalClickShouldDismiss` (macOS 27's own-icon click reaching the
+    /// global dismiss monitor, #2038) — both need the same screen rect for
+    /// the same button, and duplicating the conversion would let them drift.
+    private func statusButtonScreenRect() -> NSRect? {
         guard let button = statusItem.button, let window = button.window else { return nil }
         let buttonRectInWindow = button.convert(button.bounds, to: nil)
         let buttonRectOnScreen = window.convertToScreen(buttonRectInWindow)
         let onAScreen = NSScreen.screens.contains { $0.frame.intersects(buttonRectOnScreen) }
-        guard onAScreen else { return nil }
+        return onAScreen ? buttonRectOnScreen : nil
+    }
+
+    /// Compute the panel origin anchored to the status item button.
+    /// Returns nil when `statusButtonScreenRect()` does (icon hidden or
+    /// swallowed by the notch), and the caller should fall back to the
+    /// primary screen's top-right.
+    private func statusItemOrigin(panelSize: NSSize) -> NSPoint? {
+        guard let buttonRectOnScreen = statusButtonScreenRect() else { return nil }
         return NSPoint(
             x: buttonRectOnScreen.minX,
             y: buttonRectOnScreen.minY - panelSize.height - 2
@@ -365,6 +377,33 @@ final class MenuBarController: NSObject {
 
     // MARK: - Dismiss handling
 
+    /// Should a global mouse-down at `location` (screen coordinates, the
+    /// space `NSEvent.mouseLocation` reports) dismiss the panel?
+    ///
+    /// Up to macOS 26, `NSEvent.addGlobalMonitorForEvents` only ever saw
+    /// clicks delivered to OTHER apps — a click on our own status item was
+    /// local, so this monitor never ran for it and `togglePanel()`'s own
+    /// `isVisible` check was the only thing that closed the panel. On macOS
+    /// 27, a click on our own status item ALSO reaches this global monitor,
+    /// and arrives ~90ms before `togglePanel()`'s button action. Without this
+    /// guard, the monitor's `hidePanel()` runs first, then `togglePanel()`
+    /// sees `isVisible == false` and reopens it — a visible flash instead of
+    /// a close (#2038, measured with a synthetic `CGEvent` click + a
+    /// standalone probe app; see the issue for the timing trace).
+    ///
+    /// Pulled out as a static, pure function — same seam as `applyIcon` — so
+    /// a test can drive it directly without a live `NSStatusItem`.
+    ///
+    /// `statusButtonRect` nil (button not hosted in a window, or off every
+    /// screen — e.g. swallowed by the notch, same cases `statusButtonScreenRect()`
+    /// returns nil for) always dismisses: there is no rect to exempt, and this
+    /// matches the monitor's pre-#2038 behaviour of dismissing on every click
+    /// it saw.
+    static func globalClickShouldDismiss(at location: NSPoint, statusButtonRect: NSRect?) -> Bool {
+        guard let statusButtonRect else { return true }
+        return !statusButtonRect.contains(location)
+    }
+
     private func installDismissMonitors() {
         // Both NSEvent global monitors and NotificationCenter observers
         // with queue=.main deliver on the main thread — assumeIsolated
@@ -374,7 +413,14 @@ final class MenuBarController: NSObject {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown]
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.hidePanel() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    guard Self.globalClickShouldDismiss(
+                        at: NSEvent.mouseLocation,
+                        statusButtonRect: self.statusButtonScreenRect()
+                    ) else { return }
+                    self.hidePanel()
+                }
             }
         }
         if escapeMonitor == nil {
