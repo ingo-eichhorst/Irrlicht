@@ -111,6 +111,14 @@ For a new guard, linter, schema rule, migration, rewriter, or contract check,
 mutate what it protects and require the check to fail. Commit reusable mutation
 fixtures when practical.
 
+When a guarded predicate gains a SECOND call site, re-check every committed
+mutation anchor that names it. `tools/mutate.sh` refuses a non-unique anchor —
+`tools/mutate.sh:300` exits 8 with "the anchor occurs N times ... not exactly
+once" — so an anchor that was unique when written fails the `tools` gate the
+moment the code it names appears twice. Grep each anchor before running the
+fixtures, not after CI reports it. Measured during #2013, where adding a second
+call site for one predicate made an existing anchor match twice.
+
 Write every comment that asserts a mechanism from what you ran or read. A
 comment naming a tier, a guard, an ordering, an invariant, or "X cannot happen"
 states the check behind it, or reads as an intention rather than a fact. Write a
@@ -121,7 +129,16 @@ this before the commit.
 If the fix already exists, commit before mutating with
 `git add -A && git commit -m wip`. Capture the checkpoint SHA and confirm
 `git status --porcelain` is empty right after the commit. Restore *only* by
-reading the checkpoint back with `git show <checkpoint-sha>:<path> > <path>`.
+reading the checkpoint back with `git show "${CK}:<path>" > <path>`.
+
+**Brace the variable.** The shell here is zsh, which applies a history
+modifier to an unbraced `$CK:path`: `git show "$CK:tools/x.go"` expands to
+`<sha>ools/x.go`, git fails — and the `>` redirect has ALREADY truncated the
+target to zero bytes, so the file you meant to restore is destroyed by the
+command meant to restore it. It cost a file during #2008, and the expansion
+reproduces on this machine under zsh 5.9: with `CK=abc123def`, the unbraced
+form prints `abc123defools/x.go` while the braced one prints
+`abc123def:tools/x.go`. `"${CK}:<path>"` is the only form that survives.
 Never restore with `git checkout -- <file>`, `git restore --source=HEAD`,
 `reset --hard`, or any command of the same shape. Never mutate a dirty tree.
 Never keep the checkpoint in `/tmp` or a scratchpad instead of a commit.
@@ -231,6 +248,12 @@ gh pr create --base main --draft \
   --title "WIP: <type>(<scope>): <change>" --body "..."
 ```
 
+Push with `--no-verify` when you have already run the gates chunked in the
+foreground. The pre-push hook re-runs the same gates against its own 540s
+budget, so leaving it on costs a second full run and can report `TIMEOUT` on
+work that already passed. `--no-verify` is correct ONLY after that chunked run;
+without one, let the hook run.
+
 Confirm the push landed before opening the PR. The branch name is known here,
 so the check is an exact ref query. Section 2's work-in-progress search stays a
 pattern search, because there the slug is not yet known.
@@ -247,6 +270,28 @@ the worktree, issue intent, selected effort, explicit base
 `origin/main...HEAD`, and `.claude/skills/ir:code-review/SKILL.md`. Require the
 findings in its final text. Never use the built-in `/code-review`, `/review`,
 or the Workflow tool here. Fix valid findings, commit, and push.
+
+**Write a placeholder at the hand-back path BEFORE spawning the reviewer**, so
+a reviewer that dies is distinguishable from one that found nothing:
+
+```bash
+printf 'PLACEHOLDER: no reviewer has written here yet\n' > "$SCRATCH/<N>-handback.txt"
+```
+
+The reviewer overwrites it with its raw final text. A file still holding the
+placeholder means the reviewer never reported, which is a different fact from
+an empty findings list and must never be reported as a clean gate.
+
+**The review gets two attempts, and no more.** A reviewer can stall past its
+watchdog or die on an API error; #2013 hit both in one run, and the skill's
+unbounded "re-run the review" is how an agent ends up waiting out two 600s
+stalls in series. After the second failed attempt, stop delegating. Review the
+diff yourself at the selected effort, say plainly in the hand-back that no
+delegated review ran and that the findings are your own, and report the
+delegated-review gate as unproven. Do not spend a third attempt, and never
+author a hand-back file yourself to satisfy the checker — a `review:` line you
+typed makes the check answer a different question than the one asked, which is
+the #2008 failure this section exists to prevent.
 
 Require the reviewer to end its final text with one machine-readable line:
 
