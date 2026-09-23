@@ -22,24 +22,10 @@ import XCTest
 /// described in the PR body (synthetic `CGEvent` clicks against the built
 /// app), not by anything in this file.
 ///
-/// - `testClickInsideStatusButtonRectDoesNotDismiss` is the case the fix
-///   exists for. `testMutantAlwaysDismissingDisagreesOnTheInsideRectCase`
-///   commits the pre-#2038-fix behaviour (dismiss unconditionally, which is
-///   what every click hit once macOS 27 started routing icon clicks through
-///   this monitor) as a same-shape closure and asserts it disagrees with the
-///   real predicate on exactly that case. It is redundant with
-///   `testClickInsideStatusButtonRectDoesNotDismiss` today (both fail only if
-///   the predicate stops returning `false` for an inside click) — kept as a
-///   second, differently-shaped fixture rather than for any extra case it
-///   catches.
-/// - Separately (not committed, since it requires compiling a broken
-///   variant of the real function in its place), the predicate's body was
-///   changed to `return true` unconditionally and this suite was re-run:
-///   `testClickInsideStatusButtonRectDoesNotDismiss` and
-///   `testMutantAlwaysDismissingDisagreesOnTheInsideRectCase` both failed,
-///   confirming the tests bite. Reverted immediately after (restored from a
-///   `wip` checkpoint commit, not `git checkout`). See the PR body for the
-///   command and output.
+/// Mutation as run (not committed: it needs a broken build of the real
+/// function): with the predicate's body changed to `return true`
+/// unconditionally, `testClickInsideStatusButtonRectDoesNotDismiss` failed
+/// and the other two stayed green. See the PR body for the command and output.
 @MainActor
 final class MenuBarDismissTests: XCTestCase {
 
@@ -74,25 +60,6 @@ final class MenuBarDismissTests: XCTestCase {
         let location = NSPoint(x: rect.midX, y: rect.midY)
         XCTAssertTrue(
             MenuBarController.globalClickShouldDismiss(at: location, statusButtonRect: nil)
-        )
-    }
-
-    /// Mutation-proved (committed): the pre-#2038-fix monitor dismissed on
-    /// every click it saw — reproduced here as a same-shape closure ignoring
-    /// both arguments — which is exactly what macOS 27 turned into a bug once
-    /// it started routing our own icon's clicks through this monitor too.
-    /// Asserting it disagrees with the real predicate on the inside-rect case
-    /// keeps this test failing if the fix and the mutant are ever allowed to
-    /// converge again (e.g. the guard is dropped from the call site, or the
-    /// predicate's body regresses to unconditional `true`).
-    func testMutantAlwaysDismissingDisagreesOnTheInsideRectCase() {
-        let alwaysDismiss: (NSPoint, NSRect?) -> Bool = { _, _ in true }
-        let location = NSPoint(x: rect.midX, y: rect.midY)
-        XCTAssertNotEqual(
-            alwaysDismiss(location, rect),
-            MenuBarController.globalClickShouldDismiss(at: location, statusButtonRect: rect),
-            "the mutant (pre-#2038 monitor behaviour) and the real predicate must "
-                + "disagree on the inside-rect case — that disagreement IS the fix"
         )
     }
 }
