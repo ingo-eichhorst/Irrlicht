@@ -189,6 +189,74 @@ type RateLimitWindow struct {
 	// observed today, since UsedPercent is reported pre-normalized to a
 	// percentage regardless of the underlying counter.
 	Measure string `json:"measure,omitempty"`
+
+	// LimitKind says whether this window is a SUBSCRIPTION ALLOWANCE (what
+	// the plan includes) or a THROUGHPUT ceiling (how fast the service will
+	// answer). Additive (issue #2013 / epic #1977 §7: "Do not interpret a
+	// throughput limit as a subscription allowance without evidence").
+	//
+	// Measure alone cannot make this distinction: "requests" is the unit of
+	// both a requests-per-minute service limit and a requests-per-month
+	// plan allowance, so a second field is what #1977 §7's "field group /
+	// required meaning" table needs here. That is the concrete way #1994's
+	// field set turned out to be insufficient, which #2013 §3 requires
+	// before this struct may change at all.
+	//
+	// The zero value is "" and reads as an allowance. Every window any
+	// adapter emits today is one — Claude Code's statusline five_hour /
+	// seven_day and Codex's transcript rate_limits are plan allowances, and
+	// nothing in this repository emits a throughput ceiling yet:
+	// `grep -rn LimitKindThroughput .` at the time of writing matched only
+	// this file and rate_limit_throughput_test.go, no adapter and no
+	// fixture. So no stored row and no live reading changes behaviour, the
+	// same additive pattern #1994 used. The first adapter to
+	// observe a throughput ceiling sets LimitKindThroughput explicitly; an
+	// adapter that forgets is the residual risk this default buys, and it is
+	// the cheaper of the two — the alternative default would silently drop
+	// every allowance window that predates this field.
+	LimitKind string `json:"limit_kind,omitempty"`
+}
+
+// Limit kinds for RateLimitWindow.LimitKind (issue #2013).
+const (
+	// LimitKindAllowance: what the subscription includes over the window.
+	LimitKindAllowance = "allowance"
+	// LimitKindThroughput: a service ceiling on rate — Bedrock, Vertex and
+	// Azure meter requests per minute and enforce service limits, which are
+	// not plan allowances however similar the percentage looks. #2013 §1.4:
+	// presenting one as an allowance "would be worse than showing nothing".
+	LimitKindThroughput = "throughput"
+)
+
+// LimitKinds is the closed set. "" is not a member: it is the legacy
+// zero value, and IsSubscriptionAllowance — not this list — is what decides
+// how it reads.
+var LimitKinds = []string{LimitKindAllowance, LimitKindThroughput}
+
+// IsSubscriptionAllowance reports whether this window may be presented as a
+// plan allowance. It FAILS CLOSED: only "" (the legacy zero value every
+// window shipped today carries) and an explicit LimitKindAllowance read as
+// an allowance, and every other value — including one this package does not
+// recognise — does not.
+//
+// The obvious spelling, `w.LimitKind != LimitKindThroughput`, was the first
+// version and it was wrong: a window carrying "throughtput" is outside
+// LimitKinds, so nothing recognises it, and yet it would have been surfaced
+// by ImminentWindow at whatever percentage it reported. A one-character typo
+// in a future adapter would produce exactly the rendering #2013 §1.4 says is
+// "worse than showing nothing". AGENTS.md draws the same line for a
+// validator: an input it cannot read with confidence is the last place to
+// drop checks. Measured on the typo, and guarded by the committed mutation
+// "an unrecognised LimitKind must not read as an allowance" in
+// tools/lib/cloud-attribution-mutations_test.sh.
+func (w *RateLimitWindow) IsSubscriptionAllowance() bool {
+	if w == nil {
+		return false
+	}
+	// "" is not a member of LimitKinds — it is the legacy zero value, and
+	// excluding it would drop every allowance window written before this
+	// field existed.
+	return w.LimitKind == "" || w.LimitKind == LimitKindAllowance
 }
 
 // CreditsSnapshot describes a prepaid balance, populated only on the
@@ -242,6 +310,14 @@ func (s *RateLimitSnapshot) IsUnattributed() bool {
 // current snapshot — defined as the one with the highest UsedPercent. Returns
 // nil when the snapshot has no windows or every window is at zero (rendering
 // has no signal to display).
+//
+// Throughput windows are skipped (issue #2013). This is the one place the
+// throughput/allowance distinction has to bite, because everything that
+// renders a quota chip or projects a burn-down reads this function: ForecastCap
+// below builds its linear fit on whatever it returns, so letting a
+// requests-per-minute ceiling through here would put a service limit on the
+// plan-allowance forecast. A throughput-only snapshot therefore returns nil —
+// "showing nothing", which #2013 §1.4 prefers to showing it as an allowance.
 func (s *RateLimitSnapshot) ImminentWindow() *RateLimitWindow {
 	if s == nil || len(s.Windows) == 0 {
 		return nil
@@ -249,6 +325,9 @@ func (s *RateLimitSnapshot) ImminentWindow() *RateLimitWindow {
 	var best *RateLimitWindow
 	for i := range s.Windows {
 		w := &s.Windows[i]
+		if !w.IsSubscriptionAllowance() { // #2013: a ceiling is not the chip to show
+			continue
+		}
 		if best == nil || w.UsedPercent > best.UsedPercent {
 			best = w
 		}
@@ -292,9 +371,17 @@ func ForecastCap(history []RateLimitSnapshot, now time.Time) *time.Time {
 	// instance rolls over at the same wall-clock time across nearby
 	// samples, while two different quotas' reset times are unrelated (issue
 	// #1994).
+	// The earlier sample must be an allowance too (#2013). ImminentWindow
+	// already guarantees `imminent` is one, but the match below is on
+	// duration and reset time alone, and a throughput ceiling sharing a
+	// reset instant with an allowance would otherwise pair with it and
+	// contribute its slope to a plan-cap forecast.
 	var prev *RateLimitWindow
 	for i := range earliest.Windows {
 		w := &earliest.Windows[i]
+		if !w.IsSubscriptionAllowance() { // #2013: pair like quota with like
+			continue
+		}
 		if abs(w.WindowMinutes-imminent.WindowMinutes) <= 1 && w.ResetsAt == imminent.ResetsAt {
 			prev = w
 			break
