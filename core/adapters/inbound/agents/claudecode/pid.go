@@ -44,16 +44,11 @@ type claudeSessionMeta struct {
 	// Name is the human-readable label Claude assigns a background agent's job
 	// (e.g. "Add guiding colors to quest cards"); empty for interactive sessions.
 	Name string `json:"name"`
-	// UpdatedAt is a non-zero epoch-ms timestamp present only on Claude Code
-	// versions that live-rewrite this file on status changes and on /clear
-	// (measured on 2.1.281 — see isClaimedByOther). float64, not int64: a
-	// validator that can't parse its input should check more, not less, and
-	// a JSON number decoded into an int64 field errors out on any
-	// non-integral encoding, silently dropping the whole entry via
-	// readSessionMeta rather than just this field. omitempty keeps
-	// old-schema test fixtures (pid_test.go's writeMeta/writeMetaAt,
-	// testsupport.go's WriteSessionMetaForTest) emitting no updatedAt key at
-	// all, matching the real old-schema files they stand in for.
+	// UpdatedAt is an epoch-ms timestamp carried by the current metadata
+	// schema (observed on 2.1.281; the #169 test fixtures omit it). Its
+	// presence, not its value, selects the rule in isClaimedByOther. float64
+	// so no numeric encoding (e.g. an exponent form) can fail the unmarshal,
+	// which would drop the whole entry — and with it the claim.
 	UpdatedAt float64 `json:"updatedAt,omitempty"`
 }
 
@@ -165,15 +160,15 @@ func validSessionEntry(e os.DirEntry) (claudeSessionMeta, bool) {
 // staleness rule.
 //
 // New-schema entries (meta.UpdatedAt != 0) are always treated as claimed,
-// regardless of mtime: Claude Code 2.1.281, /clear rewrote sessionId in
-// sessions/<pid>.json, measured 2026-09-24 — a version that rewrites this
-// file on /clear also rewrites it on every status/session change, so an
-// updatedAt-bearing entry's mtime lagging the caller's transcript is not
-// evidence of a stale post-/clear leftover the way it was for the versions
-// #169 was written for; it is instead exactly the shape of #2042, where a
-// live, currently-tracked session's claim was discarded as "stale" and its
-// PID handed to an unrelated resumed session. Old-schema entries (no
-// updatedAt) keep the #169 mtime-staleness bypass unchanged.
+// regardless of mtime. The #169 bypass exists because older Claude versions
+// left the pre-/clear sessionId in this file; Claude Code 2.1.281, /clear
+// rewrote sessionId in sessions/<pid>.json, measured 2026-09-24 (tmux-driven
+// probe: 23a3ef2b… → 07605c9b…, same pid), so on the new schema a /clear is
+// resolved by the exact-sessionId match above and the bypass has nothing left
+// to rescue. Its mtime is also no activity signal there: in #2042 a live
+// session's 85094.json was last written 15:23:52 while that session kept
+// working past 15:31, and the bypass handed its PID to an unrelated resumed
+// session. Old-schema entries (no updatedAt) keep the #169 bypass unchanged.
 func isClaimedByOther(meta claudeSessionMeta, e os.DirEntry, wantMTime time.Time) bool {
 	if meta.UpdatedAt != 0 {
 		return true
