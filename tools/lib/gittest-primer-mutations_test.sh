@@ -6,10 +6,10 @@
 # mutates what it protects instead. Pointing gittest's resolved binary at a
 # path that does not exist must make every package whose TestMain primes git
 # fail before a single test runs, naming the binary — a primer that cannot run
-# must fail loudly, never skip. The four packages are the ones that run the real
-# git adapter (`grep -rln 'outbound/git"' core --include='*_test.go'`, plus the
-# git package itself). A package whose TestMain lost the call would stay green
-# here and be named.
+# must fail loudly, never skip. The packages are derived below from the test
+# imports of the git adapter. A package whose TestMain lacks the call stays
+# green under the mutation and is named (seen red during #2047 by removing the
+# call from filesystem's TestMain).
 #
 # The red half of #2047 (the cold xcrun cache itself) is a separate, opt-in
 # fixture: core/adapters/outbound/git/gittest/coldcache_repro_darwin_test.go.
@@ -46,12 +46,21 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   exit 0
 fi
 
-PKGS=(
-  irrlicht/core/adapters/outbound/git
-  irrlicht/core/adapters/outbound/filesystem
-  irrlicht/core/application/services
-  irrlicht/core/cmd/irrlichd
-)
+# The packages that run the real git adapter, derived rather than listed: every
+# package with a test file importing it, minus gittest (which imports it only
+# for the opt-in repro), plus the git package itself. A new consumer that
+# forgets the primer is therefore named here instead of silently left out.
+PKGS=(irrlicht/core/adapters/outbound/git)
+while IFS= read -r dir; do
+  pkg="irrlicht/$dir"
+  [[ "$pkg" == */outbound/git/gittest ]] && continue
+  PKGS+=("$pkg")
+done < <(cd "$REPO_ROOT" && grep -rl --include='*_test.go' 'irrlicht/core/adapters/outbound/git"' core | xargs -n1 dirname | sort -u)
+if [[ ${#PKGS[@]} -lt 4 ]]; then
+  echo "FAIL: $NAME — found only ${#PKGS[@]} package(s) running the real git adapter (want at least 4); the import grep did not run as intended" >&2
+  exit 1
+fi
+
 BOGUS="/nonexistent/irrlicht-2047-git"
 FILE="core/adapters/outbound/git/gittest/prime.go"
 ANCHOR='var binary = pathutil.MustResolve("git")'
@@ -59,7 +68,7 @@ REPLACEMENT="var binary = pathutil.MustResolve(\"git\")[:0] + \"$BOGUS\""
 
 # -run '^$' runs no test, but TestMain (and so the primer) still runs first.
 out="$(cd "$REPO_ROOT" && "$MUTATE_SH" "$FILE" "$ANCHOR" "$REPLACEMENT" \
-  bash -c "cd core && go test -count=1 -run '^\$' ${PKGS[*]} 2>&1; echo GO_TEST_RC=\$?" 2>&1)"
+  bash -c "cd core && go test -race -count=1 -run '^\$' ${PKGS[*]} 2>&1; echo GO_TEST_RC=\$?" 2>&1)"
 rc=$?
 
 fails=0

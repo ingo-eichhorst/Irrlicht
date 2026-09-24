@@ -12,10 +12,8 @@ import (
 )
 
 // TestMain owns the one irrlichd binary the subprocess tests share, so it is
-// removed after the run rather than leaked into the temp dir. It also warms the
-// git binary the real git adapter runs before any test here calls it (#2047):
-// on macOS that binary is the xcrun stub, whose first cold call can take the
-// adapter's whole 5s per-call ceiling. See package gittest.
+// removed after the run rather than leaked into the temp dir. It also primes
+// git before any test runs; see package gittest (#2047).
 func TestMain(m *testing.M) {
 	gittest.PrimeOrExit()
 	code := m.Run()
