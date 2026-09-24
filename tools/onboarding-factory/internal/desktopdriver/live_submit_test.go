@@ -141,6 +141,38 @@ func TestSubmitRetriesAClickTheHelperRefusedBeforePosting(t *testing.T) {
 	}
 }
 
+// LOCK, not red-first: the behaviour is already in submitPrompt. A missed
+// postcondition is strictly post-click — the helper posts the mouse event and
+// only then waits for Stop — so the prompt was sent, and any further click
+// would send it again. The composer here never shows Stop, so nothing but the
+// isMissedPostcondition branch can end the loop with nil.
+//
+// Mutation as run (#2049): with that branch deleted from submitPrompt, this
+// test failed on the non-nil error and the four sibling Submit tests still
+// passed. The loop returned instead of retrying because isPreClickAXFailure
+// (live.go) has no postcondition_failed term.
+func TestSubmitTreatsAMissedStopButtonAsSent(t *testing.T) {
+	inspect := func(context.Context) ([]helperElement, error) {
+		return controlsComposerElements("workspace"), nil
+	}
+	clicks := 0
+	click := func(context.Context, helperSelector, helperPostcondition) error {
+		clicks++
+		if clicks == 1 {
+			// The shape helper.go builds from the helper's postcondition_failed
+			// response, with CommandRunner.swift's message for "exists".
+			return errors.New("helper postcondition_failed: The required exists postcondition did not become true.")
+		}
+		return nil
+	}
+	if err := submitPrompt(context.Background(), "/repo/workspace", noFront, inspect, click); err != nil {
+		t.Fatalf("submitPrompt() error = %v; a missed postcondition means the click already landed", err)
+	}
+	if clicks != 1 {
+		t.Fatalf("Send was clicked %d times; the first click landed, so every further click sends the prompt again", clicks)
+	}
+}
+
 // openSessionComposerElements is what Claude Desktop exposes once a session is
 // OPEN and a turn is running: the prompt area and the send slot showing Stop,
 // with the new-session composer's environment and project popups gone.
