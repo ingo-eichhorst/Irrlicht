@@ -83,6 +83,33 @@ func transcriptForWithFile(t *testing.T, sessionID string) string {
 	return path
 }
 
+// writeMetaAtUpdatedAt writes a ~/.claude/sessions/<pid>.json file carrying a
+// non-zero "updatedAt" field and sets its mtime, independently of
+// claudeSessionMeta so the #2042 regression test below compiles and captures
+// its red run before that struct gains an UpdatedAt field. This mirrors the
+// current on-disk schema (Claude Code 2.1.281, measured 2026-09-24 — see
+// ~/.claude/sessions/<pid>.json on a live process), where updatedAt is
+// written alongside sessionId on every rewrite, including /clear.
+func writeMetaAtUpdatedAt(t *testing.T, dir string, pid int, sessionID string, mtime time.Time) {
+	t.Helper()
+	raw := struct {
+		PID       int    `json:"pid"`
+		SessionID string `json:"sessionId"`
+		UpdatedAt int64  `json:"updatedAt"`
+	}{PID: pid, SessionID: sessionID, UpdatedAt: mtime.UnixMilli()}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	path := filepath.Join(dir, strconv.Itoa(pid)+".json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+}
+
 func TestDiscoverPID_StrongMatchByMetadata(t *testing.T) {
 	const sid = "aaaa-1111"
 	dir := withTestDeps(t, map[int]bool{42: true}, nil)
@@ -110,6 +137,27 @@ func TestDiscoverPID_StrongMatchAmongMultipleMetadataFiles(t *testing.T) {
 	}
 	if pid != 200 {
 		t.Fatalf("got pid=%d, want 200", pid)
+	}
+}
+
+func TestDiscoverPID_StrongMatchByNewSchemaMetadataWithUpdatedAt(t *testing.T) {
+	// New-schema metadata (carries updatedAt, the current on-disk schema —
+	// Claude Code 2.1.281, measured 2026-09-24) still resolves through
+	// Layer 1 exactly like old-schema metadata: scanSessionMetadata's
+	// meta.SessionID == wantSessionID exact match returns before
+	// isClaimedByOther's updatedAt-driven gate (#2042) is ever consulted.
+	// Passes by construction — not a #2042 regression proof, just a lock on
+	// Layer 1 staying unaffected by the schema addition.
+	const sid = "ffff-6666"
+	dir := withTestDeps(t, map[int]bool{42: true}, nil)
+	writeMetaAtUpdatedAt(t, dir, 42, sid, time.Now())
+
+	pid, err := DiscoverPID("/repo", transcriptFor(sid), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 42 {
+		t.Fatalf("got pid=%d, want 42 (new-schema metadata should still resolve via Layer 1)", pid)
 	}
 }
 
@@ -225,6 +273,33 @@ func TestDiscoverPID_StaleMetadataDoesNotBlockCWDFallback(t *testing.T) {
 	}
 	if pid != 62896 {
 		t.Fatalf("got pid=%d, want 62896 (stale metadata must not block fallback)", pid)
+	}
+}
+
+func TestDiscoverPID_LiveOwnerWithUpdatedAtNotStolenByStaleGate(t *testing.T) {
+	// Regression for #2042. pid 85094 is a live, currently-tracked Claude
+	// Code session (session A). Its sessions/85094.json carries updatedAt
+	// (the current on-disk schema — Claude Code 2.1.281, measured
+	// 2026-09-24) but was last rewritten long enough ago that its mtime
+	// trails session B's transcript by more than staleMetaSlack — exactly
+	// the shape of the real incident (85094.json mtime 15:23:52, session
+	// active through 15:31+). Session B is re-created (e.g. via
+	// --continue) in the same cwd and discovers no metadata of its own, so
+	// pid 85094 is the only live cwd candidate. Because 85094.json carries
+	// updatedAt, its claim on session A must be treated as authoritative
+	// regardless of mtime — the #169 staleness bypass must NOT hand
+	// session B a PID that a live, tracked session still owns.
+	const pidX = 85094
+	dir := withTestDeps(t, map[int]bool{pidX: true}, []int{pidX})
+	writeMetaAtUpdatedAt(t, dir, pidX, "session-a", time.Now().Add(-6*time.Minute))
+	transcript := transcriptForWithFile(t, "session-b")
+
+	pid, err := DiscoverPID("/repo", transcript, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 0 {
+		t.Fatalf("got pid=%d, want 0 (live owner with updatedAt must not be stolen by the stale-metadata gate — #2042)", pid)
 	}
 }
 
