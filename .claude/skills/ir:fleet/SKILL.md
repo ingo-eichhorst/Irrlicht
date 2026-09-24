@@ -8,8 +8,9 @@ description: >
   scope, states a concurrency limit and its reason, watches each running agent
   for the divergences the wave-1 run produced, checks every hand-back against
   a mechanical instrument, and corrects the specific step that went wrong.
-  Three checkers do the deciding — `tools/lib/fleet-scope-overlap.sh`,
-  `tools/lib/fleet-review-evidence.sh` and `tools/lib/ref-exists.sh` — so a
+  Four checkers do the deciding — `tools/lib/fleet-scope-overlap.sh`,
+  `tools/lib/fleet-review-evidence.sh`, `tools/lib/ref-exists.sh` and
+  `tools/lib/pr-exists.sh` — so a
   verdict cites a command rather than a reading. A dependency chain that
   serialises every ticket is still a fleet: the ordering and the QA are the
   job, not only the parallelism. Use when the user says "/ir:fleet", "run the
@@ -228,6 +229,7 @@ Each divergence the wave-1 run produced, with the check that catches it:
 | waited on a shared process name | a `TIMEOUT` a sibling worktree caused | the brief keys every wait on a self-owned marker |
 | ran a gate the diff cannot break | the Swift suite on a diff with no Swift file | `git -C <worktree> diff --name-only origin/main...HEAD` |
 | reported a push that did not land | a branch that is not on the remote | `tools/lib/ref-exists.sh origin feat/<N>-<slug>` |
+| reported a PR that was never opened | a pushed branch with no PR, invisible to everyone (#2029) | `tools/lib/pr-exists.sh feat/<N>-<slug>` |
 
 An agent that hands back five times without progressing is the signature of
 the first row. Correct it rather than re-dispatching the whole ticket.
@@ -240,6 +242,7 @@ a check that never ran is visible as a missing line.
 ```bash
 tools/lib/fleet-review-evidence.sh "$SCRATCH/fleet-<N>-handback.txt"
 tools/lib/ref-exists.sh origin "feat/<N>-<slug>"
+tools/lib/pr-exists.sh "feat/<N>-<slug>"
 gh pr view <PR> --json isDraft,mergeable,mergeStateStatus,headRefOid
 gh pr checks <PR>
 ```
@@ -283,6 +286,7 @@ the real state:
 git worktree list | grep -w "<N>"
 git config --local --get "branch.feat/<N>-<slug>.irExecBase"
 tools/lib/ref-exists.sh origin "feat/<N>-<slug>"
+tools/lib/pr-exists.sh "feat/<N>-<slug>"
 gh pr list --repo ingo-eichhorst/Irrlicht --state open --search "<N>" \
   --json number,isDraft,title
 ```

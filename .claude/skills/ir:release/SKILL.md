@@ -1024,6 +1024,10 @@ ships in three places (PR, CHANGELOG, GitHub release).
 gh pr create --title "chore: release v$NEW_VERSION" \
   --body-file /tmp/release-notes-v$NEW_VERSION.md
 
+# A pushed branch with no PR is invisible (#2029). Exit 1 = no PR, open it;
+# exit 2 = could not look, which is not a pass. Do not continue on either.
+tools/lib/pr-exists.sh "release/v$NEW_VERSION" || exit 1
+
 # Capture the release PR number now, while we're still on its branch — Step 7c
 # tags the *exact* commit this PR squash-merges into, resolved via this number
 # (not HEAD). Persist it to a file (like BASE_SHA in Step 1) so it survives the

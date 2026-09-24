@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fleet-checkers-mutations_test.sh — the committed mutation fixtures for the
-# three #2022 fleet checkers and their own suites.
+# fleet checkers and their own suites: the three from #2022, plus
+# tools/lib/pr-exists.sh from #2029.
 #
 # WHY THIS FILE EXISTS. Review of #2022 ran one mutation this repo's corpus
 # could not catch: widening `fleet_scope_overlap`'s containment test from
@@ -10,9 +11,9 @@
 # had no test that could go red. That is the gap this file closes, and the
 # other rows are here so the same thing cannot happen to the rules beside it.
 #
-# It covers THREE lock tests rather than one, so `LOCK_TEST` is reassigned
+# It covers FOUR lock tests rather than one, so `LOCK_TEST` is reassigned
 # between groups. The house convention is one `<lock>-mutations_test.sh` per
-# lock; three near-empty files for three checkers that are only ever changed
+# lock; four near-empty files for four checkers that are only ever changed
 # together would be worse, so the grouping is deliberate and named here.
 # tools/lib/fleet-contract-mutations_test.sh stays separate: it mutates SKILL
 # prose, not shell.
@@ -130,6 +131,43 @@ assert_mutation_is_red \
   'letting a glob through instead of refusing it is caught' \
   'tools/lib/ref-exists.sh' \
   $'      echo "REFUSE: ref-exists — \'$branch\' carries a glob character; this check answers one exact ref, never a pattern" >&2\n      return 2' \
+  $'      : # glob no longer refused' \
+  'a glob in the branch name is refused'
+
+# ── Group 4: tools/lib/pr-exists.sh (#2029) ─────────────────────────────────
+# shellcheck disable=SC2034  # read by assert_mutation_is_red in mutation-assert.sh
+LOCK_TEST=tools/lib/pr-exists_test.sh
+
+# The row the #2029 triage asked for by name: a check that lists every PR and
+# searches the heads by substring reads `fix/x` as covered by `fix/x-2`.
+assert_mutation_is_red \
+  'replacing the exact-head query with a substring search is caught' \
+  'tools/lib/pr-exists.sh' \
+  $'  out=$(gh pr list --state all --head "$branch" --json number 2>&1)' \
+  $'  out=$(gh pr list --state all --json headRefName 2>&1 | grep -qF "$branch" && echo \'[1]\' || echo \'[]\')' \
+  'a head that is only a prefix of another PR head reports 1'
+
+assert_mutation_is_red \
+  'reporting a gh failure as "no PR" is caught' \
+  'tools/lib/pr-exists.sh' \
+  $'    echo "REFUSE: pr-exists — could not ask gh about head \'$branch\' (gh exit $status): $out" >&2\n    return 2' \
+  $'    return 1' \
+  'gh failing is refused, not reported as absent'
+
+# Counting "number" keys instead of parsing turns a non-JSON answer into a
+# count of zero, i.e. "no PR" — the silent shape the jq array check exists
+# to refuse.
+assert_mutation_is_red \
+  'reading a non-JSON answer as zero PRs is caught' \
+  'tools/lib/pr-exists.sh' \
+  $'  count=$(printf \'%s\' "$out" | jq -e \'if type == "array" then length else error("not an array") end\' 2>/dev/null)' \
+  $'  count=$(printf \'%s\' "$out" | awk \'/"number"/ { n++ } END { print n + 0 }\')' \
+  'gh printing non-JSON is refused, not reported as absent'
+
+assert_mutation_is_red \
+  'letting a glob through instead of refusing it is caught' \
+  'tools/lib/pr-exists.sh' \
+  $'      echo "REFUSE: pr-exists — \'$branch\' carries a glob character; this check answers one exact head, never a pattern" >&2\n      return 2' \
   $'      : # glob no longer refused' \
   'a glob in the branch name is refused'
 

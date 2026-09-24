@@ -8,8 +8,9 @@
 # instruction pointing at that checker. Each rule this file pins names an
 # executable: delete the rule and a fleet agent is back to hand-rolling the
 # idiom that failed. The behaviour of the checkers themselves is graded by
-# tools/lib/ref-exists_test.sh, tools/lib/fleet-scope-overlap_test.sh and
-# tools/lib/fleet-review-evidence_test.sh; this file grades the instructions.
+# tools/lib/ref-exists_test.sh, tools/lib/fleet-scope-overlap_test.sh,
+# tools/lib/fleet-review-evidence_test.sh and tools/lib/pr-exists_test.sh;
+# this file grades the instructions.
 set -uo pipefail # NOT -e: assertions capture non-zero return codes
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -28,7 +29,7 @@ done
 # readable. A skill naming a script that is not there is the loudest possible
 # form of this contract breaking.
 for checker in tools/lib/ref-exists.sh tools/lib/fleet-scope-overlap.sh \
-  tools/lib/fleet-review-evidence.sh; do
+  tools/lib/fleet-review-evidence.sh tools/lib/pr-exists.sh; do
   [ -r "$checker" ] || fail "ir:fleet delegates to $checker, which is not readable"
   grep -qF -- "$checker" "$FLEET" || fail "ir:fleet no longer names $checker"
 done
@@ -90,6 +91,13 @@ check review "$review_joined" 'is not a clean gate until there is evidence it' \
   'exec section 6 no longer says a silent review is not a clean gate'
 check review "$review_joined" 'tools/lib/ref-exists.sh origin feat/<N>-<slug>' \
   'exec section 6 no longer confirms the push landed with an exact ref query'
+# #2029: a landed ref is not a PR. A run that stopped between `git push` and
+# `gh pr create` left a branch nobody could see; section 6 must ask the
+# PR-level question too, and must say a turn does not end before it passes.
+check review "$review_joined" 'tools/lib/pr-exists.sh feat/<N>-<slug>' \
+  'exec section 6 no longer asserts a PR exists for the pushed branch'
+check review "$review_joined" 'Do not end a turn' \
+  'exec section 6 no longer forbids ending a turn between the push and a PR'
 
 # A substring ref check must not come back. `ls-remote | grep` is legitimate
 # in exactly one place — exec section 2's work-in-progress search, where the

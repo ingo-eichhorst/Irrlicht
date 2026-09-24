@@ -1,0 +1,45 @@
+name: Orphan branches
+
+# Names every branch on origin that carries work not in main and has never had
+# a pull request (#2029). A pushed branch with no PR is invisible: on
+# 2026-09-22, 43 commits for a closed issue had sat on one for 16 days, and the
+# only fix for a red main sat on another for about nine hours.
+#
+# This is not a PR gate and is not a required check. A red run in the Actions
+# tab IS the signal: open a PR for the named branch, delete it, or waive it in
+# tools/orphan-branch-lint.waivers with a reason.
+#
+# Exit 2 from the lint (gh auth, network, rate limit, an unparsable answer)
+# also fails the run. That is deliberate: a day the lint could not look must
+# not read as a clean day. See tools/orphan-branch-lint.sh for the details and
+# the cost (one gh query per branch ahead of main).
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: 'Only fail on orphans older than this many hours'
+        required: false
+        default: '24'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  orphan-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Name branches with no PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '24' }}
+        run: tools/orphan-branch-lint.sh --max-age-hours "$MAX_AGE_HOURS"

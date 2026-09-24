@@ -246,6 +246,7 @@ git push -u origin feat/<N>-<slug>
 tools/lib/ref-exists.sh origin feat/<N>-<slug>
 gh pr create --base main --draft \
   --title "WIP: <type>(<scope>): <change>" --body "..."
+tools/lib/pr-exists.sh feat/<N>-<slug>
 ```
 
 Push with `--no-verify` when you have already run the gates chunked in the
@@ -257,6 +258,13 @@ without one, let the hook run.
 Confirm the push landed before opening the PR. The branch name is known here,
 so the check is an exact ref query. Section 2's work-in-progress search stays a
 pattern search, because there the slug is not yet known.
+
+A pushed branch is not the finish line; a PR is. Do not end a turn — not for a
+question, not for a correction, not for a hand-back — between `git push` and a
+`tools/lib/pr-exists.sh` exit 0. A branch that landed with no PR is invisible:
+#2029 found one holding the only fix for a red `main` for about nine hours, and
+another holding 43 commits for 16 days. Exit 1 means open the PR now; exit 2
+means the check could not look, which is not a pass.
 
 Reference `Closes #<N>`. Include the test evidence, design deviations, and the
 `🤖 Generated with [Claude Code]` footer.

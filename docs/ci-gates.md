@@ -1009,3 +1009,49 @@ the named `--only <group>` unbounded and in the foreground, then push with
 `git push --no-verify` citing that green run. Read the push's exit status
 directly rather than through a pipe, and confirm `git status -sb` shows a
 tracking branch afterwards.
+
+### Orphan branches — a pushed branch with no PR (#2029)
+
+A branch can be pushed and never turned into a pull request, and no PR-gating
+check can see it, because there is no PR to gate. On 2026-09-22 two were found
+by hand: `feat/1887-desktop-driver-stability`, 43 commits ahead of `main` for
+16 days after its issue closed, and `fix/dsh-watch-deadline-reconcile`, which
+held the only fix for a red `main` for about nine hours. Two checks close it:
+
+- **`tools/lib/pr-exists.sh <branch>`** — the PR-level twin of
+  `tools/lib/ref-exists.sh`. Exit 0 when any PR (open, closed or merged) has
+  exactly that head, 1 when none ever did, 2 when it could not look (gh
+  failure, non-JSON answer, empty or glob branch). It asks
+  `gh pr list --state all --head <branch>`, whose head filter is exact — a
+  prefix such as `feat/2022` does not match `feat/2022-…`, asserted against
+  the real gh in `tools/lib/pr-exists_test.sh`. `ir:exec` §6 and
+  `ir:release` 7b run it right after `gh pr create`; `ir:fleet` runs it when
+  verifying and resuming a hand-back.
+- **`tools/orphan-branch-lint.sh [--max-age-hours N]`** — the backstop for
+  sessions that follow no skill. It fetches with `--prune`, then asks
+  `pr-exists.sh` about every `origin/*` branch ahead of `origin/main`. An
+  orphan older than the threshold (default 24h) exits 1; a younger one is
+  `INFO`; a single `pr-exists` refusal aborts the whole run with exit 2 and no
+  `OK` line. Knowingly PR-less branches go in
+  `tools/orphan-branch-lint.waivers` with a reason, and a waiver naming no
+  ahead-of-main branch fails. `.github/workflows/orphan-branches.yml` runs it
+  daily (06:17 UTC) and on `workflow_dispatch`; it is not a PR gate, and a red
+  run in the Actions tab is the signal.
+
+It queries once per branch rather than paging one listing of all PRs: an
+unfiltered `gh pr list --limit 1000` already returned 1000 rows on
+2026-09-24, so a single page is truncated. The price is one gh round trip per
+branch ahead of `main`, and squash-merged branches stay "ahead" forever — 532
+of the 533 remote branches on 2026-09-24, counted with
+`git rev-list --count origin/main..<branch>` over `git for-each-ref
+refs/remotes/origin`. One full local run of `tools/orphan-branch-lint.sh` on
+2026-09-24 took 371s wall clock (timed with `date +%s` around the call; it
+named `feat/1887-desktop-driver-stability`, 43 ahead, and nothing else), which
+is why it is a scheduled job and not a push hook.
+
+Both scripts run inside the `tools` gate through
+`tools/lib/pr-exists_test.sh` and `tools/lib/orphan-branch-lint_test.sh`
+(a throwaway bare-repo remote plus the stub gh in
+`tools/lib/testdata/pr-exists/gh-stub.sh`). Their mutation fixtures are
+`tools/lib/fleet-checkers-mutations_test.sh` (group 4) and
+`tools/lib/orphan-branch-lint-mutations_test.sh`.

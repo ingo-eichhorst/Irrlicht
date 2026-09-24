@@ -419,6 +419,16 @@ row 'ref-exists.sh::ref_exists' 'ref_exists (refuses a missing argument)' 2 \
     '. tools/lib/ref-exists.sh' \
     'ref_exists origin 2>/dev/null'
 
+# pr_exists (#2029), the PR-level twin, shares the same grammar and the same
+# reason for driving only its refusals here: its 0 and 1 both need gh, and
+# its own tools/lib/pr-exists_test.sh grades them against a stub.
+row 'pr-exists.sh::pr_exists' 'pr_exists (refuses a branch name carrying a glob)' 2 \
+    '. tools/lib/pr-exists.sh' \
+    'pr_exists "feat/*" 2>/dev/null'
+row 'pr-exists.sh::pr_exists' 'pr_exists (refuses a missing argument)' 2 \
+    '. tools/lib/pr-exists.sh' \
+    'pr_exists 2>/dev/null'
+
 row 'fleet-scope-overlap.sh::fleet_scope_overlap' 'fleet_scope_overlap (two disjoint scopes)' 0 \
     '. tools/lib/fleet-scope-overlap.sh' \
     'fleet_scope_overlap tools/lib/testdata/fleet-scope-overlap/pi-adapter.md tools/lib/testdata/fleet-scope-overlap/replaydata-muse.md >/dev/null'
