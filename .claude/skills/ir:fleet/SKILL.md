@@ -1,18 +1,20 @@
 ---
 name: ir:fleet
 description: >
-  Orchestrate several `ir:exec` runs over several Irrlicht issues at once, and
-  verify what the agents actually did rather than what they reported. A
-  dispatcher: it groups tickets by their declared file scope, states a
-  concurrency limit and its reason, watches each running agent for the
-  divergences the wave-1 run produced, checks every hand-back against a
-  mechanical instrument, and corrects the specific step that went wrong. Three
-  checkers do the deciding — `tools/lib/fleet-scope-overlap.sh`,
+  Orchestrate several `ir:exec` runs over several Irrlicht issues, and verify
+  what the agents actually did rather than what they reported. A dispatcher:
+  it orders tickets by their declared dependencies, surfaces the human
+  prerequisites no agent can obtain, groups what is left by declared file
+  scope, states a concurrency limit and its reason, watches each running agent
+  for the divergences the wave-1 run produced, checks every hand-back against
+  a mechanical instrument, and corrects the specific step that went wrong.
+  Three checkers do the deciding — `tools/lib/fleet-scope-overlap.sh`,
   `tools/lib/fleet-review-evidence.sh` and `tools/lib/ref-exists.sh` — so a
-  verdict cites a command rather than a reading. Use when the user says
-  "/ir:fleet", "run the fleet", "execute these issues together", or names
-  several issue numbers to work at once. It produces ready PRs and merges
-  nothing.
+  verdict cites a command rather than a reading. A dependency chain that
+  serialises every ticket is still a fleet: the ordering and the QA are the
+  job, not only the parallelism. Use when the user says "/ir:fleet", "run the
+  fleet", "execute these issues together", or names several issue numbers to
+  work at once. It produces ready PRs and merges nothing.
 ---
 
 # Irrlicht fleet — dispatcher over `ir:exec`
@@ -39,12 +41,16 @@ verdict in this skill names the command that produced it.
 
 ```text
 /ir:fleet <N> <N> <N>
+/ir:fleet <N>-<N>
 ```
 
-Explicit issue numbers only. Refuse each of these, and say which one applies:
+Explicit issue numbers only — as a list, or as one contiguous range. A
+range names its own members, so it does not grow when the tracker does.
+Refuse each of these, and say which one applies:
 
 - A label, a milestone, or "every ready-for-agent issue". Expanding a query
-  into a work-list is the easy way to dispatch far more work than intended.
+  into a work-list is the easy way to dispatch far more work than intended,
+  and the work-list changes under you between one run and the next.
 - A ticket with no current `ready-for-agent` triage decision record. Report it
   and stop for that ticket. Do not infer a plan, and do not run `/ir:triage`
   unasked.
@@ -54,6 +60,62 @@ Explicit issue numbers only. Refuse each of these, and say which one applies:
 No agent in the fleet files a GitHub issue. Never put "open a follow-up issue"
 in a brief: that would reach the tracker without the maintainer ever seeing
 the instruction that created it.
+
+## Order the tickets before you group them
+
+Scope overlap decides what may share a wave. It does not decide what may run
+at all. Two passes come first, and both read the ticket body already in the
+scratchpad.
+
+**Dependency pass.** A ticket that names another ticket of this run as a
+dependency cannot start until that one has merged. Read the declaration out of
+the section that carries it, and treat a missing section as unknown:
+
+```bash
+f="$SCRATCH/fleet-<N>-body.md"
+grep -q '^## 4\.' "$f" || { echo "UNDECLARED: #<N> has no '## 4.' section"; }
+awk '/^## 4\./{f=1;next} /^## /{f=0} f' "$f" | grep -oE '#[0-9]{3,5}' | sort -u
+```
+
+**Do not filter the whole body by keyword instead.** A pipeline of
+`grep -iE 'depends|needs'` then `grep -oE '#[0-9]{3,5}'` matches only the
+heading, because the dependency items name the ticket and not the word. Run
+against `#2009` on 2026-09-22 it printed nothing, for a ticket whose `## 4.`
+section names `#2008` in its second line. Nothing and no-dependency read
+identically, which is the shape `AGENTS.md` forbids of any check.
+
+Measured with the working command on 2026-09-22 for `#2008`-`#2013`:
+
+| Ticket | Declares |
+|---|---|
+| `#2008` | `#1994`, `#1995`, `#1996` — all closed, so it is free to start |
+| `#2009`, `#2010`, `#2011` | `#2008` |
+| `#2013` | `#2002`, `#2006` (both closed), `#2008` |
+| `#2012` | `#2008` **and** `#2009` |
+
+Five of the six name `#2008`, so dispatching that set as one wave would have
+produced five agents blocked on a tree the sixth had not created yet. The
+keyword pipeline also hid `#2012`'s second edge entirely. Build the waves from
+the dependency order first, then apply scope overlap inside each wave.
+Dispatch the next wave only once the blocking PR has merged — a ticket whose
+dependency is merely open still has nothing to build on.
+
+**Prerequisite pass.** A ticket can require something no agent can obtain: a
+consented test account, a credential, a logged-in browser profile. Surface
+every one to the maintainer BEFORE dispatch, not after an agent has burned its
+context discovering it:
+
+```bash
+grep -n -iE 'required test access|consented|consent to read' \
+  "$SCRATCH/fleet-<N>-body.md"
+```
+
+A blocked prerequisite does not always mean "do not dispatch". Read what the
+ticket says it delivers without it, and quote that sentence in the plan.
+`#2013` states that without a cloud account it is a rules-and-fixtures ticket
+and still worth landing; `#2011` and `#2012` make their access mandatory.
+Dispatch a reduced form only when the ticket itself defines one, and name in
+the brief which form the agent is running.
 
 ## Build the dispatch plan
 
@@ -96,6 +158,14 @@ reassuring, and an unknown scope is never co-dispatched.
 otherwise three. The load observation behind that split lives in
 `docs/ci-gates.md`, under "Several runs at once", together with the recovery
 from a load-induced `TIMEOUT`. Cite it rather than retyping the figure.
+
+When every pair the checker compares reports `OVERLAP`, the wave size is one
+and the run is a serial pipeline. That is a valid fleet, not a refusal.
+Measured on 2026-09-22, all fifteen pairs of `#2008`-`#2013` overlapped on
+`replaydata/providers/`, because every one of those tickets writes into the
+same new tree. What the fleet contributes there is the ordering, the
+prerequisite report and the hand-back verification — none of which a single
+`ir:exec` run performs for itself.
 
 Print the plan before any agent starts. Name the tickets, the directory keys
 the checker compared, the verdict per pair, the limit, and the rule that
@@ -225,6 +295,11 @@ instead of stopping on its work-in-progress check.
 Print the per-ticket verdict for every ticket, including any the fleet never
 started. Hand back the PR links. State plainly which tickets carry an
 `UNPROVEN` gate and why. Merge nothing, and recommend no merge.
+
+A ticket the fleet never started is reported with the reason and the party who
+can clear it: a dependency that has not merged, a prerequisite only the
+maintainer can supply, or a missing triage decision record. "Not started" on
+its own reads as an omission, and the maintainer cannot act on it.
 
 ## Anti-patterns
 
