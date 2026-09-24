@@ -7,11 +7,17 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"irrlicht/core/adapters/outbound/git/gittest"
 )
 
 // TestMain owns the one irrlichd binary the subprocess tests share, so it is
-// removed after the run rather than leaked into the temp dir.
+// removed after the run rather than leaked into the temp dir. It also warms the
+// git binary the real git adapter runs before any test here calls it (#2047):
+// on macOS that binary is the xcrun stub, whose first cold call can take the
+// adapter's whole 5s per-call ceiling. See package gittest.
 func TestMain(m *testing.M) {
+	gittest.PrimeOrExit()
 	code := m.Run()
 	sharedBin.remove()
 	os.Exit(code)

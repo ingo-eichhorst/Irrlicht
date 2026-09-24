@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // noBudget is the context this package's tests drive the adapter with where the
@@ -56,9 +57,10 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 	a := New()
 
 	// Existing dir works as before.
+	start := time.Now()
 	got, answered := a.GetGitRoot(noBudget(), dir)
 	if !answered {
-		t.Fatal("existing dir: git did not answer")
+		t.Fatalf("existing dir: git did not answer (after %s)", time.Since(start))
 	}
 	if got != dir {
 		t.Errorf("existing dir: got %q, want %q", got, dir)
@@ -66,9 +68,10 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 
 	// Deleted subdir resolves to the same repo root.
 	deleted := filepath.Join(dir, "nonexistent", "child")
+	start = time.Now()
 	got, answered = a.GetGitRoot(noBudget(), deleted)
 	if !answered {
-		t.Fatal("deleted subdir: git did not answer")
+		t.Fatalf("deleted subdir: git did not answer (after %s)", time.Since(start))
 	}
 	if got != dir {
 		t.Errorf("deleted subdir: got %q, want %q", got, dir)
@@ -78,9 +81,10 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 func TestGetGitRoot_NotARepo(t *testing.T) {
 	dir := t.TempDir()
 	a := New()
+	start := time.Now()
 	got, answered := a.GetGitRoot(noBudget(), dir)
 	if !answered {
-		t.Fatal("a non-repo dir is an ANSWER — git ran and reported exit 128 (#1543)")
+		t.Fatalf("a non-repo dir is an ANSWER — git ran and reported exit 128 (#1543); no answer after %s", time.Since(start))
 	}
 	if got != "" {
 		t.Errorf("non-repo dir: got %q, want empty", got)
