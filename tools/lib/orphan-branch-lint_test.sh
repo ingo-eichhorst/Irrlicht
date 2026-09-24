@@ -8,9 +8,12 @@
 #   feat/fresh-orphan  one commit, dated now, no PR               -> INFO only
 #   feat/level         at main, no commits ahead                  -> not asked
 #
-# The load-bearing row is the mid-loop gh failure: the lint must exit 2 and
-# must NOT print its OK line, because "no orphans among the branches it could
-# ask about" is not "no orphans".
+# The PR table also holds a FORK PR whose head is named feat/old-orphan: gh
+# matches heads by name only, so a lint that counted it would hide the orphan.
+#
+# The load-bearing refusal rows are gh failing and a listing that fills its
+# own --limit: the lint must exit 2 and must NOT print its OK line, because
+# "no orphans among the PRs it could list" is not "no orphans".
 set -uo pipefail # NOT -e: assertions capture non-zero return codes
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -70,7 +73,7 @@ if [ "$pushed" != "feat/fresh-orphan feat/level feat/merged feat/old-orphan main
   exit 1
 fi
 
-printf 'feat/merged\n' >"$WORK/pr-heads"
+printf 'feat/merged\nfeat/old-orphan fork\n' >"$WORK/pr-heads"
 : >"$WORK/empty.waivers"
 
 # run_lint <out-var-prefix> [lint args...] — runs with the stub gh first on
@@ -104,6 +107,9 @@ printf '%s\n' "$err" | grep -q 'ahead=1  feat/old-orphan' &&
 printf '%s\n' "$all" | grep -q 'feat/merged' &&
   { fail 'a branch that has a PR was named'; show; } ||
   echo '  PASS: a branch with a PR is not named'
+printf '%s\n' "$all" | grep -q 'feat/level' &&
+  { fail 'a branch level with main was named'; show; } ||
+  echo '  PASS: a branch level with main is not named'
 printf '%s\n' "$out" | grep -q '^INFO:' && printf '%s\n' "$out" | grep -q 'feat/fresh-orphan' &&
   echo '  PASS: a fresh orphan is reported as INFO' ||
   { fail 'the fresh orphan is not reported as INFO'; show; }
@@ -114,13 +120,32 @@ printf '%s\n' "$all" | grep -q '^OK:' &&
   { fail 'the OK line printed on a failing run'; show; } ||
   echo '  PASS: no OK line on a failing run'
 
-# The stub was really asked, and only about branches ahead of main.
-asked=$(sort "$WORK/queries.log" | tr '\n' ' ')
-if [ "$asked" = "feat/fresh-orphan feat/merged feat/old-orphan " ]; then
-  echo '  PASS: gh was asked about exactly the three ahead-of-main branches'
+# The stub was really asked — once, for the whole listing, with no --head.
+asked=$(wc -l <"$WORK/queries.log" | tr -d ' ')
+if [ "$asked" = "1" ] && [ -z "$(tr -d '\n' <"$WORK/queries.log")" ]; then
+  echo '  PASS: gh was asked once, for the whole listing'
 else
-  fail "gh was asked about '$asked', not the three ahead-of-main branches"
+  fail "gh was asked $asked time(s), not once for the whole listing"
 fi
+
+# ── 1b. A PR listing larger than a pipe buffer ──────────────────────────────
+# The real repository has 1218 PRs. A lookup written as `printf "$heads" |
+# grep -q` under pipefail reports SIGPIPE (141) when grep exits on an EARLY
+# match while printf is still writing, so a branch whose PR sorts first read
+# as having none. The first live run of the listing design named 10 such
+# branches, feat/1798-error-state (PR #1809) among them; this row is that run,
+# shrunk. feat/merged is listed first, then 20000 filler heads.
+{ printf 'feat/merged\n'; i=0; while [ "$i" -lt 20000 ]; do printf 'filler/branch-%05d\n' "$i"; i=$((i + 1)); done; } >"$WORK/pr-heads-big"
+cp "$WORK/pr-heads" "$WORK/pr-heads-small"
+cp "$WORK/pr-heads-big" "$WORK/pr-heads"
+run_lint --waivers "$WORK/empty.waivers"
+cp "$WORK/pr-heads-small" "$WORK/pr-heads"
+printf '%s\n' "$err" | grep -q 'feat/merged' &&
+  { fail 'with 20001 PRs listed, a branch whose PR is listed FIRST was named as an orphan'; show; } ||
+  echo '  PASS: a large listing still finds a PR listed first'
+printf '%s\n' "$err" | grep -q 'ahead=1  feat/old-orphan' &&
+  echo '  PASS: a large listing still names the real orphan' ||
+  { fail 'with 20001 PRs listed, the real orphan was not named'; show; }
 
 # ── 2. Only fresh orphans left → exit 0, with the OK line ───────────────────
 printf 'feat/old-orphan  kept on purpose for this fixture\n' >"$WORK/live.waivers"
@@ -135,6 +160,13 @@ printf '%s\n' "$out" | grep -q 'feat/fresh-orphan' &&
   { fail 'the fresh orphan vanished from a clean run'; show; }
 
 # ── 3. The threshold is honoured ────────────────────────────────────────────
+run_lint --waivers "$WORK/live.waivers" --max-age-hours 08
+if [ "$got" -eq 0 ] && printf '%s\n' "$out" | grep -q '^OK:'; then
+  echo '  PASS: a leading-zero --max-age-hours is read as decimal'
+else
+  fail "--max-age-hours 08 must be read as 8 hours and exit 0, got $got"; show
+fi
+
 run_lint --waivers "$WORK/live.waivers" --max-age-hours 0
 if [ "$got" -eq 1 ] && printf '%s\n' "$err" | grep -q 'feat/fresh-orphan'; then
   echo '  PASS: --max-age-hours 0 turns the fresh orphan into a failure'
@@ -161,20 +193,31 @@ else
 fi
 
 # ── 5. Refusals — could not look must never read as "no orphans" ────────────
-LINT_ENV=(PR_EXISTS_STUB_FAIL_ON=feat/merged)
+LINT_ENV=(PR_EXISTS_STUB_FAIL=1)
 run_lint --waivers "$WORK/live.waivers"
 LINT_ENV=()
 if [ "$got" -eq 2 ]; then
-  echo '  PASS: gh failing on one branch mid-loop refuses the whole run (exit 2)'
+  echo '  PASS: gh failing refuses the whole run (exit 2)'
 else
-  fail "gh failing mid-loop must exit 2, got $got"; show
+  fail "gh failing must exit 2, got $got"; show
 fi
 printf '%s\n' "$all" | grep -q '^OK:' &&
-  { fail 'the OK line printed although one branch could not be asked about'; show; } ||
-  echo '  PASS: no OK line when a branch could not be asked about'
-printf '%s\n' "$err" | grep -q "REFUSE:.*feat/merged" &&
-  echo '  PASS: the refusal names the branch it could not ask about' ||
-  { fail 'the refusal does not name the branch'; show; }
+  { fail 'the OK line printed although the PR listing failed'; show; } ||
+  echo '  PASS: no OK line when the PR listing failed'
+
+# The table holds two PRs; a limit of 2 is filled exactly, so the listing may
+# have been cut off and must be refused rather than read as complete.
+LINT_ENV=(ORPHAN_BRANCH_LINT_LIST_LIMIT=2)
+run_lint --waivers "$WORK/live.waivers"
+LINT_ENV=()
+if [ "$got" -eq 2 ] && printf '%s\n' "$err" | grep -q 'may be truncated'; then
+  echo '  PASS: a listing that fills its --limit is refused as possibly truncated (exit 2)'
+else
+  fail "a listing that fills its --limit must exit 2 as truncated, got $got"; show
+fi
+printf '%s\n' "$all" | grep -q '^OK:' &&
+  { fail 'the OK line printed on a possibly truncated listing'; show; } ||
+  echo '  PASS: no OK line on a possibly truncated listing'
 
 LINT_ENV=(PR_EXISTS_STUB_GARBAGE=1)
 run_lint --waivers "$WORK/live.waivers"
@@ -209,6 +252,6 @@ committed_noreason=$(sed -e 's/#.*//' "$REPO_ROOT/tools/orphan-branch-lint.waive
   fail "committed waiver(s) with no reason: $committed_noreason"
 
 if [ "$rc" -eq 0 ]; then
-  echo 'OK: orphan-branch-lint_test — orphans are named, fresh ones are INFO, stale waivers fail, and a branch it cannot ask about refuses the run'
+  echo 'OK: orphan-branch-lint_test — orphans are named, fresh ones are INFO, stale waivers fail, and a listing it cannot trust refuses the run'
 fi
 exit "$rc"

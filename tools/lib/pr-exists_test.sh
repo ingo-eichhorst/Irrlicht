@@ -45,7 +45,7 @@ assert_rc() {
 
 # ── 1. The defect this file exists for ──────────────────────────────────────
 # The stub's table holds a PR for `fix/x-2` and none for `fix/x`.
-naive=$(PATH="$STUB_BIN:$PATH" gh pr list --state all --json headRefName | grep -c 'fix/x')
+naive=$(PATH="$STUB_BIN:$PATH" gh pr list --state all --limit 100 --json headRefName | grep -c 'fix/x')
 if [ "$naive" -lt 1 ]; then
   fail 'the stub no longer carries a head that fix/x is a prefix of; this fixture would prove nothing'
 else
@@ -65,6 +65,9 @@ fi
 # ── 2. Ordinary answers ─────────────────────────────────────────────────────
 assert_rc 'a head with a PR reports 0' 0 'fix/x-2'
 assert_rc 'a head with no PR reports 1' 1 'feat/4242-never-opened'
+# #2029 review: --head matches a fork's PR too. A head whose only PR came
+# from a fork has never been made visible from THIS repository.
+assert_rc 'a head whose only PR is from a fork reports 1' 1 'fix/forked'
 
 # ── 3. Refusals — could not look must never read as "no PR" ─────────────────
 assert_rc 'a glob in the branch name is refused' 2 'feat/*'

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # A stand-in for gh(1), used by tools/lib/pr-exists_test.sh and
 # tools/lib/orphan-branch-lint_test.sh. It answers only
-# `gh pr list --state all [--head <branch>] --json <fields>`.
+# `gh pr list --state all [--head <branch>] [--limit N] --json <fields>`.
 #
-# Its PR table is one head branch per line. The default table carries the
+# Its PR table is one PR per line: `<head>` for a PR whose head lives in this
+# repository, `<head> fork` for one opened from a fork (isCrossRepository
+# true). `--head` matches the head name only, whoever owns it — which is what
+# real gh does (#2029 review: `--head fix/ghostty-tab-focus` returns a fork's
+# PR on this repo). `--limit N` truncates the answer to N rows, as real gh
+# does. The default table carries the
 # prefix pair the #2029 triage asked for: `fix/x-2` has a PR and `fix/x` does
 # not. Any check that matches a head by substring or prefix — the unfiltered
 # `gh pr list | grep fix/x` idiom — reads `fix/x` as covered. The exact-head
@@ -23,7 +28,8 @@
 set -uo pipefail
 
 DEFAULT_TABLE='fix/x-2
-feat/1999-other-work'
+feat/1999-other-work
+fix/forked fork'
 
 if [ "${1:-}" != "pr" ] || [ "${2:-}" != "list" ]; then
   echo "gh-stub: unexpected command '$*' — the tests only drive 'gh pr list'" >&2
@@ -33,10 +39,12 @@ shift 2
 
 head=""
 have_head=0
+limit=30 # gh's own default
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --head) head="${2:-}"; have_head=1; shift 2 ;;
-    --state | --json | --repo | --limit) shift 2 ;;
+    --limit) limit="${2:-}"; shift 2 ;;
+    --state | --json | --repo) shift 2 ;;
     *) shift ;;
   esac
 done
@@ -62,11 +70,17 @@ else
   table=$DEFAULT_TABLE
 fi
 
-# Emit a JSON array of {number, headRefName}; numbers are line numbers.
-printf '%s\n' "$table" | awk -v want="$head" -v filter="$have_head" '
+# Emit a JSON array of {number, headRefName, isCrossRepository}; numbers are
+# line numbers.
+printf '%s\n' "$table" | awk -v want="$head" -v filter="$have_head" -v limit="$limit" '
   BEGIN { printf "["; n = 0 }
-  $0 == "" { next }
-  filter == 1 && $0 != want { next }
-  { if (n++) printf ","; printf "{\"number\":%d,\"headRefName\":\"%s\"}", NR, $0 }
+  NF == 0 { next }
+  filter == 1 && $1 != want { next }
+  n >= limit + 0 { next }
+  {
+    cross = ($2 == "fork") ? "true" : "false"
+    if (n++) printf ","
+    printf "{\"number\":%d,\"headRefName\":\"%s\",\"isCrossRepository\":%s}", NR, $1, cross
+  }
   END { print "]" }
 '

@@ -15,12 +15,17 @@
 #
 # It asks about one exact head, never a table. `gh pr list --head <branch>`
 # filters on the exact head ref name — checked live on 2026-09-24 against this
-# repo: `--head feat/2022` returned `[]` while `feat/2022-…` has a PR. So no
-# page cap applies (the unfiltered `gh pr list --limit 1000` already returns
-# 1000 rows here, i.e. a single page is truncated), and a head that is a
-# prefix of another PR's head is not mistaken for it. That prefix row is
-# asserted in tools/lib/pr-exists_test.sh, against the stub in
+# repo: `--head feat/2022` returned `[]` while `feat/2022-…` has a PR. So a
+# head that is a prefix of another PR's head is not mistaken for it. That
+# prefix row is asserted in tools/lib/pr-exists_test.sh, against the stub in
 # tools/lib/testdata/pr-exists/gh-stub.sh, and again against the real gh.
+#
+# `--head` does NOT filter on the head's owner, so a PR opened from a FORK on
+# a branch of the same name matches too — checked live on 2026-09-24:
+# `--head fix/ghostty-tab-focus` returns PR #1470 with isCrossRepository true
+# while origin has no such branch. Only PRs whose head lives in this
+# repository (isCrossRepository == false) count here; a fork's PR says nothing
+# about whether THIS repo's branch was ever made visible.
 #
 # Any state counts: open, closed or merged. The question is "was this work
 # ever made visible", not "is it still under review".
@@ -38,8 +43,9 @@
 #   pr_exists feat/2029-pr-exists-orphan-lint
 #
 # Exit codes:
-#   0  at least one PR (any state) has exactly this head branch
-#   1  no PR has ever had this head branch
+#   0  at least one PR (any state) has exactly this head branch in this
+#      repository (fork PRs with a same-named head do not count)
+#   1  no PR from this repository has ever had this head branch
 #   2  REFUSAL — could not look. Wrong argument count, an empty branch name, a
 #      branch name carrying a glob character, gh failing (auth, network, rate
 #      limit), or gh printing something that is not a JSON array. Absence of a
@@ -72,7 +78,7 @@ pr_exists() {
   esac
 
   local out status count
-  out=$(gh pr list --state all --head "$branch" --json number 2>&1)
+  out=$(gh pr list --state all --head "$branch" --json number,isCrossRepository 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "REFUSE: pr-exists — could not ask gh about head '$branch' (gh exit $status): $out" >&2
@@ -81,8 +87,9 @@ pr_exists() {
 
   # jq decides the shape: anything that is not a JSON array is a refusal, never
   # an empty answer. `gh` printing a warning, an HTML error page or nothing at
-  # all must not read as "no PR".
-  count=$(printf '%s' "$out" | jq -e 'if type == "array" then length else error("not an array") end' 2>/dev/null)
+  # all must not read as "no PR". A row whose isCrossRepository is anything
+  # but `false` (a fork, or a field gh stopped sending) is not counted.
+  count=$(printf '%s' "$out" | jq -e 'if type == "array" then map(select(.isCrossRepository == false)) | length else error("not an array") end' 2>/dev/null)
   status=$?
   if [ "$status" -ne 0 ] || [ -z "$count" ]; then
     echo "REFUSE: pr-exists — gh answered with something that is not a JSON array for head '$branch': $out" >&2
@@ -90,10 +97,10 @@ pr_exists() {
   fi
 
   if [ "$count" -gt 0 ]; then
-    echo "OK: pr-exists — $count PR(s) have head $branch"
+    echo "OK: pr-exists — $count PR(s) from this repository have head $branch"
     return 0
   fi
-  echo "FAIL: pr-exists — no PR has ever had head $branch" >&2
+  echo "FAIL: pr-exists — no PR from this repository has ever had head $branch" >&2
   return 1
 }
 

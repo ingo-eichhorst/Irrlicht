@@ -143,8 +143,8 @@ LOCK_TEST=tools/lib/pr-exists_test.sh
 assert_mutation_is_red \
   'replacing the exact-head query with a substring search is caught' \
   'tools/lib/pr-exists.sh' \
-  $'  out=$(gh pr list --state all --head "$branch" --json number 2>&1)' \
-  $'  out=$(gh pr list --state all --json headRefName 2>&1 | grep -qF "$branch" && echo \'[1]\' || echo \'[]\')' \
+  $'  out=$(gh pr list --state all --head "$branch" --json number,isCrossRepository 2>&1)' \
+  $'  out=$(gh pr list --state all --limit 100 --json headRefName 2>&1 | grep -qF "$branch" && echo \'[{"isCrossRepository":false}]\' || echo \'[]\')' \
   'a head that is only a prefix of another PR head reports 1'
 
 assert_mutation_is_red \
@@ -160,9 +160,17 @@ assert_mutation_is_red \
 assert_mutation_is_red \
   'reading a non-JSON answer as zero PRs is caught' \
   'tools/lib/pr-exists.sh' \
-  $'  count=$(printf \'%s\' "$out" | jq -e \'if type == "array" then length else error("not an array") end\' 2>/dev/null)' \
+  $'  count=$(printf \'%s\' "$out" | jq -e \'if type == "array" then map(select(.isCrossRepository == false)) | length else error("not an array") end\' 2>/dev/null)' \
   $'  count=$(printf \'%s\' "$out" | awk \'/"number"/ { n++ } END { print n + 0 }\')' \
   'gh printing non-JSON is refused, not reported as absent'
+
+# #2029 review: --head matches a fork's same-named head too.
+assert_mutation_is_red \
+  'counting a fork PR as this repository'"'"'s is caught' \
+  'tools/lib/pr-exists.sh' \
+  $'then map(select(.isCrossRepository == false)) | length else' \
+  $'then length else' \
+  'a head whose only PR is from a fork reports 1'
 
 assert_mutation_is_red \
   'letting a glob through instead of refusing it is caught' \

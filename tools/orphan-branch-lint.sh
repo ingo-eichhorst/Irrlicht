@@ -14,24 +14,29 @@
 #
 # WHAT IT DOES
 #   1. `git fetch --prune <remote>`, so a branch deleted upstream is not named.
-#   2. For every refs/remotes/<remote>/* except HEAD and main that has at least
-#      one commit not in <remote>/main, ask tools/lib/pr-exists.sh whether a
-#      PR (any state) ever had that head. One query per branch rather than one
-#      listing of all PRs: an unfiltered `gh pr list --limit 1000` already
-#      returns 1000 rows in this repo (checked 2026-09-24 during #2029's
-#      triage), so a single page is truncated, and a branch whose PR fell off
-#      the page would be named falsely — or, worse, a paging bug would hide
-#      one. The per-branch query has no cap to get wrong.
-#   3. A branch with no PR whose tip commit is older than --max-age-hours
+#   2. List every PR once — `gh pr list --state all --limit $LIST_LIMIT
+#      --json headRefName,isCrossRepository` — and keep the heads of PRs whose
+#      head lives in this repository. gh pages through the whole list up to
+#      --limit: on 2026-09-24 `--limit 5000` returned 1217 rows, equal to the
+#      GraphQL `pullRequests.totalCount` (1217), in about 8s. An answer with
+#      as many rows as the limit may have been cut off, so it is REFUSED
+#      rather than read as complete. Fork PRs are dropped because gh matches a
+#      head by name only, and a fork's same-named branch says nothing about
+#      this repository's (live: `--head fix/ghostty-tab-focus` returns fork
+#      PR #1470, and origin has no such branch).
+#   3. For every refs/remotes/<remote>/* except HEAD and main that has at least
+#      one commit not in <remote>/main, look its name up in that set.
+#   4. A branch with no PR whose tip commit is older than --max-age-hours
 #      (default 24) is a FAIL. A younger one is printed as INFO — it may be a
 #      push whose PR is seconds away.
 #
-# COST. One gh round trip per branch ahead of main. Squash-merged branches
-# stay "ahead" forever, so that is most of them: 532 of 533 remote branches on
-# 2026-09-24 (counted with the for-each-ref / rev-list loop in #2029). One
-# full local run that day took 371s wall clock — minutes, not seconds, which
-# is why this is a scheduled job and not a push hook. Deleting merged branches
-# shrinks it.
+# COST. One paginated listing (about 13 GraphQL pages of 100 for 1217 PRs),
+# plus one local `git rev-list` per remote branch. The first version asked
+# tools/lib/pr-exists.sh once per ahead-of-main branch instead — 532 of 533
+# remote branches on 2026-09-24, since squash-merged branches stay "ahead" —
+# and took 371s; review of #2029 showed the premise behind that choice (a
+# truncated listing) was a misread `--limit`. This version's full local run
+# on 2026-09-24 took 28s and named the same single branch.
 #
 # WAIVERS. tools/orphan-branch-lint.waivers lists branches that are knowingly
 # PR-less, one `<branch> <reason>` per line. A waiver is REFUSED without a
@@ -47,18 +52,18 @@
 #      waiver, and every waiver is live
 #   1  at least one orphan older than the threshold, or a stale waiver
 #   2  REFUSAL — could not look: bad arguments, an unreadable waiver file, a
-#      failed fetch, no <remote>/main, a git error, or ANY pr-exists refusal
-#      (gh auth, network, rate limit, unparsable answer). One unanswerable
-#      branch aborts the whole run, because "no orphans among the branches I
-#      could ask about" is not "no orphans" (AGENTS.md: "A verification
-#      mechanism must fail loudly when it cannot run"). The OK line is printed
-#      only after every branch was answered.
+#      failed fetch, no <remote>/main, a git error, gh failing (auth, network,
+#      rate limit), an answer that is not a JSON array, or a listing that may
+#      have been truncated. "No orphans among the PRs I could list" is not "no
+#      orphans" (AGENTS.md: "A verification mechanism must fail loudly when it
+#      cannot run"), so the OK line prints only after a complete listing.
 set -uo pipefail
 
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=tools/lib/pr-exists.sh
-. "$SELF_DIR/lib/pr-exists.sh" # defines pr_exists
 
+# The listing's own cap. An answer this long may have been cut off and is
+# refused. Overridable so the test can drive the truncation refusal.
+LIST_LIMIT=${ORPHAN_BRANCH_LINT_LIST_LIMIT:-100000}
 MAX_AGE_HOURS=24
 REMOTE=origin
 WAIVERS="$SELF_DIR/orphan-branch-lint.waivers"
@@ -78,6 +83,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+case "$LIST_LIMIT" in
+  '' | *[!0-9]* | 0*) refuse "ORPHAN_BRANCH_LINT_LIST_LIMIT must be a positive whole number, got '$LIST_LIMIT'" ;;
+esac
 case "$MAX_AGE_HOURS" in
   '' | *[!0-9]*) refuse "--max-age-hours must be a whole number of hours, got '$MAX_AGE_HOURS'" ;;
 esac
@@ -101,7 +109,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   waived="$waived$1"$'\n'
 done <"$WAIVERS"
 
-is_waived() { printf '%s' "$waived" | grep -qxF -- "$1"; }
+# Every set lookup reads a here-string, never `printf | grep -q`: under
+# pipefail, grep -q exiting on an early match SIGPIPEs the printf and the
+# pipeline reports 141 — a "no". Measured in #2029: with the 1218-PR listing
+# the piped form named 10 branches that all have PRs (feat/1798-error-state,
+# PR #1809, among them); tools/lib/orphan-branch-lint_test.sh row 1b repeats
+# it with 20001 heads.
+is_waived() { grep -qxF -- "$1" <<<"$waived"; }
 
 # ── Enumerate ───────────────────────────────────────────────────────────────
 git fetch --prune --quiet "$REMOTE" || refuse "git fetch --prune $REMOTE failed"
@@ -111,8 +125,22 @@ git rev-parse --verify --quiet "$base" >/dev/null || refuse "$base does not exis
 branches=$(git for-each-ref --format='%(refname)' "refs/remotes/$REMOTE/") ||
   refuse "git for-each-ref over refs/remotes/$REMOTE/ failed"
 
+# ── Every PR head in this repository, once ──────────────────────────────────
+listing=$(gh pr list --state all --limit "$LIST_LIMIT" --json headRefName,isCrossRepository 2>&1) ||
+  refuse "gh pr list failed, so no branch can be judged: $listing"
+rows=$(printf '%s' "$listing" | jq -e 'if type == "array" then length else error("not an array") end' 2>/dev/null) ||
+  refuse "gh pr list answered with something that is not a JSON array: $(printf '%s' "$listing" | head -c 300)"
+[ "$rows" -lt "$LIST_LIMIT" ] ||
+  refuse "gh pr list returned $rows rows, the whole --limit $LIST_LIMIT; the listing may be truncated, so a missing head proves nothing"
+pr_heads=$(printf '%s' "$listing" | jq -r '.[] | select(.isCrossRepository == false) | .headRefName') ||
+  refuse "could not extract PR heads from the listing"
+
+has_pr() { grep -qxF -- "$1" <<<"$pr_heads"; }
+
 now=$(date +%s)
-max_age_s=$((MAX_AGE_HOURS * 3600))
+# 10#: a leading zero is decimal, not octal ("08" would otherwise abort the
+# arithmetic with exit 1, and "010" would mean 8 hours).
+max_age_s=$((10#$MAX_AGE_HOURS * 3600))
 checked=0
 live_waivers=""
 orphans=""
@@ -131,12 +159,8 @@ while IFS= read -r ref; do
     continue
   fi
 
-  out=$(pr_exists "$short" 2>&1)
-  case $? in
-    0) checked=$((checked + 1)); continue ;;
-    1) checked=$((checked + 1)) ;;
-    *) refuse "could not ask whether '$short' has a PR, so no verdict is possible: $out" ;;
-  esac
+  checked=$((checked + 1))
+  has_pr "$short" && continue
 
   tip=$(git log -1 --format='%ct' "$ref") || refuse "git log $ref failed"
   day=$(git log -1 --format='%cs' "$ref")
@@ -165,7 +189,7 @@ fi
 stale=""
 while IFS= read -r w; do
   [ -n "$w" ] || continue
-  printf '%s' "$live_waivers" | grep -qxF -- "$w" || stale="$stale$w"$'\n'
+  grep -qxF -- "$w" <<<"$live_waivers" || stale="$stale$w"$'\n'
 done <<<"$waived"
 if [ -n "$stale" ]; then
   echo "FAIL: orphan-branch-lint — waiver(s) in $WAIVERS name no ahead-of-main branch on $REMOTE any more:" >&2
@@ -175,6 +199,6 @@ if [ -n "$stale" ]; then
 fi
 
 if [ "$rc" -eq 0 ]; then
-  echo "OK: orphan-branch-lint — asked about $checked branch(es) ahead of $REMOTE/main; none older than ${MAX_AGE_HOURS}h is without a PR"
+  echo "OK: orphan-branch-lint — checked $checked branch(es) ahead of $REMOTE/main against $rows PR(s); none older than ${MAX_AGE_HOURS}h is without a PR"
 fi
 exit "$rc"
