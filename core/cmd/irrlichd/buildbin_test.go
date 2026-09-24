@@ -7,11 +7,15 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"irrlicht/core/adapters/outbound/git/gittest"
 )
 
 // TestMain owns the one irrlichd binary the subprocess tests share, so it is
-// removed after the run rather than leaked into the temp dir.
+// removed after the run rather than leaked into the temp dir. It also primes
+// git before any test runs; see package gittest (#2047).
 func TestMain(m *testing.M) {
+	gittest.PrimeOrExit()
 	code := m.Run()
 	sharedBin.remove()
 	os.Exit(code)
