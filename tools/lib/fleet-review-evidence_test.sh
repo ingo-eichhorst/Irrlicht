@@ -107,7 +107,7 @@ if [ ! -r "$REVIEW_SKILL" ]; then
   fail "cannot read $REVIEW_SKILL; the evidence grammar cannot be checked against its source"
 else
   for marker in correctness convention test-coverage efficiency simplification; do
-    grep -qF "$marker" "$REVIEW_SKILL" ||
+    grep -qF -- "$marker" "$REVIEW_SKILL" ||
       fail "category '$marker' is no longer named in $REVIEW_SKILL"
   done
   grep -qiF 'no findings' "$REVIEW_SKILL" ||

@@ -90,14 +90,14 @@ fi
 # is what actually proves the redirection works.
 for seam in IRRLICHT_TESTMAC_REPO_ROOT IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP \
             IRRLICHT_TESTMAC_DEV_APP IRRLICHT_TESTMAC_LOG_DIR IRRLICHT_TESTMAC_PLISTBUDDY; do
-  if ! grep -q "$seam" "$REPO_ROOT/$SCRIPT"; then
+  if ! grep -q -- "$seam" "$REPO_ROOT/$SCRIPT"; then
     echo "FAIL: $NAME — REFUSING TO RUN: $SCRIPT no longer honours \$$seam." >&2
     echo "      Without it this test drives the real production app and daemon." >&2
     exit 2
   fi
 done
 for seam in IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP IRRLICHT_TESTMAC_PORT; do
-  if ! grep -q "$seam" "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh"; then
+  if ! grep -q -- "$seam" "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh"; then
     echo "FAIL: $NAME — REFUSING TO RUN: restore-prod.sh no longer honours \$$seam." >&2
     echo "      Without it the restore cases below delete the real /Applications/Irrlicht.app." >&2
     exit 2

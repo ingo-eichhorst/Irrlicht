@@ -67,7 +67,7 @@ assert_mutation_is_red() {
   fi
 
   # ...and fail for the RIGHT reason.
-  if ! grep -qF "$want_match" <<<"$out"; then
+  if ! grep -qF -- "$want_match" <<<"$out"; then
     echo "FAIL: $label — $LOCK_TEST failed, but not with the expected message."
     echo "      wanted to find: $want_match"
     echo "$out" | sed 's/^/      | /'

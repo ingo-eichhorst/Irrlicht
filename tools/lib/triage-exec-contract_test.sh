@@ -29,9 +29,9 @@ exec_validation=$(awk '
 [ -n "$exec_validation" ] || fail 'cannot read the exec validation section'
 
 for field in '## High-level design' '## Testing strategy' '**Process:**' '**Estimate:**' '**Verdict:**'; do
-  grep -qF "$field" <<<"$triage_template" ||
+  grep -qF -- "$field" <<<"$triage_template" ||
     fail "triage assessment template missing required field: $field"
-  grep -qF "$field" <<<"$exec_validation" ||
+  grep -qF -- "$field" <<<"$exec_validation" ||
     fail "exec validation missing required field: $field"
 done
 

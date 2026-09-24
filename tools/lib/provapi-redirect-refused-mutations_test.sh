@@ -95,7 +95,7 @@ assert_go_test_goes_red() {
     fails=$((fails + 1))
     return
   fi
-  if ! grep -qF "$want" <<<"$out"; then
+  if ! grep -qF -- "$want" <<<"$out"; then
     echo "FAIL: $label — the test failed, but not with the expected message."
     echo "      wanted to find: $want"
     echo "$out" | quote_output

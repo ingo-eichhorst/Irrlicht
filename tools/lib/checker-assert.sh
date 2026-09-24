@@ -57,7 +57,7 @@ assert_checker_rc() {
     return 1
   fi
 
-  if [ -n "$needle" ] && ! grep -qF "$needle" <<<"$out"; then
+  if [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$out"; then
     echo "FAIL: $label — exit $got was right, but the output never said '$needle'" >&2
     echo "$out" | sed 's/^/      | /' >&2
     # shellcheck disable=SC2034  # rc is the CALLER's accumulator, declared there

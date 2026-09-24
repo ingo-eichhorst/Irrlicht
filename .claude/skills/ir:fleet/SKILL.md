@@ -116,8 +116,12 @@ its own worktree inside the fleet's. Measured in
 worktree while `--git-common-dir` gave `/Users/ingo/projects/irrlicht/.git`:
 
 ```bash
-REPO_ROOT=$(dirname "$(git rev-parse --git-common-dir)")
+REPO_ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 ```
+
+`--path-format=absolute` is what keeps it absolute from the main checkout, where
+`--git-common-dir` alone answers `.git` and the brief would say `Repo root: .`.
+Measured in `/Users/ingo/projects/irrlicht` on 2026-09-24 (#2045).
 
 
 ```text

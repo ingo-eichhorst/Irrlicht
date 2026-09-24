@@ -179,7 +179,7 @@ echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
 # overriding nothing, or shadowing something real, and every arm would grade a
 # different program while still going green.
 for fn in "${STEP_FNS[@]}"; do
-  grep -q "$fn" "$TMP/step.sh" \
+  grep -q -- "$fn" "$TMP/step.sh" \
     || { echo "FAIL: swift-test-step_test — the step body no longer calls $fn; this file is grading something else" >&2; exit 1; }
   grep -qE "^$fn\(\)" "$REAL_LIB" \
     || { echo "FAIL: swift-test-step_test — $REAL_LIB no longer defines $fn" >&2; exit 1; }
