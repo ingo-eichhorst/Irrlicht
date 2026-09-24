@@ -235,7 +235,7 @@ echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
 # library below would be overriding nothing, or shadowing something real, and
 # every arm would grade a different program while still going green.
 for fn in swift_suite_run swift_suite_completed swift_suite_ran_tests; do
-  grep -q "$fn" "$TMP/step.sh" \
+  grep -q -- "$fn" "$TMP/step.sh" \
     || { echo "FAIL: swift-snapshot-evidence_test — the step body no longer calls $fn; the fixture library is grading something else" >&2; exit 1; }
   grep -qE "^$fn\(\)" "$REAL_LIB" \
     || { echo "FAIL: swift-snapshot-evidence_test — $REAL_LIB no longer defines $fn" >&2; exit 1; }

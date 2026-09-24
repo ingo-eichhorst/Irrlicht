@@ -5,7 +5,7 @@
 # WHY THIS FILE EXISTS. fleet-contract_test.sh is a check the #2022 change
 # ADDS: it has no "before the fix" to run red, so per AGENTS.md and
 # docs/testing-philosophy.md it earns its place only by being seen to fail
-# when the thing it protects is broken. Six breakages, proven separately
+# when the thing it protects is broken. Seven breakages, proven separately
 # because a single combined mutation could pass while one of them was
 # actually unguarded.
 #
@@ -88,6 +88,14 @@ assert_mutation_is_red \
   $'when the caller names an existing worktree for `<N>` and asks to continue it,' \
   $'when the caller asks to continue an interrupted run,' \
   'exec section 2 no longer lets a caller resume an existing worktree'
+
+# ── 7. The repo root goes back to answering relative ────────────────────────
+assert_mutation_is_red \
+  'guard catches the repo root losing --path-format=absolute' \
+  '.claude/skills/ir:fleet/SKILL.md' \
+  $'REPO_ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")' \
+  $'REPO_ROOT=$(dirname "$(git rev-parse --git-common-dir)")' \
+  'ir:fleet computes the repo root without --path-format=absolute'
 
 if [[ $fails -gt 0 ]]; then
   echo "fleet-contract-mutations: $fails FAILED"

@@ -183,7 +183,7 @@ want_absent() { # label needle haystack
   return 0
 }
 want_file_contains() { # label needle file
-  if grep -qF "$2" "$3" 2>/dev/null; then pass "$1"
+  if grep -qF -- "$2" "$3" 2>/dev/null; then pass "$1"
   else fail "$1" "$3 containing: $2" "$(flat "$(cat "$3" 2>/dev/null)")"; fi
   return 0
 }

@@ -30,7 +30,7 @@ done
 for checker in tools/lib/ref-exists.sh tools/lib/fleet-scope-overlap.sh \
   tools/lib/fleet-review-evidence.sh; do
   [ -r "$checker" ] || fail "ir:fleet delegates to $checker, which is not readable"
-  grep -qF "$checker" "$FLEET" || fail "ir:fleet no longer names $checker"
+  grep -qF -- "$checker" "$FLEET" || fail "ir:fleet no longer names $checker"
 done
 
 exec_wip=$(awk '
@@ -62,7 +62,7 @@ review_joined=$(printf '%s' "$exec_review" | tr '\n' ' ')
 # check <haystack-name> <haystack> <want> <message>
 check() {
   local where="$1" haystack="$2" want="$3" message="$4"
-  grep -qF "$want" <<<"$haystack" || fail "[$where] $message"
+  grep -qF -- "$want" <<<"$haystack" || fail "[$where] $message"
 }
 
 # ── ir:exec section 2 — a resume has an entry point ─────────────────────────
@@ -118,6 +118,12 @@ check fleet "$fleet_body" 'UNPROVEN' \
   'ir:fleet no longer names the UNPROVEN review verdict'
 check fleet "$fleet_body" 'never reported as clean' \
   'ir:fleet no longer forbids reporting an unproven gate as clean'
+
+# ── ir:fleet — the repo root it binds a spawned agent to ────────────────────
+# Without the flag, --git-common-dir answers `.git` from the main checkout, so
+# the brief told a spawned agent `Repo root: .` (#2045).
+check fleet "$fleet_body" 'git rev-parse --path-format=absolute --git-common-dir' \
+  'ir:fleet computes the repo root without --path-format=absolute, so it is relative from the main checkout'
 
 # ── ir:fleet — the refusals ─────────────────────────────────────────────────
 check fleet "$fleet_body" 'Explicit issue numbers only' \

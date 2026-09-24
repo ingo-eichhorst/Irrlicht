@@ -25,7 +25,7 @@ fi
 proof_joined=$(printf '%s' "$proof_section" | tr '\n' ' ')
 check() {
   local want="$1" message="$2"
-  grep -qF "$want" <<<"$proof_joined" || fail "$message"
+  grep -qF -- "$want" <<<"$proof_joined" || fail "$message"
 }
 
 check 'commit before mutating' 'no longer says to commit before mutating'
