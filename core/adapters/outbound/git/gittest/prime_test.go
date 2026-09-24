@@ -39,6 +39,23 @@ func TestPrimeReportsAKillAtTheDeadline(t *testing.T) {
 	}
 }
 
+// A binary whose child inherits the output pipe and outlives the kill must not
+// hold the primer past its deadline (review finding on #2047's PR; the adapter
+// measured the same shape at 30.01s in shellout_test.go before #1543's WaitDelay).
+func TestPrimeIsBoundedWhenAChildHoldsThePipe(t *testing.T) {
+	leaky := filepath.Join(t.TempDir(), "leaky-git")
+	if err := os.WriteFile(leaky, []byte("#!/bin/sh\nsleep 30 &\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	elapsed, err := prime(leaky, 200*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "did not answer within 200ms") {
+		t.Fatalf("want a non-answer at the 200ms deadline, got %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("the primer waited %s for a 200ms deadline — a grandchild holding the pipe outlived the kill", elapsed)
+	}
+}
+
 // The real binary answers. This is the call every primed package's TestMain
 // makes, run here once more so a broken resolution fails in this package too.
 func TestPrimeGitAnswers(t *testing.T) {

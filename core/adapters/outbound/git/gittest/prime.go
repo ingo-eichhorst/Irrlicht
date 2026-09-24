@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"irrlicht/core/pkg/pathutil"
+	"irrlicht/core/pkg/shellout"
 )
 
 // PrimeTimeout bounds the one warm-up call. The slowest cold prime measured so
@@ -37,9 +38,10 @@ import (
 // that needs more is reported as a failure rather than waited out.
 const PrimeTimeout = 60 * time.Second
 
-// SkipPrimeEnv disables the primer. It exists for the cold-cache reproduction
-// (coldcache_repro_test.go), which must run the packages WITHOUT it to show
-// the failure the primer prevents. A skipped primer says so on stderr.
+// SkipPrimeEnv disables the primer. It exists for the cold-cache
+// reproduction (coldcache_repro_darwin_test.go), which must run the packages
+// WITHOUT it to show the failure the primer prevents. A skipped primer says so
+// on stderr.
 const SkipPrimeEnv = "IRRLICHT_SKIP_GIT_PRIME"
 
 // binary is resolved the same way the adapter resolves its own package var
@@ -62,7 +64,12 @@ func prime(bin string, timeout time.Duration) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := time.Now()
-	out, err := exec.CommandContext(ctx, bin, "--version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, "--version")
+	// Without it, a child that inherits the output pipe keeps CombinedOutput
+	// blocked after the kill: TestPrimeIsBoundedWhenAChildHoldsThePipe waited
+	// 30.05s for a 200ms deadline before this line existed.
+	cmd.WaitDelay = shellout.WaitDelay
+	out, err := cmd.CombinedOutput()
 	elapsed := time.Since(start)
 	if ctx.Err() != nil {
 		return elapsed, fmt.Errorf("gittest: %s --version did not answer within %s (killed after %s)", bin, timeout, elapsed.Round(time.Millisecond))
