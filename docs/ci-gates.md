@@ -1009,3 +1009,61 @@ the named `--only <group>` unbounded and in the foreground, then push with
 `git push --no-verify` citing that green run. Read the push's exit status
 directly rather than through a pipe, and confirm `git status -sb` shows a
 tracking branch afterwards.
+
+### Orphan branches — a pushed branch with no PR (#2029)
+
+A branch can be pushed and never turned into a pull request, and no PR-gating
+check can see it, because there is no PR to gate. On 2026-09-22 two were found
+by hand: `feat/1887-desktop-driver-stability`, 43 commits ahead of `main` for
+16 days after its issue closed, and `fix/dsh-watch-deadline-reconcile`, which
+held the only fix for a red `main` for about nine hours. Two checks close it:
+
+- **`tools/lib/pr-exists.sh <branch>`** — the PR-level twin of
+  `tools/lib/ref-exists.sh`. Exit 0 when a PR (open, closed or merged) from
+  this repository has exactly that head, 1 when none ever did, 2 when it could
+  not look (gh failure, non-JSON answer, empty or glob branch). It asks
+  `gh pr list --state all --head <branch>`, whose filter is exact on the name
+  — a prefix such as `feat/2022` does not match `feat/2022-…`, asserted
+  against the real gh in `tools/lib/pr-exists_test.sh` — but NOT on the owner:
+  `--head fix/ghostty-tab-focus` returns fork PR #1470 although origin has no
+  such branch (run 2026-09-24). So only `isCrossRepository == false` rows
+  count. `ir:exec` §6 and `ir:release` 7b run it right after `gh pr create`;
+  `ir:fleet` runs it when verifying and resuming a hand-back.
+- **`tools/orphan-branch-lint.sh [--max-age-hours N]`** — the backstop for
+  sessions that follow no skill. It fetches with `--prune`, lists every PR
+  once (`gh pr list --state all --limit 100000 --json
+  headRefName,isCrossRepository`), and looks up each `origin/*` branch ahead
+  of `origin/main` in the set of this repository's PR heads. An orphan older
+  than the threshold (default 24h) exits 1; a younger one is `INFO`. gh
+  failing, a non-array answer, or a listing that fills its own `--limit` (so
+  may be truncated) exits 2 with no `OK` line. Knowingly PR-less branches go
+  in `tools/orphan-branch-lint.waivers` with a reason, and a waiver naming no
+  ahead-of-main branch fails. `.github/workflows/orphan-branches.yml` runs it
+  daily (06:17 UTC) and on `workflow_dispatch`; it is not a PR gate, and a red
+  run in the Actions tab is the signal.
+
+One listing, not one query per branch. gh pages through the whole list up to
+`--limit`: on 2026-09-24 `gh pr list --state all --limit 5000 --json
+headRefName,isCrossRepository --jq length` returned 1217, equal to GraphQL
+`pullRequests.totalCount`, in about 8s. The first version of the lint queried
+per branch — 532 of the 533 remote branches are "ahead" of `main`, because
+squash-merged branches stay that way — and a full run took 371s and 532
+GraphQL calls, which also put it on course for `GITHUB_TOKEN`'s hourly limit
+as branches accumulate. That design rested on reading `--limit 1000` → 1000
+rows as a truncated page; it was the limit, not a page cap.
+The listing version's full local run on the same day took 28s wall clock
+(timed with `date +%s` around `tools/orphan-branch-lint.sh`) and named the same
+single branch, `feat/1887-desktop-driver-stability`, 43 ahead.
+
+Every set lookup in the lint reads a here-string, never `printf | grep -q`.
+Under `pipefail`, `grep -q` exiting on an early match SIGPIPEs the `printf`,
+the pipeline reports 141, and that reads as "no". The listing version's first
+live run did exactly this: it named 10 branches that all have PRs. Row 1b of
+`tools/lib/orphan-branch-lint_test.sh` reproduces it with 20001 listed heads.
+
+Both scripts run inside the `tools` gate through
+`tools/lib/pr-exists_test.sh` and `tools/lib/orphan-branch-lint_test.sh`
+(a throwaway bare-repo remote plus the stub gh in
+`tools/lib/testdata/pr-exists/gh-stub.sh`). Their mutation fixtures are
+`tools/lib/fleet-checkers-mutations_test.sh` (group 4) and
+`tools/lib/orphan-branch-lint-mutations_test.sh`.

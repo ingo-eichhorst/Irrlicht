@@ -1,0 +1,13 @@
+# orphan-branch-lint.waivers — branches on origin that carry work not in main
+# and knowingly have no pull request (#2029).
+#
+# Format: <branch> <whitespace> <reason>.  `#` starts a comment; blank lines
+# are ignored.  A waiver with no reason is refused.
+#
+# Both directions fail (tools/orphan-branch-lint.sh):
+#   an ahead-of-main branch older than 24h with no PR and no waiver -> FAIL
+#   a waiver naming no ahead-of-main branch on origin any more      -> FAIL
+#
+# A waiver is a decision someone made about a branch, not a way to make the
+# scheduled run go green. Prefer opening a PR (even a closed one records the
+# work) or deleting the branch.

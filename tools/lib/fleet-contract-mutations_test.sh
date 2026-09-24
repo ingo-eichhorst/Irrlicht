@@ -5,7 +5,7 @@
 # WHY THIS FILE EXISTS. fleet-contract_test.sh is a check the #2022 change
 # ADDS: it has no "before the fix" to run red, so per AGENTS.md and
 # docs/testing-philosophy.md it earns its place only by being seen to fail
-# when the thing it protects is broken. Seven breakages, proven separately
+# when the thing it protects is broken. Nine breakages, proven separately
 # because a single combined mutation could pass while one of them was
 # actually unguarded.
 #
@@ -96,6 +96,24 @@ assert_mutation_is_red \
   $'REPO_ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")' \
   $'REPO_ROOT=$(dirname "$(git rev-parse --git-common-dir)")' \
   'ir:fleet computes the repo root without --path-format=absolute'
+
+# ── 8. The hand-back stops asserting a PR exists (#2029) ────────────────────
+# Deleting the line is the exact shape of the gap: the ref check stays, the
+# push "lands", and a run that stops before `gh pr create` leaves a branch
+# nobody can see.
+assert_mutation_is_red \
+  'guard catches the pr-exists hand-back assertion being deleted' \
+  '.claude/skills/ir:exec/SKILL.md' \
+  $'  --title "WIP: <type>(<scope>): <change>" --body "..."\ntools/lib/pr-exists.sh feat/<N>-<slug>\n' \
+  $'  --title "WIP: <type>(<scope>): <change>" --body "..."\n' \
+  'exec section 6 no longer asserts a PR exists for the pushed branch'
+
+assert_mutation_is_red \
+  'guard catches the no-turn-end-before-a-PR rule being softened' \
+  '.claude/skills/ir:exec/SKILL.md' \
+  $'Do not end a turn — not for a\nquestion' \
+  $'Try not to end a turn — not for a\nquestion' \
+  'exec section 6 no longer forbids ending a turn between the push and a PR'
 
 if [[ $fails -gt 0 ]]; then
   echo "fleet-contract-mutations: $fails FAILED"
