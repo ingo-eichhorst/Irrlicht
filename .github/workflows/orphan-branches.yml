@@ -12,7 +12,7 @@ name: Orphan branches
 # Exit 2 from the lint (gh auth, network, rate limit, an unparsable answer)
 # also fails the run. That is deliberate: a day the lint could not look must
 # not read as a clean day. See tools/orphan-branch-lint.sh for the details and
-# the cost (one gh query per branch ahead of main).
+# the cost (one paginated PR listing, about 28s on 2026-09-24).
 
 on:
   schedule:
