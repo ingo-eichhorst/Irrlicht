@@ -140,6 +140,28 @@ func TestDiscoverPID_StrongMatchAmongMultipleMetadataFiles(t *testing.T) {
 	}
 }
 
+func TestDiscoverPID_StrongMatchByNewSchemaMetadataWithUpdatedAt(t *testing.T) {
+	// New-schema metadata (carries updatedAt, the current on-disk schema —
+	// Claude Code 2.1.281, measured 2026-09-24) still resolves through
+	// Layer 1 exactly like old-schema metadata: an exact sessionId match at
+	// scanSessionMetadata's meta.SessionID == wantSessionID check
+	// (pid.go:120) returns before isClaimedByOther's updatedAt-driven gate
+	// (#2042) is ever consulted. Passes by construction — not a #2042
+	// regression proof, just a lock on Layer 1 staying unaffected by the
+	// schema addition.
+	const sid = "ffff-6666"
+	dir := withTestDeps(t, map[int]bool{42: true}, nil)
+	writeMetaAtUpdatedAt(t, dir, 42, sid, time.Now())
+
+	pid, err := DiscoverPID("/repo", transcriptFor(sid), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 42 {
+		t.Fatalf("got pid=%d, want 42 (new-schema metadata should still resolve via Layer 1)", pid)
+	}
+}
+
 func TestDiscoverPID_DeadPIDMetadataIsSkipped(t *testing.T) {
 	const sid = "cccc-3333"
 	// Metadata says pid=42 owns the session, but 42 is dead.

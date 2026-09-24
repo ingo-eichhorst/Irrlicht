@@ -44,6 +44,17 @@ type claudeSessionMeta struct {
 	// Name is the human-readable label Claude assigns a background agent's job
 	// (e.g. "Add guiding colors to quest cards"); empty for interactive sessions.
 	Name string `json:"name"`
+	// UpdatedAt is a non-zero epoch-ms timestamp present only on Claude Code
+	// versions that live-rewrite this file on status changes and on /clear
+	// (measured on 2.1.281 — see isClaimedByOther). float64, not int64: a
+	// validator that can't parse its input should check more, not less, and
+	// a JSON number decoded into an int64 field errors out on any
+	// non-integral encoding, silently dropping the whole entry via
+	// readSessionMeta rather than just this field. omitempty keeps
+	// old-schema test fixtures (pid_test.go's writeMeta/writeMetaAt,
+	// testsupport.go's WriteSessionMetaForTest) emitting no updatedAt key at
+	// all, matching the real old-schema files they stand in for.
+	UpdatedAt float64 `json:"updatedAt,omitempty"`
 }
 
 // DiscoverPID finds the Claude Code process owning a session. It prefers an
@@ -99,10 +110,12 @@ func transcriptMTime(transcriptPath string) time.Time {
 
 // scanSessionMetadata scans ~/.claude/sessions/*.json once, collecting PIDs
 // that some metadata file owns (for negative-filtering the cwd fallback) and
-// looking for an exact sessionId match, returned as (pid, true). Entries
-// whose mtime is older than the caller's transcript by more than
-// staleMetaSlack are treated as positive-only signals (their PID is NOT added
-// to claimedByOthers) — see issue #169.
+// looking for an exact sessionId match, returned as (pid, true). Old-schema
+// entries (no updatedAt) whose mtime is older than the caller's transcript by
+// more than staleMetaSlack are treated as positive-only signals (their PID is
+// NOT added to claimedByOthers) — see issue #169. New-schema entries (with
+// updatedAt) are always added regardless of mtime — see isClaimedByOther and
+// issue #2042.
 func scanSessionMetadata(wantSessionID string, wantMTime time.Time) (claimedByOthers map[int]bool, matchedPID int, found bool) {
 	claimedByOthers = make(map[int]bool)
 	if wantSessionID == "" || sessionsDir == "" {
@@ -122,10 +135,12 @@ func scanSessionMetadata(wantSessionID string, wantMTime time.Time) (claimedByOt
 		}
 		// A live Claude process owns this PID for a different sessionId.
 		// Exclude it from the cwd fallback — unless the metadata is
-		// demonstrably older than the caller's transcript, which indicates a
-		// stale post-/clear entry that would otherwise strand the new
-		// session at PID=0 (issue #169).
-		if isClaimedByOther(e, wantMTime) {
+		// old-schema and demonstrably older than the caller's transcript,
+		// which indicates a stale post-/clear entry that would otherwise
+		// strand the new session at PID=0 (issue #169). New-schema metadata
+		// (updatedAt present) is always excluded regardless of mtime
+		// (issue #2042).
+		if isClaimedByOther(meta, e, wantMTime) {
 			claimedByOthers[meta.PID] = true
 		}
 	}
@@ -145,10 +160,24 @@ func validSessionEntry(e os.DirEntry) (claudeSessionMeta, bool) {
 	return meta, true
 }
 
-// isClaimedByOther reports whether a metadata entry's mtime is recent enough
-// (relative to wantMTime) that its PID should be excluded from the cwd
-// fallback. See scanSessionMetadata's doc comment for the staleness rule.
-func isClaimedByOther(e os.DirEntry, wantMTime time.Time) bool {
+// isClaimedByOther reports whether a metadata entry's PID should be excluded
+// from the cwd fallback. See scanSessionMetadata's doc comment for the
+// staleness rule.
+//
+// New-schema entries (meta.UpdatedAt != 0) are always treated as claimed,
+// regardless of mtime: Claude Code 2.1.281, /clear rewrote sessionId in
+// sessions/<pid>.json, measured 2026-09-24 — a version that rewrites this
+// file on /clear also rewrites it on every status/session change, so an
+// updatedAt-bearing entry's mtime lagging the caller's transcript is not
+// evidence of a stale post-/clear leftover the way it was for the versions
+// #169 was written for; it is instead exactly the shape of #2042, where a
+// live, currently-tracked session's claim was discarded as "stale" and its
+// PID handed to an unrelated resumed session. Old-schema entries (no
+// updatedAt) keep the #169 mtime-staleness bypass unchanged.
+func isClaimedByOther(meta claudeSessionMeta, e os.DirEntry, wantMTime time.Time) bool {
+	if meta.UpdatedAt != 0 {
+		return true
+	}
 	metaMTime := metaFileMTime(e)
 	return wantMTime.IsZero() || metaMTime.IsZero() || !metaMTime.Before(wantMTime.Add(-staleMetaSlack))
 }
