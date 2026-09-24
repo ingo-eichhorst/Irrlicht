@@ -44,9 +44,9 @@ verdict in this skill names the command that produced it.
 /ir:fleet <N>-<N>
 ```
 
-Explicit issue numbers, as a list or as one contiguous range. A range names
-its own members, so it does not grow when the tracker does. Refuse each of
-these, and say which one applies:
+Explicit issue numbers only — as a list, or as one contiguous range. A
+range names its own members, so it does not grow when the tracker does.
+Refuse each of these, and say which one applies:
 
 - A label, a milestone, or "every ready-for-agent issue". Expanding a query
   into a work-list is the easy way to dispatch far more work than intended,
