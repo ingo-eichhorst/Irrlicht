@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # presession-pid-inherit-mutations_test.sh — committed mutation fixture for
-# issue #2042's two guards on SessionDetector.inheritPreSessionPID
-# (core/application/services/session_detector_helpers.go).
+# issue #2042's three guards on handing a retired pre-session's PID to the
+# real session that replaced it (core/application/services:
+# SessionDetector.offerPreSessionPID and PIDManager.DiscoverPIDWithRetry /
+# inheritPreSessionPID).
 #
-# A real session takes a retired pre-session's PID only when (1) exactly one
+# The real session takes the pre-session's PID only when (1) exactly one
 # pre-session was retired — with several, the match cannot say which process
-# produced it — and (2) that PID is still alive. Both are guards the change
-# ADDS, so there is no "before the fix" to run red; each mutation below breaks
-# one guard and requires its test to go red:
-#   - `len(ids) == 1` → `len(ids) >= 1` hands the first of two candidates over
+# produced it — (2) that PID is still alive, and (3) the adapter's own first
+# discovery attempt found nothing, because the pre-session match is by project
+# or cwd, not by process. These are guards the change ADDS, so there is no
+# "before the fix" to run red; each mutation below breaks one guard and
+# requires its test to go red:
+#   - `len(ids) == 1` → `len(ids) >= 1` offers the first of two candidates
 #     (TestSessionDetector_AmbiguousPreSessionsNotInherited_Issue2042);
-#   - dropping the IsPIDAlive check hands a dead PID over
-#     (TestSessionDetector_DeadPreSessionPIDNotInherited_Issue2042).
+#   - dropping the IsPIDAlive check binds a dead PID
+#     (TestSessionDetector_DeadPreSessionPIDNotInherited_Issue2042);
+#   - dropping the `state.PID != 0` check binds the pre-session PID over a
+#     discovered one
+#     (TestSessionDetector_AdapterDiscoveryWinsOverPreSessionPID_Issue2042).
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise.
 
@@ -93,15 +100,14 @@ assert_go_test_goes_red() {
   echo "ok  $label"
 }
 
-FILE="core/application/services/session_detector_helpers.go"
 PKG="./core/application/services/..."
 
 # ── the single-candidate rule ──
 assert_go_test_goes_red \
-  "inheriting from the first of several retired pre-sessions" \
-  "$FILE" \
-  $'\tif len(ids) == 1 {\n\t\td.inheritPreSessionPID(ids[0], newSessionID)' \
-  $'\tif len(ids) >= 1 {\n\t\td.inheritPreSessionPID(ids[0], newSessionID)' \
+  "offering the first of several retired pre-sessions" \
+  "core/application/services/session_detector_helpers.go" \
+  $'\tif len(ids) == 1 {\n\t\td.offerPreSessionPID(ids[0], newSessionID)' \
+  $'\tif len(ids) >= 1 {\n\t\td.offerPreSessionPID(ids[0], newSessionID)' \
   "$PKG" \
   "TestSessionDetector_AmbiguousPreSessionsNotInherited_Issue2042" \
   "from an ambiguous pre-session match"
@@ -109,12 +115,22 @@ assert_go_test_goes_red \
 # ── the liveness check ──
 assert_go_test_goes_red \
   "inheriting a pre-session PID whose process has already exited" \
-  "$FILE" \
-  'err != nil || !d.pidMgr.IsPIDAlive(pid) {' \
-  'err != nil {' \
+  "core/application/services/pid_manager.go" \
+  $'\tif !pm.IsPIDAlive(pid) {\n\t\treturn false\n\t}\n\tif state, _ := pm.repo.Load(sessionID); state == nil || state.PID != 0 {' \
+  $'\tif state, _ := pm.repo.Load(sessionID); state == nil || state.PID != 0 {' \
   "$PKG" \
   "TestSessionDetector_DeadPreSessionPIDNotInherited_Issue2042" \
   "took dead pid"
+
+# ── adapter discovery first ──
+assert_go_test_goes_red \
+  "binding the pre-session PID over an adapter-discovered one" \
+  "core/application/services/pid_manager.go" \
+  $'\tif state, _ := pm.repo.Load(sessionID); state == nil || state.PID != 0 {\n\t\treturn false\n\t}\n\tpm.log.LogInfo(logComponentSessionDetector, sessionID,\n\t\tfmt.Sprintf("adapter discovery found no pid; inheriting' \
+  $'\tif state, _ := pm.repo.Load(sessionID); state == nil {\n\t\treturn false\n\t}\n\tpm.log.LogInfo(logComponentSessionDetector, sessionID,\n\t\tfmt.Sprintf("adapter discovery found no pid; inheriting' \
+  "$PKG" \
+  "TestSessionDetector_AdapterDiscoveryWinsOverPreSessionPID_Issue2042" \
+  "must not win"
 
 if [[ $fails -gt 0 ]]; then
   echo "presession-pid-inherit-mutations: $fails FAILED"

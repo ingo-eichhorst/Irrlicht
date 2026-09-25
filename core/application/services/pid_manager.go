@@ -190,6 +190,12 @@ type PIDManager struct {
 	pendingMu   sync.Mutex
 	pendingPIDs map[string]int
 
+	// preSessionPIDs holds, per real session, the PID of the one pre-session
+	// it retired (issue #2042). DiscoverPIDWithRetry falls back to it only when
+	// the adapter's own first discovery attempt finds nothing. Guarded by
+	// pendingMu.
+	preSessionPIDs map[string]int
+
 	// assignMu serializes every critical section that reads or writes the repo's
 	// shared *SessionState pointers: HandlePIDAssigned's load-modify-save +
 	// same-PID cleanup scan, claimedPIDs' scan, AND the SessionDetector event
@@ -243,6 +249,7 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		onSessionDeleted: deps.OnSessionDeleted,
 		onSessionRemoved: deps.OnSessionRemoved,
 		pendingPIDs:      make(map[string]int),
+		preSessionPIDs:   make(map[string]int),
 	}
 }
 
@@ -1198,7 +1205,11 @@ func (pm *PIDManager) claimAwareDisambiguate(sessionID string) func([]int) int {
 // 500ms, 1s, 2s intervals. This covers the timing where the agent process
 // hasn't started yet or the transcript file isn't open yet.
 func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd, transcriptPath, adapter string) {
-	if pm.TryDiscoverPID(sessionID, cwd, transcriptPath, adapter) {
+	found := pm.TryDiscoverPID(sessionID, cwd, transcriptPath, adapter)
+	if pid := pm.takePreSessionPID(sessionID); pid > 0 && pm.inheritPreSessionPID(sessionID, pid) {
+		found = true
+	}
+	if found {
 		return
 	}
 	for _, delay := range []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second} {
@@ -1211,6 +1222,49 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd, transcriptPath, adapt
 			return
 		}
 	}
+}
+
+// OfferPreSessionPID records that sessionID retired the pre-session for pid, so
+// DiscoverPIDWithRetry can fall back to that process when the adapter's own
+// discovery finds nothing (issue #2042). The pre-session match is by project
+// or cwd, not by process, so the offer never overrides a discovered PID.
+func (pm *PIDManager) OfferPreSessionPID(sessionID string, pid int) {
+	if pid <= 0 {
+		return
+	}
+	pm.pendingMu.Lock()
+	pm.preSessionPIDs[sessionID] = pid
+	pm.pendingMu.Unlock()
+}
+
+// takePreSessionPID returns and removes sessionID's offered pre-session PID,
+// or 0 when there is none.
+func (pm *PIDManager) takePreSessionPID(sessionID string) int {
+	pm.pendingMu.Lock()
+	defer pm.pendingMu.Unlock()
+	pid := pm.preSessionPIDs[sessionID]
+	delete(pm.preSessionPIDs, sessionID)
+	return pid
+}
+
+// inheritPreSessionPID binds pid to sessionID when that process is still
+// alive and the session is still unbound. The unbound check is what keeps a
+// PID the adapter's discovery just bound from being overwritten. It runs right
+// after the first
+// discovery attempt rather than after the retries: in the #2042 incident the
+// resume process exited 0.5s after its pre-session was retired, and binding it
+// is what lets that exit end the session.
+func (pm *PIDManager) inheritPreSessionPID(sessionID string, pid int) bool {
+	if !pm.IsPIDAlive(pid) {
+		return false
+	}
+	if state, _ := pm.repo.Load(sessionID); state == nil || state.PID != 0 {
+		return false
+	}
+	pm.log.LogInfo(logComponentSessionDetector, sessionID,
+		fmt.Sprintf("adapter discovery found no pid; inheriting pid %d from the retired pre-session", pid))
+	pm.HandlePIDAssigned(pid, sessionID)
+	return true
 }
 
 // SweepDeadPIDs periodically checks all sessions for dead processes and deletes

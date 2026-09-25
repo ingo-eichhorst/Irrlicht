@@ -32,6 +32,13 @@ const presessionInheritProjectDir = "-Users-test-presession-pid-inherit"
 
 func newPresessionInheritFixture(t *testing.T) *presessionInheritFixture {
 	t.Helper()
+	return newPresessionInheritFixtureWithDiscover(t, nil)
+}
+
+// newPresessionInheritFixtureWithDiscover wires discover as the claude-code
+// adapter's PID discovery; nil means the adapter finds nothing.
+func newPresessionInheritFixtureWithDiscover(t *testing.T, discover agent.PIDDiscoverFunc) *presessionInheritFixture {
+	t.Helper()
 	f := &presessionInheritFixture{
 		t:          t,
 		tw:         newMockAgentWatcher().withIdentity(agent.Identity{Name: "claude-code"}),
@@ -44,12 +51,13 @@ func newPresessionInheritFixture(t *testing.T) *presessionInheritFixture {
 		t.Fatal(err)
 	}
 	f.det = services.NewSessionDetector([]inbound.Watcher{f.tw}, services.SessionDetectorDeps{
-		PW:      f.pw,
-		Repo:    f.repo,
-		Log:     &mockLogger{},
-		Git:     gitadapter.New(),
-		Metrics: &mockMetrics{},
-		Version: "test",
+		PW:           f.pw,
+		Repo:         f.repo,
+		Log:          &mockLogger{},
+		Git:          gitadapter.New(),
+		Metrics:      &mockMetrics{},
+		Version:      "test",
+		PIDDiscovers: map[string]agent.PIDDiscoverFunc{"claude-code": discover},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -183,5 +191,26 @@ func TestSessionDetector_DeadPreSessionPIDNotInherited_Issue2042(t *testing.T) {
 
 	if pollUntil(300*time.Millisecond, func() bool { return f.pidOf(real) != 0 }) {
 		t.Fatalf("real session took dead pid %d from its retired pre-session", f.pidOf(real))
+	}
+}
+
+// TestSessionDetector_AdapterDiscoveryWinsOverPreSessionPID_Issue2042: the
+// pre-session match is by project or cwd, not by process, so its PID is only a
+// fallback. When the adapter's own discovery finds the session's process (a
+// /clear or /new in another window that shares the cwd, while this window's
+// pre-session waits), that PID is bound and the pre-session's is not.
+func TestSessionDetector_AdapterDiscoveryWinsOverPreSessionPID_Issue2042(t *testing.T) {
+	owner := liveProcessForTest(t)
+	f := newPresessionInheritFixtureWithDiscover(t, func(string, string, func([]int) int) (int, error) {
+		return owner, nil
+	})
+	bystander := liveProcessForTest(t)
+	f.addPreSession(bystander)
+
+	const real = "session_discovered_2042"
+	f.arriveRealSession(real)
+
+	if !pollUntil(time.Second, func() bool { return f.pidOf(real) == owner }) {
+		t.Fatalf("real session pid = %d, want the adapter-discovered pid %d (pre-session pid %d must not win)", f.pidOf(real), owner, bystander)
 	}
 }
