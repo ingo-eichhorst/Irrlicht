@@ -179,7 +179,34 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 	for _, sid := range ids {
 		d.retirePreSession(sid, newSessionID, adapter, projectDir)
 	}
+	if len(ids) == 1 {
+		d.offerPreSessionPID(ids[0], newSessionID)
+	}
 	return len(ids) > 0
+}
+
+// offerPreSessionPID hands a retired pre-session's PID to the PID manager as a
+// fallback for the real session that replaced it (issue #2042). Without it, a
+// brief `claude --resume` of an exited session re-creates the session with no
+// PID: DiscoverPID declines the CWD fallback when a live session claims the
+// only candidate (#2044), and a PID-0 session in working is only reaped by the
+// ready-TTL sweep. DiscoverPIDWithRetry uses the offer only when the adapter's
+// own discovery finds nothing.
+//
+// Called only when exactly one pre-session was retired: with several, the
+// match cannot say which process produced the real session. Child sessions
+// share their parent's PID and never take one. The PID is parsed from the
+// proc-<pid> id rather than read off the row, because the pre-session's own
+// PID assignment is asynchronous and may not have landed.
+func (d *SessionDetector) offerPreSessionPID(preSessionID, newSessionID string) {
+	var pid int
+	if _, err := fmt.Sscanf(preSessionID, "proc-%d", &pid); err != nil {
+		return
+	}
+	if state, _ := d.repo.Load(newSessionID); state == nil || state.ParentSessionID != "" {
+		return
+	}
+	d.pidMgr.OfferPreSessionPID(newSessionID, pid)
 }
 
 // retirePreSession fires the supersession hook and deletes a single retired
