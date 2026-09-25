@@ -89,3 +89,27 @@ func TestCost_PendingContribution_ExtraIncludedInLiveCost(t *testing.T) {
 		t.Errorf("EstimatedCostUSD = %f, want >= 15 (pending extra priced at its own model)", m.EstimatedCostUSD)
 	}
 }
+
+// TestCost_PendingContribution_FirstTurnUsesPricedPath: before any turn is
+// committed, cumByModel is empty. The live cost must still come from the
+// pending contribution, Extra included, rather than the legacy ev.Tokens
+// path, which for Claude Code now holds only the last message iteration
+// (#2052 review).
+func TestCost_PendingContribution_FirstTurnUsesPricedPath(t *testing.T) {
+	p := &extraParser{pending: &PerTurnContribution{
+		Model: "claude-sonnet-4-5",
+		Usage: UsageBreakdown{Input: 100},
+		Extra: []PerTurnContribution{{Model: "claude-opus-4-6", Usage: UsageBreakdown{Input: 1_000_000}}},
+	}}
+	tl := newExtraTailer(t, p, 1)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CumInputTokens != 1_000_100 {
+		t.Errorf("CumInputTokens = %d, want 1000100 (pending turn and its extra)", m.CumInputTokens)
+	}
+	if m.EstimatedCostUSD < 15 {
+		t.Errorf("EstimatedCostUSD = %f, want >= 15", m.EstimatedCostUSD)
+	}
+}

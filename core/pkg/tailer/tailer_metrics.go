@@ -414,12 +414,22 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 // computeCumulativeTokens aggregates per-model token counts and estimated cost.
 // It must run on every TailAndProcess pass — even when no new events were
 // processed — so that ledger-rehydrated state is reflected immediately.
+//
+// A pending contribution also selects the priced path, so a session's first
+// turn is priced from it — Extra included — before anything is committed
+// (#2052). Otherwise the legacy path prices ev.Tokens, which for a Claude Code
+// advisor turn is only the last message iteration.
 func (t *TranscriptTailer) computeCumulativeTokens() {
-	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
+	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 || t.hasPendingContribution() {
 		t.computeCumulativeTokensPriced()
 		return
 	}
 	t.computeCumulativeTokensLegacy()
+}
+
+func (t *TranscriptTailer) hasPendingContribution() bool {
+	pc, ok := t.parser.(pendingContributor)
+	return ok && pc.PendingContribution() != nil
 }
 
 // computeCumulativeTokensPriced is the new path: price per-model, sum

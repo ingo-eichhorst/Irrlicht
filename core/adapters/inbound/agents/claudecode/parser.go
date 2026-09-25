@@ -1097,9 +1097,17 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 // extractAnthropicContribution builds the turn's cost contribution from a
 // Claude Code event. With usage.iterations present, Usage is the sum of the
 // "message" iterations rather than the top-level usage: the top-level nested
-// cache_creation 5m/1h split covers only the first iteration (measured over 49
-// local multi-iteration messages — its sum was below the flat
-// cache_creation_input_tokens in every one). Each "advisor_message" iteration
+// cache_creation 5m/1h split covers only the first iteration. The committed
+// evidence is testdata/advisor-iterations.jsonl: the top-level split is
+// 1h=1553/5m=0, which is iteration 1 alone, while the flat value 3081 is
+// 1553+1528. A 2026-09-25 scan found the same in all 49 local
+// multi-iteration messages. It ran:
+//
+//	jq -c 'select(.message.usage.iterations? | length > 1) | .message.usage
+//	  | [(.cache_creation.ephemeral_5m_input_tokens + .cache_creation.ephemeral_1h_input_tokens),
+//	     .cache_creation_input_tokens]' ~/.claude/projects/*/*.jsonl
+//
+// Each "advisor_message" iteration
 // becomes an Extra contribution at its own model; the top-level usage leaves
 // it out entirely (#2052).
 func extractAnthropicContribution(raw map[string]interface{}, model string) *tailer.PerTurnContribution {
