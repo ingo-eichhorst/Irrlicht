@@ -3,17 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"irrlicht/core/adapters/inbound/agents/muse"
 	"irrlicht/core/adapters/outbound/accountquota"
 	"irrlicht/core/adapters/outbound/museaccountapi"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
 
 // museAccountAPIEffects builds the daemon-wide AccountPoller and Muse's
 // CredentialResolver/AccountQuotaTransport once, plus the Apply/Remove
-// closures museaccountapi.PermissionDeclaration needs — the gastownEffects
+// closures museaccountapi.PermissionDeclaration needs and the per-session
+// sweep that polls through them (issue #2057) — the gastownEffects
 // shape (this file's sibling, startup.go's gastownEffects), for the same
 // reason: the museaccountapi/services packages cannot construct a
 // *services.AccountPoller for themselves (deliberately ONE per daemon — see
@@ -30,11 +34,11 @@ import (
 //
 // Apply's scope is deliberately narrow: a permission grant carries no
 // session context (Apply/Remove are global toggles, not per-session calls),
-// so there is nothing here that can iterate live Muse sessions and poll
-// each one — that per-session trigger (a periodic sweep, or a lazy poll at
-// read time) is intentionally left for a follow-up; see this ticket's PR
-// body "Left out" section. What Apply CAN usefully do without session
-// context is fail fast: resolve the credential once, so a broken
+// so the per-session polling lives in services.MuseAccountSweeper (issue
+// #2057), built by museAccountAPI.sweeper below and started with the other
+// background loops; it reads the grant on every tick rather than being
+// switched on and off by these closures. What Apply CAN usefully do without
+// session context is fail fast: resolve the credential once, so a broken
 // auth.json/Keychain setup surfaces in the daemon log the moment consent is
 // granted rather than silently deferring the first failure to whenever a
 // session next polls. It never blocks or denies the grant on a resolve
@@ -57,28 +61,23 @@ import (
 // would tolerate before either path had to give up waiting anyway. The
 // resolve still happens exactly once per grant; only the wait moved off the
 // synchronous path.
-func museAccountAPIEffects(logger outbound.Logger) (start, stop func() error) {
-	// poller and resolver are used only by the start/stop closures below,
-	// which capture them directly — returning them too would be dead
-	// weight with no consumer (found by review, issue #2007: the sole
-	// caller, main.go, blanked all three of poller/resolver/transport,
-	// and `transport` specifically was constructed, returned, and never
-	// read by anything after that).
+func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
 	poller := services.NewAccountPoller()
 	resolver := museaccountapi.NewCredentialResolver(museaccountapi.AuthPath)
 
-	// Constructed for its validation side effect only — Destination() is a
-	// fixed, reviewed literal, so a construction error here is a coding
-	// mistake in this package, not a runtime condition, and is logged once
-	// at daemon startup rather than deferred into a per-poll failure that
-	// would look like a transient network problem. Not kept: nothing calls
-	// Fetch on it yet (see this function's own doc comment on the
-	// per-session poll trigger being a follow-up).
-	if _, err := accountquota.NewHTTPTransport([]outbound.FixedDestination{museaccountapi.Destination()}); err != nil {
+	// Destination() is a fixed, reviewed literal, so a construction error
+	// here is a coding mistake in this package, not a runtime condition, and
+	// is logged once at daemon startup rather than deferred into a per-poll
+	// failure that would look like a transient network problem. On that
+	// error transport stays nil and sweeper returns nil, so no sweep starts.
+	var transport outbound.AccountQuotaTransport
+	if t, err := accountquota.NewHTTPTransport([]outbound.FixedDestination{museaccountapi.Destination()}); err != nil {
 		logger.LogError("permissions", "", fmt.Sprintf("museaccountapi: building the account-quota transport: %v", err))
+	} else {
+		transport = t
 	}
 
-	start = func() error {
+	start := func() error {
 		// Detached deliberately (mirrors main.go's own
 		// `go runCapacityRefreshLoop(context.Background(), ...)`): Apply has
 		// no shorter-lived parent context to thread through, and the
@@ -93,14 +92,55 @@ func museAccountAPIEffects(logger outbound.Logger) (start, stop func() error) {
 		}()
 		return nil
 	}
-	stop = func() error {
+	stop := func() error {
 		// services.MuseAccountQuotaKey stamps AccountQuotaKey.Provider as
 		// session.ProviderMeta — Revoke's argument must match that field
 		// exactly (accountpoller.go's Revoke deletes by key.Provider ==
 		// provider), not museaccountapi.DestinationKey (that names the
 		// destination/scope, a different field).
+		// The chip itself goes on the sweep's next tick, which sees the
+		// grant gone and clears each session's meta snapshot.
 		poller.Revoke(session.ProviderMeta)
 		return nil
 	}
-	return start, stop
+	return museAccountAPI{Start: start, Stop: stop, poller: poller, resolver: resolver, transport: transport}
+}
+
+// museAccountAPI is what museAccountAPIEffects builds: the permission's
+// effects, and the shared poller/resolver/transport the sweep polls through.
+type museAccountAPI struct {
+	Start, Stop func() error
+
+	poller    *services.AccountPoller
+	resolver  outbound.CredentialResolver
+	transport outbound.AccountQuotaTransport
+}
+
+// museAccountSweepInterval is how often the sweep reconciles each Muse
+// session's snapshot. Not the account-API call rate: AccountPoller serves a
+// cached reading for its 5-minute fresh window, so most ticks make no call.
+// It bounds how long a revoke, or a write a transcript pass overwrote, takes
+// to settle.
+const museAccountSweepInterval = time.Minute
+
+// sweeper builds the per-session sweep over these parts, gated on the same
+// permission museaccountapi.PermissionDeclaration declares, or returns nil
+// when the transport could not be built.
+func (m museAccountAPI) sweeper(detector *services.SessionDetector, repo outbound.SessionRepository, perms *services.PermissionService, logger outbound.Logger) *services.MuseAccountSweeper {
+	if m.transport == nil {
+		return nil
+	}
+	return services.NewMuseAccountSweeper(services.MuseAccountSweeperDeps{
+		Sessions:  repo,
+		Writer:    detector,
+		Poller:    m.poller,
+		Resolver:  m.resolver,
+		Transport: m.transport,
+		Granted: func() bool {
+			return perms.Granted(museaccountapi.Name, agent.AccountAPIPermissionKey)
+		},
+		Adapter:  muse.AdapterName,
+		Log:      logger,
+		Interval: museAccountSweepInterval,
+	})
 }

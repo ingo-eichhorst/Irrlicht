@@ -839,6 +839,7 @@ struct SettingsView: View {
         switch key {
         case "anthropic": return "Claude"
         case "openai": return "Codex"
+        case "meta": return "Muse"
         default:
             guard key.hasPrefix("unknown:") else { return key }
             let adapter = key.dropFirst("unknown:".count)

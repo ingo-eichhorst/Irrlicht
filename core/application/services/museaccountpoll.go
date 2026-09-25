@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"irrlicht/core/adapters/outbound/museaccountapi"
 	"irrlicht/core/domain/session"
@@ -48,17 +47,27 @@ func MuseAccountQuotaKey(sessionID string) AccountQuotaKey {
 
 // MuseAccountRefresh polls (or reads the cached observation for) Muse's
 // account-quota endpoint for sessionID and, on success, parses it into a
-// session.RateLimitSnapshot through museaccountapi.BuildSnapshot.
+// session.RateLimitSnapshot through museaccountapi.BuildSnapshot. The
+// snapshot's SampledAt/LastSuccessAt are the observation's own FetchedAt, so
+// a reading served from the poller's cache keeps the time it was actually
+// fetched.
 //
-// On ANY failure — Poll returning an error, an observation with no cached
-// value yet, or BuildSnapshot rejecting the body — this returns (nil, err)
-// and NEVER a manufactured session.RateLimitSnapshot{} zero value.
-// TestMuseAccountRefresh_NeverPublishesZeroOnFailure (mutation fixture #3)
-// mutates the no-cached-value branch to return an empty snapshot instead of
-// an error and confirms the guard goes red — the same defect class issue
-// #2003 §1.4 and its own recordFailure already guard at the poller layer
-// (never setting HasValue on a failure); this is the Muse-layer half, for
-// the caller-facing boundary this function itself is.
+// When there is no cached value — Poll failing before any success, an
+// observation with no value yet, or BuildSnapshot rejecting the body — this
+// returns (nil, err) and NEVER a manufactured session.RateLimitSnapshot{}
+// zero value. TestMuseAccountRefresh_NeverPublishesZeroOnFailure (mutation
+// fixture #3) mutates the no-cached-value branch to return an empty snapshot
+// instead of an error and confirms the guard goes red — the same defect
+// class issue #2003 §1.4 and its own recordFailure already guard at the
+// poller layer (never setting HasValue on a failure); this is the
+// Muse-layer half, for the caller-facing boundary this function itself is.
+//
+// When a fetch fails AFTER an earlier success, the poller still holds that
+// reading, marked Stale (recordFailure). That reading is returned stamped
+// with RetrievalFailure, alongside a non-nil error, so a caller can keep
+// showing it without it passing for current (issue #2057 review;
+// TestMuseAccountRefresh_StaleReadingCarriesFailure was seen red before this
+// branch existed).
 func MuseAccountRefresh(
 	ctx context.Context,
 	poller *AccountPoller,
@@ -66,7 +75,6 @@ func MuseAccountRefresh(
 	transport outbound.AccountQuotaTransport,
 	granted func() bool,
 	sessionID string,
-	now time.Time,
 ) (*session.RateLimitSnapshot, error) {
 	if sessionID == "" {
 		return nil, errors.New("services: MuseAccountRefresh needs a non-empty sessionID")
@@ -80,7 +88,7 @@ func MuseAccountRefresh(
 		DestinationKey: museaccountapi.DestinationKey,
 		Auth:           museaccountapi.Auth(),
 	})
-	if err != nil {
+	if err != nil && !(obs.HasValue && obs.Stale) {
 		return nil, fmt.Errorf("services: polling Muse account quota: %w", err)
 	}
 	if !obs.HasValue {
@@ -89,9 +97,21 @@ func MuseAccountRefresh(
 		}
 		return nil, errors.New("services: Muse account quota not available yet")
 	}
-	snap, err := museaccountapi.BuildSnapshot(obs.Body, now)
-	if err != nil {
-		return nil, fmt.Errorf("services: parsing Muse account quota: %w", err)
+	snap, perr := museaccountapi.BuildSnapshot(obs.Body, obs.FetchedAt)
+	if perr != nil {
+		return nil, fmt.Errorf("services: parsing Muse account quota: %w", perr)
+	}
+	if !obs.LastAttempt.IsZero() {
+		snap.LastAttemptAt = obs.LastAttempt.Unix()
+	}
+	if obs.Stale {
+		snap.RetrievalFailure = obs.FailureReason
+		if err == nil {
+			err = fmt.Errorf("services: Muse account quota is stale: %s", obs.FailureReason)
+		} else {
+			err = fmt.Errorf("services: polling Muse account quota (serving the last reading): %w", err)
+		}
+		return &snap, err
 	}
 	return &snap, nil
 }
