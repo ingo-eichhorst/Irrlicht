@@ -27,7 +27,7 @@
       "force ready→working on first activity": 2,
       "user ESC interrupt while working → ready": 1
     },
-    "estimated_cost_usd": 0.01523075,
+    "estimated_cost_usd": 0.0156845,
     "cum_input_tokens": 6,
     "cum_output_tokens": 6,
     "cum_cache_read_tokens": 28589,

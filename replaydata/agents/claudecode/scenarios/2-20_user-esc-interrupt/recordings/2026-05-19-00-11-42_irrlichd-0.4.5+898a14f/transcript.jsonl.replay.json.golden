@@ -21,6 +21,7 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
+    "estimated_cost_usd": 0.0347649,
     "cum_input_tokens": 3,
     "cum_output_tokens": 1,
     "cum_cache_read_tokens": 12753,
