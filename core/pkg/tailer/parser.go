@@ -651,6 +651,10 @@ type PerTurnContribution struct {
 	Model           string
 	Usage           UsageBreakdown
 	ProviderCostUSD *float64 // set when the provider reports an authoritative cost (Pi)
+	// Extra carries same-turn usage billed at a different model — Claude
+	// Code's server-side advisor iteration (#2052). Each entry is accumulated
+	// under its own Model; it is not part of Usage.
+	Extra []PerTurnContribution
 }
 
 // TranscriptParser parses a single JSONL line from a specific transcript format

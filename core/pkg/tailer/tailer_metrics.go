@@ -334,6 +334,9 @@ func (t *TranscriptTailer) accumulateTokens(parsed *ParsedEvent) {
 // current ModelName from applyModelMetadata so the delta still lands under
 // a priced bucket instead of cumByModel[""].
 func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
+	for i := range c.Extra {
+		t.applyContribution(&c.Extra[i])
+	}
 	if c.ProviderCostUSD != nil {
 		t.cumProviderCostUSD += *c.ProviderCostUSD
 		return
@@ -439,25 +442,33 @@ func (t *TranscriptTailer) computeCumulativeTokensPriced() {
 		co2Grams += grams
 		co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 	}
-	// Include the pending contribution from stateful parsers (Claude Code).
+	// Include the pending contribution from stateful parsers (Claude Code),
+	// and its same-turn Extra contributions at their own models (#2052).
+	var pendings []*PerTurnContribution
 	if pc, ok := t.parser.(pendingContributor); ok {
-		if pending := pc.PendingContribution(); pending != nil {
-			totalInput += pending.Usage.Input
-			totalOutput += pending.Usage.Output
-			totalCacheRead += pending.Usage.CacheRead
-			totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
-			if t.capacityMgr != nil && pending.Model != "" {
-				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-					pending.Model,
-					pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
-					pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
+		if p := pc.PendingContribution(); p != nil {
+			pendings = append(pendings, p)
+			for i := range p.Extra {
+				pendings = append(pendings, &p.Extra[i])
 			}
-			grams, tier := capacity.EstimateCO2Grams(pending.Model,
-				pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
-					pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
-			co2Grams += grams
-			co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 		}
+	}
+	for _, pending := range pendings {
+		totalInput += pending.Usage.Input
+		totalOutput += pending.Usage.Output
+		totalCacheRead += pending.Usage.CacheRead
+		totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
+		if t.capacityMgr != nil && pending.Model != "" {
+			pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
+				pending.Model,
+				pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
+				pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
+		}
+		grams, tier := capacity.EstimateCO2Grams(pending.Model,
+			pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
+				pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
+		co2Grams += grams
+		co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 	}
 	t.metrics.CumInputTokens = totalInput
 	t.metrics.CumOutputTokens = totalOutput
