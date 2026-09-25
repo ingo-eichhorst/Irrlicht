@@ -89,6 +89,11 @@ func newReplacedRevivalFixture(t *testing.T, discover func(f *replacedRevivalFix
 	done := make(chan error, 1)
 	go func() { done <- f.det.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
+	// Seed only after Run's own startup pass (seedFromDisk) has finished, so
+	// it cannot reap the fixture's stale-transcript sessions concurrently.
+	if !waitForLogMessage(f.log, seedFromDiskStartedMsg, 2*time.Second) {
+		t.Fatalf("detector never logged %q", seedFromDiskStartedMsg)
+	}
 
 	for _, s := range []*session.SessionState{
 		{SessionID: revivalSessionA, State: session.StateWorking, Adapter: "claude-code", CWD: f.cwd, TranscriptPath: f.pathA, PID: f.pid, FirstSeen: old.Unix(), UpdatedAt: old.Unix()},
@@ -108,6 +113,23 @@ func (f *replacedRevivalFixture) replaceAByB() {
 	if !pollUntil(time.Second, func() bool { s, _ := f.repo.Load(revivalSessionA); return s == nil }) {
 		f.t.Fatal("A was never deleted as replaced by B")
 	}
+}
+
+// settled waits until the hook for A was either rejected with want or
+// revived A, so a test observes the revival itself rather than only the
+// presence of its log line.
+func (f *replacedRevivalFixture) settled(want string) bool {
+	return pollUntil(2*time.Second, func() bool {
+		if f.exists(revivalSessionA) {
+			return true
+		}
+		for _, msg := range f.log.infoSnapshot() {
+			if msg == want {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (f *replacedRevivalFixture) exists(sid string) bool {
@@ -145,8 +167,8 @@ func TestSessionDetector_ReplacedNotRevivedWhenDiscoveryDeclines_Issue2059(t *te
 
 	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
 
-	if !waitForLogMessage(f.log, notRevivedNoPIDMatchMsg, 2*time.Second) {
-		t.Fatalf("no rejection logged; want %q", notRevivedNoPIDMatchMsg)
+	if !f.settled(notRevivedNoPIDMatchMsg) {
+		t.Fatalf("hook neither rejected nor revived A; want %q", notRevivedNoPIDMatchMsg)
 	}
 	if f.exists(revivalSessionA) {
 		t.Fatal("A was revived although adapter discovery does not name its pid")
@@ -162,8 +184,8 @@ func TestSessionDetector_ReplacedNotRevivedWhenDiscoveryNamesOtherPID_Issue2059(
 
 	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
 
-	if !waitForLogMessage(f.log, notRevivedNoPIDMatchMsg, 2*time.Second) {
-		t.Fatalf("no rejection logged; want %q", notRevivedNoPIDMatchMsg)
+	if !f.settled(notRevivedNoPIDMatchMsg) {
+		t.Fatalf("hook neither rejected nor revived A; want %q", notRevivedNoPIDMatchMsg)
 	}
 	if f.exists(revivalSessionA) {
 		t.Fatalf("A was revived although discovery named pid %d, not its old pid %d", other, f.pid)
@@ -180,8 +202,8 @@ func TestSessionDetector_ReplacedNotRevivedWhileHolderActive_Issue2059(t *testin
 
 	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
 
-	if !waitForLogMessage(f.log, notRevivedHolderActiveMsg, 2*time.Second) {
-		t.Fatalf("no rejection logged; want %q", notRevivedHolderActiveMsg)
+	if !f.settled(notRevivedHolderActiveMsg) {
+		t.Fatalf("hook neither rejected nor revived A; want %q", notRevivedHolderActiveMsg)
 	}
 	if f.exists(revivalSessionA) || !f.exists(revivalSessionB) {
 		t.Fatal("A was revived over an active holder of its pid")
@@ -196,8 +218,8 @@ func TestSessionDetector_ReplacedNotRevivedByTranscriptEvent_Issue2059(t *testin
 
 	f.tw.ch <- agent.Event{Type: agent.EventActivity, SessionID: revivalSessionA, TranscriptPath: f.pathA}
 
-	if !waitForLogMessage(f.log, notRevivedNotHookMsg, 2*time.Second) {
-		t.Fatalf("no rejection logged; want %q", notRevivedNotHookMsg)
+	if !f.settled(notRevivedNotHookMsg) {
+		t.Fatalf("hook neither rejected nor revived A; want %q", notRevivedNotHookMsg)
 	}
 	if f.exists(revivalSessionA) {
 		t.Fatal("A was revived by a stale-transcript watcher event")
@@ -218,5 +240,30 @@ func TestSessionDetector_ExitedSessionNotRevivedByHook_Issue2059(t *testing.T) {
 
 	if pollUntil(500*time.Millisecond, func() bool { return f.exists(revivalSessionA) }) {
 		t.Fatal("a session deleted on process exit was revived by a hook")
+	}
+}
+
+// TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059: the
+// evidence a replacement leaves behind belongs to that deletion only. If the
+// session comes back by another route and is then deleted for a different
+// reason (here its process exits), a hook must not revive it.
+func TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059(t *testing.T) {
+	f := newReplacedRevivalFixture(t, nil)
+	f.replaceAByB()
+
+	other := liveProcessForTest(t)
+	back := &session.SessionState{SessionID: revivalSessionA, State: session.StateWorking, Adapter: "claude-code", CWD: f.cwd, TranscriptPath: f.pathA, PID: other}
+	if err := f.repo.Save(back); err != nil {
+		t.Fatal(err)
+	}
+	f.det.HandleProcessExit(other, revivalSessionA, "pid exited")
+	if !pollUntil(time.Second, func() bool { return !f.exists(revivalSessionA) }) {
+		t.Fatal("A was not deleted on process exit")
+	}
+
+	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
+
+	if pollUntil(500*time.Millisecond, func() bool { return f.exists(revivalSessionA) }) {
+		t.Fatal("a session deleted on process exit was revived by a replacement record left from an earlier deletion")
 	}
 }

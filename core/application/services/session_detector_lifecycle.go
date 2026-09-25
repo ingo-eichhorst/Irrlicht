@@ -642,6 +642,7 @@ func (d *SessionDetector) pruneDeletedSessionsCache() {
 		if ts < pruneThreshold {
 			delete(d.deletedSessions, id)
 			delete(d.deletedStates, id)
+			delete(d.replacedSessions, id)
 		}
 	}
 }

@@ -169,6 +169,7 @@ func (d *SessionDetector) recentlyDeleted(ev agent.Event) bool {
 	}
 	delete(d.deletedSessions, ev.SessionID)
 	delete(d.deletedStates, ev.SessionID)
+	delete(d.replacedSessions, ev.SessionID)
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 		"previously deleted session has fresh activity (--continue), allowing re-creation")
 	return false
@@ -631,6 +632,7 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
 			delete(d.deletedStates, ev.SessionID)
+			delete(d.replacedSessions, ev.SessionID)
 			deleted = false
 			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"previously deleted session has fresh activity (--continue), allowing re-creation")
@@ -662,6 +664,9 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 			}
 		}
 		d.mu.Unlock()
+		if deleted && revive == nil && d.tryReviveReplacedSession(ev) {
+			return
+		}
 		if deleted {
 			if revive != nil {
 				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
