@@ -505,10 +505,7 @@ func (p *Parser) applyRequestIDContribution(raw map[string]interface{}, ev *tail
 		p.pendingContrib = nil
 	}
 	if ev.Tokens != nil {
-		p.pendingContrib = &tailer.PerTurnContribution{
-			Model: ev.ModelName,
-			Usage: extractAnthropicUsageBreakdown(raw),
-		}
+		p.pendingContrib = extractAnthropicContribution(raw, ev.ModelName)
 	}
 }
 
@@ -1040,11 +1037,42 @@ func findUsageMap(raw map[string]interface{}) map[string]interface{} {
 
 // extractClaudeCodeTokens extracts token info from a Claude Code event.
 // Used for context-utilization display (Tokens field on ParsedEvent).
+//
+// A turn that called a server-side tool (the advisor) carries several model
+// iterations in usage.iterations, and its top-level usage sums the "message"
+// iterations — reading that as the context size doubles it (#2052). The
+// context is the last "message" iteration; without iterations the top-level
+// usage is used as before.
 func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
-	if usage := findUsageMap(raw); usage != nil {
-		return tailer.ExtractUsage(usage)
+	usage := findUsageMap(raw)
+	if usage == nil {
+		return nil
 	}
-	return nil
+	if msgs, _ := splitUsageIterations(usage); len(msgs) > 0 {
+		return tailer.ExtractUsage(msgs[len(msgs)-1])
+	}
+	return tailer.ExtractUsage(usage)
+}
+
+// splitUsageIterations partitions usage.iterations into the "message"
+// iterations (billed at the turn's own model) and the "advisor_message"
+// iterations (billed at the model each one names). Iterations of any other
+// type are dropped from both. Both results are nil when the array is absent.
+func splitUsageIterations(usage map[string]interface{}) (msgs, advisors []map[string]interface{}) {
+	iters, _ := usage["iterations"].([]interface{})
+	for _, it := range iters {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch m["type"] {
+		case "message":
+			msgs = append(msgs, m)
+		case "advisor_message":
+			advisors = append(advisors, m)
+		}
+	}
+	return msgs, advisors
 }
 
 // PendingContribution returns the in-progress turn's contribution so the tailer
@@ -1066,14 +1094,39 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 	p.lastRequestID = l.LastRequestID
 }
 
-// extractAnthropicUsageBreakdown builds a UsageBreakdown from a Claude Code
-// event, including Anthropic's nested 5m/1h cache-write sub-rates when present.
-func extractAnthropicUsageBreakdown(raw map[string]interface{}) tailer.UsageBreakdown {
+// extractAnthropicContribution builds the turn's cost contribution from a
+// Claude Code event. With usage.iterations present, Usage sums the "message"
+// iterations, because the top-level nested cache_creation 5m/1h split covers
+// only the first one (testdata/advisor-iterations.jsonl: top-level 1h=1553,
+// flat 3081 = 1553+1528). Each "advisor_message" iteration becomes an Extra
+// contribution at its own model, since the top-level usage omits it (#2052).
+func extractAnthropicContribution(raw map[string]interface{}, model string) *tailer.PerTurnContribution {
+	c := &tailer.PerTurnContribution{Model: model}
 	usage := findUsageMap(raw)
 	if usage == nil {
-		return tailer.UsageBreakdown{}
+		return c
 	}
+	msgs, advisors := splitUsageIterations(usage)
+	if len(msgs) == 0 {
+		c.Usage = anthropicUsageBreakdown(usage)
+	}
+	for _, m := range msgs {
+		c.Usage.Add(anthropicUsageBreakdown(m))
+	}
+	for _, a := range advisors {
+		advModel, _ := a["model"].(string)
+		c.Extra = append(c.Extra, tailer.PerTurnContribution{
+			Model: tailer.NormalizeModelName(advModel),
+			Usage: anthropicUsageBreakdown(a),
+		})
+	}
+	return c
+}
 
+// anthropicUsageBreakdown builds a UsageBreakdown from one Anthropic usage map
+// (top-level or a single iteration), including the nested 5m/1h cache-write
+// sub-rates when present.
+func anthropicUsageBreakdown(usage map[string]interface{}) tailer.UsageBreakdown {
 	bd := tailer.UsageBreakdown{}
 	if v, ok := usage["input_tokens"].(float64); ok {
 		bd.Input = int64(v)

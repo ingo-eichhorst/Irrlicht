@@ -645,12 +645,30 @@ type UsageBreakdown struct {
 	CacheCreation1h int64 // Anthropic ephemeral 1-hour write
 }
 
+// Add accumulates o into u, bucket by bucket.
+func (u *UsageBreakdown) Add(o UsageBreakdown) {
+	u.Input += o.Input
+	u.Output += o.Output
+	u.CacheRead += o.CacheRead
+	u.CacheCreation5m += o.CacheCreation5m
+	u.CacheCreation1h += o.CacheCreation1h
+}
+
+// Total is the sum of every bucket.
+func (u UsageBreakdown) Total() int64 {
+	return u.Input + u.Output + u.CacheRead + u.CacheCreation5m + u.CacheCreation1h
+}
+
 // PerTurnContribution is what an adapter emits for one completed billable turn.
 // The tailer accumulates these into cumByModel for cost calculation.
 type PerTurnContribution struct {
 	Model           string
 	Usage           UsageBreakdown
 	ProviderCostUSD *float64 // set when the provider reports an authoritative cost (Pi)
+	// Extra carries same-turn usage billed at a different model — Claude
+	// Code's server-side advisor iteration (#2052). Each entry is accumulated
+	// under its own Model; it is not part of Usage.
+	Extra []PerTurnContribution
 }
 
 // TranscriptParser parses a single JSONL line from a specific transcript format

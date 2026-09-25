@@ -334,6 +334,9 @@ func (t *TranscriptTailer) accumulateTokens(parsed *ParsedEvent) {
 // current ModelName from applyModelMetadata so the delta still lands under
 // a priced bucket instead of cumByModel[""].
 func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
+	for i := range c.Extra {
+		t.applyContribution(&c.Extra[i])
+	}
 	if c.ProviderCostUSD != nil {
 		t.cumProviderCostUSD += *c.ProviderCostUSD
 		return
@@ -350,11 +353,7 @@ func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
 		bd = &UsageBreakdown{}
 		t.cumByModel[model] = bd
 	}
-	bd.Input += c.Usage.Input
-	bd.Output += c.Usage.Output
-	bd.CacheRead += c.Usage.CacheRead
-	bd.CacheCreation5m += c.Usage.CacheCreation5m
-	bd.CacheCreation1h += c.Usage.CacheCreation1h
+	bd.Add(c.Usage)
 }
 
 // advanceCumulativeTotal is the Codex-style path: each bucket only moves
@@ -411,52 +410,50 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 // computeCumulativeTokens aggregates per-model token counts and estimated cost.
 // It must run on every TailAndProcess pass — even when no new events were
 // processed — so that ledger-rehydrated state is reflected immediately.
+//
+// A pending contribution also selects the priced path, so a session's first
+// turn is priced from it — Extra included — before anything is committed
+// (#2052). Otherwise the legacy path prices ev.Tokens, which for a Claude Code
+// advisor turn is only the last message iteration.
 func (t *TranscriptTailer) computeCumulativeTokens() {
-	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
-		t.computeCumulativeTokensPriced()
+	var pending *PerTurnContribution
+	if pc, ok := t.parser.(pendingContributor); ok {
+		pending = pc.PendingContribution()
+	}
+	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 || pending != nil {
+		t.computeCumulativeTokensPriced(pending)
 		return
 	}
 	t.computeCumulativeTokensLegacy()
 }
 
 // computeCumulativeTokensPriced is the new path: price per-model, sum
-// provider-reported costs.
-func (t *TranscriptTailer) computeCumulativeTokensPriced() {
+// provider-reported costs. pending is the stateful parser's in-progress turn
+// (Claude Code), or nil; its Extra entries are priced at their own models.
+func (t *TranscriptTailer) computeCumulativeTokensPriced(pending *PerTurnContribution) {
 	var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
 	var pricedCost, co2Grams float64
 	var co2Tier capacity.CO2Tier
-	for modelName, bd := range t.cumByModel {
+	accumulate := func(model string, bd UsageBreakdown) {
 		totalInput += bd.Input
 		totalOutput += bd.Output
 		totalCacheRead += bd.CacheRead
 		totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
-		if t.capacityMgr != nil {
+		if t.capacityMgr != nil && model != "" {
 			pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-				modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+				model, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
 		}
-		grams, tier := capacity.EstimateCO2Grams(
-			modelName, bd.Input+bd.Output+bd.CacheRead+bd.CacheCreation5m+bd.CacheCreation1h)
+		grams, tier := capacity.EstimateCO2Grams(model, bd.Total())
 		co2Grams += grams
 		co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
 	}
-	// Include the pending contribution from stateful parsers (Claude Code).
-	if pc, ok := t.parser.(pendingContributor); ok {
-		if pending := pc.PendingContribution(); pending != nil {
-			totalInput += pending.Usage.Input
-			totalOutput += pending.Usage.Output
-			totalCacheRead += pending.Usage.CacheRead
-			totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
-			if t.capacityMgr != nil && pending.Model != "" {
-				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-					pending.Model,
-					pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
-					pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
-			}
-			grams, tier := capacity.EstimateCO2Grams(pending.Model,
-				pending.Usage.Input+pending.Usage.Output+pending.Usage.CacheRead+
-					pending.Usage.CacheCreation5m+pending.Usage.CacheCreation1h)
-			co2Grams += grams
-			co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
+	for modelName, bd := range t.cumByModel {
+		accumulate(modelName, *bd)
+	}
+	if pending != nil {
+		accumulate(pending.Model, pending.Usage)
+		for _, x := range pending.Extra {
+			accumulate(x.Model, x.Usage)
 		}
 	}
 	t.metrics.CumInputTokens = totalInput

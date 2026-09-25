@@ -25,7 +25,7 @@
     "flickers_by_reason": {
       "force ready→working on first activity": 1
     },
-    "estimated_cost_usd": 0.1952675,
+    "estimated_cost_usd": 0.31232,
     "cum_input_tokens": 6,
     "cum_output_tokens": 6,
     "cum_cache_creation_tokens": 31214,
