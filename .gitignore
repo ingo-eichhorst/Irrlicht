@@ -166,3 +166,12 @@ opencode.json
 # core/adapters/outbound/museaccountapi/testdata/live_probe_*.json instead,
 # written by hand after review, not by the probe program directly.
 core/adapters/outbound/museaccountapi/museaccountapi_live_probe_result.json
+
+# Per-hook-call telemetry from the irrlicht-cowork-hook-probe plugin (#2053):
+# a leftover of the Cowork investigation that Claude Desktop syncs into every
+# Claude Code session, and whose record.sh writes into the session's cwd —
+# the repo root, core/, platforms/macos/, any worktree. Committed by accident
+# twice (bfacafad7, 44092a46b), and its payload JSON quotes the state
+# vocabulary, so tools/state-vocabulary-lint.sh flagged it on unrelated diffs.
+# Unanchored so it matches at every depth; the real fix is removing the plugin.
+.irrlicht-cowork-probe/
