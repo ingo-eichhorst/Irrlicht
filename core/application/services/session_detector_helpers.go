@@ -179,7 +179,36 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 	for _, sid := range ids {
 		d.retirePreSession(sid, newSessionID, adapter, projectDir)
 	}
+	if len(ids) == 1 {
+		d.inheritPreSessionPID(ids[0], newSessionID)
+	}
 	return len(ids) > 0
+}
+
+// inheritPreSessionPID hands a retired pre-session's process to the real
+// session that replaced it, so that process's exit ends the real session.
+// Without it, a brief `claude --resume` of an exited session re-creates the
+// session with no PID: DiscoverPID declines the CWD fallback when a live
+// session claims the only candidate (#2044), and a PID-0 session in working
+// is only reaped by the ready-TTL sweep (issue #2042).
+//
+// Called only when exactly one pre-session was retired: with several, the
+// match cannot say which process produced the real session. The PID is parsed
+// from the proc-<pid> id rather than read off the row, because the
+// pre-session's own PID assignment is asynchronous and may not have landed.
+// Runs after the pre-session row is deleted and with no lock held, since
+// HandlePIDAssigned takes assignMu and fires delete callbacks.
+func (d *SessionDetector) inheritPreSessionPID(preSessionID, newSessionID string) {
+	var pid int
+	if _, err := fmt.Sscanf(preSessionID, "proc-%d", &pid); err != nil || !d.pidMgr.IsPIDAlive(pid) {
+		return
+	}
+	if state, _ := d.repo.Load(newSessionID); state == nil || state.PID != 0 {
+		return
+	}
+	d.log.LogInfo(logComponentSessionDetector, newSessionID,
+		fmt.Sprintf("inheriting pid %d from retired pre-session %s", pid, preSessionID))
+	d.pidMgr.HandlePIDAssigned(pid, newSessionID)
 }
 
 // retirePreSession fires the supersession hook and deletes a single retired
