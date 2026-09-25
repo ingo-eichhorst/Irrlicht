@@ -472,3 +472,16 @@ func (p *AccountPoller) Revoke(provider string) {
 		delete(p.cache, key)
 	}
 }
+
+// Forget cancels key's in-flight fetch, if any, and drops its cached
+// observation — Revoke's shape for one key. A caller whose keys are scoped to
+// something that ends (MuseAccountQuotaKey is per session) calls it when that
+// thing ends, so the cache doesn't keep an entry for it forever.
+func (p *AccountPoller) Forget(key AccountQuotaKey) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e := p.cache[key]; e != nil && e.inflight != nil {
+		e.inflight.cancel()
+	}
+	delete(p.cache, key)
+}

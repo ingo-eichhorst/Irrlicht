@@ -720,12 +720,10 @@ func runDaemon() {
 
 	// Muse's account-quota poller (issue #2007) is constructed once inside
 	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
-	// "exactly one AccountPoller per daemon" design — its own start/stop
-	// closures capture it directly, so nothing here needs it. Nothing yet
-	// triggers a per-session poll; see museaccountapi_effects.go's own doc
-	// comment for why that trigger is deliberately left for a follow-up.
-	// Only the grant/revoke effects wire into the permission catalog below.
-	startMuseAccountAPI, stopMuseAccountAPI := museAccountAPIEffects(logger)
+	// "exactly one AccountPoller per daemon" design. Its grant/revoke effects
+	// wire into the permission catalog below; its per-session sweep (#2057)
+	// is started with the other background loops once the detector exists.
+	museAPI := museAccountAPIEffects(logger)
 
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
@@ -768,8 +766,8 @@ func runDaemon() {
 		StartGastown: startGastown,
 		StopGastown:  stopGastown,
 
-		StartMuseAccountAPI: startMuseAccountAPI,
-		StopMuseAccountAPI:  stopMuseAccountAPI,
+		StartMuseAccountAPI: museAPI.Start,
+		StopMuseAccountAPI:  museAPI.Stop,
 	})
 
 	// The watchdog's second collaborator, available only now: "is this channel
@@ -816,14 +814,15 @@ func runDaemon() {
 	sweepZombies(demoMode, detector, logger)
 
 	defer startBackgroundLoops(startBackgroundLoopsDeps{
-		Detector:     detector,
-		CachedRepo:   cachedRepo,
-		GitResolver:  gitResolver,
-		PermService:  permService,
-		HookVerifier: hookVerifier,
-		Cfg:          cfg,
-		DemoMode:     demoMode,
-		Logger:       logger,
+		Detector:           detector,
+		CachedRepo:         cachedRepo,
+		GitResolver:        gitResolver,
+		PermService:        permService,
+		HookVerifier:       hookVerifier,
+		Cfg:                cfg,
+		DemoMode:           demoMode,
+		Logger:             logger,
+		MuseAccountSweeper: museAPI.sweeper(detector, cachedRepo, permService, logger),
 	})()
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))

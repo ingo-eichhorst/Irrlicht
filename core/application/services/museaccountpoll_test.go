@@ -24,7 +24,7 @@ func TestMuseAccountRefresh_ReturnsSnapshotOnSuccess(t *testing.T) {
 	transport := museFixtureTransport()
 	resolver := fakeResolver{secret: "test-token"}
 
-	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(100, 0))
+	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
 	if err != nil {
 		t.Fatalf("MuseAccountRefresh: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestMuseAccountRefresh_EmptySessionIDRefused(t *testing.T) {
 	poller := NewAccountPoller()
 	transport := museFixtureTransport()
 	resolver := fakeResolver{secret: "test-token"}
-	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "", time.Unix(1, 0)); err == nil {
+	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, ""); err == nil {
 		t.Fatal("expected an error for an empty sessionID")
 	}
 }
@@ -72,7 +72,7 @@ func TestMuseAccountRefresh_NeverPublishesZeroOnFailure(t *testing.T) {
 	}
 	resolver := fakeResolver{secret: "test-token"}
 
-	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(1, 0))
+	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
 	if err == nil {
 		t.Fatal("expected an error on an auth-rejected fetch")
 	}
@@ -83,7 +83,7 @@ func TestMuseAccountRefresh_NeverPublishesZeroOnFailure(t *testing.T) {
 	// Immediate retry: lands in the post-failure backoff window, so Poll
 	// returns the cached (HasValue:false) state with a NIL error — the
 	// branch this test's own mutation fixture targets.
-	snap, err = MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(2, 0))
+	snap, err = MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
 	if err == nil {
 		t.Fatal("expected an error on the immediate retry (no cached value yet, in backoff)")
 	}
@@ -97,7 +97,7 @@ func TestMuseAccountRefresh_ResolverFailureNeverPublishesZero(t *testing.T) {
 	transport := museFixtureTransport()
 	resolver := fakeResolver{err: errors.New("credential file missing")}
 
-	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(1, 0))
+	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
 	if err == nil {
 		t.Fatal("expected an error when the credential resolver fails")
 	}
@@ -127,10 +127,10 @@ func TestMuseAccountQuotaKey_TwoSessionsNeverCollide(t *testing.T) {
 	transport := museFixtureTransport()
 	resolver := fakeResolver{secret: "test-token"}
 
-	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-a", time.Unix(1, 0)); err != nil {
+	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-a"); err != nil {
 		t.Fatalf("session-a MuseAccountRefresh: %v", err)
 	}
-	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-b", time.Unix(1, 0)); err != nil {
+	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-b"); err != nil {
 		t.Fatalf("session-b MuseAccountRefresh: %v", err)
 	}
 	if got := transport.callCount(); got != 2 {
@@ -146,8 +146,49 @@ func TestMuseAccountRefresh_NoCachedValueYetIsAnError(t *testing.T) {
 		},
 	}
 	resolver := fakeResolver{secret: "test-token"}
-	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1", time.Unix(1, 0))
+	snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
 	if err == nil || snap != nil {
 		t.Fatalf("snap=%v err=%v, want nil snap and a non-nil error", snap, err)
+	}
+}
+
+// Issue #2057 review finding: after one success, a later failed fetch must
+// not leave the old reading looking current. The poller hands back the
+// cached body marked Stale; MuseAccountRefresh returns that reading stamped
+// with the failure and its ORIGINAL fetch time, plus the error.
+func TestMuseAccountRefresh_StaleReadingCarriesFailure(t *testing.T) {
+	poller := NewAccountPoller()
+	clock := time.Unix(10_000, 0)
+	poller.now = func() time.Time { return clock }
+	fail := false
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		if fail {
+			return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureAuthRejected, Detail: "status 401"}
+		}
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte(museFixtureBody)}, nil
+	}}
+	resolver := fakeResolver{secret: "test-token"}
+
+	if _, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1"); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	fetchedAt := clock.Unix()
+
+	clock = clock.Add(pollFreshWindow + time.Second)
+	fail = true
+	for _, when := range []string{"the failing fetch", "a retry inside the backoff window"} {
+		snap, err := MuseAccountRefresh(t.Context(), poller, resolver, transport, alwaysGranted, "session-1")
+		if err == nil {
+			t.Fatalf("%s: expected an error", when)
+		}
+		if snap == nil || snap.RetrievalFailure == "" {
+			t.Fatalf("%s: snap = %+v, want the old reading stamped with a retrieval failure", when, snap)
+		}
+		if snap.SampledAt != fetchedAt || snap.LastSuccessAt != fetchedAt {
+			t.Fatalf("%s: SampledAt/LastSuccessAt = %d/%d, want the original fetch time %d", when, snap.SampledAt, snap.LastSuccessAt, fetchedAt)
+		}
+		if len(snap.Windows) != 2 {
+			t.Fatalf("%s: Windows = %+v, want the cached reading's 2", when, snap.Windows)
+		}
 	}
 }

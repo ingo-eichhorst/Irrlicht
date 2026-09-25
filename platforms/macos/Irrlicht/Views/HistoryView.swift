@@ -1548,6 +1548,7 @@ struct QuotaProviderVM: Identifiable {
         switch id {
         case "anthropic": return "Anthropic"
         case "openai": return "OpenAI"
+        case "meta": return "Meta"
         default: return "Subscription"
         }
     }

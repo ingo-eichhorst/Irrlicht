@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { quotaWindowLabel, providerKeyFor, usageCreditsLine } from './quotaChips.js';
+import { quotaWindowLabel, providerKeyFor, usageCreditsLine, providerIconHTML } from './quotaChips.js';
 
 describe('quotaWindowLabel', () => {
   test('labels a Codex single-weekly snapshot without inferring a five-hour window', () => {
@@ -29,5 +29,21 @@ describe('usageCreditsLine', () => {
   test('renders a non-dollar balance in its own currency, not $', () => {
     const line = usageCreditsLine({ has_credits: true, balance: 12.34, currency: 'CNY' });
     expect(line).not.toContain('$');
+  });
+});
+
+// Issue #2057: the daemon stamps Muse Code's account-API snapshots with
+// provider "meta", so a Meta chip needs a bundled mark rather than the
+// generic-circle fallback. Seen red before the meta entry existed
+// (providerIconHTML('meta') returned '').
+describe('providerIconHTML', () => {
+  test('bundles a Meta mark for the meta provider key', () => {
+    const svg = providerIconHTML('meta');
+    expect(svg).toContain('<svg');
+    expect(svg).toContain('fill="currentColor"');
+  });
+
+  test('returns empty for an unknown provider so the caller falls back', () => {
+    expect(providerIconHTML('nonexistent-provider')).toBe('');
   });
 });

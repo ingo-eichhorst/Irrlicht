@@ -1118,6 +1118,9 @@ type startBackgroundLoopsDeps struct {
 	Cfg          config.Config
 	DemoMode     bool
 	Logger       outbound.Logger
+	// MuseAccountSweeper polls Meta's account API for live Muse sessions
+	// (#2057); nil when its transport could not be built.
+	MuseAccountSweeper *services.MuseAccountSweeper
 }
 
 func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
@@ -1146,6 +1149,12 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 		// check — demo mode has no real consent state, so a loop asking
 		// "is this granted" would be asking a fiction.
 		go deps.HookVerifier.Run(detectorCtx)
+		// Started after PermService.Start for the same reason: the sweep
+		// reads the Muse account-API grant on every tick, and it is only real
+		// outside demo mode.
+		if deps.MuseAccountSweeper != nil {
+			go deps.MuseAccountSweeper.Run(detectorCtx)
+		}
 		// Hooks are delivered by Claude Code's native `type: http` transport
 		// straight to the daemon (#1161) — no curl, no shell — so there is no
 		// external tool whose absence could silently no-op delivery (the reason
