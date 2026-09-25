@@ -2,7 +2,10 @@ package services_test
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -15,9 +18,9 @@ import (
 // Log lines the revival decision writes (issue #2059). Each rejection is
 // logged, so these tests use them as the barrier that the hook was processed.
 const (
-	revivedReplacedMsg        = "reviving replaced session: a hook arrived and adapter discovery still names its pid"
 	notRevivedNoPIDMatchMsg   = "not reviving replaced session: adapter discovery does not name its old pid"
 	notRevivedHolderActiveMsg = "not reviving replaced session: the session now holding its pid is active"
+	notRevivedPIDExitedMsg    = "not reviving replaced session: its old pid has exited"
 	notRevivedNotHookMsg      = "not reviving replaced session: the activity is not a hook"
 )
 
@@ -36,6 +39,30 @@ type replacedRevivalFixture struct {
 	pathA    string
 	pathB    string
 	discover func(transcriptPath string) int
+	// sentinels counts drainHooks calls, so each uses a fresh session id.
+	sentinels int
+	proc      *exec.Cmd
+}
+
+// startProcess starts the long-lived process whose pid A holds.
+func (f *replacedRevivalFixture) startProcess() {
+	f.t.Helper()
+	f.proc = exec.Command("sleep", "30")
+	if err := f.proc.Start(); err != nil {
+		f.t.Fatalf("start sleep: %v", err)
+	}
+	f.pid = f.proc.Process.Pid
+	f.t.Cleanup(func() { _ = f.proc.Process.Kill(); _ = f.proc.Wait() })
+}
+
+// killPID ends the process A held and waits until the kernel reports it gone.
+func (f *replacedRevivalFixture) killPID() {
+	f.t.Helper()
+	_ = f.proc.Process.Kill()
+	_ = f.proc.Wait()
+	if !pollUntil(time.Second, func() bool { return syscall.Kill(f.pid, 0) != nil }) {
+		f.t.Fatalf("pid %d still alive after kill", f.pid)
+	}
 }
 
 const (
@@ -53,9 +80,9 @@ func newReplacedRevivalFixture(t *testing.T, discover func(f *replacedRevivalFix
 		tw:   newMockAgentWatcher().withIdentity(agent.Identity{Name: "claude-code"}),
 		repo: newMockRepo(),
 		log:  &mockLogger{},
-		pid:  liveProcessForTest(t),
 		cwd:  t.TempDir(),
 	}
+	f.startProcess()
 	dir := t.TempDir()
 	f.pathA = filepath.Join(dir, revivalSessionA+".jsonl")
 	f.pathB = filepath.Join(dir, revivalSessionB+".jsonl")
@@ -120,16 +147,24 @@ func (f *replacedRevivalFixture) replaceAByB() {
 // presence of its log line.
 func (f *replacedRevivalFixture) settled(want string) bool {
 	return pollUntil(2*time.Second, func() bool {
-		if f.exists(revivalSessionA) {
-			return true
-		}
-		for _, msg := range f.log.infoSnapshot() {
-			if msg == want {
-				return true
-			}
-		}
-		return false
+		return f.exists(revivalSessionA) || f.countLogged(want) > 0
 	})
+}
+
+// drainHooks proves every hook sent before it has been processed: hooks share
+// one queue and the detector's event loop handles it in order, so once a
+// sentinel hook sent afterwards has created its session, the earlier ones are
+// done. The sentinel's transcript is fresh, so it is admitted as new.
+func (f *replacedRevivalFixture) drainHooks() {
+	f.t.Helper()
+	f.sentinels++
+	sid := fmt.Sprintf("sentinel-2059-%d", f.sentinels)
+	path := filepath.Join(f.t.TempDir(), sid+".jsonl")
+	writeTranscript(f.t, path, time.Now())
+	f.det.HandlePermissionHook(sid, path, "PostToolUse")
+	if !pollUntil(2*time.Second, func() bool { return f.exists(sid) }) {
+		f.t.Fatalf("sentinel hook %s was never processed; the barrier cannot vouch for earlier hooks", sid)
+	}
 }
 
 func (f *replacedRevivalFixture) exists(sid string) bool {
@@ -237,8 +272,9 @@ func TestSessionDetector_ExitedSessionNotRevivedByHook_Issue2059(t *testing.T) {
 	}
 
 	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
+	f.drainHooks()
 
-	if pollUntil(500*time.Millisecond, func() bool { return f.exists(revivalSessionA) }) {
+	if f.exists(revivalSessionA) {
 		t.Fatal("a session deleted on process exit was revived by a hook")
 	}
 }
@@ -262,8 +298,56 @@ func TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059(t *testin
 	}
 
 	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
+	f.drainHooks()
 
-	if pollUntil(500*time.Millisecond, func() bool { return f.exists(revivalSessionA) }) {
+	if f.exists(revivalSessionA) {
 		t.Fatal("a session deleted on process exit was revived by a replacement record left from an earlier deletion")
+	}
+}
+
+// countLogged returns how many times msg was logged.
+func (f *replacedRevivalFixture) countLogged(msg string) int {
+	n := 0
+	for _, m := range f.log.infoSnapshot() {
+		if m == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSessionDetector_RevivalRecheckThrottled_Issue2059: a parent working in
+// subagents sends a hook per tool call. Within the recheck interval only the
+// first one evaluates the gates, and each evaluation logs its rejection.
+func TestSessionDetector_RevivalRecheckThrottled_Issue2059(t *testing.T) {
+	f := newReplacedRevivalFixture(t, nil)
+	f.replaceAByB()
+	writeTranscript(t, f.pathB, time.Now())
+
+	for i := 0; i < 3; i++ {
+		f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
+	}
+	f.drainHooks()
+
+	if got := f.countLogged(notRevivedHolderActiveMsg); got != 1 {
+		t.Fatalf("revival gates evaluated %d times for 3 hooks within the recheck interval, want 1", got)
+	}
+}
+
+// TestSessionDetector_ReplacedNotRevivedAfterPIDExited_Issue2059: once the
+// process the session lost has exited, there is nothing left to revive it
+// onto, whatever adapter discovery says.
+func TestSessionDetector_ReplacedNotRevivedAfterPIDExited_Issue2059(t *testing.T) {
+	f := newReplacedRevivalFixture(t, nil)
+	f.replaceAByB()
+	f.killPID()
+
+	f.det.HandlePermissionHook(revivalSessionA, f.pathA, "PostToolUse")
+
+	if !f.settled(notRevivedPIDExitedMsg) {
+		t.Fatalf("hook neither rejected nor revived A; want %q", notRevivedPIDExitedMsg)
+	}
+	if f.exists(revivalSessionA) {
+		t.Fatalf("A was revived onto pid %d after that process exited", f.pid)
 	}
 }

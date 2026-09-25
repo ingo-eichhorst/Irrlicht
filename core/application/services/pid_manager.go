@@ -167,7 +167,7 @@ type PIDManager struct {
 
 	// onSessionReplaced is called by cleanupStalePIDHolders with the root
 	// session it is about to delete and the pid that a new session took from
-	// it, before onSessionDeleted fires for the same id. SessionDetector uses
+	// it, right after onSessionDeleted fires for the same id. SessionDetector uses
 	// it to let the replaced session's own hooks revive it when the
 	// replacement was wrong (issue #2059). Optional.
 	onSessionReplaced func(old *session.SessionState, pid int)
@@ -380,12 +380,8 @@ func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath stri
 	if !pm.requireKnownHost[adapter] {
 		return true
 	}
-	discover := pm.pidDiscovers[adapter]
-	if discover == nil {
-		return true
-	}
-	pid, err := discover(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID))
-	if err != nil || pid <= 0 {
+	pid := pm.DiscoverPIDOnly(sessionID, adapter, cwd, transcriptPath)
+	if pid == 0 {
 		return true
 	}
 	if pm.isKnownHost == nil {
@@ -629,6 +625,25 @@ func (pm *PIDManager) HandleWatcherExit(pid int, sessionID, reason string) {
 	for _, id := range holders {
 		pm.HandleProcessExit(pid, id, reason)
 	}
+}
+
+// rootPIDHolders returns the root sessions other than exclude that hold pid.
+// Same lock as pidHolders, for the same reason: it reads state.PID across
+// sessions.
+func (pm *PIDManager) rootPIDHolders(pid int, exclude string) []*session.SessionState {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return nil
+	}
+	var holders []*session.SessionState
+	for _, s := range states {
+		if s.PID == pid && s.ParentSessionID == "" && s.SessionID != exclude {
+			holders = append(holders, s)
+		}
+	}
+	return holders
 }
 
 // pidHolders returns the ids of every session currently bound to pid
@@ -1020,11 +1035,11 @@ func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sess
 		if pm.onSessionSuperseded != nil {
 			pm.onSessionSuperseded(old.SessionID, sessionID)
 		}
-		if pm.onSessionReplaced != nil {
-			pm.onSessionReplaced(old, pid)
-		}
 		if pm.onSessionDeleted != nil {
 			pm.onSessionDeleted(old.SessionID)
+		}
+		if pm.onSessionReplaced != nil {
+			pm.onSessionReplaced(old, pid)
 		}
 
 		_ = pm.repo.Delete(old.SessionID)
@@ -1173,12 +1188,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 	if pm.pw == nil {
 		return false
 	}
-	discoverFn := pm.pidDiscovers[adapter]
-	if discoverFn == nil {
-		return false
-	}
-
-	if pid, err := discoverFn(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID)); err == nil && pid > 0 {
+	if pid := pm.DiscoverPIDOnly(sessionID, adapter, cwd, transcriptPath); pid > 0 {
 		pm.log.LogInfo(logComponentSessionDetector, sessionID,
 			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
 		pm.HandlePIDAssigned(pid, sessionID)
@@ -1188,8 +1198,9 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 }
 
 // DiscoverPIDOnly runs adapter's PID discovery for a session and returns the
-// PID it names, or 0, without assigning it. Used where discovery is evidence
-// for a decision rather than a binding (issue #2059).
+// PID it names, or 0, without assigning it. TryDiscoverPID assigns what it
+// returns; AllowsSession and replaced-session revival (issue #2059) only use
+// it as evidence.
 func (pm *PIDManager) DiscoverPIDOnly(sessionID, adapter, cwd, transcriptPath string) int {
 	discover := pm.pidDiscovers[adapter]
 	if discover == nil {

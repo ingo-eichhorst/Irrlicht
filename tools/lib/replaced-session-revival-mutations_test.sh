@@ -4,19 +4,18 @@
 # (core/application/services/session_detector_replaced_revival.go).
 #
 # A hook revives such a session only when (1) the activity is a hook, (2) the
-# adapter's PID discovery for the session still names the pid it lost, (3) no
-# other root session holding that pid has a fresh transcript, and (4) the
-# replacement record still belongs to the deletion that made it. These are
-# guards the change ADDS, so there is no "before the fix" to run red; each
-# mutation below removes one and requires its test to go red:
-#   - dropping the Synthetic check
-#     (TestSessionDetector_ReplacedNotRevivedByTranscriptEvent_Issue2059);
-#   - dropping the discovery check
-#     (TestSessionDetector_ReplacedNotRevivedWhenDiscoveryDeclines_Issue2059);
-#   - dropping the active-holder check
-#     (TestSessionDetector_ReplacedNotRevivedWhileHolderActive_Issue2059);
-#   - never dropping an armed record
-#     (TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059).
+# pid it lost is alive, (3) no other root session holding that pid has a fresh
+# transcript, (4) the adapter's PID discovery for the session still names that
+# pid, and (5) the replacement record still describes the latest deletion.
+# Evaluations are throttled per record (6). These are guards the change ADDS,
+# so there is no "before the fix" to run red; each mutation below removes one
+# and requires its test to go red:
+#   (1) TestSessionDetector_ReplacedNotRevivedByTranscriptEvent_Issue2059
+#   (2) TestSessionDetector_ReplacedNotRevivedAfterPIDExited_Issue2059
+#   (3) TestSessionDetector_ReplacedNotRevivedWhileHolderActive_Issue2059
+#   (4) TestSessionDetector_ReplacedNotRevivedWhenDiscoveryDeclines_Issue2059
+#   (5) TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059
+#   (6) TestSessionDetector_RevivalRecheckThrottled_Issue2059
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise.
 
@@ -101,7 +100,7 @@ assert_go_test_goes_red() {
 FILE="core/application/services/session_detector_replaced_revival.go"
 PKG="./core/application/services/..."
 
-# ── only hook activity counts ──
+# ── (1) only hook activity counts ──
 assert_go_test_goes_red \
   "reviving on a non-hook transcript event" \
   "$FILE" \
@@ -111,17 +110,17 @@ assert_go_test_goes_red \
   "TestSessionDetector_ReplacedNotRevivedByTranscriptEvent_Issue2059" \
   "was revived by a stale-transcript watcher event"
 
-# ── adapter discovery must name the lost pid ──
+# ── (2) the lost pid must be alive ──
 assert_go_test_goes_red \
-  "reviving when adapter discovery does not name the lost pid" \
+  "reviving onto a pid whose process has exited" \
   "$FILE" \
-  $'\tif d.pidMgr.DiscoverPIDOnly(ev.SessionID, rec.adapter, rec.cwd, ev.TranscriptPath) != rec.pid {\n\t\treturn notRevivedNoPIDMatchMsg\n\t}\n' \
+  $'\tif !d.pidMgr.IsPIDAlive(rec.pid) {\n\t\treturn notRevivedPIDExitedMsg\n\t}\n' \
   $'\n' \
   "$PKG" \
-  "TestSessionDetector_ReplacedNotRevivedWhenDiscoveryDeclines_Issue2059" \
-  "adapter discovery does not name its pid"
+  "TestSessionDetector_ReplacedNotRevivedAfterPIDExited_Issue2059" \
+  "after that process exited"
 
-# ── an active holder keeps the pid ──
+# ── (3) an active holder keeps the pid ──
 assert_go_test_goes_red \
   "reviving over an active holder of the pid" \
   "$FILE" \
@@ -131,15 +130,35 @@ assert_go_test_goes_red \
   "TestSessionDetector_ReplacedNotRevivedWhileHolderActive_Issue2059" \
   "over an active holder of its pid"
 
-# ── a later deletion drops the record ──
+# ── (4) adapter discovery must name the lost pid ──
+assert_go_test_goes_red \
+  "reviving when adapter discovery does not name the lost pid" \
+  "$FILE" \
+  $'\tif d.pidMgr.DiscoverPIDOnly(ev.SessionID, rec.adapter, rec.cwd, ev.TranscriptPath) != rec.pid {\n\t\treturn notRevivedNoPIDMatchMsg\n\t}\n' \
+  $'\n' \
+  "$PKG" \
+  "TestSessionDetector_ReplacedNotRevivedWhenDiscoveryDeclines_Issue2059" \
+  "adapter discovery does not name its pid"
+
+# ── (5) any deletion drops the record ──
 assert_go_test_goes_red \
   "keeping a replacement record across a later deletion" \
-  "$FILE" \
-  $'\tif rec.armed {\n\t\tdelete(d.replacedSessions, sessionID)\n\t\treturn\n\t}' \
-  $'\tif false {\n\t\tdelete(d.replacedSessions, sessionID)\n\t\treturn\n\t}' \
+  "core/application/services/session_detector_helpers.go" \
+  $'\tdelete(d.replacedSessions, sessionID)\n' \
+  $'\n' \
   "$PKG" \
   "TestSessionDetector_LaterDeletionDropsReplacementRecord_Issue2059" \
   "left from an earlier deletion"
+
+# ── (6) one evaluation per recheck interval ──
+assert_go_test_goes_red \
+  "evaluating the gates on every hook" \
+  "$FILE" \
+  'if time.Since(checkedAt) < revivalRecheckInterval {' \
+  'if time.Since(checkedAt) < 0 {' \
+  "$PKG" \
+  "TestSessionDetector_RevivalRecheckThrottled_Issue2059" \
+  "within the recheck interval, want 1"
 
 if [[ $fails -gt 0 ]]; then
   echo "replaced-session-revival-mutations: $fails FAILED"

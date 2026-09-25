@@ -80,7 +80,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		state := d.buildNewSessionState(id, ev, now)
-		if !d.finalizeNewSession(id, ev, state) {
+		if !d.finalizeNewSession(id, ev, state, true) {
 			return
 		}
 	} else {
@@ -398,7 +398,7 @@ func shouldClassifyAtBirth(state *session.SessionState) bool {
 // depend on it already being visible: holding a stalled parent working, and
 // clearing out any pre-session placeholder for the same project. Returns
 // false if the save failed (already logged), so the caller stops there.
-func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, state *session.SessionState) bool {
+func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, state *session.SessionState, retirePreSessions bool) bool {
 	if err := d.repo.Save(state); err != nil {
 		d.log.LogError(logComponentSessionDetector, ev.SessionID,
 			fmt.Sprintf("failed to save new session: %v", err))
@@ -418,7 +418,7 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	// ahead of the transition record below so ShouldSynthesizeCatchUpTurn
 	// (issue #996) can see its return value.
 	supersedingLivePreSession := false
-	if ev.TranscriptPath != "" {
+	if retirePreSessions && ev.TranscriptPath != "" {
 		supersedingLivePreSession = d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name, ev.SessionID)
 	}
 

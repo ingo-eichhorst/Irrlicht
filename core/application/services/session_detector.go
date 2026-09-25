@@ -182,9 +182,10 @@ type SessionDetector struct {
 	// replacedSessions holds, for a root session deleted by the same-pid
 	// cleanup (cleanupStalePIDHolders), the pid it lost and where it ran, so
 	// its own hooks can revive it if that replacement was wrong (issue #2059).
-	// Keyed like deletedSessions and cleared at the same points; any later
-	// deletion of the same id drops it. See tryReviveReplacedSession.
-	replacedSessions map[string]replacedSession
+	// Any deletion drops the entry (removeFromProjectSessions) before the
+	// same-pid cleanup records a new one, and it is cleared wherever
+	// deletedSessions is. See tryReviveReplacedSession.
+	replacedSessions map[string]*replacedSession
 
 	// hostGateRejected tracks session IDs the host-ancestry admission gate
 	// (issue #784) has already rejected. No cooldown/expiry, unlike
@@ -336,7 +337,7 @@ func newSessionDetector() *SessionDetector {
 		projectSessions:          make(map[string]string),
 		deletedSessions:          make(map[string]int64),
 		deletedStates:            make(map[string]*session.SessionState),
-		replacedSessions:         make(map[string]replacedSession),
+		replacedSessions:         make(map[string]*replacedSession),
 		hostGateRejected:         make(map[string]struct{}),
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),

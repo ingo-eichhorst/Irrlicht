@@ -18,48 +18,33 @@ const (
 	notRevivedNotHookMsg      = "not reviving replaced session: the activity is not a hook"
 )
 
+// revivalRecheckInterval bounds how often one replaced session's gates are
+// evaluated. A parent whose work runs in subagents sends a hook per tool call,
+// and an evaluation can run adapter PID discovery on the event loop.
+const revivalRecheckInterval = 5 * time.Second
+
 // replacedSession is what a root session deleted by the same-pid cleanup
 // leaves behind: the pid a new session took from it and where it ran.
 type replacedSession struct {
-	pid        int
-	adapter    string
-	cwd        string
-	projectDir string
-	// armed is set once the deletion that recorded this entry has written
-	// its tombstone. Any later deletion of the same id drops the entry, so
-	// only a same-pid replacement can ever make a session revivable.
-	armed bool
+	pid     int
+	adapter string
+	cwd     string
+	// checkedAt is when the gates last rejected a revival; see
+	// revivalRecheckInterval.
+	checkedAt time.Time
 }
 
 // recordReplacement is PIDManager's OnSessionReplaced. cleanupStalePIDHolders
-// calls it just before onSessionDeleted for the same id, which is why the
-// entry starts unarmed and the project dir is still in projectSessions.
+// calls it right after onSessionDeleted (removeFromProjectSessions) for the
+// same id, which drops any earlier record, so a record only ever describes
+// the latest deletion.
 func (d *SessionDetector) recordReplacement(old *session.SessionState, pid int) {
 	if old.ParentSessionID != "" {
 		return
 	}
 	d.mu.Lock()
-	d.replacedSessions[old.SessionID] = replacedSession{
-		pid: pid, adapter: old.Adapter, cwd: old.CWD,
-		projectDir: d.projectSessions[old.SessionID],
-	}
+	d.replacedSessions[old.SessionID] = &replacedSession{pid: pid, adapter: old.Adapter, cwd: old.CWD}
 	d.mu.Unlock()
-}
-
-// armOrDropReplacement runs under d.mu from removeFromProjectSessions. The
-// first deletion after recordReplacement arms the entry; any other deletion
-// drops it.
-func (d *SessionDetector) armOrDropReplacement(sessionID string) {
-	rec, ok := d.replacedSessions[sessionID]
-	if !ok {
-		return
-	}
-	if rec.armed {
-		delete(d.replacedSessions, sessionID)
-		return
-	}
-	rec.armed = true
-	d.replacedSessions[sessionID] = rec
 }
 
 // tryReviveReplacedSession re-creates a session that the same-pid cleanup
@@ -70,39 +55,48 @@ func (d *SessionDetector) armOrDropReplacement(sessionID string) {
 //
 // A hook alone is not enough: /clear also ends in the same-pid cleanup, and a
 // late hook can still carry the cleared transcript's path. So it revives only
-// when both of these hold:
-//   - the adapter's own PID discovery, run for this session, names the pid it
-//     lost, and that process is alive. claudecode discovery declines after a
-//     /clear on the current metadata schema (tested in #2044's
-//     LiveOwnerWithUpdatedAtNotStolenByStaleGate);
-//   - no other root session holding that pid has a fresh transcript, so a
-//     session that is actually working keeps it.
+// when the old pid is alive, no other root session holding it has a fresh
+// transcript (so a session that is actually working keeps it), and the
+// adapter's own PID discovery, run for this session, names that pid.
+// claudecode discovery declines after a /clear on the current metadata schema
+// (tested in #2044's LiveOwnerWithUpdatedAtNotStolenByStaleGate).
 //
 // The revived session then goes through ordinary PID discovery, whose
-// same-pid cleanup evicts the session that took the pid. Returns true when
-// it revived the session.
+// same-pid cleanup evicts the session that took the pid. Returns true when it
+// revived the session.
 func (d *SessionDetector) tryReviveReplacedSession(ev agent.Event) bool {
 	d.mu.Lock()
-	rec, ok := d.replacedSessions[ev.SessionID]
+	rec := d.replacedSessions[ev.SessionID]
 	deletedAt := d.deletedSessions[ev.SessionID]
+	var checkedAt time.Time
+	if rec != nil {
+		checkedAt = rec.checkedAt
+	}
 	d.mu.Unlock()
-	if !ok || !rec.armed || time.Since(time.Unix(deletedAt, 0)) < d.deletedCooldown {
+	if rec == nil || time.Since(time.Unix(deletedAt, 0)) < d.deletedCooldown {
+		return false
+	}
+	if time.Since(checkedAt) < revivalRecheckInterval {
 		return false
 	}
 	if reason := d.revivalRejection(ev, rec); reason != "" {
+		d.mu.Lock()
+		rec.checkedAt = time.Now()
+		d.mu.Unlock()
 		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
 		return false
 	}
 
+	// The gates ran without d.mu; a concurrent deletion or re-creation may
+	// have replaced or dropped the record since.
 	d.mu.Lock()
-	if cur, still := d.replacedSessions[ev.SessionID]; !still || cur != rec || d.deletedSessions[ev.SessionID] != deletedAt {
+	if d.replacedSessions[ev.SessionID] != rec {
 		d.mu.Unlock()
 		return false
 	}
 	delete(d.deletedSessions, ev.SessionID)
 	delete(d.deletedStates, ev.SessionID)
 	delete(d.replacedSessions, ev.SessionID)
-	d.projectSessions[ev.SessionID] = rec.projectDir
 	d.mu.Unlock()
 
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, revivedReplacedMsg)
@@ -111,19 +105,21 @@ func (d *SessionDetector) tryReviveReplacedSession(ev agent.Event) bool {
 }
 
 // revivalRejection returns the log line naming the first gate that rejects a
-// revival, or "" when every gate passes.
-func (d *SessionDetector) revivalRejection(ev agent.Event, rec replacedSession) string {
+// revival, or "" when every gate passes. Cheapest gates first: adapter
+// discovery can scan metadata files and processes. rec's pid, adapter and cwd
+// never change after recordReplacement, so reading them without d.mu is safe.
+func (d *SessionDetector) revivalRejection(ev agent.Event, rec *replacedSession) string {
 	if !ev.Synthetic {
 		return notRevivedNotHookMsg
 	}
 	if !d.pidMgr.IsPIDAlive(rec.pid) {
 		return notRevivedPIDExitedMsg
 	}
-	if d.pidMgr.DiscoverPIDOnly(ev.SessionID, rec.adapter, rec.cwd, ev.TranscriptPath) != rec.pid {
-		return notRevivedNoPIDMatchMsg
-	}
 	if d.pidHolderActive(ev.SessionID, rec.pid) {
 		return notRevivedHolderActiveMsg
+	}
+	if d.pidMgr.DiscoverPIDOnly(ev.SessionID, rec.adapter, rec.cwd, ev.TranscriptPath) != rec.pid {
+		return notRevivedNoPIDMatchMsg
 	}
 	return ""
 }
@@ -133,14 +129,7 @@ func (d *SessionDetector) revivalRejection(ev agent.Event, rec replacedSession) 
 // isStaleTranscript is false for a path it cannot stat, so an unreadable
 // holder counts as active.
 func (d *SessionDetector) pidHolderActive(sessionID string, pid int) bool {
-	states, err := d.repo.ListAll()
-	if err != nil {
-		return true
-	}
-	for _, s := range states {
-		if s.SessionID == sessionID || s.PID != pid || s.ParentSessionID != "" {
-			continue
-		}
+	for _, s := range d.pidMgr.rootPIDHolders(pid, sessionID) {
 		if !isStaleTranscript(s.TranscriptPath) {
 			return true
 		}
@@ -151,20 +140,16 @@ func (d *SessionDetector) pidHolderActive(sessionID string, pid int) bool {
 // reviveReplacedSession re-creates the session from its transcript and starts
 // PID discovery for it. It skips onNewSession's admission gate on purpose:
 // that gate rejects a stale transcript, and tryReviveReplacedSession's own
-// checks are the evidence that replaces it. The event handed to
-// finalizeNewSession has no transcript path so that it does not retire
-// pre-sessions: a revived session is not a new process.
-func (d *SessionDetector) reviveReplacedSession(ev agent.Event, rec replacedSession) {
+// checks are the evidence that replaces it. It does not retire pre-sessions: a
+// revived session is not a new process.
+func (d *SessionDetector) reviveReplacedSession(ev agent.Event, rec *replacedSession) {
 	id := agent.Identity{Name: rec.adapter}
 	ev.CWD = rec.cwd
-	ev.ProjectDir = rec.projectDir
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 		fmt.Sprintf(NewSessionInfoFormat, ev.ProjectDir, id.Name))
 
 	state := d.buildNewSessionState(id, ev, d.nowFn().Unix())
-	finalize := ev
-	finalize.TranscriptPath = ""
-	if !d.finalizeNewSession(id, finalize, state) {
+	if !d.finalizeNewSession(id, ev, state, false) {
 		return
 	}
 	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, rec.cwd, ev.TranscriptPath, rec.adapter)
