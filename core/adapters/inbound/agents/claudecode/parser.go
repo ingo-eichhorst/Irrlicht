@@ -1095,21 +1095,11 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 }
 
 // extractAnthropicContribution builds the turn's cost contribution from a
-// Claude Code event. With usage.iterations present, Usage is the sum of the
-// "message" iterations rather than the top-level usage: the top-level nested
-// cache_creation 5m/1h split covers only the first iteration. The committed
-// evidence is testdata/advisor-iterations.jsonl: the top-level split is
-// 1h=1553/5m=0, which is iteration 1 alone, while the flat value 3081 is
-// 1553+1528. A 2026-09-25 scan found the same in all 49 local
-// multi-iteration messages. It ran:
-//
-//	jq -c 'select(.message.usage.iterations? | length > 1) | .message.usage
-//	  | [(.cache_creation.ephemeral_5m_input_tokens + .cache_creation.ephemeral_1h_input_tokens),
-//	     .cache_creation_input_tokens]' ~/.claude/projects/*/*.jsonl
-//
-// Each "advisor_message" iteration
-// becomes an Extra contribution at its own model; the top-level usage leaves
-// it out entirely (#2052).
+// Claude Code event. With usage.iterations present, Usage sums the "message"
+// iterations, because the top-level nested cache_creation 5m/1h split covers
+// only the first one (testdata/advisor-iterations.jsonl: top-level 1h=1553,
+// flat 3081 = 1553+1528). Each "advisor_message" iteration becomes an Extra
+// contribution at its own model, since the top-level usage omits it (#2052).
 func extractAnthropicContribution(raw map[string]interface{}, model string) *tailer.PerTurnContribution {
 	c := &tailer.PerTurnContribution{Model: model}
 	usage := findUsageMap(raw)
@@ -1121,7 +1111,7 @@ func extractAnthropicContribution(raw map[string]interface{}, model string) *tai
 		c.Usage = anthropicUsageBreakdown(usage)
 	}
 	for _, m := range msgs {
-		addUsageBreakdown(&c.Usage, anthropicUsageBreakdown(m))
+		c.Usage.Add(anthropicUsageBreakdown(m))
 	}
 	for _, a := range advisors {
 		advModel, _ := a["model"].(string)
@@ -1131,14 +1121,6 @@ func extractAnthropicContribution(raw map[string]interface{}, model string) *tai
 		})
 	}
 	return c
-}
-
-func addUsageBreakdown(dst *tailer.UsageBreakdown, src tailer.UsageBreakdown) {
-	dst.Input += src.Input
-	dst.Output += src.Output
-	dst.CacheRead += src.CacheRead
-	dst.CacheCreation5m += src.CacheCreation5m
-	dst.CacheCreation1h += src.CacheCreation1h
 }
 
 // anthropicUsageBreakdown builds a UsageBreakdown from one Anthropic usage map

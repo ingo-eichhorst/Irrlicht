@@ -645,6 +645,20 @@ type UsageBreakdown struct {
 	CacheCreation1h int64 // Anthropic ephemeral 1-hour write
 }
 
+// Add accumulates o into u, bucket by bucket.
+func (u *UsageBreakdown) Add(o UsageBreakdown) {
+	u.Input += o.Input
+	u.Output += o.Output
+	u.CacheRead += o.CacheRead
+	u.CacheCreation5m += o.CacheCreation5m
+	u.CacheCreation1h += o.CacheCreation1h
+}
+
+// Total is the sum of every bucket.
+func (u UsageBreakdown) Total() int64 {
+	return u.Input + u.Output + u.CacheRead + u.CacheCreation5m + u.CacheCreation1h
+}
+
 // PerTurnContribution is what an adapter emits for one completed billable turn.
 // The tailer accumulates these into cumByModel for cost calculation.
 type PerTurnContribution struct {
