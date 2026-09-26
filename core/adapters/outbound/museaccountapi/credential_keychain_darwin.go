@@ -23,21 +23,23 @@ import (
 // succeed in ~9.5s (12.72s total probe time minus the 2869ms HTTP fetch the
 // same run measured, minus `muse --version`'s own sub-second cost).
 //
-// UNVERIFIED which of two causes that ~9.5s was: securityd/ACL negotiation
-// latency for an already-trusted caller, or a Keychain authorization dialog
-// that was answered (by whoever was at this keyboard) within the 25s window
-// — this run cannot distinguish the two, and no screenshot or prompt log was
-// captured either way. That distinction matters: if it was a one-time Allow
-// rather than an already-trusted ACL, every UNATTENDED production poll after
-// this one could re-prompt and simply time out again at 15s, silently
-// degrading to "credential not resolvable" rather than ever completing. The
-// pinned herdr-agent-quota source treats this as a first-class risk its own
-// way: it refuses a background keychain read outright without a recorded
-// `--keychain-approve` marker, so an unattended process NEVER triggers a
-// prompt. This package implements no equivalent ceremony — 15s (roughly 50%
-// headroom over the one successful measurement) is a stopgap the maintainer
-// should treat as an open question, not a settled fix; see the PR body's
-// risks section.
+// SETTLED by issue #2062 (observed by its reporter on 2026-09-26, with the
+// dev daemon from main @ 927d80cf4; not re-measured by this change): that
+// ~9.5s was an ANSWERED Keychain dialog, not securityd latency. `security`
+// is not on the item's ACL, so every read raises the dialog ("security
+// möchte deine vertraulichen Informationen verwenden …"), and "Allow"
+// covers that one read only. A hand-run read with the dialog answered took
+// 6s; an unanswered one is killed here after 15s — events.log recorded those
+// timeouts at 16:03, 16:58 and 17:17. Because each read is a prompt, callers
+// must not read on every poll: the daemon reads through
+// services.GrantCredentialCache — once per grant, plus one re-read after Meta
+// rejects the token (re-armed only by an accepted fetch) — and keeps a failed
+// read (ErrKeychainRead) cached until the permission is revoked and granted
+// again, so an unanswered dialog is not raised again on the poller's
+// backoff. 15s stays the bound on one read;
+// the pinned herdr-agent-quota source's `--keychain-approve` ceremony (it
+// never reads in the background without a recorded approval) is still not
+// implemented here.
 const keychainTimeout = 15 * time.Second
 
 // securityPath is resolved once from a fixed, unwriteable directory set
