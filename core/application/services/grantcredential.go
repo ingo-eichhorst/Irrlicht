@@ -24,7 +24,7 @@ import (
 // granting the permission again (or restarting the daemon, which re-applies
 // the grant) is the retry. A failure keepFailure rejects (one that raised no
 // dialog, such as a missing auth.json) is not cached, so the next Resolve
-// reads again.
+// reads again. A panicking resolver's outcome stays cached until Reset.
 //
 // Concurrent callers share one read: the first caller after a Reset runs the
 // wrapped resolver, and every caller arriving while it runs waits for that

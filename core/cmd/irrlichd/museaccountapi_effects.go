@@ -73,8 +73,9 @@ import (
 // grant has to follow a revoke, or be the daemon's re-apply at startup:
 // re-answering "granted" while already granted runs no Apply. A failure
 // before the Keychain route (no auth.json yet) raised no dialog and is not
-// cached. The other reset is the sweep's re-read after Meta rejects the
-// credential (services.GrantCredentialCache.InvalidateOnce).
+// cached. The other drop is the one re-read after Meta rejects the
+// credential: AccountPoller.doFetch reports each fetch's outcome to the
+// cache (services.CredentialFeedback), and a rejection calls InvalidateOnce.
 func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
 	return newMuseAccountAPI(logger, museaccountapi.NewCredentialResolver(museaccountapi.AuthPath))
 }
