@@ -318,7 +318,7 @@
     }
     /* Single visible chip gets a slightly wider bar (matches macOS compact
        vs. non-compact width: 60 vs 70). */
-    .quota-chips--single .quota-bar { width: 70px; }
+    .quota-chips--regular .quota-bar { width: 70px; }
     .quota-bar-fill {
       position: absolute;
       top: 0;
@@ -373,6 +373,35 @@
       border-radius: 4px;
       background: var(--surface-hover);
       cursor: default;
+      /* Never the item that gives width back: the chips' flexible bars do
+         (#2063). On macOS the pill's label truncated to an empty box. */
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    /* Three to five providers share the strip (#2063): the tier comes from
+       quotaChipLayout in quotaChips.js, mirroring QuotaChipDensity on macOS.
+       Only the bar flexes — between a floor and the fixed 60px it has with
+       one or two chips — so a roomy strip looks as it always did, and a
+       narrow one shrinks bars before it scrolls. Icon, window label and
+       percent keep their widths. The bar keeps `width: 60px` as its
+       preferred size: with `width: auto` its intrinsic width is 0 and every
+       bar collapsed to the floor even with room to spare (seen in headless
+       Chrome at 360px while writing this). `--flex` is on the strip for
+       both the tight and dense tiers; only their differences are per-tier. */
+    .quota-chips--tight { gap: 10px; }
+    .quota-chips--dense { gap: 8px; }
+    .quota-chips--flex .quota-chip { flex: 0 1 auto; min-width: 0; gap: 4px; }
+    .quota-chips--flex .quota-chip-body { flex: 1 1 auto; min-width: 0; }
+    .quota-chips--flex .quota-row { gap: 3px; }
+    .quota-chips--flex .quota-row-label { flex-shrink: 0; }
+    .quota-chips--flex .quota-bar { flex: 1 1 60px; width: 60px; min-width: 24px; max-width: 60px; }
+    .quota-chips--dense .quota-bar { min-width: 6px; }
+    .quota-chips--flex .quota-row-percent { flex-shrink: 0; min-width: 23px; }
+    .quota-chips--flex .quota-usage-headline {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .quota-stale { opacity: 0.5; }
     /* Same dimming treatment as .quota-stale, for the other

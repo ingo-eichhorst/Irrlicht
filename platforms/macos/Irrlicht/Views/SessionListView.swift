@@ -530,6 +530,13 @@ struct SessionListView: View {
                 .font(.system(size: 11))
                 .foregroundColor(displayMode.isHistory ? IrrColors.working : .secondary)
                 .frame(minWidth: 16)
+                // A guard, not a fix: keeps the history-minutes digits from
+                // ever being the width a crowded quota strip takes (#2063).
+                // A rendered replica of this header with 1-6 providers showed
+                // the digits intact with or without it (the strip's flexible
+                // bars shrink instead); a replica that gave the strip layout
+                // priority truncated them, which is the case this protects.
+                .fixedSize()
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -572,22 +579,23 @@ struct SessionListView: View {
     /// Header slot shown to the left of the session glyphs. Renders one
     /// chip per subscription provider whose sessions have surfaced quota
     /// data (Anthropic, OpenAI, …) — matching mockups 2 and 3 in
-    /// issue #309. When more chips exist than the 380pt header can fit
-    /// comfortably, the first `maxVisibleChips` render normally and the
-    /// rest collapse into a single "+N more" chip whose tooltip lists
-    /// what's hidden (mockup 3). Empty when no provider has a snapshot;
-    /// the app version lives in Settings rather than competing for
-    /// this slot.
+    /// issue #309. Up to `QuotaChipLayout.maxInline` chips share the header
+    /// width, packing tighter as the count grows (#2063); past that, the
+    /// first `maxBesideOverflow` render and the rest collapse into a single
+    /// "+N more" chip whose tooltip lists what's hidden (mockup 3). Empty
+    /// when no provider has a snapshot; the app version lives in Settings
+    /// rather than competing for this slot.
     @ViewBuilder
     private var headerTitleView: some View {
         if showQuotaForecast {
             let chips = Self.quotaChipData(sessions: sessionManager.sessions, now: formatNow())
             if !chips.isEmpty {
-                let visible = Array(chips.prefix(Self.maxVisibleQuotaChips))
-                let hidden = Array(chips.dropFirst(Self.maxVisibleQuotaChips))
-                HStack(alignment: .top, spacing: 8) {
+                let layout = QuotaChipLayout.forChipCount(chips.count)
+                let visible = Array(chips.prefix(layout.visibleCount))
+                let hidden = Array(chips.dropFirst(layout.visibleCount))
+                HStack(alignment: .top, spacing: layout.density.chipSpacing) {
                     ForEach(visible) { chip in
-                        quotaChipView(chip, compact: chips.count > 1)
+                        quotaChipView(chip, density: layout.density)
                     }
                     if !hidden.isEmpty {
                         quotaOverflowChip(hidden: hidden)
@@ -607,24 +615,10 @@ struct SessionListView: View {
         }
     }
 
-    /// Cap on chips rendered inline in the header before overflow kicks
-    /// in. Two compact chips at ~110pt each plus an 8pt gap is already
-    /// most of the 380pt panel width once the mode button and status
-    /// indicator are factored in; a third would overflow visibly.
-    private static let maxVisibleQuotaChips = 2
-
-    /// The "+N more" chip: a small grey pill showing the hidden chip
-    /// count, whose tooltip lists each hidden provider with its
-    /// headline metric. Matches mockup 3 in issue #309.
-    @ViewBuilder
+    /// The "+N more" chip; see `QuotaOverflowPill`. Its tooltip lists each
+    /// hidden provider with its headline metric (mockup 3 in issue #309).
     private func quotaOverflowChip(hidden: [QuotaWidgetData]) -> some View {
-        Text("+\(hidden.count) more")
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(IrrColors.chipFill)
-            .cornerRadius(IrrRadius.sm)
+        QuotaOverflowPill(hiddenCount: hidden.count)
             .tooltip(hidden.map { quotaOverflowSummary($0) }.joined(separator: "\n"))
     }
 
@@ -883,7 +877,7 @@ struct SessionListView: View {
     ///   - subscription → provider icon + its reported quota bars (mockup 1/2)
     ///   - usage        → provider icon + windowed spend, click-to-cycle (mockup 2)
     @ViewBuilder
-    private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
+    private func quotaChipView(_ d: QuotaWidgetData, density: QuotaChipDensity) -> some View {
         // Stale snapshots render at half opacity so the user can tell the data
         // pre-dates the current window — the values are still visible (better
         // than an empty header) but visibly muted, and the tooltip names the
@@ -894,7 +888,7 @@ struct SessionListView: View {
         // two pinned clocks. The modifier order is unchanged — the tooltip
         // still applies outside the opacity.
         QuotaStaleDimmed(snapshot: d.snapshot) {
-            HStack(spacing: 6) {
+            HStack(spacing: density.iconSpacing) {
                 // Provider icon (Anthropic / OpenAI) when we can infer one;
                 // otherwise fall back to the adapter icon so the chip never
                 // appears iconless. The quota bucket is provider-scoped, so
@@ -921,19 +915,20 @@ struct SessionListView: View {
                         // Subscription forced (or auto-detected) but the snapshot
                         // carries no rate-limit windows. Symmetric with the usage
                         // zero-state: a short phrase rather than an empty chip.
-                        Text("no subscription data")
+                        Text(density.isFlexible ? "no data" : "no subscription data")
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(.secondary)
-                            .frame(minWidth: 88, alignment: .leading)
+                            .lineLimit(1)
+                            .frame(minWidth: density.usageMinWidth, alignment: .leading)
                     } else {
                         VStack(alignment: .leading, spacing: 1) {
                             ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
-                                QuotaWindowRow(window: window, compact: compact)
+                                QuotaWindowRow(window: window, density: density)
                             }
                         }
                     }
                 case .usage:
-                    quotaUsageBody(d, compact: compact)
+                    quotaUsageBody(d, density: density)
                 }
             }
         }
@@ -969,23 +964,28 @@ struct SessionListView: View {
     /// it — that is #1995's territory (chip identity/bucketing), not this
     /// ticket's; see #1996's report for the full audit.
     ///
-    /// A `minWidth: 88` matches the subscription chip's row width
-    /// (label + 40pt bar + percent) so a usage chip with a short
-    /// headline doesn't collapse to an icon-only sliver next to a
-    /// bars chip.
+    /// In the fixed densities a `minWidth: 88` matches the subscription
+    /// chip's row width (label + bar + percent) so a usage chip with a short
+    /// headline doesn't collapse to an icon-only sliver next to a bars chip.
+    /// The flexible densities (#2063) drop it and let the headline truncate —
+    /// the chip tooltip carries the full value — and the dense one drops the
+    /// "spend" line too.
     @ViewBuilder
-    private func quotaUsageBody(_ d: QuotaWidgetData, compact _: Bool) -> some View {
+    private func quotaUsageBody(_ d: QuotaWidgetData, density: QuotaChipDensity) -> some View {
         let spend = sessionManager.providerCosts[d.id]?[usageCostTimeframe.rawValue] ?? 0
         Button(action: cycleUsageTimeframe) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(formatUsageCost(spend) + usageCostTimeframe.suffix)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.primary)
-                Text("spend")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                if density.usageShowsSublabel {
+                    Text("spend")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
             }
-            .frame(minWidth: 88, alignment: .leading)
+            .frame(minWidth: density.usageMinWidth, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

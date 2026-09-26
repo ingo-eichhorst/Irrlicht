@@ -46,11 +46,12 @@ import SwiftUI
 /// exactly that for the reset label, one read earlier).
 
 /// One row inside a subscription chip: window label, the bar with its pace
-/// marker, the used percent, and — outside compact mode — the reset label.
+/// marker, the used percent, and — in the regular density only — the reset
+/// label.
 ///
-/// In compact mode (multiple chips visible) the inline reset time is dropped —
-/// it lives in the tooltip — and the bar shrinks so two or three chips fit in
-/// the 380pt header.
+/// `density` (#2063) decides every width: with more chips in the header the
+/// inline reset time drops (it lives in the tooltip), then the bar turns
+/// flexible, then the window label drops. `QuotaChipDensity` holds the numbers.
 ///
 /// Was `SessionListView.quotaWindowRow`. The `Date()` it used to read for the
 /// pace marker is now this view's `\.formatNow`, read once for the row: the old
@@ -59,7 +60,7 @@ import SwiftUI
 /// hazard rather than routing around it.
 struct QuotaWindowRow: View {
     let window: RateLimitWindowInfo
-    let compact: Bool
+    let density: QuotaChipDensity
 
     @Environment(\.formatNow) private var formatNow
 
@@ -67,23 +68,35 @@ struct QuotaWindowRow: View {
         // Computed once per row, from one read of the clock — SwiftUI
         // re-invokes view bodies on every SessionManager publish.
         let pace = SessionListView.quotaPacePercent(window, now: formatNow())
-        HStack(spacing: 6) {
-            Text(SessionListView.quotaWindowLabel(window.windowMinutes))
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .frame(width: 14, alignment: .leading)
+        HStack(spacing: density.rowSpacing) {
+            if density.showsWindowLabel {
+                Text(SessionListView.quotaWindowLabel(window.windowMinutes))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 14, alignment: .leading)
+            }
 
-            QuotaWindowRow.bar(percent: window.usedPercent,
-                               color: SessionListView.barColor(used: window.usedPercent, pace: pace),
-                               pacePercent: pace)
-                .frame(width: compact ? 60 : 70, height: 5)
+            let bar = QuotaWindowRow.bar(percent: window.usedPercent,
+                                         color: SessionListView.barColor(used: window.usedPercent, pace: pace),
+                                         pacePercent: pace)
+            if let fixed = density.fixedBarWidth {
+                bar.frame(width: fixed, height: 5)
+            } else {
+                // The only flexible part of the row: the label and percent
+                // keep their fixed frames, so a crowded header takes width
+                // from the bar and never truncates the percent.
+                bar.frame(minWidth: density.minBarWidth,
+                          idealWidth: QuotaChipDensity.maxBarWidth,
+                          maxWidth: QuotaChipDensity.maxBarWidth,
+                          minHeight: 5, maxHeight: 5)
+            }
 
             Text("\(Int(window.usedPercent.rounded()))%")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundColor(.primary)
-                .frame(width: 28, alignment: .trailing)
+                .frame(width: density.percentWidth, alignment: .trailing)
 
-            if !compact {
+            if density.showsResetLabel {
                 // A view of its own since #1663 — see `QuotaResetLabel`, which
                 // reads the four values this rendering used to take off the
                 // machine (now, calendar, zone, locale) from the environment.
@@ -167,5 +180,28 @@ struct QuotaStaleDimmed<Content: View>: View {
         content
             .opacity(SessionListView.snapshotIsStale(snapshot, now: formatNow())
                      ? Self.staleOpacity : 1.0)
+    }
+}
+
+/// The header's "+N more" pill: a small grey pill showing how many provider
+/// chips did not fit inline — more than `QuotaChipLayout.maxInline` providers.
+/// Extracted from `SessionListView` for #2063 so a test can host it next to a
+/// row that already fills the header.
+struct QuotaOverflowPill: View {
+    let hiddenCount: Int
+
+    var body: some View {
+        Text("+\(hiddenCount) more")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundColor(.secondary)
+            // Before #2063 the label was the only child in a crowded header
+            // that could give width back, and it truncated to nothing — an
+            // empty grey box. `fixedSize` holds it at its full width;
+            // `QuotaOverflowPillTests` measured 12pt without it and 56pt with.
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(IrrColors.chipFill)
+            .cornerRadius(IrrRadius.sm)
     }
 }

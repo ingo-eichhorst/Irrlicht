@@ -274,8 +274,9 @@ final class QuotaChipClockTests: XCTestCase {
 
     /// The real `QuotaWindowRow` — the view `SessionListView.quotaChipView`
     /// renders — hosted through the type the snapshot suites use.
-    private func rasterizedRow(_ snapshot: RateLimitInfo, now: Date, compact: Bool = false) -> Data {
-        rasterize(QuotaWindowRow(window: snapshot.windows[0], compact: compact), now: now,
+    private func rasterizedRow(_ snapshot: RateLimitInfo, now: Date,
+                               density: QuotaChipDensity = .regular) -> Data {
+        rasterize(QuotaWindowRow(window: snapshot.windows[0], density: density), now: now,
                   width: 220, height: 24, what: "the quota window row")
     }
 
@@ -320,13 +321,13 @@ final class QuotaChipClockTests: XCTestCase {
                           "the fixture paces identically under both pinned clocks — the pixel "
                           + "comparison below cannot fail for the right reason")
         // …and rendering is deterministic, or "they differ" proves nothing.
-        XCTAssertEqual(rasterizedRow(flipping, now: early, compact: true),
-                       rasterizedRow(flipping, now: early, compact: true),
+        XCTAssertEqual(rasterizedRow(flipping, now: early, density: .compact),
+                       rasterizedRow(flipping, now: early, density: .compact),
                        "the same row rasterised twice under one clock differs — this suite's "
                        + "both-sides arms are not measuring the clock")
 
-        XCTAssertNotEqual(rasterizedRow(flipping, now: early, compact: true),
-                          rasterizedRow(flipping, now: late, compact: true),
+        XCTAssertNotEqual(rasterizedRow(flipping, now: early, density: .compact),
+                          rasterizedRow(flipping, now: late, density: .compact),
                           "the quota window row's pace marker sits at the same x under two pinned "
                           + "clocks — `\\.formatNow` is reaching nothing and the marker's "
                           + "position is coming from the machine's wall clock")
@@ -340,8 +341,8 @@ final class QuotaChipClockTests: XCTestCase {
     func testARowTheClockCannotPaceRendersIdenticallyUnderBothClocks() {
         XCTAssertNil(SessionListView.quotaPacePercent(unpaceable.windows[0], now: early),
                      "the premise of this arm is that this fixture has no pace marker")
-        XCTAssertEqual(rasterizedRow(unpaceable, now: early, compact: true),
-                       rasterizedRow(unpaceable, now: late, compact: true),
+        XCTAssertEqual(rasterizedRow(unpaceable, now: early, density: .compact),
+                       rasterizedRow(unpaceable, now: late, density: .compact),
                        "a row with no pace marker and no reset label still rendered differently "
                        + "under two clocks — something else in this row reads the wall clock")
     }
