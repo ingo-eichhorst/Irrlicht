@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   quotaWindowLabel, providerKeyFor, usageCreditsLine, providerIconHTML,
-  quotaChipLayout, buildQuotaRowDOM, buildOverflowChipDOM,
+  quotaChipLayout, buildQuotaRowDOM, buildOverflowChipDOM, applyStripDensity,
 } from './quotaChips.js';
 
 describe('quotaWindowLabel', () => {
@@ -103,5 +103,34 @@ describe('buildOverflowChipDOM', () => {
     const pill = buildOverflowChipDOM(hidden);
     expect(pill.textContent).toBe('+2 more');
     expect(pill.title).toBe('Openai: 90%\nZai');
+  });
+});
+
+// The per-tier CSS only applies through the strip's class (review finding on
+// PR #2065: nothing exercised it). Each count's layout goes through the real
+// quotaChipLayout, so the table above and the CSS selectors are connected.
+describe('applyStripDensity', () => {
+  const stripClasses = (el) => Array.from(el.classList).filter((c) => c.startsWith('quota-chips--'));
+
+  test.each([
+    [1, ['quota-chips--regular']],
+    [2, ['quota-chips--compact']],
+    [3, ['quota-chips--tight', 'quota-chips--flex']],
+    [5, ['quota-chips--dense', 'quota-chips--flex']],
+    [6, ['quota-chips--dense', 'quota-chips--flex']],
+  ])('%i providers put %j on the strip', (count, want) => {
+    const el = document.createElement('div');
+    applyStripDensity(el, quotaChipLayout(count).density);
+    expect(stripClasses(el)).toEqual(want);
+  });
+
+  test('a new density replaces the previous one, and null clears it', () => {
+    const el = document.createElement('div');
+    el.classList.add('quota-chips');
+    applyStripDensity(el, 'dense');
+    applyStripDensity(el, 'tight');
+    expect(stripClasses(el)).toEqual(['quota-chips--tight', 'quota-chips--flex']);
+    applyStripDensity(el, null);
+    expect(Array.from(el.classList)).toEqual(['quota-chips']);
   });
 });

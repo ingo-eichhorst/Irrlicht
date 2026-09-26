@@ -30,10 +30,15 @@ enum QuotaChipDensity: String, Equatable {
         }
     }
 
+    /// True for the tiers whose bars flex; every width below that differs
+    /// between the fixed and flexible tiers keys off this one distinction.
+    var isFlexible: Bool { fixedBarWidth == nil }
+
     /// The narrowest a flexible bar gets before the header runs out of room.
+    /// Read only for flexible tiers; the fixed ones use `fixedBarWidth`.
     var minBarWidth: CGFloat {
         switch self {
-        case .regular, .compact: return fixedBarWidth ?? 0
+        case .regular, .compact: return 0
         case .tight: return 24
         case .dense: return 6
         }
@@ -50,28 +55,13 @@ enum QuotaChipDensity: String, Equatable {
     /// which holds "100%" — measured at 22.25pt for 9pt medium monospaced with
     /// `NSFont.monospacedSystemFont(ofSize: 9, weight: .medium)` and
     /// `NSString.size(withAttributes:)` on the development Mac.
-    var percentWidth: CGFloat {
-        switch self {
-        case .regular, .compact: return 28
-        case .tight, .dense: return 23
-        }
-    }
+    var percentWidth: CGFloat { isFlexible ? 23 : 28 }
 
     /// Spacing between a row's label, bar and percent.
-    var rowSpacing: CGFloat {
-        switch self {
-        case .regular, .compact: return 6
-        case .tight, .dense: return 3
-        }
-    }
+    var rowSpacing: CGFloat { isFlexible ? 3 : 6 }
 
     /// Spacing between the provider icon and the chip body.
-    var iconSpacing: CGFloat {
-        switch self {
-        case .regular, .compact: return 6
-        case .tight, .dense: return 4
-        }
-    }
+    var iconSpacing: CGFloat { isFlexible ? 4 : 6 }
 
     /// Spacing between adjacent chips in the header.
     var chipSpacing: CGFloat {
@@ -85,12 +75,7 @@ enum QuotaChipDensity: String, Equatable {
     /// The usage-mode body's minimum width. It matches a subscription row's
     /// width in the fixed tiers; the flexible tiers drop it so the headline
     /// shares the header like the bars do.
-    var usageMinWidth: CGFloat? {
-        switch self {
-        case .regular, .compact: return 88
-        case .tight, .dense: return nil
-        }
-    }
+    var usageMinWidth: CGFloat? { isFlexible ? nil : 88 }
 
     /// The dense tier shows the usage headline only, without the "spend" line.
     var usageShowsSublabel: Bool { self != .dense }

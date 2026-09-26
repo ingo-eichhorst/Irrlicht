@@ -377,7 +377,9 @@ const MAX_INLINE_QUOTA_CHIPS = 5;
 // Chips shown beside the "+N more" pill past MAX_INLINE_QUOTA_CHIPS — one
 // fewer, because on macOS five dense chips plus the pill overrun the 380pt
 // popover header (QuotaChipLayoutTests.testTheWorstCaseRowFitsTheHeaderBudget).
-// The dashboard strip has more room but keeps the same rule for parity.
+// The dashboard strip usually has more room. Keeping the same count-based rule
+// anyway is a product choice for web/macOS parity (#2063 asks for it), not a
+// width requirement; a width-driven tier here would be a separate decision.
 const MAX_QUOTA_CHIPS_BESIDE_OVERFLOW = 4;
 
 // The header's visible/overflow split plus the density tier every visible
@@ -534,6 +536,18 @@ export function buildOverflowChipDOM(hidden) {
   return pill;
 }
 
+// Puts `quota-chips--<density>` on #quota-chips, plus `quota-chips--flex` for
+// the two tiers whose bars flex — the only thing that makes the per-tier CSS
+// in irrlicht.css apply. `null` clears them. Exported for quotaChips.test.js.
+export function applyStripDensity(host, density) {
+  for (const c of Array.from(host.classList)) {
+    if (c.startsWith('quota-chips--')) host.classList.remove(c);
+  }
+  if (!density) return;
+  host.classList.add('quota-chips--' + density);
+  if (density === 'tight' || density === 'dense') host.classList.add('quota-chips--flex');
+}
+
 export function renderHeaderTitle() {
   const host = document.getElementById('quota-chips');
   const header = document.querySelector('header');
@@ -544,7 +558,7 @@ export function renderHeaderTitle() {
   // strip, log to console, and leave the version line visible.
   try {
     host.innerHTML = '';
-    host.classList.remove('quota-chips--single', 'quota-chips--tight', 'quota-chips--dense');
+    applyStripDensity(host, null);
     if (!showQuotaForecast()) {
       header.classList.remove('has-quota-chips');
       return;
@@ -558,10 +572,7 @@ export function renderHeaderTitle() {
     const layout = quotaChipLayout(chips.length);
     const visible = chips.slice(0, layout.visible);
     const hidden = chips.slice(layout.visible);
-    if (layout.density === 'regular') host.classList.add('quota-chips--single');
-    if (layout.density === 'tight' || layout.density === 'dense') {
-      host.classList.add('quota-chips--' + layout.density);
-    }
+    applyStripDensity(host, layout.density);
     for (const c of visible) host.appendChild(buildQuotaChipDOM(c, layout.density, nowMs));
     if (hidden.length > 0) host.appendChild(buildOverflowChipDOM(hidden));
     header.classList.add('has-quota-chips');

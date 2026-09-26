@@ -530,11 +530,12 @@ struct SessionListView: View {
                 .font(.system(size: 11))
                 .foregroundColor(displayMode.isHistory ? IrrColors.working : .secondary)
                 .frame(minWidth: 16)
-                // The quota strip is laid out first (its `layoutPriority`),
-                // so without this the history-minutes digits were the one
-                // compressible thing left and truncated away once three or
-                // more chips filled the header (#2063, seen in a rendered
-                // replica of this row).
+                // A guard, not a fix: keeps the history-minutes digits from
+                // ever being the width a crowded quota strip takes (#2063).
+                // A rendered replica of this header with 1-6 providers showed
+                // the digits intact with or without it (the strip's flexible
+                // bars shrink instead); a replica that gave the strip layout
+                // priority truncated them, which is the case this protects.
                 .fixedSize()
                 .contentShape(Rectangle())
             }
@@ -597,18 +598,9 @@ struct SessionListView: View {
                         quotaChipView(chip, density: layout.density)
                     }
                     if !hidden.isEmpty {
-                        // Laid out before the chips, so a crowded row takes
-                        // its width from their flexible bars, not the pill.
                         quotaOverflowChip(hidden: hidden)
-                            .layoutPriority(1)
                     }
                 }
-                // The header's HStack offers its children space in order of
-                // flexibility. With flexible bars the strip is less flexible
-                // than the Spacer beside it, so without a priority it would be
-                // offered roughly half the free width and shrink its bars
-                // even in a header with room for them.
-                .layoutPriority(1)
             } else {
                 EmptyView()
             }
@@ -923,7 +915,7 @@ struct SessionListView: View {
                         // Subscription forced (or auto-detected) but the snapshot
                         // carries no rate-limit windows. Symmetric with the usage
                         // zero-state: a short phrase rather than an empty chip.
-                        Text(density.usageMinWidth == nil ? "no data" : "no subscription data")
+                        Text(density.isFlexible ? "no data" : "no subscription data")
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(.secondary)
                             .lineLimit(1)

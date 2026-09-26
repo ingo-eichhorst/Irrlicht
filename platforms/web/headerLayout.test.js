@@ -113,21 +113,42 @@ describe('the quota strip sits on its own header row', () => {
     expect(ruleBody('.quota-chips')).toMatch(/overflow-x:\s*auto/);
   });
 
+  // The two #2063 contracts below are written as functions so each can also be
+  // run against a committed mutant of its own rule (AGENTS.md: commit the
+  // mutation rather than describing it). A mutant that still passes means the
+  // check no longer reaches the declaration it claims to protect.
+  const pillHoldsItsWidth = (body) => {
+    expect(body).toMatch(/flex-shrink:\s*0/);
+    expect(body).toMatch(/white-space:\s*nowrap/);
+  };
+  const barsFlexBetweenAFloorAnd60 = (body) => {
+    expect(body).toMatch(/flex:\s*1 1 60px/);
+    expect(body).toMatch(/max-width:\s*60px/);
+    expect(body).toMatch(/min-width:\s*\d+px/);
+  };
+  const TIER_BARS = '.quota-chips--flex .quota-bar';
+
   test('the overflow pill never gives its width back to the chips (#2063)', () => {
     // On macOS the "+N more" label truncated to an empty grey box once the
     // row ran out of room; the web pill holds its width the same way.
-    const pill = ruleBody('.quota-overflow');
-    expect(pill).toMatch(/flex-shrink:\s*0/);
-    expect(pill).toMatch(/white-space:\s*nowrap/);
+    pillHoldsItsWidth(ruleBody('.quota-overflow'));
   });
 
   test('three to five chips shrink their bars, not their percent (#2063)', () => {
-    const bars = ruleBody('.quota-chips--tight .quota-bar,\n    .quota-chips--dense .quota-bar');
-    expect(bars).toMatch(/flex:\s*1 1 60px/);
-    expect(bars).toMatch(/max-width:\s*60px/);
-    expect(bars).toMatch(/min-width:\s*\d+px/);
-    const pct = ruleBody('.quota-chips--tight .quota-row-percent,\n    .quota-chips--dense .quota-row-percent');
+    barsFlexBetweenAFloorAnd60(ruleBody(TIER_BARS));
+    const pct = ruleBody('.quota-chips--flex .quota-row-percent');
     expect(pct).toMatch(/flex-shrink:\s*0/);
   });
-});
 
+  test('committed mutants: each #2063 contract rejects its rule with the load-bearing declaration removed', () => {
+    const pill = ruleBody('.quota-overflow');
+    const pillMutant = pill.replace(/flex-shrink:\s*0;/, '');
+    expect(pillMutant, 'the pill mutant must actually differ from the rule').not.toBe(pill);
+    expect(() => pillHoldsItsWidth(pillMutant)).toThrow();
+
+    const bars = ruleBody(TIER_BARS);
+    const barsMutant = bars.replace(/flex:\s*1 1 60px;/, 'flex: none;');
+    expect(barsMutant, 'the bar mutant must actually differ from the rule').not.toBe(bars);
+    expect(() => barsFlexBetweenAFloorAnd60(barsMutant)).toThrow();
+  });
+});

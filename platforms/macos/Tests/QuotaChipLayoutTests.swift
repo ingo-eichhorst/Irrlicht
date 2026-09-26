@@ -89,8 +89,11 @@ final class QuotaChipLayoutTests: XCTestCase {
         NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: 1, height: 100)).width
     }
 
+    /// Through the suite's pinned host, like `QuotaOverflowPillTests`.
+    /// `minimumWidth` above can't be: it needs a 1pt size proposal, and
+    /// `PinnedSnapshotHost` exposes only its laid-out view.
     private func idealWidth(_ view: some View) -> CGFloat {
-        NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: 10_000, height: 100)).width
+        PinnedSnapshotHost(view, width: 400, height: 100).view.fittingSize.width
     }
 
     private let window = RateLimitWindowInfo(usedPercent: 100, windowMinutes: 300,
