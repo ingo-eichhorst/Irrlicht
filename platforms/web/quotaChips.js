@@ -372,7 +372,30 @@ function needsAttention(chip) {
   return chip.key.startsWith('unknown:') || !!chip.snapshot.retrieval_failure;
 }
 
-const MAX_VISIBLE_QUOTA_CHIPS = 2;
+// Up to this many providers render inline with no overflow pill (#2063).
+const MAX_INLINE_QUOTA_CHIPS = 5;
+// Chips shown beside the "+N more" pill past MAX_INLINE_QUOTA_CHIPS — one
+// fewer, because on macOS five dense chips plus the pill overrun the 380pt
+// popover header (QuotaChipLayoutTests.testTheWorstCaseRowFitsTheHeaderBudget).
+// The dashboard strip has more room but keeps the same rule for parity.
+const MAX_QUOTA_CHIPS_BESIDE_OVERFLOW = 4;
+
+// The header's visible/overflow split plus the density tier every visible
+// chip renders at — a pure function of the provider count, mirrored by
+// QuotaChipLayout.forChipCount on macOS (#2063):
+//   regular (1)  fixed wide bars + inline reset time
+//   compact (2)  fixed bars, reset time only in the tooltip
+//   tight   (3)  bars flex down to a floor so the chips share the width
+//   dense   (4+) flexible bars, and the 5h/7d window labels drop too
+export function quotaChipLayout(count) {
+  const n = Math.max(0, count | 0);
+  const visible = n > MAX_INLINE_QUOTA_CHIPS ? MAX_QUOTA_CHIPS_BESIDE_OVERFLOW : n;
+  let density = 'dense';
+  if (n <= 1) density = 'regular';
+  else if (n === 2) density = 'compact';
+  else if (n === 3) density = 'tight';
+  return { visible, overflow: n - visible, density };
+}
 
 function adapterIconHTML(adapterKey) {
   // Adapter SVGs are bytes from the daemon's /api/v1/agents response —
@@ -393,14 +416,19 @@ function adapterIconHTML(adapterKey) {
   catch (e) { console.debug('quotaChips: failed to encode adapter icon svg', e); return ''; }
 }
 
-function buildQuotaRowDOM(w, compact, nowMs) {
+// `density` is one of quotaChipLayout's tiers. The widths each tier implies
+// live in irrlicht.css under .quota-chips--<density>; this only decides which
+// parts a row carries. Exported for quotaChips.test.js.
+export function buildQuotaRowDOM(w, density, nowMs) {
   const row = document.createElement('span');
   row.className = 'quota-row';
 
-  const label = document.createElement('span');
-  label.className = 'quota-row-label';
-  label.textContent = quotaWindowLabel(w.window_minutes || 0);
-  row.appendChild(label);
+  if (density !== 'dense') {
+    const label = document.createElement('span');
+    label.className = 'quota-row-label';
+    label.textContent = quotaWindowLabel(w.window_minutes || 0);
+    row.appendChild(label);
+  }
 
   const used = w.used_percent || 0;
   const pace = paceFor(w, nowMs);
@@ -425,7 +453,7 @@ function buildQuotaRowDOM(w, compact, nowMs) {
   pct.textContent = Math.round(used) + '%';
   row.appendChild(pct);
 
-  if (!compact && w.resets_at) {
+  if (density === 'regular' && w.resets_at) {
     const reset = document.createElement('span');
     reset.className = 'quota-row-reset';
     reset.textContent = 'resets ' + formatClockTime(w.resets_at);
@@ -442,7 +470,7 @@ const GENERIC_PROVIDER_ICON_SVG =
   + '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
   + '</svg>';
 
-function buildQuotaChipDOM(chip, compact, nowMs) {
+function buildQuotaChipDOM(chip, density, nowMs) {
   const root = document.createElement('div');
   root.className = 'quota-chip'
     + (chip.isStale ? ' quota-stale' : '')
@@ -461,7 +489,7 @@ function buildQuotaChipDOM(chip, compact, nowMs) {
   body.className = 'quota-chip-body';
   if (chip.mode === 'subscription') {
     for (const w of (chip.snapshot.windows || [])) {
-      body.appendChild(buildQuotaRowDOM(w, compact, nowMs));
+      body.appendChild(buildQuotaRowDOM(w, density, nowMs));
     }
   } else {
     // Windowed per-provider spend for the selected timeframe, click-to-
@@ -472,11 +500,14 @@ function buildQuotaChipDOM(chip, compact, nowMs) {
     const head = document.createElement('span');
     head.className = 'quota-usage-headline';
     head.textContent = formatUsageCost(usageSpendForChip(chip)) + tf.suffix;
-    const sub = document.createElement('span');
-    sub.className = 'quota-usage-sublabel';
-    sub.textContent = 'spend';
     body.appendChild(head);
-    body.appendChild(sub);
+    // The dense tier shows the headline only (#2063), like macOS.
+    if (density !== 'dense') {
+      const sub = document.createElement('span');
+      sub.className = 'quota-usage-sublabel';
+      sub.textContent = 'spend';
+      body.appendChild(sub);
+    }
     body.style.cursor = 'pointer';
     body.title = 'Click to cycle time frame (day → week → month → year)';
     body.addEventListener('click', (e) => { e.stopPropagation(); cycleUsageTimeframe(); });
@@ -485,7 +516,8 @@ function buildQuotaChipDOM(chip, compact, nowMs) {
   return root;
 }
 
-function buildOverflowChipDOM(hidden) {
+// Exported for quotaChips.test.js.
+export function buildOverflowChipDOM(hidden) {
   const pill = document.createElement('span');
   pill.className = 'quota-overflow';
   pill.textContent = '+' + hidden.length + ' more';
@@ -512,7 +544,7 @@ export function renderHeaderTitle() {
   // strip, log to console, and leave the version line visible.
   try {
     host.innerHTML = '';
-    host.classList.remove('quota-chips--single');
+    host.classList.remove('quota-chips--single', 'quota-chips--tight', 'quota-chips--dense');
     if (!showQuotaForecast()) {
       header.classList.remove('has-quota-chips');
       return;
@@ -523,11 +555,14 @@ export function renderHeaderTitle() {
       header.classList.remove('has-quota-chips');
       return;
     }
-    const visible = chips.slice(0, MAX_VISIBLE_QUOTA_CHIPS);
-    const hidden = chips.slice(MAX_VISIBLE_QUOTA_CHIPS);
-    const compact = chips.length > 1;
-    if (chips.length === 1) host.classList.add('quota-chips--single');
-    for (const c of visible) host.appendChild(buildQuotaChipDOM(c, compact, nowMs));
+    const layout = quotaChipLayout(chips.length);
+    const visible = chips.slice(0, layout.visible);
+    const hidden = chips.slice(layout.visible);
+    if (layout.density === 'regular') host.classList.add('quota-chips--single');
+    if (layout.density === 'tight' || layout.density === 'dense') {
+      host.classList.add('quota-chips--' + layout.density);
+    }
+    for (const c of visible) host.appendChild(buildQuotaChipDOM(c, layout.density, nowMs));
     if (hidden.length > 0) host.appendChild(buildOverflowChipDOM(hidden));
     header.classList.add('has-quota-chips');
   } catch (e) {

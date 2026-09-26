@@ -275,7 +275,7 @@ final class QuotaChipClockTests: XCTestCase {
     /// The real `QuotaWindowRow` — the view `SessionListView.quotaChipView`
     /// renders — hosted through the type the snapshot suites use.
     private func rasterizedRow(_ snapshot: RateLimitInfo, now: Date, compact: Bool = false) -> Data {
-        rasterize(QuotaWindowRow(window: snapshot.windows[0], compact: compact), now: now,
+        rasterize(QuotaWindowRow(window: snapshot.windows[0], density: compact ? .compact : .regular), now: now,
                   width: 220, height: 24, what: "the quota window row")
     }
 

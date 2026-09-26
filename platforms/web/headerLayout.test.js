@@ -112,4 +112,22 @@ describe('the quota strip sits on its own header row', () => {
   test('more chips than fit scroll inside the strip, never widening the header', () => {
     expect(ruleBody('.quota-chips')).toMatch(/overflow-x:\s*auto/);
   });
+
+  test('the overflow pill never gives its width back to the chips (#2063)', () => {
+    // On macOS the "+N more" label truncated to an empty grey box once the
+    // row ran out of room; the web pill holds its width the same way.
+    const pill = ruleBody('.quota-overflow');
+    expect(pill).toMatch(/flex-shrink:\s*0/);
+    expect(pill).toMatch(/white-space:\s*nowrap/);
+  });
+
+  test('three to five chips shrink their bars, not their percent (#2063)', () => {
+    const bars = ruleBody('.quota-chips--tight .quota-bar,\n    .quota-chips--dense .quota-bar');
+    expect(bars).toMatch(/flex:\s*1 1 60px/);
+    expect(bars).toMatch(/max-width:\s*60px/);
+    expect(bars).toMatch(/min-width:\s*\d+px/);
+    const pct = ruleBody('.quota-chips--tight .quota-row-percent,\n    .quota-chips--dense .quota-row-percent');
+    expect(pct).toMatch(/flex-shrink:\s*0/);
+  });
 });
+
