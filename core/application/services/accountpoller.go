@@ -339,19 +339,14 @@ func (p *AccountPoller) doFetch(ctx context.Context, req PollRequest, key Accoun
 		Auth:           req.Auth,
 		SessionID:      req.SessionID,
 	})
+	reportCredentialOutcome(req.Resolver, err)
 	if err != nil {
 		reason := outbound.QuotaFailureNetwork
 		var qerr *outbound.QuotaError
 		if errors.As(err, &qerr) {
 			reason = qerr.Reason
 		}
-		if f, ok := req.Resolver.(CredentialFeedback); ok && reason == outbound.QuotaFailureAuthRejected {
-			f.CredentialRejected()
-		}
 		return p.recordFailure(key, inflight, reason), err
-	}
-	if f, ok := req.Resolver.(CredentialFeedback); ok {
-		f.CredentialAccepted()
 	}
 
 	// The final consent check before publishing (issue #2003 §1.1:
@@ -379,6 +374,22 @@ func (p *AccountPoller) doFetch(ctx context.Context, req PollRequest, key Accoun
 type CredentialFeedback interface {
 	CredentialRejected()
 	CredentialAccepted()
+}
+
+// reportCredentialOutcome tells resolver, when it is a CredentialFeedback,
+// what the transport's fetchErr says about the credential it served.
+func reportCredentialOutcome(resolver outbound.CredentialResolver, fetchErr error) {
+	f, ok := resolver.(CredentialFeedback)
+	if !ok {
+		return
+	}
+	var qerr *outbound.QuotaError
+	switch {
+	case fetchErr == nil:
+		f.CredentialAccepted()
+	case errors.As(fetchErr, &qerr) && qerr.Reason == outbound.QuotaFailureAuthRejected:
+		f.CredentialRejected()
+	}
 }
 
 // backoffFor returns the retry delay after consecutiveFails failures in a

@@ -282,8 +282,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "AccountPoller not reporting an auth rejection" \
   "core/application/services/accountpoller.go" \
-  'if f, ok := req.Resolver.(CredentialFeedback); ok && reason == outbound.QuotaFailureAuthRejected {' \
-  'if f, ok := req.Resolver.(CredentialFeedback); ok && false {' \
+  'case errors.As(fetchErr, &qerr) && qerr.Reason == outbound.QuotaFailureAuthRejected:' \
+  'case false:' \
   "./core/application/services/" \
   'TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant' \
   "want 2 (the read, then one re-read)"
@@ -293,8 +293,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "AccountPoller not reporting an accepted credential" \
   "core/application/services/accountpoller.go" \
-  $'\tif f, ok := req.Resolver.(CredentialFeedback); ok {\n\t\tf.CredentialAccepted()' \
-  $'\tif f, ok := req.Resolver.(CredentialFeedback); ok && false {\n\t\tf.CredentialAccepted()' \
+  'case fetchErr == nil:' \
+  'case fetchErr == nil && false:' \
   "./core/application/services/" \
   'TestMuseAccountSweep_AcceptedFetchRearmsTheReRead' \
   "want 3 (read, re-read, re-read after the second rotation)"

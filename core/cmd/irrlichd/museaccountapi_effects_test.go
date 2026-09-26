@@ -70,31 +70,35 @@ func waitForReads(t *testing.T, c *countingCredentials, want int) {
 func TestMuseAccountAPI_ReadsCredentialOncePerGrant(t *testing.T) {
 	creds := &countingCredentials{}
 	api := newMuseAccountAPI(e2eLog{}, creds)
-	if err := api.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustRun(t, api.Start)
 	waitForReads(t, creds, 1)
 	for i := 0; i < 5; i++ {
-		if _, err := api.resolver.Resolve(context.Background()); err != nil {
-			t.Fatalf("resolve %d: %v", i, err)
-		}
+		mustResolve(t, api)
 	}
 	if n := creds.count(); n != 1 {
 		t.Fatalf("credential read %d times after one grant and five resolves, want 1", n)
 	}
 
-	if err := api.Stop(); err != nil {
-		t.Fatal(err)
-	}
-	if err := api.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustRun(t, api.Stop)
+	mustRun(t, api.Start)
 	waitForReads(t, creds, 2)
-	if _, err := api.resolver.Resolve(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustResolve(t, api)
 	if n := creds.count(); n != 2 {
 		t.Fatalf("credential read %d times after a revoke and a re-grant, want 2", n)
+	}
+}
+
+func mustRun(t *testing.T, effect func() error) {
+	t.Helper()
+	if err := effect(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustResolve(t *testing.T, api museAccountAPI) {
+	t.Helper()
+	if _, err := api.resolver.Resolve(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
