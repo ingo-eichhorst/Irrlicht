@@ -2,6 +2,7 @@ package museaccountapi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,4 +113,32 @@ func TestCredentialResolver_NeverCallsReveal(t *testing.T) {
 	// call site too).
 	assertNoProductionFileContains(t, ".Reveal"+"()",
 		"calls .Reveal() — this package must never unwrap a Credential, only construct one via outbound.NewCredential")
+}
+
+// Issue #2062: every failure after `security` ran is marked ErrKeychainRead,
+// so the daemon keeps it rather than re-raising the dialog; a failure before
+// the Keychain route (no auth.json yet, a file-route login) is not.
+func TestCredentialResolver_OnlyKeychainFailuresAreMarked(t *testing.T) {
+	dir := t.TempDir()
+	keychain := writeAuthJSON(t, dir, `{"providers":{"meta":{"mechanism":"oauth","storage":"keychain"}}}`)
+	for name, raw := range map[string]struct {
+		out string
+		err error
+	}{
+		"lookup fails":   {"", os.ErrNotExist},
+		"malformed blob": {"not json", nil},
+		"no token":       {`{"access_token":"  "}`, nil},
+	} {
+		r := NewCredentialResolver(func() (string, error) { return keychain, nil })
+		r.lookup = func(context.Context, string, string) (string, error) { return raw.out, raw.err }
+		if _, err := r.Resolve(context.Background()); !errors.Is(err, ErrKeychainRead) {
+			t.Errorf("%s: err = %v, want it marked ErrKeychainRead", name, err)
+		}
+	}
+
+	missing := filepath.Join(dir, "absent", "auth.json")
+	r := NewCredentialResolver(func() (string, error) { return missing, nil })
+	if _, err := r.Resolve(context.Background()); err == nil || errors.Is(err, ErrKeychainRead) {
+		t.Fatalf("missing auth.json: err = %v, want an error not marked ErrKeychainRead", err)
+	}
 }

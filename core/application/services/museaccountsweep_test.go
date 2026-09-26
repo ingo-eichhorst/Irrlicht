@@ -63,13 +63,23 @@ func (*sweepLogger) Close() error                                            { r
 type countingResolver struct {
 	mu    sync.Mutex
 	calls int
+	err   error
 }
 
 func (r *countingResolver) Resolve(context.Context) (outbound.Credential, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
+	if r.err != nil {
+		return outbound.Credential{}, r.err
+	}
 	return outbound.NewCredential("tok"), nil
+}
+
+func (r *countingResolver) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 func newTestSweeper(sessions sessionLister, transport outbound.AccountQuotaTransport, granted func() bool) (*MuseAccountSweeper, *fakeRateLimitWriter) {
@@ -78,7 +88,7 @@ func newTestSweeper(sessions sessionLister, transport outbound.AccountQuotaTrans
 		Sessions:  sessions,
 		Writer:    w,
 		Poller:    NewAccountPoller(),
-		Resolver:  fakeResolver{secret: "tok"},
+		Resolver:  NewGrantCredentialCache(fakeResolver{secret: "tok"}, keepAllFailures),
 		Transport: transport,
 		Granted:   granted,
 		Adapter:   "muse",
@@ -167,14 +177,14 @@ func TestMuseAccountSweep_ResolvesCredentialOncePerSweep(t *testing.T) {
 	transport := museFixtureTransport()
 	sw, _ := newTestSweeper(sessions, transport, alwaysGranted)
 	resolver := &countingResolver{}
-	sw.deps.Resolver = resolver
+	sw.deps.Resolver = NewGrantCredentialCache(resolver, keepAllFailures)
 	sw.sweep(context.Background())
 
 	if n := transport.callCount(); n != 3 {
 		t.Fatalf("transport called %d times, want one fetch per session (3)", n)
 	}
-	if resolver.calls != 1 {
-		t.Fatalf("credential resolved %d times in one sweep, want 1", resolver.calls)
+	if n := resolver.count(); n != 1 {
+		t.Fatalf("credential resolved %d times in one sweep, want 1", n)
 	}
 }
 
@@ -281,5 +291,135 @@ func TestMuseAccountSweep_UnchangedReadingIsNotRewritten(t *testing.T) {
 	sw.sweep(context.Background())
 	if writes := w.snapshot(); len(writes) != 1 {
 		t.Fatalf("writes = %d after a tick with an unchanged reading, want still 1", len(writes))
+	}
+}
+
+// Issue #2062: each resolve on the Keychain route raises a macOS dialog, and
+// #2057's per-sweep dedup still resolved once per sweep that fetched — once
+// per session per poll window when sessions' windows fall in different
+// sweeps. With the base wiring's raw resolver this test counted 4 reads.
+// With the daemon's grant-scoped cache, two sessions polled across three
+// fresh windows resolve the credential once.
+func TestMuseAccountSweep_ResolvesCredentialOnceAcrossPollWindows(t *testing.T) {
+	sessions := staticSessions{{SessionID: "m1", Adapter: "muse"}, {SessionID: "m2", Adapter: "muse"}}
+	transport := museFixtureTransport()
+	sw, _ := newTestSweeper(sessions, transport, alwaysGranted)
+	inner := &countingResolver{}
+	sw.deps.Resolver = NewGrantCredentialCache(inner, keepAllFailures)
+	clock := time.Unix(10_000, 0)
+	sw.deps.Poller.now = func() time.Time { return clock }
+	for i := 0; i < 4; i++ {
+		sw.sweep(context.Background())
+		clock = clock.Add(pollFreshWindow + time.Second)
+	}
+	if n := transport.callCount(); n != 8 {
+		t.Fatalf("transport called %d times, want a fetch per session per window (8); the test needs real fetches", n)
+	}
+	if n := inner.count(); n != 1 {
+		t.Fatalf("credential resolved %d times across three poll windows, want 1", n)
+	}
+}
+
+// Issue #2062: a failed read (an unanswered or denied Keychain dialog) is not
+// retried on the poller's backoff — only a Reset, which a re-grant does,
+// allows one more read.
+func TestMuseAccountSweep_FailedResolveIsNotRetriedUntilReset(t *testing.T) {
+	sessions := staticSessions{{SessionID: "m1", Adapter: "muse"}, {SessionID: "m2", Adapter: "muse"}}
+	transport := museFixtureTransport()
+	sw, w := newTestSweeper(sessions, transport, alwaysGranted)
+	inner := &countingResolver{err: errors.New("security did not answer")}
+	cache := NewGrantCredentialCache(inner, keepAllFailures)
+	sw.deps.Resolver = cache
+	clock := time.Unix(10_000, 0)
+	sw.deps.Poller.now = func() time.Time { return clock }
+	for i := 0; i < 5; i++ {
+		sw.sweep(context.Background())
+		clock = clock.Add(pollFailureBackoffCeiling + time.Second)
+	}
+	if n := inner.count(); n != 1 {
+		t.Fatalf("credential resolved %d times across five backoff windows after a failure, want 1", n)
+	}
+	if n := transport.callCount(); n != 0 {
+		t.Fatalf("transport called %d times without a credential", n)
+	}
+	if writes := w.snapshot(); len(writes) != 0 {
+		t.Fatalf("writes = %+v after failed reads, want none", writes)
+	}
+
+	cache.Reset()
+	sw.sweep(context.Background())
+	if n := inner.count(); n != 2 {
+		t.Fatalf("credential resolved %d times after a reset, want exactly one more (2)", n)
+	}
+}
+
+// Issue #2062: a 401/403 means the cached token went stale (a re-login, a
+// rotation), so the poller has the cache drop it once and the next fetch
+// reads it again.
+// A second rejection does not drop it again: re-reading would re-raise the
+// dialog on every backoff. A Reset (re-grant) re-arms the one re-read.
+func TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant(t *testing.T) {
+	rejecting := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureAuthRejected, Detail: "status 401"}
+	}}
+	sw, _ := newTestSweeper(staticSessions{{SessionID: "m1", Adapter: "muse"}}, rejecting, alwaysGranted)
+	inner := &countingResolver{}
+	cache := NewGrantCredentialCache(inner, keepAllFailures)
+	sw.deps.Resolver = cache
+	clock := time.Unix(10_000, 0)
+	sw.deps.Poller.now = func() time.Time { return clock }
+	sweepPastBackoff := func(n int) {
+		for i := 0; i < n; i++ {
+			sw.sweep(context.Background())
+			clock = clock.Add(pollFailureBackoffCeiling + time.Second)
+		}
+	}
+
+	sweepPastBackoff(5)
+	if n := rejecting.callCount(); n != 5 {
+		t.Fatalf("transport called %d times, want one rejected fetch per backoff window (5)", n)
+	}
+	if n := inner.count(); n != 2 {
+		t.Fatalf("credential resolved %d times over five rejected fetches, want 2 (the read, then one re-read)", n)
+	}
+
+	cache.Reset()
+	sweepPastBackoff(5)
+	if n := inner.count(); n != 4 {
+		t.Fatalf("credential resolved %d times after a re-grant and five more rejections, want 4", n)
+	}
+}
+
+// Issue #2062 review: a token can rotate more than once while the daemon
+// runs. An accepted fetch after the re-read re-arms it, so the next
+// rotation is picked up too — and each re-read still needs an accepted fetch
+// in between, so a refused credential cannot loop.
+func TestMuseAccountSweep_AcceptedFetchRearmsTheReRead(t *testing.T) {
+	reject := true
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		if reject {
+			return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureAuthRejected, Detail: "status 401"}
+		}
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte(museFixtureBody)}, nil
+	}}
+	sw, _ := newTestSweeper(staticSessions{{SessionID: "m1", Adapter: "muse"}}, transport, alwaysGranted)
+	inner := &countingResolver{}
+	sw.deps.Resolver = NewGrantCredentialCache(inner, keepAllFailures)
+	clock := time.Unix(10_000, 0)
+	sw.deps.Poller.now = func() time.Time { return clock }
+	step := func() {
+		sw.sweep(context.Background())
+		clock = clock.Add(pollFailureBackoffCeiling + time.Second)
+	}
+
+	step() // read 1, rejected: re-read armed
+	reject = false
+	step() // read 2 (the re-read), accepted: re-armed
+	reject = true
+	step() // rejected again (rotation): another re-read
+	step() // read 3, rejected: no further re-read
+	step()
+	if n := inner.count(); n != 3 {
+		t.Fatalf("credential resolved %d times, want 3 (read, re-read, re-read after the second rotation)", n)
 	}
 }

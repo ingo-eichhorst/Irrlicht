@@ -345,7 +345,13 @@ func (p *AccountPoller) doFetch(ctx context.Context, req PollRequest, key Accoun
 		if errors.As(err, &qerr) {
 			reason = qerr.Reason
 		}
+		if f, ok := req.Resolver.(CredentialFeedback); ok && reason == outbound.QuotaFailureAuthRejected {
+			f.CredentialRejected()
+		}
 		return p.recordFailure(key, inflight, reason), err
+	}
+	if f, ok := req.Resolver.(CredentialFeedback); ok {
+		f.CredentialAccepted()
 	}
 
 	// The final consent check before publishing (issue #2003 §1.1:
@@ -361,6 +367,18 @@ func (p *AccountPoller) doFetch(ctx context.Context, req PollRequest, key Accoun
 	}
 
 	return p.publish(key, inflight, resp.Body), nil
+}
+
+// CredentialFeedback is implemented by a CredentialResolver that wants to
+// know what the destination made of the credential it served
+// (GrantCredentialCache, issue #2062). doFetch calls it once per fetch that
+// ran: CredentialRejected when the transport classified the answer as
+// QuotaFailureAuthRejected (401/403), CredentialAccepted when the transport
+// returned no error. A cached reading or a backoff tick runs no fetch and
+// reports neither.
+type CredentialFeedback interface {
+	CredentialRejected()
+	CredentialAccepted()
 }
 
 // backoffFor returns the retry delay after consecutiveFails failures in a

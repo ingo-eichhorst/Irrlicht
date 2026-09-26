@@ -26,6 +26,7 @@ package museaccountapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -99,6 +100,14 @@ type CredentialResolver struct {
 	lookup keychainRawLookup
 }
 
+// ErrKeychainRead marks every Resolve failure that happened after the
+// Keychain route ran `security` — each such run can raise a macOS Keychain
+// dialog (issue #2062), so the daemon does not retry these on its own
+// (services.GrantCredentialCache keeps them until the permission is granted
+// again). A failure before that point (auth.json missing, not an OAuth login)
+// carries no dialog and does not wrap it.
+var ErrKeychainRead = errors.New("museaccountapi: keychain read failed")
+
 // NewCredentialResolver returns a resolver reading auth.json at the path
 // path resolves.
 func NewCredentialResolver(path func() (string, error)) CredentialResolver {
@@ -149,15 +158,15 @@ func (r CredentialResolver) Resolve(ctx context.Context) (outbound.Credential, e
 	}
 	raw, err := lookup(ctx, KeychainService, KeychainAccount)
 	if err != nil {
-		return outbound.Credential{}, fmt.Errorf("museaccountapi: keychain lookup: %w", err)
+		return outbound.Credential{}, fmt.Errorf("%w: lookup: %w", ErrKeychainRead, err)
 	}
 	var blob keychainBlob
 	if err := json.Unmarshal([]byte(raw), &blob); err != nil {
-		return outbound.Credential{}, fmt.Errorf("museaccountapi: keychain item %s/%s is not the expected JSON shape", KeychainService, KeychainAccount)
+		return outbound.Credential{}, fmt.Errorf("%w: item %s/%s is not the expected JSON shape", ErrKeychainRead, KeychainService, KeychainAccount)
 	}
 	token := strings.TrimSpace(blob.AccessToken)
 	if token == "" {
-		return outbound.Credential{}, fmt.Errorf("museaccountapi: keychain item %s/%s has no access_token", KeychainService, KeychainAccount)
+		return outbound.Credential{}, fmt.Errorf("%w: item %s/%s has no access_token", ErrKeychainRead, KeychainService, KeychainAccount)
 	}
 	return outbound.NewCredential(token), nil
 }

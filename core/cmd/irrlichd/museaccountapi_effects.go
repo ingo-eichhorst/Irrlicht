@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,12 +59,33 @@ import (
 // result, and the credential's own doc comment
 // (museaccountapi/credential_keychain_darwin.go) measured this machine's
 // real Keychain item taking ~9.5s, well past what a short inline bound
-// would tolerate before either path had to give up waiting anyway. The
-// resolve still happens exactly once per grant; only the wait moved off the
-// synchronous path.
+// would tolerate before either path had to give up waiting anyway.
+//
+// The credential is read once per grant (issue #2062). Every read on Muse's
+// Keychain route raises a macOS dialog, and before #2062 the sweep read it on
+// every fetch — once per session per poll window. resolver is a
+// services.GrantCredentialCache shared by Apply's read and the sweep: Apply
+// resets it and warms it, so that read is the one the sweep is then served,
+// and a sweep tick that lands while it is still running joins it instead of
+// starting a second. A failed Keychain read (museaccountapi.ErrKeychainRead)
+// stays cached too, so an unanswered dialog is not raised again on the
+// poller's backoff; Remove resets it, and the next grant reads again. That
+// grant has to follow a revoke, or be the daemon's re-apply at startup:
+// re-answering "granted" while already granted runs no Apply. A failure
+// before the Keychain route (no auth.json yet) raised no dialog and is not
+// cached. The other reset is the sweep's re-read after Meta rejects the
+// credential (services.GrantCredentialCache.InvalidateOnce).
 func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
+	return newMuseAccountAPI(logger, museaccountapi.NewCredentialResolver(museaccountapi.AuthPath))
+}
+
+// newMuseAccountAPI is museAccountAPIEffects over a given credential
+// resolver, so a test can count the reads the wiring makes.
+func newMuseAccountAPI(logger outbound.Logger, credentials outbound.CredentialResolver) museAccountAPI {
 	poller := services.NewAccountPoller()
-	resolver := museaccountapi.NewCredentialResolver(museaccountapi.AuthPath)
+	resolver := services.NewGrantCredentialCache(credentials, func(err error) bool {
+		return errors.Is(err, museaccountapi.ErrKeychainRead)
+	})
 
 	// Destination() is a fixed, reviewed literal, so a construction error
 	// here is a coding mistake in this package, not a runtime condition, and
@@ -85,9 +107,10 @@ func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
 		// one shellout this can reach (keychainTimeout, 15s, measured) —a
 		// second, shorter timeout here would only race that one for no
 		// benefit, which is exactly what the prior 5s version did.
+		resolver.Reset()
 		go func() {
 			if _, err := resolver.Resolve(context.Background()); err != nil {
-				logger.LogInfo("permissions", "", fmt.Sprintf("museaccountapi: credential not resolvable yet: %v", err))
+				logger.LogInfo("permissions", "", fmt.Sprintf("museaccountapi: credential not resolvable: %v", err))
 			}
 		}()
 		return nil
@@ -101,6 +124,12 @@ func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
 		// The chip itself goes on the sweep's next tick, which sees the
 		// grant gone and clears each session's meta snapshot.
 		poller.Revoke(session.ProviderMeta)
+		// Reset after Revoke: Revoke cancels any fetch in flight, and a read
+		// that fetch was running may still land in the cache before this
+		// line — the reset drops it either way. Reset never waits on a read
+		// in flight (GrantCredentialCache.Reset), so a revoke answered over
+		// HTTP is not held up by an open Keychain dialog.
+		resolver.Reset()
 		return nil
 	}
 	return museAccountAPI{Start: start, Stop: stop, poller: poller, resolver: resolver, transport: transport}
@@ -112,7 +141,7 @@ type museAccountAPI struct {
 	Start, Stop func() error
 
 	poller    *services.AccountPoller
-	resolver  outbound.CredentialResolver
+	resolver  *services.GrantCredentialCache
 	transport outbound.AccountQuotaTransport
 }
 

@@ -166,6 +166,139 @@ assert_go_test_goes_red \
   'TestMuseAccountSweep_UnchangedReadingIsNotRewritten' \
   "after a tick with an unchanged reading"
 
+# ── 6-17. Issue #2062: the credential is read once per grant ───────────────
+# Each read on Muse's Keychain route raises a macOS dialog, so these guard
+# GrantCredentialCache (core/application/services/grantcredential.go), the
+# poller's credential feedback, the ErrKeychainRead marking, and the wiring
+# that resets the cache. The sweep's first re-read after an auth rejection is
+# not here: TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant
+# was seen red before anything invalidated the cache.
+
+# 6. A failed Keychain read is re-read on the next resolve (the dialog loop).
+assert_go_test_goes_red \
+  "the grant cache not keeping a failed read" \
+  "core/application/services/grantcredential.go" \
+  'if r.err != nil && !c.keeps(r.err) {' \
+  'if r.err != nil {' \
+  "./core/application/services/" \
+  'TestGrantCredentialCache_FailureIsStickyUntilReset|TestMuseAccountSweep_FailedResolveIsNotRetriedUntilReset' \
+  "after a failure"
+
+# 7. A failure that raised no dialog is kept (a login after the grant is
+#    never picked up).
+assert_go_test_goes_red \
+  "the grant cache keeping every failure" \
+  "core/application/services/grantcredential.go" \
+  'return c.keepFailure != nil && c.keepFailure(err)' \
+  'return true' \
+  "./core/application/services/" \
+  'TestGrantCredentialCache_UnkeptFailureIsReadAgain' \
+  "after unkept failures, want 3"
+
+# 8. Every caller starts its own read (two dialogs when Apply's warm-up and a
+#    sweep tick overlap).
+assert_go_test_goes_red \
+  "the grant cache not sharing a read in flight" \
+  "core/application/services/grantcredential.go" \
+  $'\tif r == nil {' \
+  $'\tif true {' \
+  "./core/application/services/" \
+  'TestGrantCredentialCache_ConcurrentCallersShareOneRead' \
+  "concurrent callers, want 1"
+
+# 9. Every auth rejection re-reads the credential.
+assert_go_test_goes_red \
+  "InvalidateOnce invalidating on every rejection" \
+  "core/application/services/grantcredential.go" \
+  'if c.reReadUsed {' \
+  'if false {' \
+  "./core/application/services/" \
+  'TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant' \
+  "want 2 (the read, then one re-read)"
+
+# 10. A rejection orphans a read still in flight (a second dialog).
+assert_go_test_goes_red \
+  "InvalidateOnce dropping a read in flight" \
+  "core/application/services/grantcredential.go" \
+  $'\t\tdefault:\n\t\t\treturn false' \
+  $'\t\tdefault:' \
+  "./core/application/services/" \
+  'TestGrantCredentialCache_InvalidateOnceLeavesAReadInFlight' \
+  "dropped a read still in flight"
+
+# 11. A re-grant does not re-arm the re-read.
+assert_go_test_goes_red \
+  "Reset not re-arming InvalidateOnce" \
+  "core/application/services/grantcredential.go" \
+  $'\tc.cur = nil\n\tc.reReadUsed = false' \
+  $'\tc.cur = nil' \
+  "./core/application/services/" \
+  'TestGrantCredentialCache_InvalidateOnceIsRearmedByReset' \
+  "InvalidateOnce after a Reset did nothing"
+
+# 12. An accepted fetch does not re-arm the re-read (a second token rotation
+#     is never picked up).
+assert_go_test_goes_red \
+  "CredentialAccepted not re-arming InvalidateOnce" \
+  "core/application/services/grantcredential.go" \
+  $'\tdefer c.mu.Unlock()\n\tc.reReadUsed = false\n}' \
+  $'\tdefer c.mu.Unlock()\n}' \
+  "./core/application/services/" \
+  'TestMuseAccountSweep_AcceptedFetchRearmsTheReRead' \
+  "want 3 (read, re-read, re-read after the second rotation)"
+
+# 13. A Keychain lookup failure is not marked, so it would be retried.
+assert_go_test_goes_red \
+  "the Muse resolver not marking a Keychain lookup failure" \
+  "core/adapters/outbound/museaccountapi/credential.go" \
+  'fmt.Errorf("%w: lookup: %w", ErrKeychainRead, err)' \
+  'fmt.Errorf("museaccountapi: keychain lookup: %w", err)' \
+  "./core/adapters/outbound/museaccountapi/" \
+  'TestCredentialResolver_OnlyKeychainFailuresAreMarked' \
+  "want it marked ErrKeychainRead"
+
+# 14. A revoke keeps the credential cached.
+assert_go_test_goes_red \
+  "museAccountAPIEffects' Stop not dropping the credential" \
+  "core/cmd/irrlichd/museaccountapi_effects.go" \
+  $'\t\tresolver.Reset()\n\t\treturn nil' \
+  $'\t\treturn nil' \
+  "./core/cmd/irrlichd/" \
+  'TestMuseAccountAPI_RevokeDropsTheCredential' \
+  "a resolve after a revoke was served the credential cached before it"
+
+# 15. A grant keeps whatever was cached before it.
+assert_go_test_goes_red \
+  "museAccountAPIEffects' Start not resetting the cache" \
+  "core/cmd/irrlichd/museaccountapi_effects.go" \
+  $'\t\tresolver.Reset()\n\t\tgo func() {' \
+  $'\t\tgo func() {' \
+  "./core/cmd/irrlichd/" \
+  'TestMuseAccountAPI_ApplyRereadsTheCredential' \
+  "credential reads, want 2"
+
+# 16. AccountPoller stops reporting a rejection to the resolver (the rejected
+#     token is never re-read).
+assert_go_test_goes_red \
+  "AccountPoller not reporting an auth rejection" \
+  "core/application/services/accountpoller.go" \
+  'if f, ok := req.Resolver.(CredentialFeedback); ok && reason == outbound.QuotaFailureAuthRejected {' \
+  'if f, ok := req.Resolver.(CredentialFeedback); ok && false {' \
+  "./core/application/services/" \
+  'TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant' \
+  "want 2 (the read, then one re-read)"
+
+# 17. AccountPoller stops reporting an accepted fetch (a second rotation is
+#     never picked up).
+assert_go_test_goes_red \
+  "AccountPoller not reporting an accepted credential" \
+  "core/application/services/accountpoller.go" \
+  $'\tif f, ok := req.Resolver.(CredentialFeedback); ok {\n\t\tf.CredentialAccepted()' \
+  $'\tif f, ok := req.Resolver.(CredentialFeedback); ok && false {\n\t\tf.CredentialAccepted()' \
+  "./core/application/services/" \
+  'TestMuseAccountSweep_AcceptedFetchRearmsTheReRead' \
+  "want 3 (read, re-read, re-read after the second rotation)"
+
 if [[ $fails -gt 0 ]]; then
   echo "muse-account-sweep-mutations: $fails FAILED"
   exit 1

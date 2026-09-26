@@ -6,7 +6,6 @@ package services
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"irrlicht/core/domain/session"
@@ -20,7 +19,9 @@ type ProviderRateLimitWriter interface {
 }
 
 // MuseAccountSweeperDeps wires a MuseAccountSweeper. Poller, Resolver and
-// Transport are the ones museAccountAPIEffects builds for the permission;
+// Transport are the ones museAccountAPIEffects builds for the permission —
+// Resolver is the daemon's one GrantCredentialCache, which its Apply/Remove
+// closures reset and AccountPoller tells about rejections;
 // Granted is bound to the Muse account-API permission; Adapter is the Muse
 // adapter's name (passed in because this package must not import an inbound
 // adapter).
@@ -50,10 +51,10 @@ type MuseAccountSweeperDeps struct {
 // is not re-saved or re-broadcast.
 //
 // Polls run serially on the sweep's own goroutine, never on the event or
-// HTTP path. The credential is resolved at most once per sweep and shared by
-// every session that needs a fetch in it (sweepResolver): each session has
-// its own poller key, and the Keychain route measured ~9.5s per read
-// (museaccountapi/credential_keychain_darwin.go).
+// HTTP path. Each session has its own poller key, so every session's fetch
+// resolves the credential; Resolver (a GrantCredentialCache) serves all of
+// them from one read per grant, because each read on the Keychain route
+// raises a macOS dialog (issue #2062).
 type MuseAccountSweeper struct {
 	deps MuseAccountSweeperDeps
 	// polled is every session this sweeper has polled and not yet seen end,
@@ -97,7 +98,6 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 	}
 	s.listFailing = false
 	granted := s.deps.Granted()
-	resolver := &sweepResolver{inner: s.deps.Resolver}
 	seen := make(map[string]bool, len(sessions))
 	for _, st := range sessions {
 		if ctx.Err() != nil {
@@ -121,7 +121,7 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 		// On a failure after an earlier success, snap is that reading stamped
 		// with RetrievalFailure (see MuseAccountRefresh); with no earlier
 		// success it is nil and nothing is written.
-		snap, err := MuseAccountRefresh(ctx, s.deps.Poller, resolver, s.deps.Transport,
+		snap, err := MuseAccountRefresh(ctx, s.deps.Poller, s.deps.Resolver, s.deps.Transport,
 			s.deps.Granted, st.SessionID)
 		if err != nil {
 			s.logFailure(st.SessionID, err)
@@ -158,18 +158,3 @@ func (s *MuseAccountSweeper) logFailure(sessionID string, err error) {
 }
 
 const logComponentMuseAccountSweep = "museaccountsweep"
-
-// sweepResolver resolves the wrapped credential at most once and serves that
-// result (credential or error) to every later call. The sweep builds a fresh
-// one per pass, so the credential is held only for that pass.
-type sweepResolver struct {
-	inner outbound.CredentialResolver
-	once  sync.Once
-	cred  outbound.Credential
-	err   error
-}
-
-func (r *sweepResolver) Resolve(ctx context.Context) (outbound.Credential, error) {
-	r.once.Do(func() { r.cred, r.err = r.inner.Resolve(ctx) })
-	return r.cred, r.err
-}
