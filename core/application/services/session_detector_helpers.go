@@ -14,6 +14,7 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.mu.Lock()
 	delete(d.projectSessions, sessionID)
 	d.deletedSessions[sessionID] = time.Now().Unix()
+	delete(d.replacedSessions, sessionID)
 	d.mu.Unlock()
 	// Drop the background-process liveness cache for the gone session — a
 	// deleted session is never re-observed as non-working, so

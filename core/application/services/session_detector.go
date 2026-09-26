@@ -179,6 +179,14 @@ type SessionDetector struct {
 	// cacheDeletedSnapshot and processActivity's Terminal branch.
 	deletedStates map[string]*session.SessionState
 
+	// replacedSessions holds, for a root session deleted by the same-pid
+	// cleanup (cleanupStalePIDHolders), the pid it lost and where it ran, so
+	// its own hooks can revive it if that replacement was wrong (issue #2059).
+	// Any deletion drops the entry (removeFromProjectSessions) before the
+	// same-pid cleanup records a new one, and it is cleared wherever
+	// deletedSessions is. See tryReviveReplacedSession.
+	replacedSessions map[string]*replacedSession
+
 	// hostGateRejected tracks session IDs the host-ancestry admission gate
 	// (issue #784) has already rejected. No cooldown/expiry, unlike
 	// deletedSessions — a rejected PID's process ancestry (e.g. CodexBar,
@@ -329,6 +337,7 @@ func newSessionDetector() *SessionDetector {
 		projectSessions:          make(map[string]string),
 		deletedSessions:          make(map[string]int64),
 		deletedStates:            make(map[string]*session.SessionState),
+		replacedSessions:         make(map[string]*replacedSession),
 		hostGateRejected:         make(map[string]struct{}),
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),
@@ -368,17 +377,18 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 	det.enricher = newMetadataEnricher(deps.Git, deps.Metrics)
 	det.metrics = deps.Metrics
 	det.pidMgr = NewPIDManager(PIDManagerDeps{
-		PW:               deps.PW,
-		Repo:             deps.Repo,
-		Log:              deps.Log,
-		Broadcaster:      deps.Broadcaster,
-		ReadyTTL:         deps.ReadyTTL,
-		PIDDiscovers:     deps.PIDDiscovers,
-		SharedPIDOwners:  deps.SharedPIDOwners,
-		ProcessNames:     deps.ProcessNames,
-		LiveCWDs:         deps.LiveCWDs,
-		OnSessionDeleted: det.removeFromProjectSessions,
-		OnSessionRemoved: det.cacheDeletedSnapshot,
+		PW:                deps.PW,
+		Repo:              deps.Repo,
+		Log:               deps.Log,
+		Broadcaster:       deps.Broadcaster,
+		ReadyTTL:          deps.ReadyTTL,
+		PIDDiscovers:      deps.PIDDiscovers,
+		SharedPIDOwners:   deps.SharedPIDOwners,
+		ProcessNames:      deps.ProcessNames,
+		LiveCWDs:          deps.LiveCWDs,
+		OnSessionDeleted:  det.removeFromProjectSessions,
+		OnSessionRemoved:  det.cacheDeletedSnapshot,
+		OnSessionReplaced: det.recordReplacement,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
