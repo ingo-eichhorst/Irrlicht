@@ -283,7 +283,7 @@ assert_go_test_goes_red \
   "AccountPoller not reporting an auth rejection" \
   "core/application/services/accountpoller.go" \
   'case errors.As(fetchErr, &qerr) && qerr.Reason == outbound.QuotaFailureAuthRejected:' \
-  'case false:' \
+  'case errors.As(fetchErr, &qerr) && false:' \
   "./core/application/services/" \
   'TestMuseAccountSweep_AuthRejectionReReadsCredentialOncePerGrant' \
   "want 2 (the read, then one re-read)"
