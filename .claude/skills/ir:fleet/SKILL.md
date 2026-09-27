@@ -70,7 +70,9 @@ scratchpad.
 
 **Dependency pass.** A ticket that names another ticket of this run as a
 dependency cannot start until that one has merged. Read the declaration out of
-the section that carries it, and treat a missing section as unknown:
+the section that carries it, and treat a missing section as unknown.
+`$SCRATCH` here and below is this session's scratchpad directory — the path
+the system prompt names; set it once with `SCRATCH=<that path>`:
 
 ```bash
 f="$SCRATCH/fleet-<N>-body.md"

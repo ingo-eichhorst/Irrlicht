@@ -37,7 +37,7 @@ const (
 	modelGemini3FlashPreview = "gemini-3-flash-preview"
 	modelGemini35Flash       = "gemini-3.5-flash"
 	modelGPT53Codex          = "gpt-5.3-codex"
-	modelClaudeSonnet4Dated  = "claude-sonnet-4-20250514"
+	modelClaudeSonnet4Dated  = "anthropic.claude-sonnet-4-20250514-v1:0"
 	modelGPTOSS120BSlash     = "openai/gpt-oss-120b"
 )
 
@@ -75,9 +75,9 @@ var modelAliases = map[string]string{
 	// (-high, -low, -medium, -thinking, -high-thinking, -fast-mode) that
 	// LiteLLM does not index. Sources: Cursor's public model docs and forum
 	// posts quoting literal slugs.
-	"claude-4-sonnet":                 modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
-	"claude-4-sonnet-1m":              modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
-	"claude-4-sonnet-thinking":        modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key. Aligned with its "claude-4-sonnet" / "claude-4-sonnet-1m" siblings above, which name the same generation.
+	"claude-4-sonnet":                 modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM ships only the dated Bedrock key (the bare dated key was dropped by 2026-09-26; its $3/$15 pricing matches Anthropic list).
+	"claude-4-sonnet-1m":              modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM ships only the dated Bedrock key (the bare dated key was dropped by 2026-09-26; its $3/$15 pricing matches Anthropic list).
+	"claude-4-sonnet-thinking":        modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM ships only the dated Bedrock key (the bare dated key was dropped by 2026-09-26; its $3/$15 pricing matches Anthropic list). Aligned with its "claude-4-sonnet" / "claude-4-sonnet-1m" siblings above, which name the same generation.
 	"claude-4.5-sonnet":               modelClaudeSonnet45,
 	"claude-4.5-sonnet-thinking":      modelClaudeSonnet45,
 	"claude-4.6-sonnet":               modelClaudeSonnet46,
@@ -85,7 +85,7 @@ var modelAliases = map[string]string{
 	"claude-4.6-sonnet-low":           modelClaudeSonnet46,
 	"claude-4.6-sonnet-thinking":      modelClaudeSonnet46,
 	"claude-4.6-sonnet-high-thinking": modelClaudeSonnet46,
-	"claude-4-opus":                   "claude-opus-4-20250514", // LOCAL_OVERRIDE: codeburn → claude-opus-4; LiteLLM only ships the date-suffixed key.
+	"claude-4-opus":                   "anthropic.claude-opus-4-20250514-v1:0", // LOCAL_OVERRIDE: codeburn → claude-opus-4; LiteLLM ships only the dated Bedrock key (the bare dated key was dropped by 2026-09-26; its $15/$75 pricing matches Anthropic list).
 	"claude-4.5-opus":                 modelClaudeOpus45,
 	"claude-4.5-opus-high":            modelClaudeOpus45,
 	"claude-4.5-opus-low":             modelClaudeOpus45,
@@ -111,6 +111,15 @@ var modelAliases = map[string]string{
 	// this string (#1256). Its sibling "claude-sonnet-4.5" already resolves
 	// on its own and needs no entry.
 	"claude-haiku-4.5": modelClaudeHaiku45,
+	// Copilot's own spellings of the pre-2026 Claude SKUs (codeburn sync for
+	// v0.6.6). None of the three canonicals is an undated key in the LiteLLM
+	// snapshot (checked against the capacity cache: only Bedrock-style
+	// dated keys exist), so these resolve to a zero-value capacity and log on
+	// miss until LiteLLM ships them.
+	"claude-3.5-sonnet":         "claude-3-5-sonnet",
+	"claude-3.7-sonnet":         "claude-3-7-sonnet",
+	"claude-3.7-sonnet-thought": "claude-3-7-sonnet",
+	"claude-opus-4.1":           "claude-opus-4-1",
 
 	// Cursor in-house Composer family — no LiteLLM entry; price as the
 	// underlying Sonnet generation per Cursor's docs.
@@ -192,6 +201,15 @@ var modelAliases = map[string]string{
 	// LiteLLM snapshot does not ship yet (checked against the capacity cache
 	// for v0.6.5), so it resolves to a zero-value capacity until it does.
 	"grokbot-auto": "grok-4.6",
+	// Grok bot surfaces and Cursor's Grok reasoning tiers (codeburn sync for
+	// v0.6.6) — same "grok-4.6" canonical, same zero-value capacity.
+	"grok-bot-automation":       "grok-4.6",
+	"grok-bot-cua":              "grok-4.6",
+	"grok-bot-default":          "grok-4.6",
+	"grok-4.6-high":             "grok-4.6",
+	"grok-4.6-high-fast":        "grok-4.6",
+	"cursor-grok-4.6-high":      "grok-4.6",
+	"cursor-grok-4.6-high-fast": "grok-4.6",
 
 	// Human-readable display-name forms emitted by some frontends.
 	"Claude Sonnet 4.6": modelClaudeSonnet46,

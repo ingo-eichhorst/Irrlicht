@@ -47,7 +47,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 - **History view** — spend over time with projection, attribution by project / branch / model, a productive-vs-reverted yield ratio, DORA metrics, and an Activity Matrix of working/waiting/ready/error agent counts per project (macOS app + web dashboard)
 - **Subagent trees** — parent ↔ Explore / Plan / background agents, not just the parent
 - **Git-aware grouping** — sessions clustered by project, branch, worktree
-- **Real-time** — <1s latency via FSEvents/kqueue; no polling
+- **Real-time** — <1s latency via kqueue file watching; no polling
 
 ## Supported agents
 
@@ -180,7 +180,7 @@ Six concrete pains, every one documented:
 ## How it works
 
 ```
-Transcript files → FSEvents/kqueue → state machine → menu bar
+Transcript files → kqueue (fsnotify) → state machine → menu bar
 ```
 
 Irrlicht reads the `.jsonl` transcripts your agents already write, persists each session as atomic JSON under `~/Library/Application Support/Irrlicht/instances/`, and renders dots in a SwiftUI menu-bar app over a local WebSocket. The app ships as a single `.app` bundle with the daemon embedded — no separate services, no version drift.

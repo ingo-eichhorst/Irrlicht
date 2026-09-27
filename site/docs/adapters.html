@@ -253,6 +253,7 @@
         <li>The context-window limit comes from muse&rsquo;s own locally cached <code>~/.local/share/muse/model-catalog/</code> files, not from the transcript, which never carries it</li>
         <li>The <code>session-index.db</code> sidecar is deliberately never read &mdash; it was measured out of sync with the live session set, so it is not a reliable source for anything</li>
         <li>The adapter is observe-only, gated behind a single <code>transcripts</code> permission. Muse offers no hook or control path</li>
+        <li><strong>Account quota (separate consent row, &ldquo;Muse account quota&rdquo;):</strong> the Meta quota chip comes from Meta&rsquo;s account API, not the transcript. It is declared on its own <code>muse-account-api</code> pseudo-adapter under the <code>account-api</code> permission (<code>core/adapters/outbound/museaccountapi/</code>). Once granted, the daemon reads the Muse OAuth credential (<code>~/.config/muse/auth.json</code>, or the <code>ai.meta.dev.credentials</code> macOS Keychain item) once per grant, and a sweep every 60&nbsp;seconds refreshes each live top-level Muse session&rsquo;s quota, calling <code>POST https://api.meta.ai/muse-code/key</code> only when the cached reading is older than 5&nbsp;minutes. Revoking it stops further credential reads and requests and discards the cached reading</li>
         <li><strong>Adapter name:</strong> <code>"muse"</code></li>
         <li>Stage: <strong>alpha</strong></li>
       </ul>
@@ -434,18 +435,18 @@ type RawLineParser interface {
 }
 </code></pre>
 
-      <p>Three further optional hooks are detected by type assertion inside the tailer; implement only the ones the adapter needs.</p>
+      <p>Further optional hooks are detected by type assertion inside the tailer; implement only the ones the adapter needs. Three are shown below; the full set (also <code>queuedTurnSplitter</code>, <code>rotationResetter</code> and <code>TranscriptPathAware</code>) is in <code>core/pkg/tailer/parser.go</code>.</p>
 
 <pre><code>// Synthesize turn_done when the source format has no in-band end-of-turn marker
 // (aider's TUI prompt is not written to the file). The tailer calls IdleFlush
 // after each pass with the wall-clock idle time since the last line.
-type IdleFlusher interface {
+type idleFlusher interface {
     IdleFlush(idleFor time.Duration) *ParsedEvent
 }
 
 // Expose the in-progress turn's cost contribution so the live cost display
 // reflects a streaming turn before it commits (Claude Code).
-type PendingContributor interface {
+type pendingContributor interface {
     PendingContribution() *PerTurnContribution
 }
 
@@ -532,7 +533,7 @@ type Watcher interface {
         <li><strong>Package:</strong> <code>core/adapters/outbound/websocket/</code></li>
         <li>Fan-out to all connected clients</li>
         <li>Non-blocking sends (drops slow subscribers)</li>
-        <li><strong>Message types:</strong> <code>session_created</code> / <code>session_updated</code> / <code>session_deleted</code>, <code>orchestrator_state</code></li>
+        <li><strong>Message types:</strong> <code>session_created</code> / <code>session_updated</code> / <code>session_deleted</code>, <code>focus_requested</code>, <code>permissions_updated</code>, and the <code>history_*_v2</code> frames (full list: <a href="api-reference.html">API Reference</a> &rarr; <code>GET /api/v1/sessions/stream</code>)</li>
       </ul>
 
       <h3>Git Resolver</h3>
@@ -600,7 +601,7 @@ type Watcher interface {
         <li>Scenario cells assessed via the <code>assess</code> verb of <code>/ir:onboarding-factory</code>, recorded in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
         <li><strong>Machine-checked (#1369):</strong> the four <em>alpha-floor</em> core scenarios are settled &mdash; <code>session-start</code>, <code>basic-turn</code>, <code>auto-executed-tool-call</code>, <code>turn-end-terminal-text</code>. All four are reachable from lifecycle hooks alone, which is what makes <code>alpha</code> a day-one tier for an adapter that has hooks and no transcript parser: it asserts <strong>state only, no metrics</strong>.</li>
         <li>An entry in <code>replaydata/agents/adapters.json</code> declaring this maturity and any missing capabilities. <code>of validate</code> fails if the claim exceeds what the core scenarios earn.</li>
-        <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>
+        <li>The alpha-floor cells recorded, committed and replay green via <code>tools/replay-fixtures.sh</code> (<code>1-1_session-start</code>, <code>2-1_basic-turn</code>, <code>2-2_auto-executed-tool-call</code>, <code>2-13_turn-end-terminal-text</code>)</li>
       </ul>
 
       <p><strong>For platforms, additionally:</strong></p>

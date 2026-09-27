@@ -12,6 +12,52 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-09-27
+
+### Your Meta (Muse) subscription joins the quota header, and sessions stop getting stuck in the wrong state
+
+### Highlights
+
+#### Meta quota in the header
+![Anthropic and Meta quota chips side by side in the header](assets/releases/v0.6.6/meta-quota-chip.png)
+
+A running Muse session now shows your Meta subscription's 5-hour and 7-day usage as its own chip, next to Anthropic and OpenAI. Up to five subscriptions share the header width instead of pushing each other off the edge.
+
+**Why it matters:** you see every subscription you are burning through in one place, without opening Muse.
+
+Turn it on under Settings → Permissions → "Muse account quota". Granting it reads the Muse credential once, which may show one Keychain prompt; choose "Allow", not "Always Allow".
+
+(#2057, #2058, #2062, #2064, #2063, #2065)
+
+### Also in this release
+
+**Fixed**
+- The Muse credential is read once per grant instead of on every quota poll, so macOS no longer shows a Keychain prompt every minute (#2062, #2064)
+- A header with three to five subscriptions gives every chip a share of the width; with six or more it shows four chips and a "+N more" pill (#2063, #2065)
+- Claude Code: a turn that calls the advisor tool no longer doubles the context size or raises a false pressure alert, and the advisor's tokens now count toward cost (#2052, #2054)
+- Claude Code: a session right after `/clear` no longer shows `working` with no activity behind it (#2034, #2037)
+- Claude Code: a new session no longer takes over the PID of another live session, a resumed session inherits the PID of the process that resumed it, and a session deleted by mistake comes back on its next hook (#2042, #2044, #2056, #2059, #2060)
+- macOS 27: a second click on the menu bar icon closes the panel instead of flashing it closed and open again (#2038, #2040)
+- Pricing: 11 new model aliases synced from codeburn (Copilot's Claude 3.5/3.7/Opus 4.1 spellings and the Grok bot and Cursor Grok tiers), and Cursor's Claude 4 Sonnet/Opus aliases priced again after LiteLLM dropped the key they pointed at
+
+**Changed / Docs / Distribution**
+- Replay data: a provider domain for the `of` CLI with a manifest and redacted fixtures per billing provider under `replaydata/providers/` (#2008, #2035)
+- Billing attribution rules that tell a gateway, an upstream biller and a local runtime apart, with fixtures only and no cloud integration (#2013, #2039)
+- Maintainer tooling: `tools/lib/pr-exists.sh` names pushed branches that never got a PR, `ir:fleet` orders tickets by dependency and resolves an absolute repo root, and `ir:exec` bounds its review delegation (#2029, #2043, #2031, #2045, #2046, #2041)
+- Tests: the git adapter tests prime the `xcrun` stub first, and `desktopdriver` pins that a missed Stop postcondition still counts as sent (#2048, #2049, #2050)
+- `.irrlicht-cowork-probe/` is ignored at every depth (#2053, #2055)
+
+### Technical appendix
+
+- **Meta quota chip (#2057, PR #2058).** `MuseAccountSweeper` (`core/application/services/museaccountsweep.go`) runs a 60-second level-triggered sweep over live Muse sessions, polls Meta's account API through the daemon-wide `AccountPoller` under a session-scoped key, and writes the reading onto the session with `SessionDetector.SetProviderRateLimit`, which only replaces a snapshot stamped with the same provider and skips a reading that differs only in its timestamps. It clears the Meta snapshot while the `muse-account-api/account-api` permission is not granted. A failed poll after an earlier success keeps the last reading stamped with `RetrievalFailure`, so it never passes for current. Cache entries of ended sessions are forgotten. The Meta icon and label are wired into `platforms/web/quotaChips.js` and the macOS `ProviderIconRegistry`.
+- **One Keychain read per grant (#2062, PR #2064).** Muse stores its token in the macOS Keychain (`auth.json` `providers.meta.storage: "keychain"`), and every `security find-generic-password` call can raise a dialog. `GrantCredentialCache` (`core/application/services/grantcredential.go`) resolves the credential once per grant, keeps a Keychain failure (`ErrKeychainRead`) until the next grant or restart instead of retrying it every poll, and re-reads once on a 401/403.
+- **Header density tiers (#2063, PR #2065).** `QuotaChipLayout.swift` and the web `quotaChipLayout` / `applyStripDensity` pick a tier from the number of providers: 1 regular, 2 compact, 3 tight (flexible bars 24–60 pt), 4–5 dense (bars 6–60 pt, no 5h/7d labels), more than 5 shows four chips plus a fixed-size "+N more" pill. Mutation fixtures live in `tools/lib/quotachiplayout-mutations_test.sh`.
+- **Advisor iterations (#2052, PR #2054).** When `usage.iterations` is present, context comes from the last `message` iteration and cost sums every iteration, including the advisor's.
+- **No working without evidence (#2034, PR #2037).** `ClassifyStateOnEvidence` discards a `transcript_activity` verdict when the metrics hold no substantive event, which is the shape after `/clear` when the delayed `idle_prompt` hook runs a synthetic pass over zero lines.
+- **PID ownership (#2042, #2059; PRs #2044, #2056, #2060).** `isClaimedByOther` no longer discards a stale-mtime metadata entry that names a live, tracked session with `updatedAt`; a retired pre-session hands its live PID to the session that replaced it when discovery finds none; and `cleanupStalePIDHolders` reports the session it replaced, so a hook for that session revives it instead of waiting for a main-transcript write.
+- **Status item click (#2038, PR #2040).** On macOS 27 the global mouse-down dismiss monitor also receives clicks on our own `NSStatusItem`; `globalClickShouldDismiss(at:statusButtonRect:)` skips those.
+- **Alias sync.** Added 11 codeburn aliases whose canonicals (`claude-3-5-sonnet`, `claude-3-7-sonnet`, `claude-opus-4-1`, `grok-4.6`) are not in the LiteLLM snapshot yet, so they resolve to zero-value capacity and log on miss. The `claude-4-sonnet*` and `claude-4-opus` LOCAL_OVERRIDEs now point at `anthropic.claude-sonnet-4-20250514-v1:0` and `anthropic.claude-opus-4-20250514-v1:0`, because the bare dated keys are gone from the snapshot and the Bedrock keys carry the same list price ($3/$15 and $15/$75 per MTok). Upstream changed its four GLM canonicals to `z-ai/glm-5.2` / `z-ai/glm-5.3`; neither the old nor the new targets are priced, so they are left for maintainer review, and `gpt-4.1` is skipped as a self-mapping.
+
 ## [0.6.5] — 2026-09-22
 
 ### Quota shows one row per subscription again, DeepSeek Harness joins the supported agents, and a relay you can install with one command
@@ -1993,7 +2039,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.6
 [0.6.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.5
 [0.6.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.4
 [0.6.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.3

@@ -202,7 +202,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.6.5"
+  "version": "0.6.6"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -241,8 +241,8 @@
         <tbody>
           <tr>
             <td><code>chart</code></td>
-            <td><code>cost</code> (default), <code>tokens</code>, <code>co2</code>, <code>models</code>, <code>providers</code>, <code>agents</code>, <code>state</code>, <code>yield</code>, <code>dora</code></td>
-            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>co2</code> sums the estimated CO2e footprint like <code>cost</code> sums spend; <code>agents</code> returns the concurrent-agents timeline; <code>state</code> returns the per-project, per-state activity matrix; <code>yield</code> returns the per-project productive-vs-reverted aggregate; <code>dora</code> returns one project's DORA metrics (requires <code>project</code>)</td>
+            <td><code>cost</code> (default), <code>tokens</code>, <code>co2</code>, <code>models</code>, <code>providers</code>, <code>agents</code>, <code>state</code>, <code>yield</code>, <code>dora</code>, <code>autonomy_projects</code>, <code>autonomy_duration</code></td>
+            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>co2</code> sums the estimated CO2e footprint like <code>cost</code> sums spend; <code>agents</code> returns the concurrent-agents timeline; <code>state</code> returns the per-project, per-state activity matrix; <code>yield</code> returns the per-project productive-vs-reverted aggregate; <code>autonomy_projects</code> / <code>autonomy_duration</code> return the Autonomy section's per-project panels and aggregate percentile chart (windowed by <code>window</code>, below); <code>dora</code> returns one project's DORA metrics (requires <code>project</code>)</td>
           </tr>
           <tr>
             <td><code>group</code></td>
@@ -258,6 +258,11 @@
             <td><code>granularity</code></td>
             <td><code>1m</code>, <code>10m</code>, <code>60m</code>, <code>8h</code>, <code>24h</code> (default), <code>7d</code>, <code>1mo</code>, <code>6mo</code>, <code>1y</code></td>
             <td><code>chart=state</code> only. Picks both the bucket width and the trailing window at once (e.g. <code>1m</code> shows the last 45 minutes, <code>1y</code> shows the last 8 years)</td>
+          </tr>
+          <tr>
+            <td><code>window</code></td>
+            <td><code>30d</code> (default), <code>1y</code></td>
+            <td><code>chart=autonomy_projects</code> / <code>autonomy_duration</code> only, which resolve their window from it instead of <code>range</code>: <code>30d</code> is 30 daily buckets, <code>1y</code> is 52 weekly buckets</td>
           </tr>
           <tr>
             <td><code>scope</code></td>
@@ -277,7 +282,7 @@
       <pre><code># Weekly cost by project
 curl "http://127.0.0.1:7837/api/v1/history?chart=cost&group=project&range=week" | jq
 
-# Activity Matrix: one row per project, one series per state, last 24 hourly buckets
+# Activity Matrix: one row per project, one series per state, last 30 daily buckets
 curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</code></pre>
 
       <h3>GET /api/v1/permissions</h3>
@@ -566,7 +571,7 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
           <tr>
             <td><code>adapter</code></td>
             <td>string</td>
-            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, <code>gemini-cli</code>, <code>antigravity</code>, <code>mistral-vibe</code>, <code>copilot</code>, <code>hermes</code>, <code>muse</code>, <code>junie</code>, or empty (legacy / unknown)</td>
+            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, <code>gemini-cli</code>, <code>antigravity</code>, <code>mistral-vibe</code>, <code>copilot</code>, <code>hermes</code>, <code>muse</code>, <code>junie</code>, <code>dsh</code>, or empty (legacy / unknown)</td>
           </tr>
           <tr>
             <td><code>cwd</code></td>
