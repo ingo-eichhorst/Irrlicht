@@ -253,7 +253,7 @@ cd Irrlicht
       <p>Under the hood, <code>build-release.sh</code> performs these steps in order:</p>
 
       <ol>
-        <li><strong>Syncs the web frontend</strong> &mdash; embeds the latest HTML/CSS/JS assets into the daemon binary.</li>
+        <li><strong>Stages the web frontend</strong> &mdash; copies the dashboard HTML/CSS/JS into <code>Irrlicht.app/Contents/Resources/web/</code>, where the daemon serves it from disk.</li>
         <li><strong>Cross-compiles the daemon</strong> &mdash; builds <code>irrlichd</code> for both <code>arm64</code> (Apple Silicon) and <code>amd64</code> (Intel).</li>
         <li><strong>Creates a universal binary</strong> &mdash; merges both architectures with <code>lipo</code> so one binary runs natively on any Mac.</li>
         <li><strong>Builds the Swift menu-bar app</strong> &mdash; compiles <code>Irrlicht.app</code> from the SwiftUI source.</li>

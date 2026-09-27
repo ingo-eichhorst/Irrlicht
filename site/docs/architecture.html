@@ -132,14 +132,23 @@
       <!-- ── Project Structure ── -->
       <h2>Project Structure</h2>
 
+      <p>Abridged &mdash; the main directories under <code>core/</code>; tests, <code>e2e/</code>, <code>internal/</code> and <code>replay/</code> are omitted.</p>
+
       <pre><code>core/
 &#x251C;&#x2500;&#x2500; cmd/
 &#x2502;   &#x251C;&#x2500;&#x2500; irrlichd/          # Daemon entry point
-&#x2502;   &#x2514;&#x2500;&#x2500; irrlicht-ls/       # CLI listing tool
+&#x2502;   &#x251C;&#x2500;&#x2500; irrlicht-ls/       # CLI listing tool
+&#x2502;   &#x251C;&#x2500;&#x2500; irrlicht-focus/    # CLI focus tool
+&#x2502;   &#x2514;&#x2500;&#x2500; irrlichtrelay/     # Relay server
 &#x251C;&#x2500;&#x2500; domain/                # Pure domain types
 &#x2502;   &#x251C;&#x2500;&#x2500; session/           # SessionState, SessionMetrics
 &#x2502;   &#x251C;&#x2500;&#x2500; agent/             # Agent event types
 &#x2502;   &#x251C;&#x2500;&#x2500; orchestrator/      # Orchestrator state
+&#x2502;   &#x251C;&#x2500;&#x2500; lifecycle/         # Lifecycle event kinds
+&#x2502;   &#x251C;&#x2500;&#x2500; permission/        # Consent state
+&#x2502;   &#x251C;&#x2500;&#x2500; notify/            # Notification policy
+&#x2502;   &#x251C;&#x2500;&#x2500; dora/              # DORA metrics
+&#x2502;   &#x251C;&#x2500;&#x2500; stats/             # Percentiles
 &#x2502;   &#x2514;&#x2500;&#x2500; config/            # Configuration
 &#x251C;&#x2500;&#x2500; ports/
 &#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # Watcher, OrchestratorWatcher
@@ -202,7 +211,7 @@
           </ul>
         </li>
         <li><strong>PushService</strong> &mdash; WebSocket fan-out to connected clients</li>
-        <li><strong>HTTP Server</strong> &mdash; API endpoints + embedded web UI</li>
+        <li><strong>HTTP Server</strong> &mdash; API endpoints + the web dashboard, served from disk (see <code>IRRLICHT_UI_DIR</code>)</li>
       </ol>
 
       <!-- ── Data Flow ── -->

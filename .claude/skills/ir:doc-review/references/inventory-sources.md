@@ -47,7 +47,7 @@ find core/cmd tools/*/cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
 grep -rhoE 'flag\.[A-Za-z]+Var\([^,]+,\s*"[^"]+"' core tools --include='*.go' \
   | grep -oE '"[^"]+"' | sort -u
 grep -rhoE '\b[A-Za-z_]+\.(String|Bool|Int|Duration|Int64|Float64)\("[^"]+"' core tools --include='*.go' \
-  | grep -v '_test.go' | grep -oE '"[^"]+"' | sort -u
+  --exclude='*_test.go' | grep -oE '"[^"]+"' | sort -u
 # irrlichd's manual flags — read the knownFlags slice, not the hasFlag call sites
 # (most are hasFlagIn(args, "...") in selectAction; grepping `hasFlag("` finds only --record)
 sed -n '/^var knownFlags = \[\]string{/,/^}/p' core/cmd/irrlichd/main.go \
@@ -86,7 +86,10 @@ The **config inventory** that completeness checks against is the user-facing sub
 
 ```bash
 grep -rhoE 'os\.Getenv\("(IRRLICHT_[A-Z_]+|NO_COLOR|GT_BIN|GT_ROOT)"\)' core --include='*.go' \
-  | grep -v '_test.go' | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u
+  --exclude='*_test.go' | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u
+# Test files are excluded with --exclude, not a trailing `grep -v '_test.go'`:
+# -h strips filenames from the output, so that filter matched nothing and let
+# test-only opt-ins (e.g. IRRLICHT_DSH_SHARED_PID_LIVE) into the inventory.
 ```
 
 **Documented mention** = the var appears in `site/docs/configuration.html` (or README for the

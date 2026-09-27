@@ -79,6 +79,9 @@ a clear-cut violation — and `issues/search` never returns them:
 tools/sonarqube-report.sh "hotspots/search?organization=<org>&projectKey=<key>&ps=50"
 ```
 
+where `<org>` is `SONAR_ORGANIZATION` and `<key>` is `SONAR_PROJECT_KEY` from
+`.env` (`grep -E '^SONAR_(ORGANIZATION|PROJECT_KEY)=' .env`).
+
 Always run this, even though it's frequently empty — a report that skips
 it silently reads as "no hotspots" when the truth is "didn't check."
 Each entry has a `status` (`TO_REVIEW` / `REVIEWED`); only unreviewed ones
@@ -92,6 +95,9 @@ just its one-line message:
 ```bash
 tools/sonarqube-report.sh "rules/show?key=<rule>&organization=<org>"
 ```
+
+where `<rule>` is a rule key from the issues list (e.g. `go:S1192`) and `<org>`
+is `SONAR_ORGANIZATION` as above.
 
 ### 5. Summarize
 

@@ -85,7 +85,7 @@ These events manage the existence of sessions -- creation and deletion. They are
 Pre-sessions (`proc-<pid>`) are synthetic sessions created by the process scanner before any transcript exists. They allow the UI to show a session as soon as the user opens Claude Code.
 
 1. Process scanner detects `claude` process via `pgrep`
-2. Checks `hasActiveSession`: skips if a transcript was modified in the last 60s (file watcher handles those)
+2. Checks `hasActiveSession`: skips if a real (transcript-backed, non-`proc-`) session already exists for this PID and project directory (`HasRealSessionForPID`, matched by transcript-path parent or CWD)
 3. Creates pre-session with `proc-<pid>` ID, state `ready`
 4. When real transcript arrives, pre-session is deleted and replaced by the real session
 
@@ -151,8 +151,10 @@ HasOpenToolCall=true AND any LastOpenToolNames entry is a user-blocking tool
 ### `IsAgentDone()` -> triggers `ready`
 
 ```
-Primary:  LastEventType == "turn_done"
-Fallback: HasOpenToolCall=false AND LastEventType in {assistant, assistant_output}
+Guard:         never fires while HasOpenToolCall or HasLiveBackgroundProcess is true
+Authoritative: HookTurnDone (Claude Code Stop hook)
+Primary:       LastEventType == "turn_done"
+Fallback:      LastEventType in {assistant, assistant_output}
 ```
 
 ### Turn Completion Signals

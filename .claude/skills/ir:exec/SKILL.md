@@ -286,6 +286,9 @@ a reviewer that dies is distinguishable from one that found nothing:
 printf 'PLACEHOLDER: no reviewer has written here yet\n' > "$SCRATCH/<N>-handback.txt"
 ```
 
+where `$SCRATCH` is this session's scratchpad directory (the path the system
+prompt names; `SCRATCH=<that path>`).
+
 The reviewer overwrites it with its raw final text. A file still holding the
 placeholder means the reviewer never reported, which is a different fact from
 an empty findings list and must never be reported as a clean gate.

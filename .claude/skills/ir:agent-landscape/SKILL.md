@@ -127,7 +127,7 @@ gh api repos/<github_repo> --jq '{repo: .full_name, stars: .stargazers_count, la
 Batch them in a single bash loop so you don't issue 40 separate tool calls. Example:
 
 ```bash
-jq -r '.agents[] | select(.github_repo != null) | .github_repo' references/agent-data.json \
+jq -r '.agents[] | select(.github_repo != null) | .github_repo' .claude/skills/ir:agent-landscape/references/agent-data.json \
 | while read -r repo; do
     gh api "repos/$repo" --jq '{queried: "'"$repo"'", repo: .full_name, stars: .stargazers_count, language: .language, license: .license.spdx_id, description: .description, archived: .archived}'
   done

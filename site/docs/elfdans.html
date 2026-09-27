@@ -225,6 +225,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         <tbody>
           <tr><td>A session enters <span class="badge badge-waiting">waiting</span></td><td>Banner as soon as the relay sees it &mdash; latency is the whole feature</td></tr>
           <tr><td>A session goes <span class="badge badge-working">working</span> &rarr; <span class="badge badge-ready">ready</span></td><td>Banner after a 7-second hold-down. If the session starts working again inside those seconds, nothing is sent at all</td></tr>
+          <tr><td>A session enters <span class="badge badge-error">error</span></td><td>Banner immediately &mdash; no hold-down, because an error is cleared only by the next successful turn, so there is no flap to wait out</td></tr>
           <tr><td>Anything &rarr; <span class="badge badge-working">working</span></td><td>Never. Starting work is not news</td></tr>
           <tr><td>A subagent transitions</td><td>Never &mdash; the parent session&rsquo;s own transitions cover it</td></tr>
           <tr><td>The same session again</td><td>One banner per session: a newer one replaces the older instead of stacking. At most one per session per edge per 60 seconds</td></tr>
@@ -235,7 +236,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         </tbody>
       </table>
 
-      <p>Each notification also carries a lifetime, which bounds how long the push service holds it for a phone that is off: an hour for <span class="badge badge-waiting">waiting</span>, ten minutes for <span class="badge badge-ready">ready</span> and for the daemon banners. A question that was asked an hour ago is still a question; a <span class="badge badge-ready">ready</span> from an hour ago is noise.</p>
+      <p>Each notification also carries a lifetime, which bounds how long the push service holds it for a phone that is off: an hour for <span class="badge badge-waiting">waiting</span> and <span class="badge badge-error">error</span>, ten minutes for <span class="badge badge-ready">ready</span> and for the daemon banners (<span class="badge badge-working">working</span> is never sent, so it has none). A question that was asked an hour ago is still a question; a <span class="badge badge-ready">ready</span> from an hour ago is noise.</p>
 
       <p>Every phone paired through the same relay workspace &mdash; the isolation unit a token belongs to &mdash; receives the same notifications. Filtering per phone or per project, &ldquo;this phone only wants project X&rdquo;, does not exist yet.</p>
 
