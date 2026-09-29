@@ -60,8 +60,8 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | Agent          | Stage   |
 | -------------- | ------- |
 | Claude Code    | beta    |
-| OpenAI Codex   | alpha   |
-| Pi             | alpha   |
+| OpenAI Codex   | beta    |
+| Pi             | beta    |
 | Aider          | alpha   |
 | OpenCode       | alpha   |
 | Kiro CLI       | alpha   |
