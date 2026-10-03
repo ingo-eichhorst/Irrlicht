@@ -160,19 +160,19 @@ go build -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay</code></pre>
           <p>The relay can also terminate TLS itself with <code>--tls-cert</code> and <code>--tls-key</code> (both flags are required together).</p>
         </li>
         <li>
-          <strong>Issue tokens</strong>
-          <p>One for the daemon, one for the browser you will pair from. Each secret is printed once:</p>
+          <strong>Enroll the Mac with one URL</strong>
+          <p>Start the relay with <code>--public-url https://&lt;your-relay&gt;</code>, then mint a one-time enrollment URL:</p>
+          <pre><code>irrlichtrelay enroll new --public-url https://&lt;your-relay&gt; --label "laptop"</code></pre>
+          <p>In the macOS app, open <strong>Settings &rarr; Advanced Settings &rarr; Sources</strong>, paste the printed <code>https://&lt;your-relay&gt;/enroll/XXXX-XXXX</code> URL into the enrollment field and press <strong>Join</strong>. The app redeems the code for its own token, stores it in the Keychain, fills in the relay URL and turns on <strong>Publish to relay</strong> &mdash; the running daemon picks it up with no relaunch. The daemon dials <em>out</em>, so it needs no inbound port and works behind NAT.</p>
+          <p>The code works once and expires after ten minutes. A code that is mistyped, expired or already used gets one answer by design, so the app says to mint a fresh one rather than guessing which. A relay started with <code>--auth off</code> has no token store and cannot enroll at all. Run <code>enroll new</code> as the same user and <code>IRRLICHT_HOME</code> the relay runs under. Without <code>--public-url</code> it prints only the bare code: paste that once the relay URL below is filled in with an <code>https://</code> or <code>wss://</code> address, or type <code>https://&lt;your-relay&gt;/enroll/</code> in front of it.</p>
+        </li>
+        <li>
+          <strong>Or: issue tokens by hand</strong>
+          <p>The route enrollment replaces, still useful for a daemon on Linux or a browser. One token for the daemon, one for the browser you will pair from. Each secret is printed once:</p>
           <pre><code>irrlichtrelay token issue --label "laptop-daemon"
 irrlichtrelay token issue --label "my-browser"</code></pre>
-          <p>Run the <code>token</code> subcommand as the same user and <code>IRRLICHT_HOME</code> the relay runs under, so both read one file. A serving relay re-reads it on change, so issuing and revoking need no restart.</p>
-        </li>
-        <li>
-          <strong>Point the daemon at it</strong>
-          <p>Either set <code>IRRLICHT_RELAY_URL</code> and <code>IRRLICHT_RELAY_TOKEN</code> (see <a href="configuration.html">Configuration</a>), or enter the URL and token under <strong>Settings &rarr; Sources</strong> in the macOS app or the dashboard. The daemon dials <em>out</em>, so it needs no inbound port and works behind NAT.</p>
-        </li>
-        <li>
-          <strong>Open the dashboard the relay serves</strong>
-          <p>Browse to the relay&rsquo;s own HTTPS address and enter the browser token under <strong>Settings &rarr; Sources</strong> there. This matters: the pairing endpoints are same-origin, so the Elfdans section appears on the page <em>the relay served</em> &mdash; not on the daemon&rsquo;s local dashboard at <code>127.0.0.1:7837</code>, which has no push endpoints to offer.</p>
+          <p>Run the <code>token</code> subcommand as the same user and <code>IRRLICHT_HOME</code> the relay runs under, so both read one file. A serving relay re-reads it on change, so issuing and revoking need no restart. Then either set <code>IRRLICHT_RELAY_URL</code> and <code>IRRLICHT_RELAY_TOKEN</code> (see <a href="configuration.html">Configuration</a>), or enter the URL and token under <strong>Settings &rarr; Sources</strong> in the macOS app or the dashboard.</p>
+          <p>To pair from a browser instead of the Mac app, browse to the relay&rsquo;s own HTTPS address and enter the browser token under <strong>Settings &rarr; Sources</strong> there. The pairing endpoints are same-origin, so the Elfdans section appears on the page <em>the relay served</em> &mdash; not on the daemon&rsquo;s local dashboard at <code>127.0.0.1:7837</code>, which has no push endpoints to offer.</p>
         </li>
       </ol>
 
