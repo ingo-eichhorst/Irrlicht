@@ -314,6 +314,27 @@ cd Irrlicht
         When you grant Claude Code's statusline permission, Irrlicht registers a <code>statusLine.command</code> entry in <code>~/.claude/settings.json</code>. Any Claude Code session already running at that point won't pick it up &mdash; close and reopen it once to activate the integration.
       </div>
 
+      <!-- ── Troubleshooting ── -->
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3 id="claude-code-sandbox-403">Claude Code shows <code>HTTP 403 from http://localhost:7837/api/v1/hooks/claudecode</code></h3>
+
+      <p>You see lines like <code>PostToolUse:Bash hook error</code> or <code>Stop hook error</code> followed by an HTTP 403, while the lights and notifications keep working. The 403 does not come from Irrlicht. The daemon's hook endpoint only answers 200, 400 or 405. It comes from Claude Code's <a href="https://code.claude.com/docs/en/sandboxing" target="_blank" rel="noopener">sandbox</a>. With <code>sandbox.enabled</code> on, Claude Code sends HTTP hooks through its sandbox network proxy. That proxy's allowed domains start empty, so it refuses the request before it reaches the daemon (observed with Claude Code 2.1.284, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2051" target="_blank" rel="noopener">#2051</a>). Irrlicht keeps working because it also reads the transcripts directly. What you lose is the faster hook signal.</p>
+
+      <p>To fix it, allow the daemon's address in <code>~/.claude/settings.json</code> and restart your Claude Code sessions:</p>
+
+      <pre><code>{
+  "sandbox": {
+    "network": {
+      "allowedDomains": ["localhost:7837"]
+    }
+  }
+}</code></pre>
+
+      <p>Merge this into your existing <code>sandbox</code> block rather than replacing it. If the daemon runs on a different port (see <a href="configuration.html#which-port-var">Which port variable do I set?</a>), use that port. Changing the hook URL to <code>127.0.0.1</code> does not help on its own: the sandbox proxy refuses loopback addresses unless they are listed too.</p>
+
+      <p>The entry also lets commands that go through the sandbox proxy reach the daemon on that port. Leave it out if that matters more to you than the hook signal.</p>
+
       <!-- ── Uninstalling ── -->
       <h2 id="uninstalling">Uninstalling</h2>
 
