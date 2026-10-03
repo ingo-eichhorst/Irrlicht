@@ -20,7 +20,8 @@
     "flickers_by_reason": {},
     "cum_input_tokens": 15214,
     "cum_output_tokens": 5,
-    "model_name": "gpt-5.6-sol"
+    "model_name": "gpt-5.6-sol",
+    "execution_confidence": 100
   },
   "transitions": [
     {

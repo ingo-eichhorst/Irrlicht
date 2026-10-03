@@ -29,7 +29,8 @@
     "cum_input_tokens": 6,
     "cum_cache_read_tokens": 16902,
     "cum_cache_creation_tokens": 11497,
-    "model_name": "\u003csynthetic\u003e"
+    "model_name": "\u003csynthetic\u003e",
+    "execution_confidence": 100
   },
   "transitions": [
     {

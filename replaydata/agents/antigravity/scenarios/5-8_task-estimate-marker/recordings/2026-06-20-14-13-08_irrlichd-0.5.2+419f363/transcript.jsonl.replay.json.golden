@@ -27,7 +27,8 @@
       "agent finished turn → ready": 4,
       "force ready→working on first activity": 4
     },
-    "model_name": "GPT-OSS 120B"
+    "model_name": "GPT-OSS 120B",
+    "execution_confidence": 100
   },
   "transitions": [
     {

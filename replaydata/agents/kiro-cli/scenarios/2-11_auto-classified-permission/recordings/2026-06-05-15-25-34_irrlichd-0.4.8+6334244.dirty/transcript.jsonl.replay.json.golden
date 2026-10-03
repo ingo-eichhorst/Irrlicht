@@ -21,7 +21,8 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "model_name": "qwen3-coder-next"
+    "model_name": "qwen3-coder-next",
+    "execution_confidence": 100
   },
   "transitions": [
     {

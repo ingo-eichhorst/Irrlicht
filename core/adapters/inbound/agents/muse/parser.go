@@ -759,6 +759,8 @@ func parseAssistantMessageCommitted(event map[string]any, ev *tailer.ParsedEvent
 		ev.TaskEstimate = est
 	}
 	ev.AssistantText = tailer.TruncateAssistantText(text)
+	// Execution-confidence sample (#737) from the FULL text, never the display tail.
+	ev.Hedge = session.MeasureHedging(text)
 	// Scan the FULL text, not the truncated display tail — a question
 	// sitting before the trailing 200 runes would otherwise settle the turn
 	// (issue #1150), the same computation every other adapter performs.
@@ -1143,6 +1145,9 @@ func mergeChildDeltaSlices(merged, ev *tailer.ParsedEvent) {
 	merged.ToolResultIDs = append(merged.ToolResultIDs, ev.ToolResultIDs...)
 	merged.PermissionRequestIDs = append(merged.PermissionRequestIDs, ev.PermissionRequestIDs...)
 	merged.PermissionResolvedIDs = append(merged.PermissionResolvedIDs, ev.PermissionResolvedIDs...)
+	// Execution-confidence samples (#737) sum, so the merged line counts as
+	// one assistant message carrying every child's prose.
+	merged.Hedge = merged.Hedge.Plus(ev.Hedge)
 }
 
 // mergeChildBooleanFlags ORs each flag across children: once any child sets

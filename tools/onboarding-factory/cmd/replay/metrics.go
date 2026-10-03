@@ -5,6 +5,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/dsh"
+	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -59,6 +60,7 @@ func finalizeSummary(report *replayReport, consumed int, stateDurations map[stri
 			report.Summary.ContextWindow = lastMetrics.ContextWindow
 			report.Summary.ContextUtilization = lastMetrics.ContextUtilization
 		}
+		report.Summary.ExecutionConfidence = replayengine.TailerToDomain(lastMetrics).ExecutionConfidence
 		if len(lastMetrics.Tasks) > 0 {
 			report.Summary.Tasks = make([]session.Task, len(lastMetrics.Tasks))
 			for i, t := range lastMetrics.Tasks {

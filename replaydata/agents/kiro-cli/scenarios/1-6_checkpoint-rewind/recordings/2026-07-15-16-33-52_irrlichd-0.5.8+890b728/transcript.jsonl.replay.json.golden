@@ -27,7 +27,8 @@
       "agent finished turn → ready": 1,
       "force ready→working on first activity": 2
     },
-    "model_name": "qwen3-coder-next"
+    "model_name": "qwen3-coder-next",
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -150,6 +151,8 @@ func parseUserMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 func (p *Parser) parseAssistantMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	if content, _ := raw["content"].(string); strings.TrimSpace(content) != "" {
 		ev.AssistantText = tailer.TruncateAssistantText(content)
+		// Execution-confidence sample (#737) from the FULL text, never the display tail.
+		ev.Hedge = session.MeasureHedging(content)
 		if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
 		}

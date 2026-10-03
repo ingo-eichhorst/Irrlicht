@@ -17,7 +17,8 @@
     "state_durations": {},
     "flicker_count": 0,
     "flickers_by_category": {},
-    "flickers_by_reason": {}
+    "flickers_by_reason": {},
+    "execution_confidence": 100
   },
   "transitions": [
     {

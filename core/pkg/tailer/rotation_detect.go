@@ -4,6 +4,8 @@ import (
 	"hash/fnv"
 	"io"
 	"time"
+
+	"irrlicht/core/domain/session"
 )
 
 // This file owns rotation handling: deciding whether the tailer's resume point
@@ -134,6 +136,12 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	t.pendingSnapshot = nil
 	t.cumByModel = make(map[string]*UsageBreakdown)
 	t.cumProviderCostUSD = 0
+	// The execution-confidence accumulator is additive over messages like the
+	// token counters above: re-reading from byte 0 would observe every
+	// surviving message again and keep counting prose a rewind deleted
+	// (TestTailer_ExecutionConfidenceResetsOnRewrite, #737).
+	t.executionConfidence = session.ExecutionConfidenceAccumulator{}
+	t.hedgeSeen = nil
 	t.tasks = nil
 	t.taskSeq = 0
 	t.pendingTaskCreates = make(map[string]string)

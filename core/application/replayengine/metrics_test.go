@@ -3,6 +3,7 @@ package replayengine
 import (
 	"testing"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
 )
@@ -213,5 +214,33 @@ func TestTailerToDomain_NilCompactor_HeadlinesAreIdentity(t *testing.T) {
 	}
 	if got.LastAssistantText != "should I proceed?" {
 		t.Errorf("LastAssistantText = %q, want full text preserved", got.LastAssistantText)
+	}
+}
+
+// The shared converter derives the execution-confidence score, low flag and
+// tooltip from the tailer's accumulator (issue #737) — the one place both the
+// live metrics adapter and the replay paths get it from.
+func TestConvert_ExecutionConfidence(t *testing.T) {
+	var acc session.ExecutionConfidenceAccumulator
+	acc.Observe(session.MeasureHedging("I'm not sure what this means; it is ambiguous and unclear."))
+	got := TailerToDomain(&tailer.SessionMetrics{ExecutionConfidence: acc})
+	want, _ := acc.Score()
+	if got.ExecutionConfidence == nil || *got.ExecutionConfidence != want {
+		t.Fatalf("ExecutionConfidence = %v, want %d", got.ExecutionConfidence, want)
+	}
+	if !got.ExecutionConfidenceLow {
+		t.Error("score not flagged low, want a low verdict")
+	}
+	if got.ExecutionConfidenceTooltip == "" {
+		t.Error("empty tooltip, want one")
+	}
+
+	none := TailerToDomain(&tailer.SessionMetrics{})
+	empty := session.SessionMetrics{}
+	if none.ExecutionConfidence != nil {
+		t.Errorf("no scored message must leave the score nil, got %d", *none.ExecutionConfidence)
+	}
+	if none.ExecutionConfidenceLow != empty.ExecutionConfidenceLow || none.ExecutionConfidenceTooltip != empty.ExecutionConfidenceTooltip {
+		t.Errorf("no scored message must leave low/tooltip empty, got %v %q", none.ExecutionConfidenceLow, none.ExecutionConfidenceTooltip)
 	}
 }

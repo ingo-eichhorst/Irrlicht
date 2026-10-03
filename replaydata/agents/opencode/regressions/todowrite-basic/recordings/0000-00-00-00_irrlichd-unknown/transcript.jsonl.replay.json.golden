@@ -38,7 +38,8 @@
         "subject": "Sleep 1s (task C)",
         "status": "pending"
       }
-    ]
+    ],
+    "execution_confidence": 100
   },
   "transitions": [
     {

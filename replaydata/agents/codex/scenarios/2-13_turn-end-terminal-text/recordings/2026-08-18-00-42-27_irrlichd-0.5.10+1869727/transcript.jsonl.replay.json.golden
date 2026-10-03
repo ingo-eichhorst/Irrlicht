@@ -29,7 +29,8 @@
     },
     "cum_input_tokens": 23773,
     "cum_output_tokens": 11,
-    "model_name": "gpt-5.6-sol"
+    "model_name": "gpt-5.6-sol",
+    "execution_confidence": 100
   },
   "transitions": [
     {

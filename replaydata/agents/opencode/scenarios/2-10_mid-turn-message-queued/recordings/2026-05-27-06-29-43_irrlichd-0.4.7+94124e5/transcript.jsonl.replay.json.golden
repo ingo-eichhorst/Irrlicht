@@ -21,7 +21,8 @@
     "flickers_by_category": {},
     "flickers_by_reason": {},
     "cum_input_tokens": 27256,
-    "cum_output_tokens": 37
+    "cum_output_tokens": 37,
+    "execution_confidence": 100
   },
   "transitions": [
     {

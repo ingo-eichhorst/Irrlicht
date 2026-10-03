@@ -20,7 +20,8 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "model_name": "Gemini 3.1 Pro"
+    "model_name": "Gemini 3.1 Pro",
+    "execution_confidence": 100
   },
   "transitions": [
     {

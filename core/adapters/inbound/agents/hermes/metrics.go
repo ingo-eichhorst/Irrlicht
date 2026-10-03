@@ -144,6 +144,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 	metrics.LastEventType = fold.lastEventType
 	metrics.LastAssistantText = fold.lastAssistantText
 	metrics.PendingWaitingCue = fold.pendingWaitingCue
+	session.ApplyExecutionConfidence(metrics, fold.confidence)
 	metrics.HasOpenToolCall = len(fold.openTools) > 0
 	metrics.OpenToolCallCount = len(fold.openTools)
 	metrics.LastOpenToolNames = openToolNames(fold.openTools)
@@ -191,6 +192,11 @@ type messageFold struct {
 	lastAssistantText string
 	pendingWaitingCue bool
 	openTools         map[string]string // tool-call id → tool name
+
+	// Execution confidence (#737). This path bypasses the tailer that normally
+	// holds the accumulator; foldMessages re-folds every row on each call, so
+	// it is rebuilt from scratch rather than persisted.
+	confidence session.ExecutionConfidenceAccumulator
 
 	// Task accumulator. The store path bypasses the tailer, so the same fold
 	// it performs is applied here via the shared helpers (see #277).
@@ -259,6 +265,7 @@ func (f *messageFold) apply(ev *tailer.ParsedEvent) {
 		f.lastAssistantText = ev.AssistantText
 		f.pendingWaitingCue = ev.PendingWaitingCue
 	}
+	f.confidence.Observe(ev.Hedge)
 	// A new user message answers whatever the agent was waiting on, so the
 	// cue does not survive it. The ProcessOwnedStore path bypasses the
 	// tailer, which is where that reset normally lives.
