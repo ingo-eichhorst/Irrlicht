@@ -12,6 +12,9 @@ enum RelayEnrollmentClient {
     /// are dropped (core/pkg/onetimecode/onetimecode.go).
     static let codeAlphabet = Set("ABCDEFGHJKMNPQRSTVWXYZ23456789")
 
+    /// Caps a redeem response body; a real one is under 200 bytes.
+    private static let maxResponseBytes = 64_000
+
     enum Failure: LocalizedError, Equatable {
         /// 401. The relay answers unknown, expired and already-used codes
         /// identically (`enrollCodeInvalidMsg`), so this must not guess which.
@@ -59,12 +62,14 @@ enum RelayEnrollmentClient {
     /// Anything else is refused here, before any network call.
     static func parse(_ raw: String, configuredRelayURL: String = "") -> (origin: URL, code: String)? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isPresentedCode(trimmed.uppercased()) {
-            guard let origin = secureOrigin(configuredRelayURL, schemes: ["https", "wss"]) else { return nil }
-            return (origin, trimmed.uppercased())
+        let bareCode = trimmed.uppercased()
+        if isPresentedCode(bareCode) {
+            guard let configured = URLComponents(string: configuredRelayURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  let origin = secureOrigin(configured, schemes: ["https", "wss"]) else { return nil }
+            return (origin, bareCode)
         }
         guard let parts = URLComponents(string: trimmed),
-              let origin = secureOrigin(trimmed, schemes: ["https"]) else { return nil }
+              let origin = secureOrigin(parts, schemes: ["https"]) else { return nil }
 
         var path = parts.path
         if path.hasSuffix("/") { path.removeLast() }
@@ -75,12 +80,11 @@ enum RelayEnrollmentClient {
         return (origin, code)
     }
 
-    /// The `https://host[:port]` origin of `raw`, or nil unless its scheme is
-    /// one of `schemes` and it carries a host and no credentials, query or
+    /// The `https://host[:port]` origin of `parts`, or nil unless its scheme
+    /// is one of `schemes` and it carries a host and no credentials, query or
     /// fragment. The path is ignored; the callers check it themselves.
-    private static func secureOrigin(_ raw: String, schemes: Set<String>) -> URL? {
-        guard let parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let scheme = parts.scheme?.lowercased(), schemes.contains(scheme),
+    private static func secureOrigin(_ parts: URLComponents, schemes: Set<String>) -> URL? {
+        guard let scheme = parts.scheme?.lowercased(), schemes.contains(scheme),
               let host = parts.host, !host.isEmpty,
               parts.user == nil, parts.password == nil,
               parts.query == nil, parts.fragment == nil else { return nil }
@@ -114,7 +118,7 @@ enum RelayEnrollmentClient {
         struct RelayError: Decodable { let error: String }
         switch status {
         case 200:
-            guard data.count <= 64_000,
+            guard data.count <= maxResponseBytes,
                   let token = try? JSONDecoder().decode(Redeemed.self, from: data).token,
                   !token.isEmpty else { throw Failure.invalidResponse }
             return token
@@ -122,7 +126,7 @@ enum RelayEnrollmentClient {
         case 403: throw Failure.authOff
         case 429: throw Failure.rateLimited
         default:
-            let message = data.count <= 64_000
+            let message = data.count <= maxResponseBytes
                 ? (try? JSONDecoder().decode(RelayError.self, from: data))?.error
                 : nil
             throw Failure.rejected(status, message?.isEmpty == false ? message : nil)

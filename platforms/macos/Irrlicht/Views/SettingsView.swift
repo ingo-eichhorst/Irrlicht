@@ -625,15 +625,11 @@ struct SettingsView: View {
                                 publishStatus.stop()
                             }
                             .onChange(of: useRelayServer) { on in
-                                if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = Self.defaultRelayURLPlaceholder
-                                }
+                                if on { seedEmptyRelayURLDraft() }
                                 commitRelayURL()
                             }
                             .onChange(of: publishToRelay) { on in
-                                if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = Self.defaultRelayURLPlaceholder
-                                }
+                                if on { seedEmptyRelayURLDraft() }
                                 commitRelayURL()
                                 daemonManager.publishSettingsDidChange()
                                 if on { publishStatus.start() } else { publishStatus.stop() }
@@ -855,14 +851,18 @@ struct SettingsView: View {
         relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Gives an empty URL draft a value before a relay toggle commits it: the
+    /// stored `relayServerURL` when there is one (an enrollment writes it
+    /// before flipping `publishToRelay`, #1965), else the localhost placeholder.
+    private func seedEmptyRelayURLDraft() {
+        guard relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        relayURLDraft = relayServerURL.isEmpty ? Self.defaultRelayURLPlaceholder : relayServerURL
+    }
+
     /// Stores a redeemed enrollment (#1965) and reconfigures both relay
     /// directions live, the same hop the token field takes (#722). `apply`
-    /// runs first so a refused Keychain write changes nothing. The drafts are
-    /// set in the same synchronous call, before SwiftUI's next update runs the
-    /// `.onChange(of: publishToRelay)` handler, which commits `relayURLDraft`
-    /// to `relayServerURL` and would put the ws://localhost placeholder in an
-    /// empty one. That ordering is SwiftUI's deferred `onChange` delivery as
-    /// read, not something a test here exercises.
+    /// runs first so a refused Keychain write changes nothing; the drafts are
+    /// then updated so the manual fields show what was stored.
     private func applyRelayEnrollment(origin: URL, token: String) throws {
         try RelayEnrollmentClient.apply(token: token, origin: origin)
         relayURLDraft = origin.absoluteString
