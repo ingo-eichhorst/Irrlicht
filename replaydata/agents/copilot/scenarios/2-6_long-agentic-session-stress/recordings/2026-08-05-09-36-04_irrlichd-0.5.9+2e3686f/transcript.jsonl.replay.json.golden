@@ -31,7 +31,8 @@
     "cum_input_tokens": 54896,
     "cum_output_tokens": 800,
     "cum_cache_read_tokens": 45056,
-    "model_name": "gpt-5-mini"
+    "model_name": "gpt-5-mini",
+    "execution_confidence": 100
   },
   "transitions": [
     {

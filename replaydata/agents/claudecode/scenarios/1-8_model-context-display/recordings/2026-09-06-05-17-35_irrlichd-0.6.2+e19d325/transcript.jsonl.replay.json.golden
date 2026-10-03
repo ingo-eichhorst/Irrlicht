@@ -31,7 +31,8 @@
     "cum_output_tokens": 12,
     "cum_cache_read_tokens": 54220,
     "cum_cache_creation_tokens": 24435,
-    "model_name": "claude-sonnet-5"
+    "model_name": "claude-sonnet-5",
+    "execution_confidence": 100
   },
   "transitions": [
     {

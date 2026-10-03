@@ -28,7 +28,8 @@
       "force ready→working on first activity": 3
     },
     "cum_input_tokens": 138761,
-    "cum_output_tokens": 33
+    "cum_output_tokens": 33,
+    "execution_confidence": 100
   },
   "transitions": [
     {

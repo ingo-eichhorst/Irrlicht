@@ -38,7 +38,8 @@
         "subject": "Task 3 description",
         "status": "pending"
       }
-    ]
+    ],
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -76,7 +76,8 @@
         "subject": "Output 10 and run sleep 2, then reply exactly 'donecounting'",
         "status": "completed"
       }
-    ]
+    ],
+    "execution_confidence": 100
   },
   "transitions": [
     {

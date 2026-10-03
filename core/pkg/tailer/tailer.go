@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 )
 
@@ -182,6 +183,14 @@ type SessionMetrics struct {
 	// Transient like the domain PendingQuestionMarker — recomputed each pass and
 	// restored from the ledger on restart, never serialized into session JSON.
 	PendingWaitingCue bool `json:"-"`
+
+	// ExecutionConfidence is the decayed hedge accumulator behind the
+	// execution-confidence score (issue #737), republished every pass from the
+	// tailer's sticky state. The converter turns it into the domain score,
+	// low flag and tooltip via session.ApplyExecutionConfidence. A value, not a
+	// pointer, so a snapshot handed out here never aliases the live state the
+	// next pass mutates.
+	ExecutionConfidence session.ExecutionConfidenceAccumulator `json:"-"`
 
 	// PermissionMode is the session's permission mode. Extracted from
 	// "permission-mode" events. A census of 320 live Claude Code transcripts
@@ -420,6 +429,21 @@ type TranscriptTailer struct {
 	// lastAssistantText: set from the parsed event's PendingWaitingCue whenever
 	// the assistant text updates, cleared when a user message clears the text.
 	lastPendingWaitingCue bool
+
+	// executionConfidence folds every assistant message's hedge sample
+	// (ParsedEvent.Hedge) into the decayed state behind the
+	// execution-confidence score (issue #737). Sticky for the session's life
+	// and persisted in the ledger.
+	executionConfidence session.ExecutionConfidenceAccumulator
+
+	// hedgeSeen is the last sample observed per ParsedEvent.HedgeKey, so a
+	// re-emitted message with an identical sample is not observed twice.
+	// Cleared at each new user turn (which bounds it) and on rotation. This
+	// assumes re-emissions stay within their user turn — gemini-cli rewrites
+	// in place and junie replays its block set when the task finalizes, both
+	// before the next prompt (read from the parsers' format docs). Not
+	// persisted: only a re-emission straddling a daemon restart counts twice.
+	hedgeSeen map[string]session.HedgeSample
 
 	// lastTaskEstimate holds the most recent agent-emitted task-progress
 	// marker. Markers are sporadic (model-discretion, every few turns), so
@@ -1384,6 +1408,27 @@ func (t *TranscriptTailer) updateInterruptAndDenialFlags(parsed *ParsedEvent) {
 	}
 }
 
+// observeHedge folds the event's execution-confidence sample into the
+// accumulator, skipping a keyed message already observed with an identical
+// sample. A keyed message whose sample CHANGED (a streaming message rewritten
+// with more text) is observed again — an accepted over-count, smaller than
+// dropping the final text.
+func (t *TranscriptTailer) observeHedge(parsed *ParsedEvent) {
+	if parsed.Hedge == nil {
+		return
+	}
+	if parsed.HedgeKey != "" {
+		if prev, ok := t.hedgeSeen[parsed.HedgeKey]; ok && prev == *parsed.Hedge {
+			return
+		}
+		if t.hedgeSeen == nil {
+			t.hedgeSeen = make(map[string]session.HedgeSample)
+		}
+		t.hedgeSeen[parsed.HedgeKey] = *parsed.Hedge
+	}
+	t.executionConfidence.Observe(parsed.Hedge)
+}
+
 // applyAssistantTextAndMarkers updates the assistant-text and
 // agent-emitted-marker state (task estimate, summary, question) that a
 // waiting/ready session's surfaced headline is derived from, and captures
@@ -1398,6 +1443,7 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 		t.lastAssistantText = ""
 		t.lastPendingWaitingCue = false
 	}
+	t.observeHedge(parsed)
 	if parsed.TaskEstimate != nil {
 		t.applyTaskEstimate(parsed.TaskEstimate)
 	}
@@ -1427,6 +1473,9 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 		// tool call — the chip vanished mid-task until the next marker (#558).
 		t.lastTaskEstimate = nil
 		t.firstTaskEstimate = nil
+		// The re-emission keys belong to the previous turn's messages; dropping
+		// them here bounds hedgeSeen to one user turn.
+		t.hedgeSeen = nil
 		// The summary describes the now-superseded task; clear it so the next
 		// task re-anchors (the agent re-emits, or the heuristic takes over).
 		t.lastTaskSummary = nil

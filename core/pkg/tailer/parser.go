@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"irrlicht/core/domain/session"
 )
 
 // ToolUse represents a single tool invocation with its unique ID.
@@ -296,8 +298,22 @@ type ParsedEvent struct {
 	// sits before the trailing text — the prose-heuristic analogue of the
 	// TaskQuestion marker path. See issue #1150.
 	PendingWaitingCue bool
-	CWD               string // working directory if found
-	PermissionMode    string // Claude Code only
+	// Hedge is this event's execution-confidence sample (issue #737): the
+	// weighted hedge-phrase hits and prose word count of the FULL assistant
+	// text, measured by session.MeasureHedging at the adapter call site that
+	// holds that text. Never derived from AssistantText above — the 200-rune
+	// display tail would drop most of the message. nil when the event carries
+	// no assistant prose; the tailer then leaves its decayed score untouched.
+	Hedge *session.HedgeSample
+	// HedgeKey, when set, is the adapter's stable id for the message Hedge
+	// was measured from (a message id, a step id). Adapters whose transcript
+	// re-emits one message as several lines (gemini-cli rewrites a streaming
+	// message in place under one id, junie replays stepId-keyed block
+	// updates) set it so the tailer observes a repeat with an identical
+	// sample only once. Empty means "every event is a new message".
+	HedgeKey       string
+	CWD            string // working directory if found
+	PermissionMode string // Claude Code only
 
 	// RateLimit, when non-nil, is a subscription-quota snapshot extracted from
 	// this event. Codex emits one per token_count event_msg; Claude Code feeds
@@ -850,8 +866,12 @@ type ReplayStoreStager interface {
 // parser consumed without registering — without the re-scan that line is never
 // re-read, so a `persistent` Monitor, which carries timeoutMs 0 and therefore no
 // deadline of its own, would keep flipping the session to `ready` for the whole
-// remaining life of the task).
-const LedgerSchemaVersion = 7
+// remaining life of the task);
+// 8 — #737 (ExecutionConfidence persisted; a pre-#737 parser consumed every
+// assistant message without measuring its hedge language, so an old ledger
+// resumed at LastOffset would score an in-flight session from its NEXT message
+// only — the re-scan derives the score from the whole transcript instead).
+const LedgerSchemaVersion = 8
 
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
@@ -1026,6 +1046,11 @@ type LedgerState struct {
 	// resurrect one (see SessionMetrics.SessionError for why that distinction is
 	// load-bearing).
 	SessionError *SessionError `json:"session_error,omitempty"`
+	// ExecutionConfidence persists the decayed hedge accumulator behind the
+	// execution-confidence score (issue #737) so a daemon restart that resumes
+	// at LastOffset keeps the score instead of starting it over from the
+	// first new message. nil until an assistant message has been scored.
+	ExecutionConfidence *session.ExecutionConfidenceAccumulator `json:"execution_confidence,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

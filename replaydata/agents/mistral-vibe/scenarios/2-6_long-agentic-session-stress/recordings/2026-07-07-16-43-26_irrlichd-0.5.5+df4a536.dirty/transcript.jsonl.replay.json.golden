@@ -26,7 +26,8 @@
     "flickers_by_reason": {
       "agent finished turn → ready": 3,
       "force ready→working on first activity": 4
-    }
+    },
+    "execution_confidence": 100
   },
   "transitions": [
     {

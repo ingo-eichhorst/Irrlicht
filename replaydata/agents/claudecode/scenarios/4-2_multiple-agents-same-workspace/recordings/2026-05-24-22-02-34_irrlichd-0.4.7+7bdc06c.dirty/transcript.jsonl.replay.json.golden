@@ -30,7 +30,8 @@
     "cum_output_tokens": 5,
     "cum_cache_read_tokens": 9749,
     "cum_cache_creation_tokens": 4541,
-    "model_name": "claude-opus-4-7"
+    "model_name": "claude-opus-4-7",
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -26,7 +26,8 @@
       "agent finished turn → ready": 1
     },
     "cum_input_tokens": 43885,
-    "cum_output_tokens": 95
+    "cum_output_tokens": 95,
+    "execution_confidence": 100
   },
   "transitions": [
     {

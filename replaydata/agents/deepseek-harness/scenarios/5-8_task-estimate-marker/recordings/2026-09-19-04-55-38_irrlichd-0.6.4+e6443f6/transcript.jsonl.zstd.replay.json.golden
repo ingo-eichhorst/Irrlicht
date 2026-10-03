@@ -26,7 +26,8 @@
     "model_name": "google/gemma-4-26b-a4b",
     "total_tokens": 13352,
     "context_window": 262144,
-    "context_utilization_percentage": 5.0933837890625
+    "context_utilization_percentage": 5.0933837890625,
+    "execution_confidence": 100
   },
   "transitions": [
     {

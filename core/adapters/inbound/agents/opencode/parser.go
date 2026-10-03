@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -246,6 +247,8 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 			ev.TaskSummary = s
 		}
 		ev.AssistantText = tailer.TruncateAssistantText(text)
+		// Execution-confidence sample (#737) from the FULL text, never the display tail.
+		ev.Hedge = session.MeasureHedgingCached(text) // re-parsed every poll by the store fold
 	}
 	return ev
 }

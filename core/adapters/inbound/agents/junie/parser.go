@@ -380,6 +380,11 @@ func parseAgentThought(agentEvent map[string]any, ev *tailer.ParsedEvent) {
 	ev.EventType = "assistant_message"
 	if text := str(agentEvent, "text"); strings.TrimSpace(text) != "" {
 		ev.AssistantText = tailer.TruncateAssistantText(text)
+		// Execution-confidence sample (#737) from the FULL text, never the display tail.
+		ev.Hedge = session.MeasureHedging(text)
+		// Keyed by stepId: block events are a re-emitted update stream (see
+		// the agentEvent kinds above), observed once per identical sample.
+		ev.HedgeKey = str(agentEvent, "stepId")
 	}
 }
 
@@ -395,6 +400,9 @@ func parseResultBlock(agentEvent map[string]any, ev *tailer.ParsedEvent) {
 		return
 	}
 	ev.AssistantText = tailer.TruncateAssistantText(result)
+	// Execution-confidence sample (#737) from the FULL text, never the display tail.
+	ev.Hedge = session.MeasureHedging(result)
+	ev.HedgeKey = str(agentEvent, "stepId") // re-emitted update stream, as above
 	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(result))
 }
 

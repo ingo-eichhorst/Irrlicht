@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -475,6 +476,11 @@ func (p *Parser) parseAssistant(raw map[string]interface{}, ev *tailer.ParsedEve
 
 	content, _ := raw["content"].(string)
 	ev.AssistantText = tailer.TruncateAssistantText(content)
+	// Execution-confidence sample (#737) from the FULL text, never the display tail.
+	ev.Hedge = session.MeasureHedging(content)
+	// Keyed by message id: Gemini rewrites a streaming message in place under
+	// one id, and the tailer observes an identical re-emission only once.
+	ev.HedgeKey, _ = raw["id"].(string)
 	if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 		ev.TaskEstimate = est
 	}

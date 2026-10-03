@@ -23,7 +23,8 @@
     "flickers_by_reason": {},
     "cum_input_tokens": 1240,
     "cum_output_tokens": 420,
-    "model_name": "gpt-5.2-codex"
+    "model_name": "gpt-5.2-codex",
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -185,6 +185,8 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		Tasks:                             convertTasks(m.Tasks),
 		SessionError:                      convertSessionError(m.SessionError),
 	}
+	// Execution confidence (#737): derived here so live and replay agree.
+	session.ApplyExecutionConfidence(result, m.ExecutionConfidence)
 	// Task summary (issue #738): the agent's in-band marker wins; the first
 	// user message is the heuristic fallback for agents that emit none. Both
 	// are wall-clock independent, so the selection lives in this shared

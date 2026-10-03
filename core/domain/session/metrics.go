@@ -193,6 +193,24 @@ type SessionMetrics struct {
 	// is false.
 	CacheBloatExplanation string `json:"cache_bloat_explanation,omitempty"`
 
+	// ExecutionConfidence is how decisive the agent sounds, 0–100 (100 =
+	// decisive), scored from hedging and uncertainty language in its recent
+	// assistant messages (issue #737). A pointer so a real 0 is not hidden by
+	// omitempty; nil until the first assistant message with prose has been
+	// scored, and nil for an adapter path that feeds no full assistant text.
+	// Derived only by ApplyExecutionConfidence (execution_confidence.go).
+	ExecutionConfidence *int `json:"execution_confidence,omitempty"`
+
+	// ExecutionConfidenceLow is the daemon's verdict that ExecutionConfidence
+	// is below ExecutionConfidenceLowThreshold — the condition both UIs show
+	// their warning chip on, so neither re-derives the threshold.
+	ExecutionConfidenceLow bool `json:"execution_confidence_low,omitempty"`
+
+	// ExecutionConfidenceTooltip is the hover text for that chip, composed
+	// daemon-side (the CacheBloatExplanation precedent, #827) so both UIs
+	// render the identical string. Empty exactly when ExecutionConfidence is nil.
+	ExecutionConfidenceTooltip string `json:"execution_confidence_tooltip,omitempty"`
+
 	// LastCWD is the most recent working directory extracted from the
 	// transcript during metrics parsing. Used to avoid a separate file read.
 	LastCWD string `json:"-"` // transient — not persisted in session JSON
@@ -747,6 +765,14 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		// carryForwardOverlayState — see the field's own comment for why a
 		// carry-forward would make the error unclearable.
 		SessionError: newM.SessionError,
+
+		// Copied verbatim, nil included: every metrics path republishes the
+		// whole accumulator each pass (the tailer from its sticky state, the
+		// opencode/hermes store folds from a full re-fold), so newM's value is
+		// the current verdict, never "not observed this pass" (#737).
+		ExecutionConfidence:        newM.ExecutionConfidence,
+		ExecutionConfidenceLow:     newM.ExecutionConfidenceLow,
+		ExecutionConfidenceTooltip: newM.ExecutionConfidenceTooltip,
 	}
 }
 

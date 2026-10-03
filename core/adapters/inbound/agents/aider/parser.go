@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -190,9 +191,11 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 		EventType:     "assistant_message",
 		ModelName:     p.model,
 		AssistantText: tailer.TruncateAssistantText(text),
-		Contribution:  contribution,
-		TaskEstimate:  taskEstimate,
-		TaskSummary:   taskSummary,
+		// Execution-confidence sample (#737) over the whole accumulated reply.
+		Hedge:        session.MeasureHedging(text),
+		Contribution: contribution,
+		TaskEstimate: taskEstimate,
+		TaskSummary:  taskSummary,
 		Tokens: &tailer.TokenSnapshot{
 			Input:  sent,
 			Output: received,

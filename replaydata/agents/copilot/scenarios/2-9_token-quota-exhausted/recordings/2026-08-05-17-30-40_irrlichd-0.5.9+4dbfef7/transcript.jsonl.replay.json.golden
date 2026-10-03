@@ -29,7 +29,8 @@
     },
     "cum_input_tokens": 12,
     "cum_output_tokens": 1,
-    "model_name": "irrlicht-quota-model"
+    "model_name": "irrlicht-quota-model",
+    "execution_confidence": 100
   },
   "transitions": [
     {

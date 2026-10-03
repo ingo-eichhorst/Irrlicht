@@ -23,7 +23,8 @@
     "flickers_by_reason": {},
     "cum_input_tokens": 12,
     "cum_output_tokens": 1,
-    "model_name": "muse-spark-1.2"
+    "model_name": "muse-spark-1.2",
+    "execution_confidence": 100
   },
   "transitions": [
     {

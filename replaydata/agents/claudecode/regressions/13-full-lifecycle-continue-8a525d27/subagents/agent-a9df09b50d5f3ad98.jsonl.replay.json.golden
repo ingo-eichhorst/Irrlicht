@@ -26,7 +26,8 @@
     "cum_output_tokens": 1931,
     "cum_cache_read_tokens": 48736,
     "cum_cache_creation_tokens": 5729,
-    "model_name": "claude-haiku-4-5"
+    "model_name": "claude-haiku-4-5",
+    "execution_confidence": 100
   },
   "transitions": [
     {

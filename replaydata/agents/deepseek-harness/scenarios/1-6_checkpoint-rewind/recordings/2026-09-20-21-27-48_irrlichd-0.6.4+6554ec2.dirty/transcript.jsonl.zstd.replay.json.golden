@@ -32,7 +32,8 @@
     "model_name": "qwen/qwen3.5-9b",
     "total_tokens": 12241,
     "context_window": 262144,
-    "context_utilization_percentage": 4.6695709228515625
+    "context_utilization_percentage": 4.6695709228515625,
+    "execution_confidence": 100
   },
   "transitions": [
     {
