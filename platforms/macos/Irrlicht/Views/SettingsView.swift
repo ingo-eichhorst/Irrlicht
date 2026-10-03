@@ -533,6 +533,10 @@ struct SettingsView: View {
                                     Spacer()
                                 }
 
+                                // Always visible, unlike the URL + token fields
+                                // below: it is how a fresh install gets there (#1965).
+                                RelayEnrollmentField(onEnrolled: applyRelayEnrollment)
+
                                 LeadingToggle(
                                     isOn: $useLocalDaemon,
                                     label: "Local",
@@ -849,6 +853,19 @@ struct SettingsView: View {
 
     private func commitRelayURL() {
         relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Stores a redeemed enrollment (#1965) and reconfigures both relay
+    /// directions live, the same hop the token field takes (#722). The drafts
+    /// are set first: `apply` flips `publishToRelay`, and that toggle's
+    /// `onChange` commits `relayURLDraft` to `relayServerURL` — an empty
+    /// draft there would be replaced by the ws://localhost placeholder.
+    private func applyRelayEnrollment(origin: URL, token: String) {
+        relayURLDraft = origin.absoluteString
+        relayTokenDraft = token
+        RelayEnrollmentClient.apply(token: token, origin: origin)
+        sessionManager.relayTokenDidChange()
+        daemonManager.publishSettingsDidChange()
     }
 
     /// Reflect the login item's real system status (not just the stored
