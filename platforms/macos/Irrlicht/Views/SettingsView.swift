@@ -535,7 +535,7 @@ struct SettingsView: View {
 
                                 // Always visible, unlike the URL + token fields
                                 // below: it is how a fresh install gets there (#1965).
-                                RelayEnrollmentField(onEnrolled: applyRelayEnrollment)
+                                RelayEnrollmentField(configuredRelayURL: relayServerURL, onEnrolled: applyRelayEnrollment)
 
                                 LeadingToggle(
                                     isOn: $useLocalDaemon,
@@ -856,14 +856,17 @@ struct SettingsView: View {
     }
 
     /// Stores a redeemed enrollment (#1965) and reconfigures both relay
-    /// directions live, the same hop the token field takes (#722). The drafts
-    /// are set first: `apply` flips `publishToRelay`, and that toggle's
-    /// `onChange` commits `relayURLDraft` to `relayServerURL` — an empty
-    /// draft there would be replaced by the ws://localhost placeholder.
-    private func applyRelayEnrollment(origin: URL, token: String) {
+    /// directions live, the same hop the token field takes (#722). `apply`
+    /// runs first so a refused Keychain write changes nothing. The drafts are
+    /// set in the same synchronous call, before SwiftUI's next update runs the
+    /// `.onChange(of: publishToRelay)` handler, which commits `relayURLDraft`
+    /// to `relayServerURL` and would put the ws://localhost placeholder in an
+    /// empty one. That ordering is SwiftUI's deferred `onChange` delivery as
+    /// read, not something a test here exercises.
+    private func applyRelayEnrollment(origin: URL, token: String) throws {
+        try RelayEnrollmentClient.apply(token: token, origin: origin)
         relayURLDraft = origin.absoluteString
         relayTokenDraft = token
-        RelayEnrollmentClient.apply(token: token, origin: origin)
         sessionManager.relayTokenDidChange()
         daemonManager.publishSettingsDidChange()
     }

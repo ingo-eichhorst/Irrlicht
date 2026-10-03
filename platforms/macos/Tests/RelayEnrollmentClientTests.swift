@@ -48,6 +48,31 @@ final class RelayEnrollmentClientTests: XCTestCase {
         }
     }
 
+    // The relay prints only the bare code when it has no --public-url, and
+    // tells the operator it "still works when typed or pasted into the
+    // desktop app by hand" (core/cmd/irrlichtrelay/pairing_handoff.go).
+    func testParseAcceptsABareCodeAgainstAnAlreadyConfiguredSecureRelay() throws {
+        for relay in ["wss://relay.example.com", "https://relay.example.com/",
+                      "wss://relay.example.com/api/v1/sessions/stream"] {
+            let parsed = try XCTUnwrap(RelayEnrollmentClient.parse(" k7qm-3pxa ", configuredRelayURL: relay), relay)
+            XCTAssertEqual(parsed.origin.absoluteString, "https://relay.example.com", relay)
+            XCTAssertEqual(parsed.code, "K7QM-3PXA", relay)
+        }
+    }
+
+    func testParseRefusesABareCodeWithoutASecureConfiguredRelay() {
+        for relay in ["", "ws://localhost:7839", "http://relay.example.com", "localhost:7839"] {
+            XCTAssertNil(RelayEnrollmentClient.parse("K7QM-3PXA", configuredRelayURL: relay), relay)
+        }
+        XCTAssertNil(RelayEnrollmentClient.parse("K7QM-3PXI", configuredRelayURL: "wss://relay.example.com"))
+    }
+
+    func testAFullURLWinsOverTheConfiguredRelay() throws {
+        let parsed = try XCTUnwrap(RelayEnrollmentClient.parse(
+            "https://other.example.com/enroll/K7QM-3PXA", configuredRelayURL: "wss://relay.example.com"))
+        XCTAssertEqual(parsed.origin.absoluteString, "https://other.example.com")
+    }
+
     // MARK: - request
 
     func testRedeemRequestPostsCodeAndLabelWithoutAnyBearer() throws {
@@ -117,7 +142,7 @@ final class RelayEnrollmentClientTests: XCTestCase {
         var written: [(value: String, account: String)] = []
         let parsed = try XCTUnwrap(RelayEnrollmentClient.parse("https://relay.example.com/enroll/K7QM-3PXA"))
 
-        RelayEnrollmentClient.apply(token: "irr_secret", origin: parsed.origin, defaults: defaults) { value, account in
+        try RelayEnrollmentClient.apply(token: "irr_secret", origin: parsed.origin, defaults: defaults) { value, account in
             written.append((value, account))
             return true
         }
@@ -126,5 +151,19 @@ final class RelayEnrollmentClientTests: XCTestCase {
         XCTAssertEqual(written.map(\.account), ["relayToken"])
         XCTAssertEqual(defaults.string(forKey: "relayServerURL"), "https://relay.example.com")
         XCTAssertTrue(defaults.bool(forKey: "publishToRelay"))
+    }
+
+    func testApplyLeavesSettingsAloneWhenTheKeychainRefusesTheToken() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set(false, forKey: "publishToRelay")
+        defaults.set("wss://old.example.com", forKey: "relayServerURL")
+        let parsed = try XCTUnwrap(RelayEnrollmentClient.parse("https://relay.example.com/enroll/K7QM-3PXA"))
+
+        XCTAssertThrowsError(try RelayEnrollmentClient.apply(
+            token: "irr_secret", origin: parsed.origin, defaults: defaults) { _, _ in false }) {
+            XCTAssertEqual($0 as? RelayEnrollmentClient.Failure, .keychainWriteFailed)
+        }
+        XCTAssertEqual(defaults.string(forKey: "relayServerURL"), "wss://old.example.com")
+        XCTAssertFalse(defaults.bool(forKey: "publishToRelay"))
     }
 }

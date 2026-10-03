@@ -21,6 +21,7 @@ enum RelayEnrollmentClient {
         /// 429. Too many failed redemptions in the relay's window.
         case rateLimited
         case invalidResponse
+        case keychainWriteFailed
         /// The request never got an HTTP answer; carries the host.
         case unreachable(String)
         /// Any other status, with the relay's own `error` text when it sent one.
@@ -36,6 +37,8 @@ enum RelayEnrollmentClient {
                 return "Too many failed enrollment attempts. Wait a minute, then try again."
             case .invalidResponse:
                 return "The relay returned an invalid enrollment response."
+            case .keychainWriteFailed:
+                return "Joined the relay, but the token could not be saved to the Keychain. Mint a fresh code and try again."
             case .unreachable(let host):
                 return "Could not reach \(host). Check the address and your network."
             case .rejected(let status, let message?):
@@ -47,15 +50,21 @@ enum RelayEnrollmentClient {
     }
 
     /// Splits an enrollment URL into the relay origin and the presented code.
-    /// The relay only ever prints `<https origin>/enroll/<code>` (its
-    /// `--public-url` is validated as an HTTPS origin without a path), so
-    /// anything else is refused here, before any network call.
-    static func parse(_ raw: String) -> (origin: URL, code: String)? {
-        guard let parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-              parts.scheme?.lowercased() == "https",
-              let host = parts.host, !host.isEmpty,
-              parts.user == nil, parts.password == nil,
-              parts.query == nil, parts.fragment == nil else { return nil }
+    /// The relay prints `<https origin>/enroll/<code>` when it has a
+    /// `--public-url` (validated as an HTTPS origin without a path), and
+    /// otherwise only the bare code, saying it "still works when typed or
+    /// pasted into the desktop app by hand" (core/cmd/irrlichtrelay/
+    /// pairing_handoff.go). A bare code is therefore sent to the relay already
+    /// configured in `configuredRelayURL`, but only when that is `https`/`wss`.
+    /// Anything else is refused here, before any network call.
+    static func parse(_ raw: String, configuredRelayURL: String = "") -> (origin: URL, code: String)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isPresentedCode(trimmed.uppercased()) {
+            guard let origin = secureOrigin(configuredRelayURL, schemes: ["https", "wss"]) else { return nil }
+            return (origin, trimmed.uppercased())
+        }
+        guard let parts = URLComponents(string: trimmed),
+              let origin = secureOrigin(trimmed, schemes: ["https"]) else { return nil }
 
         var path = parts.path
         if path.hasSuffix("/") { path.removeLast() }
@@ -63,13 +72,23 @@ enum RelayEnrollmentClient {
         guard path.hasPrefix(prefix) else { return nil }
         let code = path.dropFirst(prefix.count).uppercased()
         guard isPresentedCode(code) else { return nil }
+        return (origin, code)
+    }
 
+    /// The `https://host[:port]` origin of `raw`, or nil unless its scheme is
+    /// one of `schemes` and it carries a host and no credentials, query or
+    /// fragment. The path is ignored; the callers check it themselves.
+    private static func secureOrigin(_ raw: String, schemes: Set<String>) -> URL? {
+        guard let parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = parts.scheme?.lowercased(), schemes.contains(scheme),
+              let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil,
+              parts.query == nil, parts.fragment == nil else { return nil }
         var origin = URLComponents()
         origin.scheme = "https"
         origin.host = host.lowercased()
         origin.port = parts.port
-        guard let url = origin.url else { return nil }
-        return (url, code)
+        return origin.url
     }
 
     /// The relay's `IsPresentedCode`: four alphabet characters, a dash, four more.
@@ -114,11 +133,13 @@ enum RelayEnrollmentClient {
     /// theirs: the token under the `relayToken` Keychain account, the origin
     /// as `relayServerURL` (the app's `relayStreamURL` and the daemon's
     /// `normalizeRelayURL` both rewrite `https://` to the `wss://` stream
-    /// URL), and publishing switched on. The caller then nudges the running
-    /// subscribe link and daemon, exactly as the token field does.
+    /// URL), and publishing switched on. A refused Keychain write throws
+    /// before any setting changes, so publishing never starts without a token.
+    /// The caller then nudges the running subscribe link and daemon, exactly
+    /// as the token field does.
     static func apply(token: String, origin: URL, defaults: UserDefaults = .standard,
-                      setToken: (String, String) -> Bool = { KeychainStore.set($0, account: $1) }) {
-        _ = setToken(token, "relayToken")
+                      setToken: (String, String) -> Bool = { KeychainStore.set($0, account: $1) }) throws {
+        guard setToken(token, "relayToken") else { throw Failure.keychainWriteFailed }
         defaults.set(origin.absoluteString, forKey: "relayServerURL")
         defaults.set(true, forKey: "publishToRelay")
     }
