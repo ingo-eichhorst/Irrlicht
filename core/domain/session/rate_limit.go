@@ -19,6 +19,12 @@ const (
 	// ("Muse Code Everyday Usage", observed on the #2007 live probe) that
 	// Provider alone does not distinguish.
 	ProviderMeta = "meta"
+	// ProviderDeepSeek is DeepSeek's prepaid API balance (issue #2009, epic
+	// #1977 §10 work package D) — the BILLING product, distinct from the
+	// "dsh" coding-agent adapter (core/adapters/inbound/agents/dsh), which is
+	// an agent that can be pointed at DeepSeek or at any other provider. The
+	// adapter name is never evidence for this provider.
+	ProviderDeepSeek = "deepseek"
 )
 
 // AttributionQualityConfirmed is the only AttributionQuality value that
@@ -118,7 +124,10 @@ type RateLimitSnapshot struct {
 	// QuotaScope names what the quota is scoped to, for a provider that
 	// exposes more than one shape (e.g. "individual", "workspace"). Empty
 	// means the provider does not distinguish, or the scope was not
-	// observed.
+	// observed. On a snapshot carrying Credits it is one of the
+	// BalanceScope* constants (balance_coverage.go, issue #2009), and
+	// BalanceScopeRef reads the matching reference: ConfirmedAccountRef for
+	// "account", QuotaID for "api_key".
 	QuotaScope string `json:"quota_scope,omitempty"`
 
 	// AttributionEvidence names what established Provider (and
@@ -131,7 +140,12 @@ type RateLimitSnapshot struct {
 	// QuotaID is a stable provider-issued identifier for the specific quota
 	// bucket this snapshot reports on, when the provider exposes one. When a
 	// provider exposes no stable id, callers document their own composite
-	// key rather than leaving this populated with a guess.
+	// key rather than leaving this populated with a guess. For a credits
+	// snapshot whose QuotaScope is BalanceScopeAPIKey, the bucket IS the key,
+	// so this is the key's provider-issued reference, and
+	// session.BalanceCovers matches sessions on it (issue #2009). A producer
+	// that has no such reference leaves it empty, which binds the balance to
+	// no session.
 	QuotaID string `json:"quota_id,omitempty"`
 
 	// ObservationSource names the mechanism that produced this snapshot:

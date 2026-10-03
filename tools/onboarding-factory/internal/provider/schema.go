@@ -160,10 +160,17 @@ const (
 	ResolverFile     = "file"
 	ResolverKeychain = "keychain"
 	ResolverBrowser  = "browser-profile"
+	// ResolverNotImplemented: the route needs a credential and no resolver
+	// for it ships yet (issue #2009: DeepSeek's parser landed before its key
+	// location could be inspected). Distinct from ResolverNone, which says
+	// the route needs no credential at all. It names no location: a location
+	// would be a claim about where the credential lives, which is exactly
+	// what has not been established.
+	ResolverNotImplemented = "not-implemented"
 )
 
 // ResolverKinds is the closed set.
-var ResolverKinds = []string{ResolverNone, ResolverFile, ResolverKeychain, ResolverBrowser}
+var ResolverKinds = []string{ResolverNone, ResolverFile, ResolverKeychain, ResolverBrowser, ResolverNotImplemented}
 
 // Implementation kinds — #1977 §8 and issue #2008 §1.4: "A manifest can add
 // recognition metadata, or configure an existing reviewed strategy. A new

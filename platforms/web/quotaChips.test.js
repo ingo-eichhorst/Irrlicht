@@ -33,6 +33,28 @@ describe('usageCreditsLine', () => {
     const line = usageCreditsLine({ has_credits: true, balance: 12.34, currency: 'CNY' });
     expect(line).not.toContain('$');
   });
+
+  // Issue #2009 — LOCKS, not red-first: these pass on the #1995 renderer
+  // unchanged. They pin the wire shapes core/adapters/outbound/
+  // deepseekaccountapi produces (balance omitted by omitempty on a zero,
+  // balance_observed kept) and the four states #2009 §1.3 requires to stay
+  // apart. QuotaChipModeTests.swift (lines 19-71) pins the same four states on macOS.
+  test('keeps observed zero, unknown, unlimited and missing distinct', () => {
+    const zero = usageCreditsLine({ has_credits: false, balance_observed: true, currency: 'CNY', total: 0, granted: 0, topped_up: 0 });
+    const unknown = usageCreditsLine({ has_credits: true });
+    const unlimited = usageCreditsLine({ has_credits: true, unlimited: true });
+    const missing = usageCreditsLine(null);
+    expect(zero).toBe('Credits balance: 0.00 CNY');
+    expect(unknown).toBe('Credits: available');
+    expect(unlimited).toBe('Credits: unlimited');
+    expect(missing).toBeNull();
+    expect(new Set([zero, unknown, unlimited, missing]).size).toBe(4);
+  });
+
+  test('renders a DeepSeek CNY balance in CNY', () => {
+    const line = usageCreditsLine({ has_credits: true, balance: 110, balance_observed: true, currency: 'CNY', total: 110, granted: 10, topped_up: 100 });
+    expect(line).toBe('Credits balance: 110.00 CNY');
+  });
 });
 
 // Issue #2057: the daemon stamps Muse Code's account-API snapshots with

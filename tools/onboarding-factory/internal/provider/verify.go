@@ -198,13 +198,20 @@ func verifyAuth(m Manifest, add func(string, ...any)) {
 		return
 	}
 	for _, r := range m.CredentialResolvers {
-		if !inSet(r.Kind, ResolverKinds) {
-			add("credential resolver kind %q is not one of: %s", r.Kind, oneOf(ResolverKinds))
-			continue
+		verifyResolver(r, add)
+	}
+}
+
+func verifyResolver(r CredentialResolver, add func(string, ...any)) {
+	switch {
+	case !inSet(r.Kind, ResolverKinds):
+		add("credential resolver kind %q is not one of: %s", r.Kind, oneOf(ResolverKinds))
+	case r.Kind == ResolverNotImplemented:
+		if r.Location != "" || r.Format != "" {
+			add("credential resolver %q names a location or format (%q/%q) — an unimplemented resolver has not established either", r.Kind, r.Location, r.Format)
 		}
-		if r.Kind != ResolverNone && r.Location == "" {
-			add("credential resolver %q names no location", r.Kind)
-		}
+	case r.Kind != ResolverNone && r.Location == "":
+		add("credential resolver %q names no location", r.Kind)
 	}
 }
 

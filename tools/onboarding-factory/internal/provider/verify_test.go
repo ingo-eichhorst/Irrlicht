@@ -344,6 +344,29 @@ func TestVerifyRejectsADataOnlyRouteNamingAPermission(t *testing.T) {
 		"a data-only route names a permission")
 }
 
+// An unimplemented credential resolver (#2009) is accepted only while it
+// claims nothing about where the credential lives. Its guard is the target of
+// tools/lib/provider-resolver-not-implemented-mutations_test.sh.
+func TestVerifyRejectsAnUnimplementedResolverNamingALocation(t *testing.T) {
+	t.Run("bare", func(t *testing.T) {
+		root := t.TempDir()
+		m := loadFixtureManifest(t, "no-quota")
+		m.CredentialResolvers = []CredentialResolver{{Kind: ResolverNotImplemented}}
+		writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+		if f := ValidateRepo(root); len(f) != 0 {
+			t.Fatalf("a bare not-implemented resolver should validate, got:\n%s", messages(f))
+		}
+	})
+	t.Run("with-location", func(t *testing.T) {
+		root := t.TempDir()
+		m := loadFixtureManifest(t, "no-quota")
+		m.CredentialResolvers = []CredentialResolver{{Kind: ResolverNotImplemented, Location: "~/.acme/key", Format: "yaml"}}
+		writeTree(t, root, m, map[string]any{"plan": "acme-pro", "active": true})
+		wantFindings(t, "not-implemented-with-location", ValidateRepo(root),
+			"an unimplemented resolver has not established either")
+	})
+}
+
 // A path that escapes the tree is a finding rather than an empty read. The
 // filesystem readers elsewhere in the factory answer a "..'-bearing path with
 // an EMPTY result, which would read here as a fixture that checked out clean.
