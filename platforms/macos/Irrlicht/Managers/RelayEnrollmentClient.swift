@@ -114,22 +114,27 @@ enum RelayEnrollmentClient {
 
     /// Returns the issued token, or the `Failure` naming why there is none.
     static func decode(_ data: Data, status: Int) throws -> String {
+        guard status == 200 else { throw refusal(status: status, body: data) }
         struct Redeemed: Decodable { let token: String }
-        struct RelayError: Decodable { let error: String }
+        guard data.count <= maxResponseBytes,
+              let token = try? JSONDecoder().decode(Redeemed.self, from: data).token,
+              !token.isEmpty else { throw Failure.invalidResponse }
+        return token
+    }
+
+    /// Maps a non-200 redeem answer onto the relay's own distinctions
+    /// (core/cmd/irrlichtrelay/enroll_handlers.go) and nothing finer.
+    private static func refusal(status: Int, body: Data) -> Failure {
         switch status {
-        case 200:
-            guard data.count <= maxResponseBytes,
-                  let token = try? JSONDecoder().decode(Redeemed.self, from: data).token,
-                  !token.isEmpty else { throw Failure.invalidResponse }
-            return token
-        case 401: throw Failure.codeRefused
-        case 403: throw Failure.authOff
-        case 429: throw Failure.rateLimited
+        case 401: return .codeRefused
+        case 403: return .authOff
+        case 429: return .rateLimited
         default:
-            let message = data.count <= maxResponseBytes
-                ? (try? JSONDecoder().decode(RelayError.self, from: data))?.error
+            struct RelayError: Decodable { let error: String }
+            let message = body.count <= maxResponseBytes
+                ? (try? JSONDecoder().decode(RelayError.self, from: body))?.error
                 : nil
-            throw Failure.rejected(status, message?.isEmpty == false ? message : nil)
+            return .rejected(status, message?.isEmpty == false ? message : nil)
         }
     }
 
