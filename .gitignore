@@ -175,3 +175,6 @@ core/adapters/outbound/museaccountapi/museaccountapi_live_probe_result.json
 # vocabulary, so tools/state-vocabulary-lint.sh flagged it on unrelated diffs.
 # Unanchored so it matches at every depth; the real fix is removing the plugin.
 .irrlicht-cowork-probe/
+
+# Default output of deepseekaccountapi's go:build live_probe test (#2009).
+core/adapters/outbound/deepseekaccountapi/deepseekaccountapi_live_probe_result.json

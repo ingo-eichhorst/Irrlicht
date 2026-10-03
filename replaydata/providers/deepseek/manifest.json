@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "id": "deepseek",
+  "display_name": "DeepSeek — prepaid API balance",
+  "_comment": [
+    "Issue #2009, epic #1977 work package D: the prepaid-balance shape.",
+    "The billing provider is 'deepseek'; the coding-agent adapter that can",
+    "be pointed at it is 'dsh' (matrix column 'deepseek-harness'). They are",
+    "not the same thing, and nothing here reads or depends on that adapter.",
+    "",
+    "No live probe has run. The run that wrote this had no DeepSeek account",
+    "access, so every claim below is fixture-verified at best: the response",
+    "fixture is DeepSeek's own documented example, copied verbatim from",
+    "https://api-docs.deepseek.com/api/get-user-balance/ on 2026-10-03, and",
+    "the zero fixture is a shape built from that same schema. Neither is a",
+    "capture. No credential resolver, permission or poller ships, so the",
+    "route is code-backed only as far as its destination and parser go.",
+    "platforms names where that parser and its tests run (pure Go, no",
+    "platform-specific code); no resolver or wiring exists on either."
+  ],
+  "products": [
+    {
+      "id": "deepseek-api-prepaid",
+      "name": "DeepSeek API prepaid balance",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "account-api",
+    "destination_keys": ["deepseek-account-api"],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/outbound/deepseekaccountapi",
+      "tests": [
+        "core/adapters/outbound/deepseekaccountapi/parser_test.go",
+        "core/domain/session/balance_coverage_test.go"
+      ],
+      "mutation_fixtures": [
+        "tools/lib/deepseekaccountapi-currency-mutations_test.sh",
+        "tools/lib/deepseekaccountapi-zero-mutations_test.sh",
+        "tools/lib/balance-coverage-byok-mutations_test.sh",
+        "tools/lib/balance-coverage-scope-mutations_test.sh"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "api-key",
+    "header": "Authorization",
+    "prefix": "Bearer "
+  },
+  "credential_resolvers": [
+    {
+      "kind": "not-implemented"
+    }
+  ],
+  "platforms": ["darwin", "linux"],
+  "redaction": {
+    "allowed_fields": ["is_available", "balance_infos"],
+    "note": "The documented schema has only these two top-level keys. RedactBalanceResponse re-marshals through the same allowlist the parser decodes, so an undocumented field a real response carries never reaches a fixture."
+  },
+  "fixtures": [
+    {
+      "name": "balance-response-documented",
+      "kind": "shape",
+      "path": "fixtures/balance-response.documented.json",
+      "note": "DeepSeek's documented example response, verbatim (CNY, total 110.00 = granted 10.00 + topped-up 100.00). Not a capture."
+    },
+    {
+      "name": "balance-zero",
+      "kind": "shape",
+      "path": "fixtures/balance-zero.shape.json",
+      "note": "A zero USD balance with is_available false, built from the documented schema. #2009 §6 row 4 (a real zero-balance account) was not obtainable."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "unassessed",
+      "note": "The balance response names no product or plan. Whether another route does has not been looked at."
+    },
+    "quota_windows": {
+      "claim": "unassessed",
+      "note": "Prepaid balance only; no window route has been looked at. Not source-specific-unavailable: nothing reached the route."
+    },
+    "balance": {
+      "claim": "fixture-verified",
+      "evidence": ["deepseek-balance-documented-fixture", "deepseek-balance-zero-fixture", "deepseek-parser-source"],
+      "note": "Currency, the three components and an observed zero survive to the wire (parser_test.go). A multi-currency response is refused rather than summed or truncated, because CreditsSnapshot holds one currency and no real multi-currency response has been seen."
+    },
+    "account_identity": {
+      "claim": "unassessed",
+      "note": "The documented response carries no account id, so the parser binds the balance to no confirmed account and session.BalanceCovers lets it cover no session. Whether a real response or another route carries one has not been probed."
+    }
+  },
+  "evidence": [
+    {
+      "id": "deepseek-balance-documented-fixture",
+      "kind": "fixture",
+      "date": "2026-10-03",
+      "ref": "replaydata/providers/deepseek/fixtures/balance-response.documented.json",
+      "note": "Copied from https://api-docs.deepseek.com/api/get-user-balance/ on 2026-10-03."
+    },
+    {
+      "id": "deepseek-balance-zero-fixture",
+      "kind": "fixture",
+      "date": "2026-10-03",
+      "ref": "replaydata/providers/deepseek/fixtures/balance-zero.shape.json"
+    },
+    {
+      "id": "deepseek-parser-source",
+      "kind": "source",
+      "date": "2026-10-03",
+      "ref": "core/adapters/outbound/deepseekaccountapi/parser.go",
+      "note": "The allowlist decode, the string-amount parsing, and the refusals."
+    }
+  ]
+}
