@@ -28,6 +28,28 @@ struct ContextBar: View {
     }
 }
 
+/// What the low execution-confidence chip shows (issue #737) — the Swift twin
+/// of `executionConfidenceChip` in platforms/web/formatters.js, kept to the
+/// same three rules so the two rows cannot disagree:
+///
+/// - Shown only when the daemon says `execution_confidence_low == true`. The
+///   threshold lives daemon-side next to the hedge lexicon; this client never
+///   compares the score itself, so a score of 0 is shown and a missing flag
+///   is hidden whatever the score.
+/// - Text is "? <score>", or "? —" when the flag arrives without a score.
+/// - The tooltip is the daemon-composed string, verbatim ("" when absent).
+struct ExecutionConfidenceChip: Equatable {
+    let text: String
+    let tooltip: String
+
+    static func from(_ metrics: SessionMetrics?) -> ExecutionConfidenceChip? {
+        guard let metrics, metrics.executionConfidenceLow == true else { return nil }
+        let score = metrics.executionConfidence.map(String.init) ?? "\u{2014}"
+        return ExecutionConfidenceChip(text: "? " + score,
+                                       tooltip: metrics.executionConfidenceTooltip ?? "")
+    }
+}
+
 struct SessionRowView: View {
     let session: SessionState
     let agentNumber: Int
@@ -237,6 +259,42 @@ struct SessionRowView: View {
         }
     }
 
+    /// Width the low execution-confidence chip takes out of the bar column
+    /// (#737): the chip's fixed frame plus the row's 6 pt HStack spacing, or 0
+    /// when there is no chip. Taken from the bar rather than left to the
+    /// Spacer because the 350 pt snapshot render showed the model label
+    /// collapsing to "o…" when the chip squeezed it; shrinking the bar keeps
+    /// the bar's start x, the branch and the model label unchanged and moves
+    /// only this row's trailing edge — the web's chip resolves the same squeeze
+    /// the same way (its branch and bar give up flex share on that row only).
+    private static let confidenceChipWidth: CGFloat = 28
+    private var confidenceChipSlot: CGFloat {
+        ExecutionConfidenceChip.from(session.metrics) == nil ? 0 : Self.confidenceChipWidth + 6
+    }
+
+    /// Low execution-confidence chip (#737), inline after the context bar /
+    /// cost column like the web's `.row-confidence`. Built by hand rather than
+    /// with `.pill`, whose `maxWidth: .infinity` frame would swallow the
+    /// Spacer and push the model label out. The frame is fixed so the slot
+    /// the bar gives up (`confidenceChipSlot`) is exactly what the chip
+    /// occupies. Wash and text colour are the question pill's
+    /// (`noticeWash(waiting)` + `waitingPillText`, #984), the macOS
+    /// counterparts of the web chip's --waiting-dim / --waiting.
+    @ViewBuilder
+    private var executionConfidenceChip: some View {
+        if let chip = ExecutionConfidenceChip.from(session.metrics) {
+            Text(chip.text)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundColor(IrrColors.waitingPillText)
+                .lineLimit(1)
+                .frame(width: Self.confidenceChipWidth, height: 13)
+                .background(IrrColors.noticeWash(IrrColors.waiting))
+                .cornerRadius(IrrRadius.xs)
+                .tooltip(chip.tooltip)
+                .accessibilityIdentifier("session-confidence-chip-\(session.id)")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -347,7 +405,7 @@ struct SessionRowView: View {
                         ContextBar(utilization: metrics.contextUtilization,
                                    pressureColor: metrics.contextPressureColor,
                                    label: metrics.formattedTokenCount)
-                            .frame(width: 100, height: 13)
+                            .frame(width: 100 - confidenceChipSlot, height: 13)
                             .tooltip("Context window usage")
                         if showCostDisplay {
                             HStack(spacing: 1) {
@@ -372,7 +430,7 @@ struct SessionRowView: View {
                         Text(metrics.formattedTokenUsage)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(.secondary)
-                            .frame(width: 100, height: 13, alignment: .leading)
+                            .frame(width: 100 - confidenceChipSlot, height: 13, alignment: .leading)
                             .tooltip("Token count — context window not known for \(session.shortModelName)")
                         if showCostDisplay {
                             HStack(spacing: 1) {
@@ -387,7 +445,7 @@ struct SessionRowView: View {
                                 .frame(width: 32, alignment: .leading)
                         }
                     } else {
-                        Color.clear.frame(width: 132, height: 13)
+                        Color.clear.frame(width: 132 - confidenceChipSlot, height: 13)
                     }
                 } else {
                     // Historical modes (1s/10s/60s): bar fills the same column as the
@@ -395,9 +453,11 @@ struct SessionRowView: View {
                     // taller because it carries no cost/% readout alongside it.
                     HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [],
                                    bucketCount: sessionManager.historyBucketCount)
-                        .frame(width: 132, height: 16)
+                        .frame(width: 132 - confidenceChipSlot, height: 16)
                         .tooltip(displayMode.tooltip)
                 }
+
+                executionConfidenceChip
 
                 Spacer()
 
