@@ -259,4 +259,49 @@ export const scenes = [
     ),
     deltas: [],
   })),
+
+  // #737 — the low execution-confidence chip, in BOTH themes because it borrows
+  // the --waiting pair, which has a light-theme override. One low session (the
+  // chip), one confident session that still carries a score (no chip — the
+  // daemon omits `_low` when false), and one with no score at all, so a
+  // reviewer sees the chip beside rows it must not appear on.
+  ...['dark', 'light'].map((theme) => ({
+    name: (theme === 'dark' ? '09' : '10') + '-low-confidence-' + theme,
+    theme,
+    expectedRows: 3,
+    sessions: sessions(
+      group('irrlicht', [
+        {
+          session_id: 'conf-low-' + theme, state: 'working', project_name: 'irrlicht',
+          git_branch: 'feat/flaky-auth', adapter: 'claude-code', first_seen: t(410),
+          metrics: {
+            model_name: 'claude-opus-4-8', estimated_cost_usd: 0.88,
+            context_utilization_percentage: 52, pressure_level: 'low',
+            total_tokens: 104000, elapsed_seconds: 410,
+            execution_confidence: 31, execution_confidence_low: true,
+            execution_confidence_tooltip: 'Execution confidence 31/100 — scored from hedging and uncertainty ' +
+              "language in the agent's recent messages, latest weighted most (100 = decisive; below 50 is low).",
+          },
+        },
+        {
+          session_id: 'conf-ok-' + theme, state: 'working', project_name: 'irrlicht',
+          git_branch: 'main', adapter: 'claude-code', first_seen: t(200),
+          metrics: {
+            model_name: 'claude-sonnet-4-6', estimated_cost_usd: 0.21,
+            context_utilization_percentage: 18, pressure_level: 'low',
+            total_tokens: 36000, elapsed_seconds: 200,
+            execution_confidence: 86,
+            execution_confidence_tooltip: 'Execution confidence 86/100 — scored from hedging and uncertainty ' +
+              "language in the agent's recent messages, latest weighted most (100 = decisive; below 50 is low).",
+          },
+        },
+        {
+          session_id: 'conf-none-' + theme, state: 'ready', project_name: 'irrlicht',
+          git_branch: 'docs/readme', adapter: 'codex', first_seen: t(900),
+          metrics: { model_name: 'gpt-5-codex', estimated_cost_usd: 0.05, elapsed_seconds: 900 },
+        },
+      ], { day: 1.14 }),
+    ),
+    deltas: [],
+  })),
 ]

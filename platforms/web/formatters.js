@@ -327,3 +327,24 @@ export function cacheBloatBadgeText(tooltip, percent) {
   return percent > 0 ? `${base} +${percent}%` : base;
 }
 
+
+// Execution-confidence chip (#737) — what the session row shows, or null when
+// it shows nothing. The daemon owns every judgement here: `execution_confidence_low`
+// is its verdict against its own threshold (session.ExecutionConfidenceLowThreshold),
+// and `execution_confidence_tooltip` is its composed hover text, rendered
+// verbatim the way cache_bloat_explanation is (#827). The client deliberately
+// compares no number to a threshold, so the two UIs cannot disagree about which
+// sessions are low.
+//
+// Gated on the flag alone, never on the score's truthiness: 0 is the lowest
+// score there is, and a `!metrics.execution_confidence` check would hide exactly
+// that session. The daemon omits `execution_confidence_low` when it is false, so
+// an absent flag and an explicit false both read as "not low".
+export function executionConfidenceChip(metrics) {
+  if (metrics?.execution_confidence_low !== true) return null;
+  const score = metrics.execution_confidence;
+  return {
+    text: '? ' + (typeof score === 'number' ? String(score) : '—'),
+    title: metrics.execution_confidence_tooltip || '',
+  };
+}
