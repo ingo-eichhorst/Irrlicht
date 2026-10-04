@@ -931,6 +931,27 @@
     }
     .row-eta.stale { opacity: 0.5; }
 
+    /* Low execution-confidence chip (#737) — "? 42", shown only while the
+       daemon flags the session low. Borrows the --waiting / --waiting-dim pair
+       rather than minting a hue: it is the palette's "look at this" amber, and
+       the pair already re-tuned for the light theme (#984). Measured with
+       `node platforms/web/snapshots/contrast.mjs`: 6.84:1 dark, 5.56:1 light
+       against the wash; irrlicht.confidence.test.js re-asserts >= 4.5:1 in
+       both themes. --pressure-* has no light override, so cache-bloat's
+       red-on-12%-wash recipe would not carry over. */
+    .row-confidence {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: var(--waiting-dim);
+      color: var(--waiting);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      cursor: default;
+    }
+
     .row-id {
       font-size: 9px;
       color: var(--muted);

@@ -12,7 +12,7 @@ import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, rel
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
-  cacheBloatBadgeText,
+  cacheBloatBadgeText, executionConfidenceChip,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
 import { initElfdans } from './elfdans.js';
@@ -754,7 +754,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       // (issue #354; assets/overlay-reference.png):
       // 1 state · 2 project/branch · 3 context-bar · 4 tokens · 5 cost ·
       // 6 model · 7 adapter icon. Extras (role badge, in-progress task dots,
-      // waiting question, active-tool label, elapsed/id, history canvas) are
+      // waiting question, active-tool label, ETA, low execution-confidence
+      // chip, elapsed/id, history canvas) are
       // tucked between the primary slots with `display:none` until populated.
       el.innerHTML =
         '<span class="row-state-icon"></span>' +
@@ -771,6 +772,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         '<span class="row-cost"></span>' +
         '<canvas class="row-history"></canvas>' +
         '<span class="row-eta" style="display:none"></span>' +
+        '<span class="row-confidence" style="display:none"></span>' +
         '<span class="row-spacer"></span>' +
         '<span class="row-model"></span>' +
         '<span class="row-adapter-icon" style="display:none"></span>' +
@@ -824,6 +826,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       renderRowModel(el, metrics, agent);
       renderRowElapsed(el, agent, metrics, isActive);
       renderRowEta(el, metrics, state);
+      renderRowConfidence(el, metrics);
       renderRowCreated(el, agent);
       renderRowId(el, agent);
       renderRowRoleBadge(el, agent);
@@ -1036,6 +1039,28 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       } else {
         etaEl.style.display = 'none';
         etaEl.dataset.eta = '';
+      }
+    }
+
+    // Low execution-confidence chip (#737) — a compact "? <score>" shown only
+    // while the daemon flags the session low; the full score and what it
+    // means live in the daemon-composed tooltip. Sits after the context bar,
+    // like the ETA chip, with no width rule of its own: the 09/10 snapshot
+    // scenes, rendered in headless Chrome iframes at 320/360/420/768 px, show
+    // the chip whole at every width, the branch and bar giving up a few px of
+    // flex share on that row only. Left visible in history view and with cost
+    // hidden: it is a health signal, not a cost/context column.
+    function renderRowConfidence(el, metrics) {
+      const confEl = el.querySelector('.row-confidence');
+      const chip = executionConfidenceChip(metrics);
+      if (chip) {
+        if (confEl.style.display === 'none') confEl.style.display = '';
+        if (confEl.textContent !== chip.text) confEl.textContent = chip.text;
+        if (confEl.title !== chip.title) confEl.title = chip.title;
+      } else if (confEl.style.display !== 'none') {
+        confEl.style.display = 'none';
+        confEl.textContent = '';
+        confEl.title = '';
       }
     }
 
