@@ -470,6 +470,9 @@ struct SessionMetrics: Codable {
     let cacheBloatPercent: Int?            // how far above the project baseline, as a rounded percent (issue #946)
     let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
     let cacheBloatExplanation: String?     // longer plain-language hover text, composed daemon-side (issue #827)
+    let executionConfidence: Int?          // 0–100 hedging score, 100 = decisive; nil until the first scored assistant turn (issue #737)
+    let executionConfidenceLow: Bool?      // daemon's verdict that the score is below its threshold — the only thing that shows the chip
+    let executionConfidenceTooltip: String? // hover text composed daemon-side, rendered verbatim (same string the web shows)
     /// Why this session failed, when `state == "error"` (#1802).
     ///
     /// It lives on METRICS, not on the session, because that is where the
@@ -506,6 +509,9 @@ struct SessionMetrics: Codable {
         case cacheBloatPercent = "cache_bloat_percent"
         case cacheBloatTooltip = "cache_bloat_tooltip"
         case cacheBloatExplanation = "cache_bloat_explanation"
+        case executionConfidence = "execution_confidence"
+        case executionConfidenceLow = "execution_confidence_low"
+        case executionConfidenceTooltip = "execution_confidence_tooltip"
         case sessionError = "session_error"
     }
 
@@ -546,6 +552,9 @@ struct SessionMetrics: Codable {
         cacheBloatPercent = try c.decodeIfPresent(Int.self, forKey: .cacheBloatPercent)
         cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
         cacheBloatExplanation = try c.decodeIfPresent(String.self, forKey: .cacheBloatExplanation)
+        executionConfidence = try c.decodeIfPresent(Int.self, forKey: .executionConfidence)
+        executionConfidenceLow = try c.decodeIfPresent(Bool.self, forKey: .executionConfidenceLow)
+        executionConfidenceTooltip = try c.decodeIfPresent(String.self, forKey: .executionConfidenceTooltip)
         sessionError = try c.decodeIfPresent(SessionError.self, forKey: .sessionError)
     }
 
@@ -576,6 +585,9 @@ struct SessionMetrics: Codable {
         cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
         cacheBloatExplanation: String? = nil,
+        executionConfidence: Int? = nil,
+        executionConfidenceLow: Bool? = nil,
+        executionConfidenceTooltip: String? = nil,
         sessionError: SessionError? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
@@ -601,6 +613,9 @@ struct SessionMetrics: Codable {
         self.cacheBloatPercent = cacheBloatPercent
         self.cacheBloatTooltip = cacheBloatTooltip
         self.cacheBloatExplanation = cacheBloatExplanation
+        self.executionConfidence = executionConfidence
+        self.executionConfidenceLow = executionConfidenceLow
+        self.executionConfidenceTooltip = executionConfidenceTooltip
         self.sessionError = sessionError
     }
 
@@ -629,6 +644,9 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(cacheBloatPercent, forKey: .cacheBloatPercent)
         try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
         try c.encodeIfPresent(cacheBloatExplanation, forKey: .cacheBloatExplanation)
+        try c.encodeIfPresent(executionConfidence, forKey: .executionConfidence)
+        try c.encodeIfPresent(executionConfidenceLow, forKey: .executionConfidenceLow)
+        try c.encodeIfPresent(executionConfidenceTooltip, forKey: .executionConfidenceTooltip)
         try c.encodeIfPresent(sessionError, forKey: .sessionError)
     }
     

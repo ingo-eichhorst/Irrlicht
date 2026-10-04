@@ -309,7 +309,7 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
     /// image snapshots, and the ratchet would be reset rather than read. It is
     /// printed instead, on every run of this test and by every run of the
     /// suite itself (`Executed N tests`).
-    private static let committedUngatedTestCount = 56
+    private static let committedUngatedTestCount = 58
 
     /// The module the gated test target's classes live in, read off this class
     /// rather than typed: a literal here that stopped naming the real target
