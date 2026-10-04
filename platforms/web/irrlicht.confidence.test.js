@@ -2,7 +2,9 @@ import { describe, test, expect, beforeAll } from 'vitest'
 
 import { executionConfidenceChip } from './formatters.js'
 import { readCss } from './snapshots/serialize.js'
-import { contrastRatio, composite, readToken, DARK_BLOCK, LIGHT_MEDIA_BLOCK } from './snapshots/contrast.mjs'
+import {
+  contrastRatio, composite, readToken, DARK_BLOCK, LIGHT_MEDIA_BLOCK, LIGHT_THEME_BLOCK,
+} from './snapshots/contrast.mjs'
 
 // #737 Phase 2: the low execution-confidence chip in the session row.
 //
@@ -58,15 +60,10 @@ const update = async (a) => {
 }
 
 beforeAll(async () => {
+  const bodyFor = (u) => (u.includes('/api/v1/sessions') ? sessionsPayload : u.includes('/api/v1/agents') ? [] : null)
   global.fetch = (url) => {
-    const u = String(url)
-    if (u.includes('/api/v1/sessions')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(sessionsPayload) })
-    }
-    if (u.includes('/api/v1/agents')) {
-      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) })
-    }
-    return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
+    const body = bodyFor(String(url))
+    return Promise.resolve({ ok: body !== null, json: () => Promise.resolve(body) })
   }
   await import('./irrlicht.js')
   await tick()
@@ -180,12 +177,22 @@ describe('chip colours clear WCAG AA in both themes', () => {
   test('--waiting on its own --waiting-dim wash is >= 4.5:1', () => {
     // The chip borrows this pair (irrlicht.css .row-confidence). Reproduce the
     // full table with: node platforms/web/snapshots/contrast.mjs
+    // The wash is composited from --waiting-dim's own rgba() as declared in
+    // each block, so a re-tuned alpha or hue is measured rather than assumed.
+    // Both light declarations are checked: the OS-preference @media block and
+    // the explicit [data-theme="light"] block can drift apart.
     const css = readCss()
-    for (const [name, block] of [['dark', DARK_BLOCK], ['light', LIGHT_MEDIA_BLOCK]]) {
+    const blocks = [['dark', DARK_BLOCK], ['light (media)', LIGHT_MEDIA_BLOCK], ['light (data-theme)', LIGHT_THEME_BLOCK]]
+    for (const [name, block] of blocks) {
       const hex = readToken(css, block, 'waiting')
       const surface = readToken(css, block, 'surface')
-      const ratio = contrastRatio(hex, composite(hex, 0.12, surface))
-      expect(ratio, `${name} --waiting ${hex} on its 12% wash over ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+      const dim = readToken(css, block, 'waiting-dim')
+      const m = dim.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/)
+      expect(m, `${name} --waiting-dim ${dim} is not an rgba() quadruple`).not.toBeNull()
+      const washHex = '#' + [1, 2, 3].map((i) => Number(m[i]).toString(16).padStart(2, '0')).join('')
+      const alpha = Number(m[4])
+      const ratio = contrastRatio(hex, composite(washHex, alpha, surface))
+      expect(ratio, `${name} --waiting ${hex} on --waiting-dim ${dim} over ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
     }
   })
 
