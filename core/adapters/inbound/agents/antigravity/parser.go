@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -127,6 +128,11 @@ func (p *Parser) parsePlannerResponse(raw map[string]any, ev *tailer.ParsedEvent
 
 	if strings.TrimSpace(content) != "" {
 		ev.AssistantText = tailer.TruncateAssistantText(content)
+		// Execution-confidence sample (#737) from the FULL text, never the display tail.
+		ev.Hedge = session.MeasureHedging(content)
+		// Keyed by step: recordings repeat a planner step under the same
+		// step_index (1-2_session-end), observed once per identical sample.
+		ev.HedgeKey = "step-" + strconv.FormatInt(intFromAny(raw["step_index"]), 10)
 		if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
 		}

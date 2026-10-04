@@ -28,7 +28,8 @@
     "cum_input_tokens": 34141,
     "cum_output_tokens": 635,
     "cum_cache_read_tokens": 99795,
-    "model_name": "muse-spark-1.2"
+    "model_name": "muse-spark-1.2",
+    "execution_confidence": 100
   },
   "transitions": [
     {

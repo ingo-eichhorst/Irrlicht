@@ -923,6 +923,10 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 	switch eventType {
 	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		full := tailer.ExtractAssistantFullText(raw)
+		// Execution-confidence sample (#737), measured before the
+		// AskUserQuestion fallback below can swap in tool input — that is
+		// the agent's question, not its prose.
+		ev.Hedge = session.MeasureHedging(full)
 		ev.AssistantText = tailer.TruncateAssistantText(full)
 		if ev.AssistantText == "" && askUserQuestion != "" {
 			full = askUserQuestion

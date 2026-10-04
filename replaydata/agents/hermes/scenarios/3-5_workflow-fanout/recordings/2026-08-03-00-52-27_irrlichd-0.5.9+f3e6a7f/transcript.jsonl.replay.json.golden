@@ -27,7 +27,8 @@
       "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
-    "model_name": "gpt-5.6-luna"
+    "model_name": "gpt-5.6-luna",
+    "execution_confidence": 100
   },
   "transitions": [
     {

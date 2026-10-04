@@ -30,7 +30,8 @@
     "estimated_cost_usd": 0.0345465,
     "cum_input_tokens": 23019,
     "cum_output_tokens": 2,
-    "model_name": "gemini-3.5-flash"
+    "model_name": "gemini-3.5-flash",
+    "execution_confidence": 100
   },
   "transitions": [
     {

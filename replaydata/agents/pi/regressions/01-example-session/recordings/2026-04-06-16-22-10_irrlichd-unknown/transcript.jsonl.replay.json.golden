@@ -33,7 +33,8 @@
     "cum_input_tokens": 910869,
     "cum_output_tokens": 82483,
     "cum_cache_read_tokens": 28928768,
-    "model_name": "gpt-5.3-codex"
+    "model_name": "gpt-5.3-codex",
+    "execution_confidence": 100
   },
   "transitions": [
     {

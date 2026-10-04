@@ -184,4 +184,11 @@ type reportSummary struct {
 	// (single-session) view sourced from lastMetrics; a future multi-session
 	// task-list fixture would surface per-session tasks on sessionTimeline.
 	Tasks []session.Task `json:"tasks,omitempty"`
+
+	// ExecutionConfidence is the primary session's final execution-confidence
+	// score (issue #737), 0–100, derived through the same
+	// replayengine.MetricsConverter the live daemon uses — so a converter that
+	// stops producing it drifts every golden that carries one. Omitted when no
+	// assistant prose was scored.
+	ExecutionConfidence *int `json:"execution_confidence,omitempty"`
 }

@@ -36,7 +36,8 @@
         "subject": "reply done",
         "status": "completed"
       }
-    ]
+    ],
+    "execution_confidence": 100
   },
   "transitions": [
     {

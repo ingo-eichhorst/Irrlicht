@@ -190,6 +190,8 @@ func parseAssistantText(message map[string]any, ev *tailer.ParsedEvent) {
 	ev.TaskEstimate = tailer.ScanTaskEstimate(fullText, ev.Timestamp)
 	ev.TaskSummary = tailer.ScanTaskSummary(fullText, ev.Timestamp)
 	ev.AssistantText = tailer.TruncateAssistantText(fullText)
+	// Execution-confidence sample (#737) from the FULL text, never the display tail.
+	ev.Hedge = session.MeasureHedging(fullText)
 	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(fullText))
 }
 

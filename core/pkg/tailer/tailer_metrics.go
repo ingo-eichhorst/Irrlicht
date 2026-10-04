@@ -578,6 +578,7 @@ func (t *TranscriptTailer) surfaceSporadicMetrics() {
 
 	t.metrics.TaskQuestion = t.lastTaskQuestion
 	t.metrics.PendingWaitingCue = t.lastPendingWaitingCue
+	t.metrics.ExecutionConfidence = t.executionConfidence
 	t.metrics.AwaySummary = t.lastAwaySummary
 	t.metrics.PendingBackgroundAgentCount = t.lastPendingBackgroundAgentCount
 

@@ -30,7 +30,8 @@
     "model_name": "gemini-pro-default",
     "total_tokens": 16316,
     "context_window": 1048576,
-    "context_utilization_percentage": 1.5560150146484375
+    "context_utilization_percentage": 1.5560150146484375,
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -24,7 +24,8 @@
     "estimated_cost_usd": 3.36599,
     "cum_input_tokens": 664822,
     "cum_output_tokens": 1396,
-    "model_name": "gpt-5.5"
+    "model_name": "gpt-5.5",
+    "execution_confidence": 100
   },
   "transitions": [
     {

@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -157,6 +158,9 @@ func parseAssistantTextBlock(block map[string]interface{}, ev *tailer.ParsedEven
 	if !ok || text == "" {
 		return "", false
 	}
+	// Execution-confidence sample (#737): summed over every text block, so the
+	// message yields one sample although AssistantText keeps only the last.
+	ev.Hedge = ev.Hedge.Plus(session.MeasureHedging(text))
 	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 		ev.TaskEstimate = est
 	}

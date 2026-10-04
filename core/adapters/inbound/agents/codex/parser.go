@@ -399,6 +399,8 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 		ev.EventType = "assistant_message"
 		full := tailer.ExtractAssistantFullText(raw)
 		ev.AssistantText = tailer.TruncateAssistantText(full)
+		// Execution-confidence sample (#737) from the FULL text, never the display tail.
+		ev.Hedge = session.MeasureHedging(full)
 		// issue #1159: mirror the claudecode fix (#1150). The prose waiting
 		// heuristics see only the tail-truncated AssistantText, so a cue or
 		// question sitting before the trailing 200 runes is invisible to them.

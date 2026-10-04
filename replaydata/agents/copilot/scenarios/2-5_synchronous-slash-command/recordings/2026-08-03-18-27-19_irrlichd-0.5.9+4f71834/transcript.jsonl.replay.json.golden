@@ -27,7 +27,8 @@
     "estimated_cost_usd": 0.0028205,
     "cum_input_tokens": 10554,
     "cum_output_tokens": 91,
-    "model_name": "gpt-5-mini"
+    "model_name": "gpt-5-mini",
+    "execution_confidence": 100
   },
   "transitions": [
     {

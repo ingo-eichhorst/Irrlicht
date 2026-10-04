@@ -31,7 +31,8 @@
     "cum_input_tokens": 8107,
     "cum_output_tokens": 30,
     "cum_cache_read_tokens": 14336,
-    "model_name": "gpt-5.5"
+    "model_name": "gpt-5.5",
+    "execution_confidence": 100
   },
   "transitions": [
     {

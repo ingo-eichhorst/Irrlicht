@@ -69,6 +69,12 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	// which is how the clearing rule says "recovered" — under the same
 	// reassigned-never-mutated argument as the estimate pointers above.
 	s.SessionError = t.sessionError
+	// A fresh copy, never a pointer at the live accumulator the next pass
+	// mutates. Omitted until a message has been scored.
+	if t.executionConfidence.Messages > 0 {
+		acc := t.executionConfidence
+		s.ExecutionConfidence = &acc
+	}
 	return s
 }
 
@@ -154,6 +160,12 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	// early return; writing t.metrics.SessionError here as well would add a
 	// second writer to a slot surfaceSporadicMetrics already owns.
 	t.sessionError = s.SessionError
+	// Only the private field: surfaceSporadicMetrics republishes it onto
+	// t.metrics every pass, above computeMetrics' empty-history early return,
+	// exactly like lastPendingWaitingCue (issue #737).
+	if s.ExecutionConfidence != nil {
+		t.executionConfidence = *s.ExecutionConfidence
+	}
 }
 
 // restoreCumByModel deep-copies a persisted per-model usage breakdown into

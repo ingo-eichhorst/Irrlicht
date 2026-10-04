@@ -280,6 +280,8 @@ func (p *Parser) parseAssistantMessage(data map[string]any, ev *tailer.ParsedEve
 		return
 	}
 	ev.AssistantText = tailer.TruncateAssistantText(content)
+	// Execution-confidence sample (#737) from the FULL text, never the display tail.
+	ev.Hedge = session.MeasureHedging(content)
 	// Carry the waiting verdict over the FULL text, not just the truncated
 	// display tail — a question sitting before the tail would otherwise settle
 	// the turn to ready while the agent waits on the user (issue #1150). Same

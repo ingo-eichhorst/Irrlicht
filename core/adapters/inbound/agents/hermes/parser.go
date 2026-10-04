@@ -108,6 +108,8 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 				ev.TaskSummary = s
 			}
 			ev.AssistantText = tailer.TruncateAssistantText(text)
+			// Execution-confidence sample (#737) from the FULL text, never the display tail.
+			ev.Hedge = session.MeasureHedgingCached(text) // re-parsed every poll by the store fold
 		}
 		calls := decodeToolCalls(raw[keyToolCalls])
 		ev.ToolUses = toolUses(calls)

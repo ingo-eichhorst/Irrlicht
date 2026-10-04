@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -313,6 +314,10 @@ func applyPiContentBlock(ev *tailer.ParsedEvent, block map[string]interface{}) {
 		if !ok {
 			return
 		}
+		// Execution-confidence sample (#737): summed over every text block,
+		// so the message yields one sample even though the display text
+		// below keeps only the last block.
+		ev.Hedge = ev.Hedge.Plus(session.MeasureHedging(text))
 		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
 			ev.TaskEstimate = est
 		}

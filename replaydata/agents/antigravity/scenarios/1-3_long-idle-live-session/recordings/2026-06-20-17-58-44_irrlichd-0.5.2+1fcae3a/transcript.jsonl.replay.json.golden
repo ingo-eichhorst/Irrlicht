@@ -27,7 +27,8 @@
       "agent finished turn → ready": 1,
       "force ready→working on first activity": 3
     },
-    "model_name": "Gemini 3.1 Pro"
+    "model_name": "Gemini 3.1 Pro",
+    "execution_confidence": 100
   },
   "transitions": [
     {

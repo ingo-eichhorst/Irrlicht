@@ -24,7 +24,8 @@
     "flickers_by_reason": {
       "force ready→working on first activity": 1
     },
-    "model_name": "Gemini 3.5 Flash"
+    "model_name": "Gemini 3.5 Flash",
+    "execution_confidence": 100
   },
   "transitions": [
     {

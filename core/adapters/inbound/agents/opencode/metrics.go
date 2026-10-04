@@ -107,6 +107,11 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	// history each time and the sticky field is simply this local.
 	var sessionErr *tailer.SessionError
 
+	// Execution confidence (#737), folded here because this path bypasses the
+	// tailer that normally holds it. Like sessionErr it needs no persistence:
+	// every call re-folds every part row, so it is rebuilt from scratch.
+	var confidence session.ExecutionConfidenceAccumulator
+
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
@@ -143,6 +148,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &tasks, &taskByID)
 		applyContribution(ev.Contribution, &cumInput, &cumOutput, &cumCacheRead, &cumCost)
 		trackTokensAndText(ev, metrics, &lastAssistantText)
+		confidence.Observe(ev.Hedge)
 
 		// Track the latest task-estimate marker (issue #558) — mirrors the
 		// tailer's lastTaskEstimate persistence, which this path bypasses.
@@ -168,6 +174,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
 	metrics.Tasks = tasks
 	metrics.SessionError = convertSessionError(sessionErr)
+	session.ApplyExecutionConfidence(metrics, confidence)
 
 	// Surface the agent-authored task estimate + projected completion ETA
 	// (issue #558) — mirrors the conversion the shared metrics adapter does
