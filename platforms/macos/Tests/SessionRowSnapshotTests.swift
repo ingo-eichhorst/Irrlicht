@@ -419,32 +419,29 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
+    /// A working row carrying the daemon's three #737 fields, with the
+    /// tooltip in the exact shape `executionConfidenceTooltip` composes.
+    private func confidenceSession(score: Int, low: Bool) -> SessionState {
+        makeSession(
+            state: .working,
+            metrics: makeMetrics(
+                executionConfidence: score,
+                executionConfidenceLow: low,
+                executionConfidenceTooltip: "Execution confidence \(score)/100 — scored from hedging and uncertainty language in the agent's recent messages, latest weighted most (100 = decisive; below 50 is low)."
+            )
+        )
+    }
+
     // #737: the low execution-confidence chip sits inline after the context
     // bar, ahead of the model label, which must still fit at the row's width.
     func testExecutionConfidenceChipLow() {
-        let session = makeSession(
-            state: .working,
-            metrics: makeMetrics(
-                executionConfidence: 31,
-                executionConfidenceLow: true,
-                executionConfidenceTooltip: "Execution confidence 31/100 — scored from hedging and uncertainty language in the agent's recent messages, latest weighted most (100 = decisive; below 50 is low)."
-            )
-        )
-        assertSnapshot(of: host(session), as: .pinnedImage)
+        assertSnapshot(of: host(confidenceSession(score: 31, low: true)), as: .pinnedImage)
     }
 
     // #737: a scored but confident session carries the same three fields with
     // the flag false — no chip, the row is the plain working row.
     func testExecutionConfidenceChipHiddenWhenNotLow() {
-        let session = makeSession(
-            state: .working,
-            metrics: makeMetrics(
-                executionConfidence: 86,
-                executionConfidenceLow: false,
-                executionConfidenceTooltip: "Execution confidence 86/100 — scored from hedging and uncertainty language in the agent's recent messages, latest weighted most (100 = decisive; below 50 is low)."
-            )
-        )
-        assertSnapshot(of: host(session), as: .pinnedImage)
+        assertSnapshot(of: host(confidenceSession(score: 86, low: false)), as: .pinnedImage)
     }
 
     func testContextPressureAlert() {
