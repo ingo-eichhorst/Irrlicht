@@ -46,6 +46,7 @@ func Agent() agent.Agent {
 			Match:          agent.ExactName{Name: ProcessName},
 			PIDForSession:  DiscoverPID,
 			SharedPIDOwner: OwnsSharedPID,
+			ReleasedPID:    ReleasedPID,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{

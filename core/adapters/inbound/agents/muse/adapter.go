@@ -129,8 +129,10 @@ var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 // reports (via subagentShadowParentID). This is safe against the daemon's
 // existing session-identity model (core/domain/agent/source.go: sessions are
 // deduplicated by ID in the repo, not by transcript path, and
-// backfillExistingSession only ever sets an EMPTY TranscriptPath — never
-// overwrites an already-known one) PROVIDED the nested copy is discovered
+// backfillExistingSession only ever sets an EMPTY TranscriptPath for muse —
+// it replaces a known one only for an adapter that declares a ReleasedPID,
+// which muse does not; see followRolledTranscript, #2080) PROVIDED the
+// nested copy is discovered
 // before the shadow, which is what makes the shadow's later arrival a
 // backfill onto an existing session rather than a race to seed a new one
 // from the wrong (tiny, approval-only) file. Verified, not assumed: `stat -f

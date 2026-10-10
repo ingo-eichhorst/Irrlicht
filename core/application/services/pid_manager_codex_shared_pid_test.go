@@ -3,11 +3,13 @@
 package services_test
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,24 +39,79 @@ import (
 // deadline leaves room for several slow probes on a loaded runner.
 const codexWriterDeadline = 10 * time.Second
 
+// rolloutHolder is a helper process holding codex rollouts open for writing —
+// the managed app-server daemon's shape. It has to be a child process:
+// WriterOf never reports the calling process (darwin's writerPIDFromLsof drops
+// self, linux's WriterOf skips os.Getpid()).
+type rolloutHolder struct {
+	paths    []string
+	released []bool
+	pid      int
+	stdin    io.WriteCloser
+}
+
+// startRolloutHolder lays nothing down: every path must already exist. The
+// holder opens paths[i] on fd 3+i and then loops in `read`, closing the
+// descriptor each line names. read, eval and exec are shell builtins, so the
+// holder never forks: a forked child would inherit the descriptors and show up
+// as a second writer of the same files.
+//
+// It returns only once the real codex probe reports the helper as the writer
+// of every path, polled to codexWriterDeadline — never after a sleep.
+func startRolloutHolder(t *testing.T, paths ...string) *rolloutHolder {
+	t.Helper()
+	redirs := make([]string, len(paths))
+	for i := range paths {
+		redirs[i] = fmt.Sprintf(`%d>>"$%d"`, 3+i, 1+i)
+	}
+	script := "exec " + strings.Join(redirs, " ") + `; while read fd; do eval "exec $fd>&-"; done`
+	cmd := exec.Command("/bin/sh", append([]string{"-c", script, "sh"}, paths...)...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start rollout holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	h := &rolloutHolder{paths: paths, released: make([]bool, len(paths)), pid: cmd.Process.Pid, stdin: stdin}
+	for _, p := range paths {
+		awaitCodexWriter(t, p, h.pid)
+	}
+	return h
+}
+
+// release closes the holder's handle on paths[i] (the shape of the daemon
+// unloading that thread) and waits until the probe sees exactly that: paths[i]
+// has no writer, and every path not yet released is still the holder's.
+func (h *rolloutHolder) release(t *testing.T, i int) {
+	t.Helper()
+	if _, err := fmt.Fprintf(h.stdin, "%d\n", 3+i); err != nil {
+		t.Fatalf("signal rollout holder: %v", err)
+	}
+	h.released[i] = true
+	for j, p := range h.paths {
+		want := h.pid
+		if h.released[j] {
+			want = 0
+		}
+		awaitCodexWriter(t, p, want)
+	}
+}
+
 // codexSharedPIDFixture is two codex rollouts held open for writing by ONE
-// helper process — the managed app-server daemon's shape. first is the older
-// root. The helper has to be a child process: WriterOf never reports the
-// calling process (darwin's writerPIDFromLsof drops self, linux's WriterOf
-// skips os.Getpid()).
+// rolloutHolder — the managed app-server daemon's shape. first is the older
+// root.
 type codexSharedPIDFixture struct {
 	first, second string
 	holderPID     int
-	holderStdin   io.WriteCloser
+	holder        *rolloutHolder
 }
 
-// newCodexSharedPIDFixture lays the rollouts down and starts the holder, which
-// opens first on fd 3 and second on fd 4 and then blocks in `read`. read is a
-// shell builtin, so the holder never forks: a forked child would inherit both
-// descriptors and show up as a second writer of the same files.
-//
-// It returns only once the real codex probe reports the helper as the writer
-// of both files, polled to codexWriterDeadline — never after a sleep.
 func newCodexSharedPIDFixture(t *testing.T) *codexSharedPIDFixture {
 	t.Helper()
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")
@@ -70,36 +127,21 @@ func newCodexSharedPIDFixture(t *testing.T) *codexSharedPIDFixture {
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("/bin/sh", "-c",
-		`exec 3>>"$1" 4>>"$2"; read line; exec 3>&-; read line`, "sh", f.first, f.second)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("stdin pipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start rollout holder: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	})
-	f.holderPID, f.holderStdin = cmd.Process.Pid, stdin
-	awaitCodexWriter(t, f.first, f.holderPID)
-	awaitCodexWriter(t, f.second, f.holderPID)
+	f.holder = startRolloutHolder(t, f.first, f.second)
+	f.holderPID = f.holder.pid
 	return f
 }
 
-// releaseFirst sends the holder one line, which closes its handle on the first
-// rollout (the shape of the daemon unloading that thread) while the second
-// stays held, and waits until the probe sees exactly that.
+// releaseFirst releases the older root's rollout while the newer one stays
+// held; releaseSecond the reverse.
 func (f *codexSharedPIDFixture) releaseFirst(t *testing.T) {
 	t.Helper()
-	if _, err := io.WriteString(f.holderStdin, "\n"); err != nil {
-		t.Fatalf("signal rollout holder: %v", err)
-	}
-	awaitCodexWriter(t, f.first, 0)
-	awaitCodexWriter(t, f.second, f.holderPID)
+	f.holder.release(t, 0)
+}
+
+func (f *codexSharedPIDFixture) releaseSecond(t *testing.T) {
+	t.Helper()
+	f.holder.release(t, 1)
 }
 
 // seed stores both roots in a fresh repo and returns them. pidOfSecond lets the

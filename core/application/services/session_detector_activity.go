@@ -485,7 +485,8 @@ func (d *SessionDetector) recordCatchUpTurn(sessionID string, state *session.Ses
 // backfillExistingSession fills in TranscriptPath/Adapter on an
 // already-known session when an earlier processActivity fallback
 // (debounce/refresh) created it without one — the watcher's identity on this
-// transcript event is the authoritative source. Runs under the PIDManager's
+// transcript event is the authoritative source. A known TranscriptPath is
+// replaced only by followRolledTranscript's rule. Runs under the PIDManager's
 // state lock: a discovery goroutine spawned by the earlier event may still
 // be in flight, and its assignPIDLocked writes state.PID/UpdatedAt on this
 // same pointer (issue #606).
@@ -500,6 +501,9 @@ func (d *SessionDetector) backfillExistingSession(id agent.Identity, ev agent.Ev
 			existing.Adapter = id.Name
 			changed = true
 		}
+		if d.followRolledTranscript(existing, ev) {
+			changed = true
+		}
 		if !changed {
 			return
 		}
@@ -509,6 +513,57 @@ func (d *SessionDetector) backfillExistingSession(id agent.Identity, ev agent.Ev
 				fmt.Sprintf("failed to update existing session: %v", err))
 		}
 	})
+}
+
+// followRolledTranscript re-points state at ev's transcript when the agent
+// has continued the session in a newer file (#2080), and reports whether it
+// did. A paginated codex thread continues in rollout-<ts>-<thread>_<segment>
+// .jsonl, whose session_meta.id the codex watcher maps to the same session,
+// and the managed app-server daemon then holds only the new file: on the dev
+// machine on 2026-10-10, `lsof -p` of the 0.162.1 managed daemon listed the
+// `_01a12665…` segment of thread 01a1181a and not its 2026/10/07 rollout.
+//
+// Only for an adapter that declares a release probe: that probe asks about
+// state.TranscriptPath, and the old segment would answer "released" for a
+// live thread. Every other adapter keeps the path it has — muse depends on
+// that, because its shadow file maps to the same id as the transcript that
+// carries the session (see muse's sessionIDFromPath). The new file must also
+// be newer (transcriptRolledOver), so a late event from the old segment never
+// moves the session back.
+//
+// Like onRelocated, it drops the old path's tailer cache. Callers hold
+// PIDManager.WithSessionStateLock and persist state themselves.
+func (d *SessionDetector) followRolledTranscript(state *session.SessionState, ev agent.Event) bool {
+	if !d.pidMgr.probesRelease(state.Adapter) || !transcriptRolledOver(state.TranscriptPath, ev.TranscriptPath) {
+		return false
+	}
+	d.log.LogInfo(logComponentSessionDetector, state.SessionID,
+		fmt.Sprintf("transcript continued in %s — following it", filepath.Base(ev.TranscriptPath)))
+	d.enricher.PruneMetrics(state.TranscriptPath)
+	state.TranscriptPath = ev.TranscriptPath
+	return true
+}
+
+// transcriptRolledOver reports whether candidate is a different, existing
+// transcript whose mtime is strictly newer than current's, or current no
+// longer exists. An empty path on either side, or a current transcript that
+// cannot be stat'ed for any other reason, is no rollover.
+func transcriptRolledOver(current, candidate string) bool {
+	if current == "" || candidate == "" {
+		return false
+	}
+	if current == candidate {
+		return false
+	}
+	next, err := os.Stat(candidate)
+	if err != nil {
+		return false
+	}
+	prev, err := os.Stat(current)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return next.ModTime().After(prev.ModTime())
 }
 
 // isLiveStaleSession reports whether a stale transcript should still produce
@@ -707,6 +762,7 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 // empty on the coalesced/refresh paths — see processActivity.
 func (d *SessionDetector) processActivityLocked(id agent.Identity, state *session.SessionState, ev agent.Event) {
 	d.backfillAdapterFromIdentity(id, state, ev)
+	d.followRolledTranscript(state, ev)
 	d.applyPendingPID(state, ev)
 
 	// Retry PID discovery if not yet known.

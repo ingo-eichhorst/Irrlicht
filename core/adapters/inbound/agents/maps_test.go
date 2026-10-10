@@ -1,7 +1,9 @@
 package agents_test
 
 import (
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -88,6 +90,16 @@ func TestSharedPIDOwners_OptInSet(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("shared PID owners = %v, want %v", got, want)
+	}
+}
+
+// TestReleasedPIDs_OptInSet pins which adapters end a root whose live PID
+// released its transcript (#2080): only codex. Opting in also turns on
+// followRolledTranscript, which muse's shadow file must not get.
+func TestReleasedPIDs_OptInSet(t *testing.T) {
+	got := slices.Sorted(maps.Keys(agents.ReleasedPIDs(agents.All())))
+	if want := []string{codex.AdapterName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released-transcript probes = %v, want %v", got, want)
 	}
 }
 

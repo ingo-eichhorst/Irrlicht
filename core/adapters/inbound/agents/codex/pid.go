@@ -40,7 +40,33 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // policy did. The same-PID paths never ask about their winner (the root
 // being assigned, or the newest root on the PID for the startup and periodic
 // sweeps); see isDedupDeleteCandidate in core/application/services/pid_manager.go.
+// ReleasedPID below is what ends that winner once its rollout is released
+// (#2080).
 func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
 	held, err := processlifecycle.HoldsForWriting(pid, transcriptPath)
 	return err == nil && held
+}
+
+// ReleasedPID reports that pid verifiably no longer holds this rollout open
+// for writing (#2080): the per-pid probe ran and answered "does not hold"
+// (processlifecycle.HoldsForWriting's (false, nil)). A probe that could not
+// run answers false, as does a rollout still held, so neither ends a session.
+//
+// The guard comes first because HoldsForWriting answers (false, nil) for a
+// non-positive pid or an empty path, which name nothing that could hold a
+// file. That is a safe "no" for OwnsSharedPID and the opposite here: passed
+// through, it would read as "released" and end a session bound to no process,
+// or a pre-session that has no rollout yet.
+//
+// What releases the rollout is the thread unload described on OwnsSharedPID
+// (codex rust-v0.162.1 thread_lifecycle.rs, read in source and NOT observed
+// live): closing the TUI drops the thread's last subscription, so the root is
+// expected to end about thread_unload_delay (60s by default) after the TUI
+// exits, while the daemon — the PID the root is bound to — lives on.
+func ReleasedPID(cwd, transcriptPath string, pid int) bool {
+	if pid <= 0 || transcriptPath == "" {
+		return false
+	}
+	held, err := processlifecycle.HoldsForWriting(pid, transcriptPath)
+	return err == nil && !held
 }
