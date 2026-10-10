@@ -26,6 +26,11 @@ import (
 // dedicated interactive invocation or a shared `serve` host holding many
 // other sessions' locks at the same time.
 //
+// Resolving the right PID per session is not the whole story, though: under
+// `muse serve` every live root resolves to the SAME PID, and the daemon's
+// same-PID supersession (#169) treats a second root on one PID as replacing
+// the first. OwnsSharedPID is what keeps those roots side by side (#2084).
+//
 // Falls back to asking the identical question of the transcript file
 // itself (session.jsonl) when the lock file has no writer. UNVERIFIED
 // whether Muse ever keeps session.jsonl open for the session's lifetime the
@@ -49,6 +54,32 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 		}
 	}
 	return processlifecycle.DiscoverPIDByTranscriptWriter(transcriptPath)
+}
+
+// OwnsSharedPID reports whether this session is still bound to pid by the same
+// probe DiscoverPID uses — its .session.lock's writer, else its transcript's —
+// asked of one root that shares pid with a newer muse root. An erroring probe,
+// no writer, or a different writer does not confirm ownership
+// (agent.SharedPIDOwnerFunc's contract: inconclusive is false), so the root
+// falls back to the exclusive same-PID policy and is retired.
+//
+// Under `muse serve` this keeps every root whose lock the host still holds.
+// In the dedicated one-session-per-process mode, /clear starts a new session
+// in the same process and releases the old session's lock (live-probed for
+// /clear only, recorded in
+// replaydata/agents/muse/scenarios/1-5_session-reset/metadata.json), so the
+// old root answers false and is retired as before — provided muse does not
+// also hold the old session.jsonl open, which the fallback above would read
+// as ownership (UNVERIFIED, as noted there). Also not measured: whether the
+// lock release always lands before the new root's PID binds. If it does not,
+// the old root is kept at assignment and retired by a later periodic
+// same-PID sweep instead (SweepDeadPIDs ticks every 5s, backing off to 15s).
+func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	owner, err := DiscoverPID(cwd, transcriptPath, nil)
+	return err == nil && owner == pid
 }
 
 // sessionLockPath derives a session's .session.lock path from its
