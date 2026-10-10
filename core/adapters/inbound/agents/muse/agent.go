@@ -41,7 +41,9 @@ func Source() agent.Source {
 // (processCmdPattern; format-spec §2), and DiscoverPID keys off each
 // session's own .session.lock file rather than a process-name scan, since
 // one muse process can legitimately serve several sessions at once (`muse
-// serve`, format-spec §2) — see pid.go.
+// serve`, format-spec §2) — see pid.go. For the same reason it declares
+// OwnsSharedPID as its SharedPIDOwner, so concurrent roots on one `muse serve`
+// PID are not retired as same-PID duplicates of each other (#2084).
 //
 // Muse exposes no documented native hook/callback mechanism: format-spec's
 // research (covering `muse --help` and the MSP wire schema) surfaced
@@ -62,8 +64,9 @@ func Agent() agent.Agent {
 			IconSVGDark:  iconSVGDark,
 		},
 		Process: agent.Process{
-			Match:         agent.CommandPattern{Regex: processCmdRegex},
-			PIDForSession: DiscoverPID,
+			Match:          agent.CommandPattern{Regex: processCmdRegex},
+			PIDForSession:  DiscoverPID,
+			SharedPIDOwner: OwnsSharedPID,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{

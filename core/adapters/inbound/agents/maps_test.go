@@ -71,9 +71,12 @@ func TestPIDDiscoverers_coversAllAdapters(t *testing.T) {
 }
 
 // Codex opted in for #2077: its managed app-server daemon writes every TUI's
-// rollout, so concurrent codex roots share one PID.
+// rollout, so concurrent codex roots share one PID. Muse opted in for #2084:
+// one `muse serve` host holds every hosted session's lock, so concurrent muse
+// roots share one PID. Projected from agents.All(), the slice the daemon wires
+// at boot, so an adapter opting in anywhere changes this set.
 func TestSharedPIDOwners_OptInSet(t *testing.T) {
-	m := agents.SharedPIDOwners(append(testAgents(), dsh.Agent()))
+	m := agents.SharedPIDOwners(agents.All())
 	var got []string
 	for name, owns := range m {
 		if owns != nil {
@@ -81,7 +84,7 @@ func TestSharedPIDOwners_OptInSet(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{codex.AdapterName, dsh.AdapterName}
+	want := []string{codex.AdapterName, dsh.AdapterName, muse.AdapterName}
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("shared PID owners = %v, want %v", got, want)
