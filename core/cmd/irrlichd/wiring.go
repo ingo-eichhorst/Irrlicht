@@ -105,8 +105,8 @@ func buildAgentWatchers(
 	if m, ok := a.Process.Match.(agent.CommandPattern); ok {
 		scanner.WithCommandLineMatch(m.Regex.String())
 	}
-	if a.Process.ExcludeArgv != nil {
-		scanner.WithArgvFilter(a.Process.ExcludeArgv)
+	if a.Process.ExcludeArgv != nil || a.Process.SessionHostArgv != nil {
+		scanner.WithArgvFilter(a.Process.SkipsPreSession)
 	}
 	if dshChildFilter != nil && (a.Identity.Name == "codex" || a.Identity.Name == "claude-code") {
 		scanner.WithPIDFilter(func(pid int) bool { return dshChildFilter(a.Identity.Name, pid) })

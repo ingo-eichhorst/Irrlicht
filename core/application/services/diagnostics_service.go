@@ -527,7 +527,7 @@ func (s *DiagnosticsService) processes(red *Redactor) []adapterProcesses {
 		sort.Ints(pids)
 		procs := make([]processInfo, 0, len(pids))
 		for _, pid := range pids {
-			procs = append(procs, s.procInfo(pid, a.Process.ExcludeArgv, red))
+			procs = append(procs, s.procInfo(pid, a.Process.SkipsPreSession, red))
 		}
 		out = append(out, adapterProcesses{Adapter: a.Identity.Name, Processes: procs})
 	}
@@ -536,13 +536,10 @@ func (s *DiagnosticsService) processes(red *Redactor) []adapterProcesses {
 
 // excluderByAdapter resolves an adapter name to its infra-argv predicate (or
 // nil if it declares none). An empty adapter name resolves to Claude Code.
-// An adapter that declares ReleasedPID resolves to nil: its excluder names the
-// host its roots are bound to (codex's app-server, #2082), so such a binding is
-// not a ghost — the exemption PIDManager.isBoundToInfra makes for the reaper.
 func (s *DiagnosticsService) excluderByAdapter() func(adapter string) func([]string) bool {
 	m := make(map[string]func([]string) bool, len(s.agents))
 	for _, a := range s.agents {
-		if a.Process.ExcludeArgv != nil && a.Process.ReleasedPID == nil {
+		if a.Process.ExcludeArgv != nil {
 			m[a.Identity.Name] = a.Process.ExcludeArgv
 		}
 	}

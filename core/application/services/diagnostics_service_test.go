@@ -653,11 +653,10 @@ func TestHooksBundleOmitsReverificationWhenNotCollectedInDaemon(t *testing.T) {
 	}
 }
 
-// Issue #2082 review: an adapter that declares ReleasedPID hosts its roots on
-// a process its ExcludeArgv names (codex's app-server), so a root bound to it
-// is the normal binding, not a #727 ghost. The process landscape still marks
-// the host itself as infra.
-func TestLivenessDoesNotFlagAHostedRootAsAGhost(t *testing.T) {
+// Issue #2082: a session host (Process.SessionHostArgv, codex's app-server)
+// is flagged infra in the process landscape, as an ExcludeArgv match is, while
+// a root bound to it is a normal binding, not a #727 ghost.
+func TestDiagnosticsFlagsASessionHostOnlyInTheLandscape(t *testing.T) {
 	appServer := func(argv []string) bool { return len(argv) > 1 && argv[1] == "app-server" }
 	obs := &diagFakeObserver{
 		argv:   map[int][]string{400: {"codex", "app-server", "--listen", "unix://", "--managed-daemon"}},
@@ -668,10 +667,7 @@ func TestLivenessDoesNotFlagAHostedRootAsAGhost(t *testing.T) {
 		IsAlive: func(int) bool { return true },
 		Agents: []agent.Agent{{
 			Identity: agent.Identity{Name: "codex"},
-			Process: agent.Process{
-				Match: agent.ExactName{Name: "codex"}, ExcludeArgv: appServer,
-				ReleasedPID: func(string, string, int) bool { return false },
-			},
+			Process:  agent.Process{Match: agent.ExactName{Name: "codex"}, SessionHostArgv: appServer},
 		}},
 		DefaultAdapter: "codex",
 	})
@@ -683,6 +679,6 @@ func TestLivenessDoesNotFlagAHostedRootAsAGhost(t *testing.T) {
 	}
 	procs := svc.processes(red)
 	if len(procs) != 1 || len(procs[0].Processes) != 1 || !procs[0].Processes[0].IsInfraArgv {
-		t.Errorf("the app-server itself should stay flagged infra in the process landscape: %+v", procs)
+		t.Errorf("the app-server itself should be flagged infra in the process landscape: %+v", procs)
 	}
 }

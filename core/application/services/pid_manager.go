@@ -233,10 +233,16 @@ type PIDManager struct {
 	releaseStreaks map[releaseKey]int
 	misboundRoots  map[releaseKey]bool
 
+	// sessionHosts maps adapter name → its Process.SessionHostArgv, and
+	// hostReadArgv reads a live PID's argv; together they let the presession
+	// sweep recognize a root bound to its adapter's session host (#2082). Both
+	// nil disables that pairing; installed once at startup via SetSessionHosts.
+	sessionHosts map[string]func([]string) bool
+	hostReadArgv func(pid int) []string
 	// hostClaims holds the hosted roots that have already retired a
-	// placeholder (#2082), so a root retires at most one however many sweeps
-	// see it; see hostedPlaceholderVictims. hostClaimMu guards it for the same
-	// reason releaseMu exists.
+	// placeholder, so a root retires at most one however many sweeps see it;
+	// see hostedPlaceholderVictims. hostClaimMu guards it for the same reason
+	// releaseMu exists.
 	hostClaimMu sync.Mutex
 	hostClaims  map[string]bool
 
@@ -356,6 +362,16 @@ func (pm *PIDManager) SetBackgroundReader(fn BackgroundReader) {
 func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, readArgv func(pid int) []string) {
 	pm.argvExcluders = excluders
 	pm.readArgv = readArgv
+}
+
+// SetSessionHosts installs the seam the presession sweep uses to retire the
+// placeholder a hosted root's client left behind (#2082). hosts maps adapter
+// name → Process.SessionHostArgv; readArgv reads a PID's argv. Both nil (the
+// default, and what tests/demo mode leave) disables the pairing. Called once
+// at startup.
+func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, readArgv func(pid int) []string) {
+	pm.sessionHosts = hosts
+	pm.hostReadArgv = readArgv
 }
 
 // SetHostGate installs the seam session admission uses to reject a candidate
@@ -1877,18 +1893,8 @@ func (pm *PIDManager) reapUnboundReadyGhost(snap livenessSnapshot) bool {
 // TTL-branch reap below: a genuinely active session — including one blocked on a
 // permission prompt, which is bound to the real `claude` PID, not infra — is
 // never reaped here.
-//
-// It also returns false for an adapter that declares a release probe: its
-// sessions are hosted by a process that outlives them, and its excluder names
-// that host (codex's app-server, #2082), so a root bound to it is hosted, not
-// mis-bound. endReleasedRoots ends such a root once the host lets its
-// transcript go (#2080). TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra
-// was run red without this check, against codex's declared excluder.
 func (pm *PIDManager) isBoundToInfra(snap livenessSnapshot) bool {
 	if pm.readArgv == nil || snap.pid <= 0 || snap.parentSessionID != "" {
-		return false
-	}
-	if pm.probesRelease(snap.adapter) {
 		return false
 	}
 	exclude := pm.argvExcluders[snap.adapter]
@@ -2760,11 +2766,7 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		pm.assignMu.Unlock()
 		return
 	}
-	type victim struct {
-		state     *session.SessionState
-		candidate string
-	}
-	var victims []victim
+	var victims []presessionVictim
 	now := time.Now()
 	for _, proc := range states {
 		if !strings.HasPrefix(proc.SessionID, "proc-") {
@@ -2777,68 +2779,70 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		if kind == matchCWD && !preSessionCWDGuardPasses(proc, candidate, now) {
 			continue
 		}
-		victims = append(victims, victim{state: proc, candidate: candidate.SessionID})
+		victims = append(victims, presessionVictim{state: proc, by: candidate.SessionID, reason: "PID-bound to a sibling"})
 	}
 	pm.assignMu.Unlock()
 
+	// Both kinds come from the same snapshot, so one placeholder can be in
+	// both lists; the reload below skips it the second time.
+	victims = append(victims, pm.hostedPlaceholderVictims(states)...)
 	for _, v := range victims {
 		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
 			continue
 		}
 		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
-			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate), v.candidate)
-	}
-
-	for _, v := range pm.hostedPlaceholderVictims(states) {
-		if s, _ := pm.repo.Load(v.placeholder.SessionID); s == nil {
-			continue
-		}
-		pm.removeSessionUntracked(logComponentSessionDetector, v.placeholder,
-			fmt.Sprintf("pre-session superseded by %s (bound to its adapter's session host) — deleting", v.root), v.root)
+			fmt.Sprintf("pre-session superseded by %s (%s) — deleting", v.by, v.reason), v.by)
 	}
 }
 
-// hostedVictim is a placeholder paired with the hosted root that retires it.
-type hostedVictim struct {
-	placeholder *session.SessionState
-	root        string
+// presessionVictim is a proc-* placeholder the periodic sweep retires in
+// favour of the real session by, for reason (logged).
+type presessionVictim struct {
+	state  *session.SessionState
+	by     string
+	reason string
 }
 
-// hostGroup holds one (adapter, cwd)'s hosted-root candidates and placeholders.
+// hostGroup holds one (adapter, cwd)'s hosted-root candidates and
+// placeholders, and the adapter's session-host predicate.
 type hostGroup struct {
-	adapter      string
+	isHost       func([]string) bool
 	roots        []*session.SessionState
 	placeholders []*session.SessionState
 }
 
 // hostedPlaceholderVictims picks, for retirement without waiting out
 // preSessionSweepGrace, the placeholder a hosted root's client left behind
-// (#2082). A codex TUI's root
-// binds to the app-server that hosts its thread (#2077), never to the TUI's own
-// PID, so the PID-match path never retires the TUI's placeholder and the cwd
-// fallback waits 90s.
+// (#2082). A codex TUI's root binds to the app-server that hosts its thread
+// (#2077), never to the TUI's own PID, so the PID-match path never retires the
+// TUI's placeholder and the cwd fallback waits 90s.
 //
-// The rule, for an adapter that declares a release probe (its sessions are
-// hosted by a process that outlives them) and whose observe consent is granted:
-// within one cwd, each root whose bound PID's argv the adapter's excluder names
-// retires the oldest placeholder that was first seen before the root (or within
+// The rule, for an adapter that declares a session host
+// (Process.SessionHostArgv) and whose observe consent is granted: within one
+// cwd, each root whose bound PID's argv that predicate recognizes retires the
+// oldest placeholder that was first seen before the root (or within
 // hostedPlaceholderMintLag after it) and does not share its PID — one
 // placeholder per root, ever, which hostClaims remembers across sweeps. So N
 // placeholders and M such roots lose at most the M oldest, and a placeholder
 // minted well after every root in its cwd (a TUI opened with no thread yet, or
-// one re-minted at daemon start beside a seeded root) keeps the grace path. Which TUI a root came from is not known (#2083); the
-// oldest is a stand-in.
+// one re-minted at daemon start beside a seeded root) keeps the grace path.
+// Which TUI a root came from is not known (#2083); the oldest is a stand-in.
+//
+// hostClaims covers this sweep only. When a root is born, the session
+// detector's cleanupPreSessionsForProject retires every same-cwd placeholder
+// and records no claim, so such a root can still pair with a placeholder
+// minted within the lag after it.
 //
 // states is the sweep's snapshot. The argv reads run outside assignMu.
-func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) []hostedVictim {
-	if pm.readArgv == nil || len(pm.releasedPIDs) == 0 {
+func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) []presessionVictim {
+	if pm.hostReadArgv == nil || len(pm.sessionHosts) == 0 {
 		return nil
 	}
 	groups := pm.hostGroups(states)
 	pm.hostClaimMu.Lock()
 	defer pm.hostClaimMu.Unlock()
 	claims := make(map[string]bool)
-	var victims []hostedVictim
+	var victims []presessionVictim
 	for _, g := range groups {
 		for _, root := range g.roots {
 			if pm.hostClaims[root.SessionID] {
@@ -2852,12 +2856,16 @@ func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) [
 }
 
 // hostGroups groups states by (adapter, cwd) for the adapters that declare a
-// release probe: placeholders, and the roots that could have been hosted —
-// top-level, with a transcript and a PID.
+// session host and whose observe consent is granted: placeholders, and the
+// roots that could have been hosted — top-level, with a transcript and a PID.
 func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*hostGroup {
 	groups := make(map[[2]string]*hostGroup)
 	for _, s := range states {
-		if s.CWD == "" || !pm.probesRelease(s.Adapter) {
+		isHost := pm.sessionHosts[s.Adapter]
+		if s.CWD == "" || isHost == nil {
+			continue
+		}
+		if !pm.observeAllowed(s.Adapter) {
 			continue
 		}
 		placeholder := strings.HasPrefix(s.SessionID, "proc-")
@@ -2867,7 +2875,7 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 		key := [2]string{s.Adapter, s.CWD}
 		g := groups[key]
 		if g == nil {
-			g = &hostGroup{adapter: s.Adapter}
+			g = &hostGroup{isHost: isHost}
 			groups[key] = g
 		}
 		if placeholder {
@@ -2892,12 +2900,8 @@ const hostedPlaceholderMintLag = 6 * time.Second
 // pairHostedRoots pairs g's unclaimed hosted roots, oldest first, each with the
 // oldest unpaired placeholder first seen no later than hostedPlaceholderMintLag
 // after it and not on its own PID, and records each pairing in claims.
-func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []hostedVictim {
-	if len(g.placeholders) == 0 || !pm.observeAllowed(g.adapter) {
-		return nil
-	}
-	exclude := pm.argvExcluders[g.adapter]
-	if exclude == nil {
+func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []presessionVictim {
+	if len(g.placeholders) == 0 {
 		return nil
 	}
 	byFirstSeen := func(a, b *session.SessionState) int {
@@ -2910,9 +2914,9 @@ func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []ho
 	slices.SortFunc(g.placeholders, byFirstSeen)
 	paired := make([]bool, len(g.placeholders))
 	mintLag := int64(hostedPlaceholderMintLag / time.Second)
-	var victims []hostedVictim
+	var victims []presessionVictim
 	for _, root := range g.roots {
-		if claims[root.SessionID] || !exclude(pm.readArgv(root.PID)) {
+		if claims[root.SessionID] || !g.isHost(pm.hostReadArgv(root.PID)) {
 			continue
 		}
 		for i, p := range g.placeholders {
@@ -2921,7 +2925,7 @@ func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []ho
 			}
 			paired[i] = true
 			claims[root.SessionID] = true
-			victims = append(victims, hostedVictim{placeholder: p, root: root.SessionID})
+			victims = append(victims, presessionVictim{state: p, by: root.SessionID, reason: "bound to its adapter's session host"})
 			break
 		}
 	}

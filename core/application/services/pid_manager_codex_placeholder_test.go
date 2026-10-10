@@ -3,6 +3,7 @@ package services_test
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,8 +22,7 @@ import (
 //
 // The argv rows were captured on the dev machine on 2026-10-11 with
 // `ps -o args= -p <pid>` (pids 29284, 3766, 70874), paths shortened to their
-// last element. The release step is not the subject here, so every rollout
-// reads as still held.
+// last element.
 var (
 	codexManagedDaemonArgv   = []string{"codex", "app-server", "--listen", "unix://", "--analytics-default-enabled", "--managed-daemon"}
 	codexVSCodeAppServerArgv = []string{"codex", "-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"}
@@ -30,20 +30,18 @@ var (
 )
 
 type codexPlaceholderFixture struct {
-	t        *testing.T
-	repo     *mockRepo
-	cwd      string
-	argv     map[int][]string
-	released map[string]agent.ReleasedPIDFunc
-	consent  func(adapter string) bool
+	t       *testing.T
+	repo    *mockRepo
+	cwd     string
+	argv    map[int][]string
+	hosts   map[string]func([]string) bool
+	consent func(adapter string) bool
 }
 
 func newCodexPlaceholderFixture(t *testing.T) *codexPlaceholderFixture {
 	return &codexPlaceholderFixture{
 		t: t, repo: newMockRepo(), cwd: t.TempDir(), argv: map[int][]string{},
-		released: map[string]agent.ReleasedPIDFunc{
-			codex.AdapterName: func(string, string, int) bool { return false },
-		},
+		hosts: agents.SessionHosts([]agent.Agent{codex.Agent()}),
 	}
 }
 
@@ -85,16 +83,17 @@ func (f *codexPlaceholderFixture) root(id string, pid int, cwd string, age time.
 	}
 }
 
-// pidManager wires the codex excluder as startup.go does
-// (agents.ArgvExcluders → SetInfraReaper), with f.argv as the argv reader.
+// pidManager wires codex's declarations as startup.go does
+// (agents.ArgvExcluders → SetInfraReaper, agents.SessionHosts →
+// SetSessionHosts), with f.argv as the argv reader.
 func (f *codexPlaceholderFixture) pidManager() *services.PIDManager {
 	pm := services.NewPIDManager(services.PIDManagerDeps{
 		Repo: f.repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
-		ReleasedPIDs:     f.released,
 		OnSessionDeleted: func(string) {},
 	})
-	pm.SetInfraReaper(agents.ArgvExcluders([]agent.Agent{codex.Agent()}),
-		func(pid int) []string { return f.argv[pid] })
+	readArgv := func(pid int) []string { return f.argv[pid] }
+	pm.SetInfraReaper(agents.ArgvExcluders([]agent.Agent{codex.Agent()}), readArgv)
+	pm.SetSessionHosts(f.hosts, readArgv)
 	if f.consent != nil {
 		pm.SetConsentGate(f.consent)
 	}
@@ -114,9 +113,9 @@ func TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer(t *
 	tui := f.placeholder(30 * time.Second)
 	f.root("codex-root", f.process(codexManagedDaemonArgv), f.cwd, 10*time.Second)
 	pm := f.pidManager()
-	var superseded [][2]string
+	var superseded []supersededPair
 	pm.SetSessionSupersededHandler(func(oldID, newID string) {
-		superseded = append(superseded, [2]string{oldID, newID})
+		superseded = append(superseded, supersededPair{oldID: oldID, newID: newID})
 	})
 
 	pm.CheckPIDLiveness()
@@ -127,7 +126,7 @@ func TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer(t *
 	if !f.present("codex-root") {
 		t.Fatal("the codex root itself was removed")
 	}
-	if want := [][2]string{{tui, "codex-root"}}; fmt.Sprint(superseded) != fmt.Sprint(want) {
+	if want := []supersededPair{{oldID: tui, newID: "codex-root"}}; !slices.Equal(superseded, want) {
 		t.Errorf("superseded hook calls = %v, want %v", superseded, want)
 	}
 }
@@ -246,13 +245,11 @@ func TestCheckPIDLiveness_CodexPlaceholderPromptRetirementScope(t *testing.T) {
 			f.root("codex-root", f.process(codexManagedDaemonArgv), f.cwd, 10*time.Second)
 			return id
 		}},
-		// Only an adapter whose sessions are hosted by a process that outlives
-		// them (it declares ReleasedPID) binds a root away from its client.
-		// Another adapter declares one, so the check is per adapter.
-		{"adapter declares no release probe", func(f *codexPlaceholderFixture) string {
-			f.released = map[string]agent.ReleasedPIDFunc{
-				"another-adapter": func(string, string, int) bool { return false },
-			}
+		// Only an adapter that declares a session host binds a root away from
+		// its client. Another adapter declares one, so the check is per
+		// adapter.
+		{"adapter declares no session host", func(f *codexPlaceholderFixture) string {
+			f.hosts = map[string]func([]string) bool{"another-adapter": codex.IsAppServerArgv}
 			id := f.placeholder(30 * time.Second)
 			f.root("codex-root", f.process(codexManagedDaemonArgv), f.cwd, 10*time.Second)
 			return id
@@ -271,11 +268,12 @@ func TestCheckPIDLiveness_CodexPlaceholderPromptRetirementScope(t *testing.T) {
 	}
 }
 
-// Lock (#2082): naming the codex app-server in Process.ExcludeArgv must not let
-// the #727 infra reaper end an idle codex root the app-server still hosts. That
-// reaper ends a root whose bound PID's argv the adapter excludes once its
-// transcript and UpdatedAt are stale, and every codex root is bound to an
-// app-server (#2077).
+// Lock (#2082): the #727 infra reaper must not end an idle codex root the
+// app-server still hosts. That reaper ends a root whose bound PID's argv the
+// adapter's Process.ExcludeArgv rejects once its transcript and UpdatedAt are
+// stale, and every codex root is bound to an app-server (#2077) — so codex
+// names the app-server in SessionHostArgv, never in ExcludeArgv. Seen red when
+// IsAppServerArgv was declared as codex's ExcludeArgv.
 func TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra(t *testing.T) {
 	f := newCodexPlaceholderFixture(t)
 	transcript := filepath.Join(t.TempDir(), "rollout-idle.jsonl")

@@ -3,43 +3,49 @@
 # issue #2082: codex app-server processes get no placeholder row, and a TUI's
 # placeholder goes once a newer codex root in its cwd is bound to an app-server.
 #
-# WHY THIS FILE EXISTS. The red-first tests for #2082 (the codex declaration,
-# the scanner wiring, and the prompt retirement) were seen red on the base.
-# What they cannot show is that each guard the fix ADDS reaches what it
-# protects: the locks for those guards pass on the base by construction. Each
-# mutation below breaks one guard and requires the named test to go red with
-# the named message:
+# WHY THIS FILE EXISTS. The red-first tests for #2082 were seen red on the
+# base: the codex scanner had no argv filter, and a TUI's placeholder stayed
+# beside a root bound to the app-server. What they cannot show is that each
+# guard the fix ADDS reaches what it protects: the locks for those guards pass
+# on the base by construction, and SessionHostArgv, SkipsPreSession and
+# IsAppServerArgv are new. Each mutation below breaks one guard and requires
+# the named test to go red with the named message:
 #
-#   1. a placeholder first seen after the root is paired with it → the scope
+#   0. the sweep never runs the hosted pairing → the red-first test goes red:
+#      the placeholder survives beside its root.
+#   1. a placeholder first seen well after the root is paired → the scope
 #      lock's "placeholder newer than the root" row goes red: a TUI opened
 #      with no thread yet loses its row.
 #   2. a root's pairing is forgotten between sweeps → the two-TUI lock goes red
 #      on sweep 2: one root retires a second placeholder.
 #   3. a root pairs with every eligible placeholder → the two-TUI lock goes red
 #      on sweep 1.
-#   4. the root's bound PID need not be an app-server → the scope lock's "root
-#      bound to a TUI" row goes red.
+#   4. the root's bound PID need not be a session host → the scope lock's
+#      "root bound to a TUI" row goes red.
 #   5. the observe-consent gate is dropped → the scope lock's consent row goes
 #      red.
-#   6. an adapter without its own release probe is paired → the scope lock's
-#      "adapter declares no release probe" row goes red.
 #   7. a placeholder on the root's own PID is paired → the own-PID lock goes
 #      red: the TUI placeholder keeps its row.
-#   8. the infra reaper's release-probe exemption is dropped → the idle-root
-#      lock goes red: an idle codex root on the app-server is reaped.
+#   8. codex also names the app-server in ExcludeArgv → the idle-root lock
+#      goes red: the #727 infra reaper ends an idle hosted root.
 #   9. the predicate reads argv[1] only → the codex table's VS Code row goes
 #      red.
-#  10. the predicate excludes a short or unreadable argv → the codex table's
+#  10. the predicate matches a short or unreadable argv → the codex table's
 #      unreadable-argv row goes red.
-#  11. codex declares no ExcludeArgv → the wiring test goes red: the scanner
-#      has no argv filter.
+#  11. codex declares no SessionHostArgv → the wiring test goes red: the
+#      scanner has no argv filter.
 #  12. no mint lag: a placeholder must be first seen no later than its root →
 #      the mint-lag test's 4s row goes red: a TUI launched with a prompt keeps
 #      its placeholder for the grace period.
 #  13. an option's value counts as the subcommand → the codex table's
 #      `--cd app-server` row goes red.
-#  14. the diagnostics excluder keeps adapters that declare ReleasedPID → the
-#      hosted-root liveness test goes red: every codex root reads as a ghost.
+#  14. the scanner wiring ignores SessionHostArgv → the wiring test goes red.
+#  15. SkipsPreSession ignores SessionHostArgv → its table's session-host row
+#      goes red.
+#
+# There is no mutation 6: which adapter's session host applies is a map
+# index (pm.sessionHosts[s.Adapter]), not a guard; the scope lock's "adapter
+# declares no session host" row pins it.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -129,12 +135,24 @@ PM_FILE="core/application/services/pid_manager.go"
 CODEX_FILE="core/adapters/inbound/agents/codex/agent.go"
 SCOPE='^TestCheckPIDLiveness_CodexPlaceholderPromptRetirementScope$'
 PER_ROOT='^TestCheckPIDLiveness_CodexPlaceholdersRetiredAtMostOnePerRoot$/^two_TUIs,_one_root$'
+CODEX_TABLE='^TestAgentDeclaresCodexAppServerAsSessionHost$'
+PAIR_LINE='if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {'
+
+# ── 0. the sweep never runs the hosted pairing ──
+assert_go_test_goes_red \
+  "the periodic sweep without the hosted pairing" \
+  "$PM_FILE" \
+  $'\tvictims = append(victims, pm.hostedPlaceholderVictims(states)...)\n' \
+  '' \
+  "$SERVICES" \
+  '^TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer$' \
+  "survived a sweep after a newer codex root in its cwd bound to the app-server daemon"
 
 # ── 1. a placeholder newer than the root is paired ──
 assert_go_test_goes_red \
-  "a placeholder first seen after the root paired with it" \
+  "a placeholder first seen well after the root paired with it" \
   "$PM_FILE" \
-  'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {' \
+  "$PAIR_LINE" \
   'if paired[i] || mintLag < 0 || p.PID == root.PID {' \
   "$SERVICES" \
   "$SCOPE/^placeholder_newer_than_the_root\$" \
@@ -154,18 +172,18 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "a hosted root pairing with more than one placeholder" \
   "$PM_FILE" \
-  $'victims = append(victims, hostedVictim{placeholder: p, root: root.SessionID})\n\t\t\tbreak' \
-  $'victims = append(victims, hostedVictim{placeholder: p, root: root.SessionID})' \
+  $'reason: "bound to its adapter\'s session host"})\n\t\t\tbreak' \
+  $'reason: "bound to its adapter\'s session host"})' \
   "$SERVICES" \
   "$PER_ROOT" \
   "after sweep 1 placeholder #1 (oldest first) present = false, want true"
 
-# ── 4. the root's PID need not be an app-server ──
+# ── 4. the root's PID need not be a session host ──
 assert_go_test_goes_red \
-  "a root paired without its bound PID's argv being the adapter's host" \
+  "a root paired without its bound PID being its adapter's session host" \
   "$PM_FILE" \
-  'if claims[root.SessionID] || !exclude(pm.readArgv(root.PID)) {' \
-  'if claims[root.SessionID] || exclude == nil {' \
+  'if claims[root.SessionID] || !g.isHost(pm.hostReadArgv(root.PID)) {' \
+  'if claims[root.SessionID] || g.isHost == nil {' \
   "$SERVICES" \
   "$SCOPE/^root_bound_to_a_TUI,_not_an_app-server\$" \
   "was retired within its grace period"
@@ -174,38 +192,28 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "hosted-root pairing ignoring the consent gate" \
   "$PM_FILE" \
-  'if len(g.placeholders) == 0 || !pm.observeAllowed(g.adapter) {' \
-  'if len(g.placeholders) == 0 {' \
+  'if !pm.observeAllowed(s.Adapter) {' \
+  'if false {' \
   "$SERVICES" \
   "$SCOPE/^observe_consent_withheld\$" \
-  "was retired within its grace period"
-
-# ── 6. an adapter without its own release probe is paired ──
-assert_go_test_goes_red \
-  "hosted-root pairing for an adapter without a release probe" \
-  "$PM_FILE" \
-  'if s.CWD == "" || !pm.probesRelease(s.Adapter) {' \
-  'if s.CWD == "" {' \
-  "$SERVICES" \
-  "$SCOPE/^adapter_declares_no_release_probe\$" \
   "was retired within its grace period"
 
 # ── 7. a placeholder on the root's own PID is paired ──
 assert_go_test_goes_red \
   "a placeholder on the root's own PID using up its pairing" \
   "$PM_FILE" \
-  'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {' \
+  "$PAIR_LINE" \
   'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag {' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_CodexPlaceholderOnTheRootsOwnPIDLeavesItsPairing$' \
   "the root's pairing went to the placeholder on its own pid"
 
-# ── 8. the infra reaper's exemption is dropped ──
+# ── 8. codex also names the app-server in ExcludeArgv ──
 assert_go_test_goes_red \
-  "the infra reaper ending a root its adapter's host still hosts" \
-  "$PM_FILE" \
-  $'\tif pm.probesRelease(snap.adapter) {\n\t\treturn false\n\t}' \
-  $'\tif false {\n\t\treturn false\n\t}' \
+  "codex declaring the app-server as ExcludeArgv" \
+  "$CODEX_FILE" \
+  $'\t\t\tSessionHostArgv: IsAppServerArgv,\n' \
+  $'\t\t\tSessionHostArgv: IsAppServerArgv,\n\t\t\tExcludeArgv: IsAppServerArgv,\n' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra$' \
   "was reaped as an infra-bound ghost"
@@ -217,24 +225,24 @@ assert_go_test_goes_red \
   'for i := 1; i < len(argv); i++ {' \
   'for i := 1; i < len(argv) && i < 2; i++ {' \
   "$CODEX" \
-  '^TestAgentExcludesCodexAppServerProcesses$' \
-  "VS Code extension app-server (pid 3766): ExcludeArgv("
+  "$CODEX_TABLE" \
+  "VS Code extension app-server (pid 3766): SessionHostArgv("
 
-# ── 10. a short or unreadable argv is excluded ──
+# ── 10. a short or unreadable argv matches ──
 assert_go_test_goes_red \
-  "codex.IsAppServerArgv excluding an unreadable argv" \
+  "codex.IsAppServerArgv matching an unreadable argv" \
   "$CODEX_FILE" \
   $'\t}\n\treturn false\n}\n\n// valueOptions' \
   $'\t}\n\treturn len(argv) < 2\n}\n\n// valueOptions' \
   "$CODEX" \
-  '^TestAgentExcludesCodexAppServerProcesses$' \
-  "unreadable argv: ExcludeArgv("
+  "$CODEX_TABLE" \
+  "unreadable argv: SessionHostArgv("
 
-# ── 11. codex declares no ExcludeArgv ──
+# ── 11. codex declares no SessionHostArgv ──
 assert_go_test_goes_red \
-  "codex without an ExcludeArgv declaration" \
+  "codex without a SessionHostArgv declaration" \
   "$CODEX_FILE" \
-  $'\t\t\tExcludeArgv:    IsAppServerArgv,\n' \
+  $'\t\t\tSessionHostArgv: IsAppServerArgv,\n' \
   '' \
   "./core/cmd/irrlichd/" \
   '^TestCodexScannerCarriesArgvFilter$' \
@@ -257,18 +265,28 @@ assert_go_test_goes_red \
   'if argv[i] == "app-server" && !valueOptions[argv[i-1]] {' \
   'if argv[i] == "app-server" {' \
   "$CODEX" \
-  '^TestAgentExcludesCodexAppServerProcesses$' \
-  "TUI with --cd app-server: ExcludeArgv("
+  "$CODEX_TABLE" \
+  "TUI with --cd app-server: SessionHostArgv("
 
-# ── 14. diagnostics reads a hosted root as a ghost ──
+# ── 14. the scanner wiring ignores SessionHostArgv ──
 assert_go_test_goes_red \
-  "the diagnostics excluder keeping an adapter that declares ReleasedPID" \
-  "core/application/services/diagnostics_service.go" \
-  'if a.Process.ExcludeArgv != nil && a.Process.ReleasedPID == nil {' \
+  "the scanner wiring without SessionHostArgv" \
+  "core/cmd/irrlichd/wiring.go" \
+  'if a.Process.ExcludeArgv != nil || a.Process.SessionHostArgv != nil {' \
   'if a.Process.ExcludeArgv != nil {' \
-  "$SERVICES" \
-  '^TestLivenessDoesNotFlagAHostedRootAsAGhost$' \
-  "reads as a ghost binding"
+  "./core/cmd/irrlichd/" \
+  '^TestCodexScannerCarriesArgvFilter$' \
+  "the codex scanner has no argv filter"
+
+# ── 15. SkipsPreSession ignores SessionHostArgv ──
+assert_go_test_goes_red \
+  "agent.Process.SkipsPreSession without SessionHostArgv" \
+  "core/domain/agent/declaration.go" \
+  '(p.SessionHostArgv != nil && p.SessionHostArgv(argv))' \
+  '(p.SessionHostArgv != nil && false)' \
+  "./core/domain/agent/" \
+  '^TestProcessSkipsPreSession$' \
+  "session host: SkipsPreSession("
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-appserver-placeholder-mutations: $fails FAILED"

@@ -47,7 +47,10 @@ func Agent() agent.Agent {
 			PIDForSession:  DiscoverPID,
 			SharedPIDOwner: OwnsSharedPID,
 			ReleasedPID:    ReleasedPID,
-			ExcludeArgv:    IsAppServerArgv,
+			// Not ExcludeArgv: every codex root is bound to an app-server
+			// (#2077), and the #727 infra reaper ends a session bound to a
+			// process ExcludeArgv rejects.
+			SessionHostArgv: IsAppServerArgv,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{
@@ -107,8 +110,9 @@ func Agent() agent.Agent {
 }
 
 // IsAppServerArgv reports whether a `codex`-binary process is a codex
-// app-server rather than a TUI a user talks to (#2082): any argument after
-// argv[0] equal to "app-server". The shapes it covers, read with `ps -o args=`
+// app-server rather than a TUI a user talks to (#2082): an argument after
+// argv[0] equal to "app-server" that is not an option's value. The shapes it
+// covers, read with `ps -o args=`
 // on the dev machine on 2026-10-11:
 //
 //   - `codex app-server --listen unix:// --analytics-default-enabled --managed-daemon`
@@ -122,14 +126,11 @@ func Agent() agent.Agent {
 // `app-server` would be. Nor is the value of one of valueOptions matched (a TUI
 // started with `--cd app-server` for a package directory of that name); the
 // value of an option missing from that list still is. A nil or empty argv
-// (unreadable) is never an app-server, per the agent.Process.ExcludeArgv
-// contract.
+// (unreadable) is never an app-server.
 //
-// Declared as codex's Process.ExcludeArgv, so the process scanner mints no
-// placeholder row for an app-server. The same declaration feeds the #727 infra
-// reaper, which would read every codex root as a ghost — they are all bound to
-// an app-server (#2077) — so the PID manager exempts adapters that declare
-// ReleasedPID from it (PIDManager.isBoundToInfra).
+// Declared as codex's Process.SessionHostArgv: the scanner mints no
+// placeholder row for an app-server, and a root bound to one retires its TUI's
+// placeholder. Exported for #2083.
 func IsAppServerArgv(argv []string) bool {
 	for i := 1; i < len(argv); i++ {
 		if argv[i] == "app-server" && !valueOptions[argv[i-1]] {

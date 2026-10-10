@@ -580,6 +580,13 @@ func (d *SessionDetector) SetInfraReaper(excluders map[string]func([]string) boo
 	d.pidMgr.SetInfraReaper(excluders, readArgv)
 }
 
+// SetSessionHosts installs the presession-sweep seam that retires the
+// placeholder a hosted root's client left behind (#2082). Both args nil
+// disables it. Call before Run.
+func (d *SessionDetector) SetSessionHosts(hosts map[string]func([]string) bool, readArgv func(pid int) []string) {
+	d.pidMgr.SetSessionHosts(hosts, readArgv)
+}
+
 // SetHostGate installs the session-admission seam that rejects a candidate PID
 // launched by something other than a known terminal or IDE (#784). Both args
 // nil disables the check. Call before Run.

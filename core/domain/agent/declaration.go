@@ -392,6 +392,14 @@ type Identity struct {
 	IconSVGDark  string // raw <svg>…</svg> markup, dark theme
 }
 
+// SkipsPreSession reports whether the scanner mints no pre-session for a
+// matched process with this argv: one ExcludeArgv rejects or SessionHostArgv
+// recognizes.
+func (p Process) SkipsPreSession(argv []string) bool {
+	return (p.ExcludeArgv != nil && p.ExcludeArgv(argv)) ||
+		(p.SessionHostArgv != nil && p.SessionHostArgv(argv))
+}
+
 // Process bundles the two universal process-related contracts every
 // adapter must declare: how to recognize the agent's OS processes, and
 // how to map a session (by cwd + transcript path) back to a single PID.
@@ -418,12 +426,16 @@ type Process struct {
 	// live in the adapter package; the scanner stays generic. A nil argv
 	// (unreadable, e.g. hardened-runtime) is passed through, so an adapter's
 	// predicate must default to *not* excluding when it can't tell.
-	//
-	// The liveness sweep also reaps a session bound to an excluded process
-	// (#727), unless the adapter declares ReleasedPID: then the excluded
-	// process is the host its sessions are bound to (codex's app-server,
-	// #2082), and a root bound to it retires its client's placeholder instead.
 	ExcludeArgv func(argv []string) bool
+
+	// SessionHostArgv, when non-nil, recognizes a matched process that hosts
+	// this agent's sessions on behalf of the processes a user talks to — the
+	// shared codex app-server (#2077). The scanner mints no pre-session for it,
+	// as for ExcludeArgv. Unlike ExcludeArgv, a root session legitimately binds
+	// to it, so nothing reaps a session for being bound to it; a root bound to
+	// it instead retires the pre-session its client left behind (#2082). A nil
+	// argv must not match, as for ExcludeArgv.
+	SessionHostArgv func(argv []string) bool
 
 	// RequireKnownHost, when true, gates session admission on the bound
 	// process's OS-level ancestry: a candidate PID whose parent chain doesn't

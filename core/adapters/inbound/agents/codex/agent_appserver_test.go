@@ -8,10 +8,10 @@ import "testing"
 // captured on the dev machine on 2026-10-11 with `ps -o args= -p <pid>` for
 // every `pgrep -x codex` PID (pids 29284, 70892, 3766, 70874); the paths are
 // shortened to their last element, which the predicate never reads.
-func TestAgentExcludesCodexAppServerProcesses(t *testing.T) {
-	exclude := Agent().Process.ExcludeArgv
-	if exclude == nil {
-		t.Fatal("codex declares no Process.ExcludeArgv, so the scanner mints a placeholder row for every codex app-server process")
+func TestAgentDeclaresCodexAppServerAsSessionHost(t *testing.T) {
+	isHost := Agent().Process.SessionHostArgv
+	if isHost == nil {
+		t.Fatal("codex declares no Process.SessionHostArgv, so the scanner mints a placeholder row for every codex app-server process")
 	}
 	for _, tc := range []struct {
 		name string
@@ -25,7 +25,7 @@ func TestAgentExcludesCodexAppServerProcesses(t *testing.T) {
 		{"bare TUI", []string{"codex"}, false},
 		{"TUI whose prompt mentions app-server", []string{"codex", "--yolo", "start the app-server"}, false},
 		{"exec", []string{"codex", "exec", "fix the tests"}, false},
-		// The ExcludeArgv contract: an unreadable argv is a session.
+		// As for ExcludeArgv: an unreadable argv is a session.
 		{"unreadable argv", nil, false},
 		{"empty argv", []string{}, false},
 		// argv[0] is the executable path, never an argument.
@@ -36,8 +36,8 @@ func TestAgentExcludesCodexAppServerProcesses(t *testing.T) {
 		{"TUI with --add-dir app-server", []string{"codex", "--yolo", "--add-dir", "app-server"}, false},
 		{"app-server after a -c value", []string{"codex", "-c", "app-server", "--yolo"}, false},
 	} {
-		if got := exclude(tc.argv); got != tc.want {
-			t.Errorf("%s: ExcludeArgv(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)
+		if got := isHost(tc.argv); got != tc.want {
+			t.Errorf("%s: SessionHostArgv(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)
 		}
 	}
 }
