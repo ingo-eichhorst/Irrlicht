@@ -32,9 +32,10 @@ import (
 // helper's handles (process_other.go's stub reports no writer).
 
 // museLockDeadline bounds every wait on the helper's file handles. Each poll
-// is up to two real WriterOf probes (the lock, then the transcript fallback),
-// and a single lsof is allowed processlifecycle's 2s shelloutTimeout, so the
-// deadline leaves room for several slow probes on a loaded runner.
+// is up to two real WriterOf probes (the lock, then the transcript fallback;
+// lsof on darwin, a /proc scan on linux), and a single lsof is allowed
+// processlifecycle's 2s shelloutTimeout, so the deadline leaves room for
+// several slow probes on a loaded runner.
 const museLockDeadline = 10 * time.Second
 
 // museSharedPIDFixture is two muse session directories whose .session.lock
@@ -43,9 +44,9 @@ const museLockDeadline = 10 * time.Second
 // nothing holds; first is the older root. The helper has to be a child
 // process: WriterOf never reports the calling process.
 type museSharedPIDFixture struct {
-	day, first, second string
-	holderPID          int
-	holderStdin        io.WriteCloser
+	first, second string
+	holderPID     int
+	holderStdin   io.WriteCloser
 }
 
 // newMuseSharedPIDFixture lays both session directories down and starts the
@@ -58,9 +59,11 @@ type museSharedPIDFixture struct {
 // museLockDeadline. So a fixture that held the wrong file fails here, loudly.
 func newMuseSharedPIDFixture(t *testing.T) *museSharedPIDFixture {
 	t.Helper()
-	f := &museSharedPIDFixture{day: filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")}
-	f.first = writeMuseSession(t, filepath.Join(f.day, "01a1181a-0000-7000-8000-000000000001"))
-	f.second = writeMuseSession(t, filepath.Join(f.day, "01a12197-0000-7000-8000-000000000002"))
+	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")
+	f := &museSharedPIDFixture{
+		first:  writeMuseSession(t, filepath.Join(day, "01a1181a-0000-7000-8000-000000000001")),
+		second: writeMuseSession(t, filepath.Join(day, "01a12197-0000-7000-8000-000000000002")),
+	}
 	cmd := exec.Command("/bin/sh", "-c",
 		`exec 3>>"$1" 4>>"$2"; read line; exec 3>&-; read line`, "sh",
 		filepath.Join(filepath.Dir(f.first), ".session.lock"),
@@ -156,20 +159,17 @@ func museSharedPIDOwners() map[string]agent.SharedPIDOwnerFunc {
 	return agents.SharedPIDOwners([]agent.Agent{muse.Agent()})
 }
 
-func museSessionsPresent(repo *mockRepo, ids ...string) []bool {
-	present := make([]bool, len(ids))
-	for i, id := range ids {
-		_, err := repo.Load(id)
-		present[i] = err == nil
-	}
-	return present
+func museRootsPresent(repo *mockRepo) (first, second bool) {
+	_, errFirst := repo.Load("muse-first")
+	_, errSecond := repo.Load("muse-second")
+	return errFirst == nil, errSecond == nil
 }
 
 func requireBothMuseRoots(t *testing.T, repo *mockRepo, path string) {
 	t.Helper()
-	if p := museSessionsPresent(repo, "muse-first", "muse-second"); !p[0] || !p[1] {
+	if first, second := museRootsPresent(repo); !first || !second {
 		t.Fatalf("%s removed a live muse root sharing the muse serve host's pid "+
-			"(muse-first present=%v, muse-second present=%v)", path, p[0], p[1])
+			"(muse-first present=%v, muse-second present=%v)", path, first, second)
 	}
 }
 
@@ -255,11 +255,11 @@ func requireReleasedMuseRootRetired(t *testing.T, path string, secondBound bool,
 
 	act(pm, f, first, second)
 
-	p := museSessionsPresent(repo, first.SessionID, second.SessionID)
-	if p[0] {
+	firstPresent, secondPresent := museRootsPresent(repo)
+	if firstPresent {
 		t.Fatalf("%s path: a muse root whose lock the host released survived the same-PID reconciliation", path)
 	}
-	if !p[1] {
+	if !secondPresent {
 		t.Fatalf("%s path: removed the muse root whose lock is still held", path)
 	}
 	want := []removedRecord{{first.SessionID, muse.AdapterName, f.first}}

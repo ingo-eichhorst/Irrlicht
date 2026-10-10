@@ -19,7 +19,10 @@
 #      on every path (a root whose lock the host released is kept forever);
 #   3. isDedupDeleteCandidate stops exempting subagents → the subagent lock
 #      goes red on every path (a muse subagent on its parent's PID, holding no
-#      lock, is retired), so that lock really reaches the exemption.
+#      lock, is retired), so that lock really reaches the exemption;
+#   4. OwnsSharedPID's pid <= 0 guard is dropped → its unit test's zero-pid
+#      row goes red (DiscoverPID answers 0 for an unheld session, so a zero
+#      pid would "match" no writer at all).
 #
 # The transcript_removed record for opt-in adapters is pinned by
 # codex-shared-pid-owner-mutations_test.sh and is not repeated here.
@@ -153,6 +156,16 @@ for path in assignment periodic seed; do
     "^TestSamePIDReconciliation_MuseSubagentOnServePIDIsNeverAVictim\$/^${path}\$" \
     "$path path removed a muse subagent sharing its parent's pid"
 done
+
+# ── 4. the pid <= 0 guard is dropped: a zero pid matches "no writer" ──
+assert_go_test_goes_red \
+  "OwnsSharedPID without its pid <= 0 guard" \
+  "$FILE" \
+  $'\tif pid <= 0 {' \
+  $'\tif false {' \
+  "./core/adapters/inbound/agents/muse/" \
+  "^TestOwnsSharedPID\$/^zero_pid\$" \
+  "= true, want false"
 
 if [[ $fails -gt 0 ]]; then
   echo "muse-shared-pid-owner-mutations: $fails FAILED"

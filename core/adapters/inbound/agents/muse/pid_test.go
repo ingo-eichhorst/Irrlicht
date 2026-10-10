@@ -32,8 +32,9 @@ func holdOpen(t *testing.T, path, transcript string) int {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	// One lsof may take up to processlifecycle's 2s shelloutTimeout; leave
-	// room for several on a loaded runner.
+	// Each poll is up to two WriterOf probes (lsof on darwin, a /proc scan on
+	// linux); one lsof may take up to processlifecycle's 2s shelloutTimeout,
+	// so leave room for several on a loaded runner.
 	const deadline = 10 * time.Second
 	start := time.Now()
 	for time.Since(start) < deadline {
