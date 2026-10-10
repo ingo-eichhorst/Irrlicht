@@ -1,8 +1,6 @@
 package codex
 
 import (
-	"slices"
-
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
@@ -121,8 +119,11 @@ func Agent() agent.Agent {
 //
 // A prompt is a single argv slot, so a TUI started with a prompt that merely
 // mentions the word is not matched; a TUI whose whole prompt is exactly
-// `app-server` would be. A nil or empty argv (unreadable) is never an
-// app-server, per the agent.Process.ExcludeArgv contract.
+// `app-server` would be. Nor is the value of one of valueOptions matched (a TUI
+// started with `--cd app-server` for a package directory of that name); the
+// value of an option missing from that list still is. A nil or empty argv
+// (unreadable) is never an app-server, per the agent.Process.ExcludeArgv
+// contract.
 //
 // Declared as codex's Process.ExcludeArgv, so the process scanner mints no
 // placeholder row for an app-server. The same declaration feeds the #727 infra
@@ -130,10 +131,25 @@ func Agent() agent.Agent {
 // an app-server (#2077) — so the PID manager exempts adapters that declare
 // ReleasedPID from it (PIDManager.isBoundToInfra).
 func IsAppServerArgv(argv []string) bool {
-	if len(argv) < 2 {
-		return false
+	for i := 1; i < len(argv); i++ {
+		if argv[i] == "app-server" && !valueOptions[argv[i-1]] {
+			return true
+		}
 	}
-	return slices.Contains(argv[1:], "app-server")
+	return false
+}
+
+// valueOptions are the codex options that take their value as the next
+// argument. Read from the clap strings of the installed 0.162.1 binary
+// (option name beside its value name: cd/DIR, add-dir/ADD_DIR, model/MODEL,
+// profile/CONFIG_PROFILE_V2, sandbox/SANDBOX_MODE, image/IMAGES,
+// local-provider/OSS_PROVIDER, config key=value) plus `-c`, which the VS Code
+// extension's argv uses. Other short aliases were not verified there and are
+// left out.
+var valueOptions = map[string]bool{
+	"-c": true, "--config": true, "--cd": true, "--add-dir": true,
+	"--model": true, "--profile": true, "--sandbox": true, "--image": true,
+	"--local-provider": true,
 }
 
 // Source is this adapter's transcript-source declaration, split out of Agent so

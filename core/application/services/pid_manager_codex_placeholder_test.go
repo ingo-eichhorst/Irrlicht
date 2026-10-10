@@ -132,6 +132,26 @@ func TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer(t *
 	}
 }
 
+// Red-first (review of #2082): the scanner polls every 1–5s, so a TUI launched
+// with a prompt can have its root before its placeholder is minted. A
+// placeholder minted within one scanner poll after the root (and within the
+// same second) still goes.
+func TestCheckPIDLiveness_CodexPlaceholderMintedJustAfterItsRootIsRetired(t *testing.T) {
+	for _, lag := range []time.Duration{0, 4 * time.Second} {
+		t.Run(lag.String(), func(t *testing.T) {
+			f := newCodexPlaceholderFixture(t)
+			f.root("codex-root", f.process(codexManagedDaemonArgv), f.cwd, 10*time.Second)
+			tui := f.placeholder(10*time.Second - lag)
+
+			f.pidManager().CheckPIDLiveness()
+
+			if f.present(tui) {
+				t.Fatalf("placeholder %s minted %v after its root survived a sweep", tui, lag)
+			}
+		})
+	}
+}
+
 // Lock (#2082): with N placeholders and M app-server-bound roots in one cwd,
 // the M oldest placeholders go and the rest stay — also on the next sweep,
 // which must not let the same roots take more.

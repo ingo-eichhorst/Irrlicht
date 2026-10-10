@@ -652,3 +652,37 @@ func TestHooksBundleOmitsReverificationWhenNotCollectedInDaemon(t *testing.T) {
 			"that IS readable from this process: %q", note)
 	}
 }
+
+// Issue #2082 review: an adapter that declares ReleasedPID hosts its roots on
+// a process its ExcludeArgv names (codex's app-server), so a root bound to it
+// is the normal binding, not a #727 ghost. The process landscape still marks
+// the host itself as infra.
+func TestLivenessDoesNotFlagAHostedRootAsAGhost(t *testing.T) {
+	appServer := func(argv []string) bool { return len(argv) > 1 && argv[1] == "app-server" }
+	obs := &diagFakeObserver{
+		argv:   map[int][]string{400: {"codex", "app-server", "--listen", "unix://", "--managed-daemon"}},
+		byName: map[string][]int{"codex": {400}},
+	}
+	svc := NewDiagnosticsService(DiagnosticsServiceDeps{
+		Obs:     obs,
+		IsAlive: func(int) bool { return true },
+		Agents: []agent.Agent{{
+			Identity: agent.Identity{Name: "codex"},
+			Process: agent.Process{
+				Match: agent.ExactName{Name: "codex"}, ExcludeArgv: appServer,
+				ReleasedPID: func(string, string, int) bool { return false },
+			},
+		}},
+		DefaultAdapter: "codex",
+	})
+	red := NewRedactor("")
+
+	got := svc.liveness([]*session.SessionState{{SessionID: "root", Adapter: "codex", PID: 400}}, red)
+	if len(got) != 1 || got[0].IsInfraArgv || !got[0].MatchesAdapterPattern {
+		t.Errorf("a codex root hosted by the app-server reads as a ghost binding: %+v", got)
+	}
+	procs := svc.processes(red)
+	if len(procs) != 1 || len(procs[0].Processes) != 1 || !procs[0].Processes[0].IsInfraArgv {
+		t.Errorf("the app-server itself should stay flagged infra in the process landscape: %+v", procs)
+	}
+}

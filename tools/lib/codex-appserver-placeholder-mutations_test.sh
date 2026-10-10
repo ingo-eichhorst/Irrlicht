@@ -33,6 +33,13 @@
 #      unreadable-argv row goes red.
 #  11. codex declares no ExcludeArgv → the wiring test goes red: the scanner
 #      has no argv filter.
+#  12. no mint lag: a placeholder must be first seen no later than its root →
+#      the mint-lag test's 4s row goes red: a TUI launched with a prompt keeps
+#      its placeholder for the grace period.
+#  13. an option's value counts as the subcommand → the codex table's
+#      `--cd app-server` row goes red.
+#  14. the diagnostics excluder keeps adapters that declare ReleasedPID → the
+#      hosted-root liveness test goes red: every codex root reads as a ghost.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -127,8 +134,8 @@ PER_ROOT='^TestCheckPIDLiveness_CodexPlaceholdersRetiredAtMostOnePerRoot$/^two_T
 assert_go_test_goes_red \
   "a placeholder first seen after the root paired with it" \
   "$PM_FILE" \
-  'if paired[i] || p.FirstSeen >= root.FirstSeen || p.PID == root.PID {' \
-  'if paired[i] || p.PID == root.PID {' \
+  'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {' \
+  'if paired[i] || mintLag < 0 || p.PID == root.PID {' \
   "$SERVICES" \
   "$SCOPE/^placeholder_newer_than_the_root\$" \
   "was retired within its grace period"
@@ -187,8 +194,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "a placeholder on the root's own PID using up its pairing" \
   "$PM_FILE" \
-  'if paired[i] || p.FirstSeen >= root.FirstSeen || p.PID == root.PID {' \
-  'if paired[i] || p.FirstSeen >= root.FirstSeen {' \
+  'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {' \
+  'if paired[i] || p.FirstSeen > root.FirstSeen+mintLag {' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_CodexPlaceholderOnTheRootsOwnPIDLeavesItsPairing$' \
   "the root's pairing went to the placeholder on its own pid"
@@ -207,8 +214,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "codex.IsAppServerArgv reading argv[1] only" \
   "$CODEX_FILE" \
-  'return slices.Contains(argv[1:], "app-server")' \
-  'return slices.Contains(argv[1:2], "app-server")' \
+  'for i := 1; i < len(argv); i++ {' \
+  'for i := 1; i < len(argv) && i < 2; i++ {' \
   "$CODEX" \
   '^TestAgentExcludesCodexAppServerProcesses$' \
   "VS Code extension app-server (pid 3766): ExcludeArgv("
@@ -217,8 +224,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "codex.IsAppServerArgv excluding an unreadable argv" \
   "$CODEX_FILE" \
-  $'\tif len(argv) < 2 {\n\t\treturn false' \
-  $'\tif len(argv) < 2 {\n\t\treturn true' \
+  $'\t}\n\treturn false\n}\n\n// valueOptions' \
+  $'\t}\n\treturn len(argv) < 2\n}\n\n// valueOptions' \
   "$CODEX" \
   '^TestAgentExcludesCodexAppServerProcesses$' \
   "unreadable argv: ExcludeArgv("
@@ -232,6 +239,36 @@ assert_go_test_goes_red \
   "./core/cmd/irrlichd/" \
   '^TestCodexScannerCarriesArgvFilter$' \
   "the codex scanner has no argv filter"
+
+# ── 12. no mint lag ──
+assert_go_test_goes_red \
+  "a placeholder minted just after its root left for the grace period" \
+  "$PM_FILE" \
+  'mintLag := int64(hostedPlaceholderMintLag / time.Second)' \
+  'mintLag := int64(0)' \
+  "$SERVICES" \
+  '^TestCheckPIDLiveness_CodexPlaceholderMintedJustAfterItsRootIsRetired$/^4s$' \
+  "minted 4s after its root survived a sweep"
+
+# ── 13. an option's value counts as the subcommand ──
+assert_go_test_goes_red \
+  "codex.IsAppServerArgv matching an option's value" \
+  "$CODEX_FILE" \
+  'if argv[i] == "app-server" && !valueOptions[argv[i-1]] {' \
+  'if argv[i] == "app-server" {' \
+  "$CODEX" \
+  '^TestAgentExcludesCodexAppServerProcesses$' \
+  "TUI with --cd app-server: ExcludeArgv("
+
+# ── 14. diagnostics reads a hosted root as a ghost ──
+assert_go_test_goes_red \
+  "the diagnostics excluder keeping an adapter that declares ReleasedPID" \
+  "core/application/services/diagnostics_service.go" \
+  'if a.Process.ExcludeArgv != nil && a.Process.ReleasedPID == nil {' \
+  'if a.Process.ExcludeArgv != nil {' \
+  "$SERVICES" \
+  '^TestLivenessDoesNotFlagAHostedRootAsAGhost$' \
+  "reads as a ghost binding"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-appserver-placeholder-mutations: $fails FAILED"

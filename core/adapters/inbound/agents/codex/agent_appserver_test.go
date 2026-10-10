@@ -30,6 +30,11 @@ func TestAgentExcludesCodexAppServerProcesses(t *testing.T) {
 		{"empty argv", []string{}, false},
 		// argv[0] is the executable path, never an argument.
 		{"app-server only as argv[0]", []string{"app-server"}, false},
+		// The value of an option is not the subcommand (review of #2082): a
+		// monorepo package directory named app-server.
+		{"TUI with --cd app-server", []string{"codex", "--cd", "app-server"}, false},
+		{"TUI with --add-dir app-server", []string{"codex", "--yolo", "--add-dir", "app-server"}, false},
+		{"app-server after a -c value", []string{"codex", "-c", "app-server", "--yolo"}, false},
 	} {
 		if got := exclude(tc.argv); got != tc.want {
 			t.Errorf("%s: ExcludeArgv(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)

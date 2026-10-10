@@ -2821,12 +2821,12 @@ type hostGroup struct {
 // The rule, for an adapter that declares a release probe (its sessions are
 // hosted by a process that outlives them) and whose observe consent is granted:
 // within one cwd, each root whose bound PID's argv the adapter's excluder names
-// retires the oldest placeholder that was first seen before the root and does
-// not share its PID — one placeholder per root, ever, which hostClaims
-// remembers across sweeps. So N placeholders and M such roots lose at most the
-// M oldest, and a placeholder minted after every root in its cwd (a TUI opened
-// with no thread yet, or one re-minted at daemon start beside a seeded root)
-// keeps the grace path. Which TUI a root came from is not known (#2083); the
+// retires the oldest placeholder that was first seen before the root (or within
+// hostedPlaceholderMintLag after it) and does not share its PID — one
+// placeholder per root, ever, which hostClaims remembers across sweeps. So N
+// placeholders and M such roots lose at most the M oldest, and a placeholder
+// minted well after every root in its cwd (a TUI opened with no thread yet, or
+// one re-minted at daemon start beside a seeded root) keeps the grace path. Which TUI a root came from is not known (#2083); the
 // oldest is a stand-in.
 //
 // states is the sweep's snapshot. The argv reads run outside assignMu.
@@ -2879,9 +2879,19 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 	return groups
 }
 
+// hostedPlaceholderMintLag is how much later than a root its client's
+// placeholder may be first seen and still be paired with it. The process
+// scanner polls every 1s, backing off to 5s while its PID set is stable
+// (defaultInterval and backoffInterval in processlifecycle/scanner.go), so a
+// TUI launched with a prompt can have its root before its placeholder is
+// minted; FirstSeen is whole seconds, so one more second covers the rounding.
+// A TUI opened within this lag after another TUI's root in the same cwd can
+// lose its pre-thread row early.
+const hostedPlaceholderMintLag = 6 * time.Second
+
 // pairHostedRoots pairs g's unclaimed hosted roots, oldest first, each with the
-// oldest unpaired placeholder first seen before it and not on its own PID, and
-// records each pairing in claims.
+// oldest unpaired placeholder first seen no later than hostedPlaceholderMintLag
+// after it and not on its own PID, and records each pairing in claims.
 func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []hostedVictim {
 	if len(g.placeholders) == 0 || !pm.observeAllowed(g.adapter) {
 		return nil
@@ -2899,13 +2909,14 @@ func (pm *PIDManager) pairHostedRoots(g *hostGroup, claims map[string]bool) []ho
 	slices.SortFunc(g.roots, byFirstSeen)
 	slices.SortFunc(g.placeholders, byFirstSeen)
 	paired := make([]bool, len(g.placeholders))
+	mintLag := int64(hostedPlaceholderMintLag / time.Second)
 	var victims []hostedVictim
 	for _, root := range g.roots {
 		if claims[root.SessionID] || !exclude(pm.readArgv(root.PID)) {
 			continue
 		}
 		for i, p := range g.placeholders {
-			if paired[i] || p.FirstSeen >= root.FirstSeen || p.PID == root.PID {
+			if paired[i] || p.FirstSeen > root.FirstSeen+mintLag || p.PID == root.PID {
 				continue
 			}
 			paired[i] = true
