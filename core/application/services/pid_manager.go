@@ -2385,10 +2385,34 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
-			pm.removeSessionUntracked(logComponentSessionDetectorSeed, state,
-				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID), "")
+			pm.retireSamePIDDuplicate(logComponentSessionDetectorSeed, state,
+				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
 		}
 	}
+}
+
+// retireSamePIDDuplicate removes a same-PID victim on the startup (dedupeByPID)
+// and periodic (retireUnprovenPIDVictim) paths. For an adapter that declares a
+// SharedPIDOwner, both callers reach here only after confirmsSharedPID declined
+// the victim — normally because its own probe found it no longer owns the
+// shared PID (for codex: the app-server released its rollout, #2077), else
+// because the probe could not confirm (inconclusive read, a different winning
+// adapter, consent withdrawn) — so the session is gone either way, and the
+// removal is recorded as transcript_removed exactly as cleanupStalePIDHolders
+// records the assignment-time one. Every other
+// adapter's victim is a bookkeeping duplicate (#1992) and stays unrecorded.
+// TestSamePIDRetirement_ReleasedCodexRootRecordsTranscriptRemoved and
+// TestSamePIDRetirement_NonOptInDuplicateRecordsNothing pin both halves.
+func (pm *PIDManager) retireSamePIDDuplicate(tag string, victim *session.SessionState, msg string) {
+	if pm.sharedPIDOwners[victim.Adapter] != nil {
+		pm.record(lifecycle.Event{
+			Kind:           lifecycle.KindTranscriptRemoved,
+			SessionID:      victim.SessionID,
+			Adapter:        victim.Adapter,
+			TranscriptPath: victim.TranscriptPath,
+		})
+	}
+	pm.removeSessionUntracked(tag, victim, msg, "")
 }
 
 // removeSessionUntracked deletes s via the same log→onSessionSuperseded→
@@ -2403,11 +2427,10 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 // in favor of (empty for a plain same-PID dedup, which has no single
 // superseding identity to re-key state onto — issue #997).
 //
-// Exception: retireUnprovenPIDVictim also routes here when an adapter's
-// SharedPIDOwner probe stops confirming a root (for codex, how a /new
-// supersession ends: read in codex source, not observed live; see
-// codex.OwnsSharedPID, #2077). That is a real teardown left unrecorded: a
-// known gap, not a design property of this function.
+// The same-PID startup and periodic paths reach here through
+// retireSamePIDDuplicate, which records transcript_removed first when the
+// victim's adapter declares a SharedPIDOwner — there the removal is a session
+// ending, not a bookkeeping row (#2077).
 func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState, msg string, supersededBy string) {
 	pm.log.LogInfo(tag, s.SessionID, msg)
 	if supersededBy != "" && pm.onSessionSuperseded != nil {
@@ -2426,11 +2449,13 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 // adapter declaring a SharedPIDOwner a root whose probe would no longer
 // confirm the PID is kept while it is the winner (for the startup and
 // periodic sweeps, the newest root on that PID), until a newer root binds the
-// PID or the process exits (#2077's residual). This candidate policy is shared by all three same-PID
-// reconciliation paths (issue #1992 unified these from two independent
-// spellings): assignment-time cleanup (assignPIDLocked's same-PID scan, acted
-// on by cleanupStalePIDHolders), seed-time dedup (dedupeByPID, via SeedPIDs),
-// and the periodic sweep (dedupeByPIDPeriodic, via CheckPIDLiveness).
+// PID or the process exits (#2077's residual).
+//
+// This candidate policy is shared by all three same-PID reconciliation paths
+// (issue #1992 unified these from two independent spellings):
+// assignment-time cleanup (assignPIDLocked's same-PID scan, acted on by
+// cleanupStalePIDHolders), seed-time dedup (dedupeByPID, via SeedPIDs), and
+// the periodic sweep (dedupeByPIDPeriodic, via CheckPIDLiveness).
 //
 //   - A subagent (ParentSessionID != "") is never a victim: it shares its
 //     parent's PID by design, never its own.
@@ -2636,8 +2661,8 @@ func (pm *PIDManager) retireUnprovenPIDVictim(victim periodicPIDVictim) {
 	if state, _ := pm.repo.Load(victim.state.SessionID); state == nil {
 		return
 	}
-	pm.removeSessionUntracked(logComponentSessionDetector, victim.state,
-		fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", victim.state.PID, victim.winner), "")
+	pm.retireSamePIDDuplicate(logComponentSessionDetector, victim.state,
+		fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", victim.state.PID, victim.winner))
 }
 
 // preSessionCWDGuardPasses implements the #113 guard for the matchCWD path: a

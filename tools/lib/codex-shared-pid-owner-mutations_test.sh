@@ -17,6 +17,14 @@
 #   2. the probe answers true for every root   → the retirement test goes red
 #      (a root whose rollout the daemon released is kept forever).
 #
+# And the transcript_removed record PIDManager.retireSamePIDDuplicate adds for
+# opt-in adapters on the startup and periodic same-PID paths:
+#
+#   3. record for no adapter   → the released codex root's retirement goes
+#      unrecorded on the periodic and seed paths (each asserted on its own);
+#   4. record for every adapter → a non-opt-in bookkeeping duplicate (#1992)
+#      is recorded as a session ending.
+#
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
 # touches git state. Modeled on
@@ -130,6 +138,31 @@ assert_go_test_goes_red \
   "./core/application/services/" \
   "^TestCheckPIDLiveness_ReleasedCodexRootIsRetired\$" \
   "a codex root whose rollout the daemon released survived the same-PID sweep"
+
+PM_FILE="core/application/services/pid_manager.go"
+PM_ANCHOR=$'\tif pm.sharedPIDOwners[victim.Adapter] != nil {'
+
+# ── 3. no adapter's same-PID retirement is recorded ──
+for path in periodic seed; do
+  assert_go_test_goes_red \
+    "retireSamePIDDuplicate recording nothing for an opt-in adapter ($path path)" \
+    "$PM_FILE" \
+    "$PM_ANCHOR" \
+    $'\tif false {' \
+    "./core/application/services/" \
+    "^TestSamePIDRetirement_ReleasedCodexRootRecordsTranscriptRemoved\$/^${path}\$" \
+    "$path path: transcript_removed events = []"
+done
+
+# ── 4. every adapter's same-PID retirement is recorded ──
+assert_go_test_goes_red \
+  "retireSamePIDDuplicate recording a non-opt-in bookkeeping duplicate" \
+  "$PM_FILE" \
+  "$PM_ANCHOR" \
+  $'\tif true {' \
+  "./core/application/services/" \
+  "^TestSamePIDRetirement_NonOptInDuplicateRecordsNothing\$" \
+  "for a non-opt-in bookkeeping duplicate"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-shared-pid-owner-mutations: $fails FAILED"

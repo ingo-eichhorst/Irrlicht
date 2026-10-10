@@ -13,6 +13,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 )
 
@@ -1464,6 +1465,51 @@ func newPIDManagerWithSharedPIDOwners(repo *mockRepo, owners map[string]agent.Sh
 		SharedPIDOwners:  owners,
 		OnSessionDeleted: func(string) {},
 	})
+}
+
+// Lock (#2077): for an adapter that declares no SharedPIDOwner, a same-PID
+// duplicate retired by the startup or periodic sweep is a bookkeeping row
+// (#1992), not a session ending, so neither path records transcript_removed.
+// Only an opt-in adapter's retirement — its probe declined the PID — is
+// recorded.
+func TestSamePIDRetirement_NonOptInDuplicateRecordsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(pm *services.PIDManager, states []*session.SessionState)
+	}{
+		{name: "periodic", run: func(pm *services.PIDManager, _ []*session.SessionState) { pm.CheckPIDLiveness() }},
+		{name: "seed", run: func(pm *services.PIDManager, states []*session.SessionState) { pm.SeedPIDs(states) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRepo()
+			pid := os.Getpid()
+			now := time.Now().Unix()
+			older := &session.SessionState{
+				SessionID: "dup-older", Adapter: "claude-code", State: session.StateReady,
+				PID: pid, TranscriptPath: "/tmp/dup-older.jsonl", FirstSeen: now - 1, UpdatedAt: now,
+			}
+			newer := &session.SessionState{
+				SessionID: "dup-newer", Adapter: "claude-code", State: session.StateReady,
+				PID: pid, TranscriptPath: "/tmp/dup-newer.jsonl", FirstSeen: now, UpdatedAt: now,
+			}
+			repo.states[older.SessionID] = older
+			repo.states[newer.SessionID] = newer
+			rec := &mockRecorder{}
+			pm := newPIDManagerWithSharedPIDOwners(repo, nil)
+			pm.SetRecorder(rec, nil)
+
+			tc.run(pm, []*session.SessionState{older, newer})
+
+			if _, err := repo.Load(older.SessionID); err == nil {
+				t.Fatal("precondition: the older same-PID duplicate was not retired")
+			}
+			for _, ev := range rec.snapshot() {
+				if ev.Kind == lifecycle.KindTranscriptRemoved {
+					t.Fatalf("%s path recorded %+v for a non-opt-in bookkeeping duplicate", tc.name, ev)
+				}
+			}
+		})
+	}
 }
 
 func TestHandlePIDAssigned_ConcurrentDSHRootsKeepSharedPID(t *testing.T) {

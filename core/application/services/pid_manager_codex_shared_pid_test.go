@@ -12,7 +12,9 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 )
 
@@ -206,4 +208,73 @@ func TestCheckPIDLiveness_ReleasedCodexRootIsRetired(t *testing.T) {
 	if !second {
 		t.Fatal("the periodic sweep removed the codex root whose rollout is still held")
 	}
+}
+
+// A released codex root's retirement is a real teardown, so every same-PID
+// path records it as transcript_removed — the event offline replay and the
+// ghost view read as "this session ended". Before #2077 the /new supersession
+// always went through the assignment path (cleanupStalePIDHolders, which
+// records); with the shared-PID probe it now usually ends on the periodic
+// sweep, after codex unloads the old thread, so that path must record too.
+func TestSamePIDRetirement_ReleasedCodexRootRecordsTranscriptRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(f *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, first, second *session.SessionState)
+		// pidOfSecond: the assignment path binds the newer root's PID itself.
+		pidOfSecond func(f *codexSharedPIDFixture) int
+	}{
+		{
+			name:        "assignment",
+			pidOfSecond: func(*codexSharedPIDFixture) int { return 0 },
+			run: func(f *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, _, second *session.SessionState) {
+				newRecordingCodexPIDManager(repo, rec).HandlePIDAssigned(f.holderPID, second.SessionID)
+			},
+		},
+		{
+			name:        "periodic",
+			pidOfSecond: func(f *codexSharedPIDFixture) int { return f.holderPID },
+			run: func(_ *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, _, _ *session.SessionState) {
+				newRecordingCodexPIDManager(repo, rec).CheckPIDLiveness()
+			},
+		},
+		{
+			name:        "seed",
+			pidOfSecond: func(f *codexSharedPIDFixture) int { return f.holderPID },
+			run: func(_ *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, first, second *session.SessionState) {
+				newRecordingCodexPIDManager(repo, rec).SeedPIDs([]*session.SessionState{first, second})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCodexSharedPIDFixture(t)
+			repo, first, second := f.seed(tc.pidOfSecond(f))
+			f.releaseFirst(t)
+			rec := &mockRecorder{}
+
+			tc.run(f, repo, rec, first, second)
+
+			if present, _ := codexRootsPresent(repo); present {
+				t.Fatal("precondition: the released codex root was not retired")
+			}
+			var removed []lifecycle.Event
+			for _, ev := range rec.snapshot() {
+				if ev.Kind == lifecycle.KindTranscriptRemoved {
+					removed = append(removed, ev)
+				}
+			}
+			want := lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved,
+				SessionID: first.SessionID, Adapter: codex.AdapterName, TranscriptPath: f.first}
+			if len(removed) != 1 || removed[0].SessionID != want.SessionID ||
+				removed[0].Adapter != want.Adapter || removed[0].TranscriptPath != want.TranscriptPath {
+				t.Fatalf("%s path: transcript_removed events = %+v, want exactly one for %s (%s, %s)",
+					tc.name, removed, want.SessionID, want.Adapter, want.TranscriptPath)
+			}
+		})
+	}
+}
+
+func newRecordingCodexPIDManager(repo *mockRepo, rec *mockRecorder) *services.PIDManager {
+	pm := newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners())
+	pm.SetRecorder(rec, nil)
+	return pm
 }
