@@ -3,7 +3,9 @@
 package processlifecycle
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,12 +24,6 @@ import (
 // several slow probes on a loaded runner.
 const holdsDeadline = 10 * time.Second
 
-// holdsAnswer is one (held, err) reading, so a poll can report the last one.
-type holdsAnswer struct {
-	held bool
-	err  error
-}
-
 // awaitHolds polls HoldsForWriting(pid, path) until it answers (want, nil),
 // and fails with the elapsed time and the last answer otherwise. It observes
 // the method under test itself rather than WriterOf, so readiness is the
@@ -35,15 +31,14 @@ type holdsAnswer struct {
 func awaitHolds(t *testing.T, pid int, path string, want bool) {
 	t.Helper()
 	start := time.Now()
-	var last holdsAnswer
 	for {
-		last.held, last.err = HoldsForWriting(pid, path)
-		if last.err == nil && last.held == want {
+		held, err := HoldsForWriting(pid, path)
+		if err == nil && held == want {
 			return
 		}
 		if time.Since(start) > holdsDeadline {
 			t.Fatalf("after %v HoldsForWriting(%d, %s) = (%v, %v), want (%v, nil)",
-				time.Since(start).Round(time.Millisecond), pid, path, last.held, last.err, want)
+				time.Since(start).Round(time.Millisecond), pid, path, held, err, want)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -100,23 +95,6 @@ func newHoldsFixture(t *testing.T) *holdsFixture {
 	return f
 }
 
-// reapedPID returns the pid of a child that has already exited and been
-// reaped, so nothing is running under it while the test asks about it. A pid
-// recycled in between fails the test rather than skipping it, since the row
-// would otherwise ask about an unrelated live process.
-func reapedPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("/bin/sh", "-c", "exit 0")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run short-lived child: %v", err)
-	}
-	pid := cmd.Process.Pid
-	if IsAlive(pid) {
-		t.Fatalf("pid %d is alive after being reaped, so the exited-pid row would ask about another process", pid)
-	}
-	return pid
-}
-
 // TestHoldsForWriting drives the probe's three answers against a real holder:
 // held, then released while the holder lives on, plus every way a call can name
 // nothing that holds the file.
@@ -154,7 +132,6 @@ func TestHoldsForWriting(t *testing.T) {
 		{name: "empty path", pid: f.holder, path: ""},
 		{name: "zero pid", pid: 0, path: f.writeOnly},
 		{name: "negative pid", pid: -1, path: f.writeOnly},
-		{name: "pid that has exited", pid: reapedPID(t), path: f.writeOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			held, err := HoldsForWriting(tc.pid, tc.path)
@@ -167,6 +144,13 @@ func TestHoldsForWriting(t *testing.T) {
 		})
 	}
 
+	t.Run("pid that has exited", func(t *testing.T) {
+		pid := deadPIDForScannerTest(t)
+		if held, err := HoldsForWriting(pid, f.writeOnly); err != nil || held {
+			t.Fatalf("HoldsForWriting(%d, %q) = (%v, %v), want (false, nil)", pid, f.writeOnly, held, err)
+		}
+	})
+
 	t.Run("released while the holder lives on", func(t *testing.T) {
 		if _, err := io.WriteString(f.stdin, "\n"); err != nil {
 			t.Fatalf("signal holder: %v", err)
@@ -177,6 +161,39 @@ func TestHoldsForWriting(t *testing.T) {
 		// "released", not "pid gone". Signal 0 checks that without touching it.
 		if err := syscall.Kill(f.holder, 0); err != nil {
 			t.Fatalf("holder pid %d is gone (%v), so this case did not test a release", f.holder, err)
+		}
+	})
+}
+
+// TestHoldsForWritingUnstattablePathIsNeverANo covers a file inside a
+// directory this user may not search. darwin's lsof cannot stat it and prints
+// no rows, exiting 1 as it does for "nothing to report"; linux cannot resolve
+// it with filepath.EvalSymlinks. Neither is a "does not hold": a held file
+// must read as held or as an error, and an unheld one as an error.
+func TestHoldsForWritingUnstattablePathIsNeverANo(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which searches a mode-000 directory anyway, so the path stays stattable")
+	}
+	f := newHoldsFixture(t)
+	locked := filepath.Dir(f.writeOnly)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Registered after newHoldsFixture's t.TempDir, so it runs first and the
+	// directory is searchable again when TempDir removes it.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if _, err := os.Stat(f.writeOnly); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("stat %s after chmod 000 of its directory = %v, want a permission error — without it this case tests nothing", f.writeOnly, err)
+	}
+
+	t.Run("held", func(t *testing.T) {
+		if held, err := HoldsForWriting(f.holder, f.writeOnly); err == nil && !held {
+			t.Fatalf("HoldsForWriting(holder, %s) = (false, nil) — a path the probe could not stat collapsed into \"does not hold\"", f.writeOnly)
+		}
+	})
+	t.Run("unheld", func(t *testing.T) {
+		if held, err := HoldsForWriting(f.holder, f.unheld); err == nil {
+			t.Fatalf("HoldsForWriting(holder, %s) = (%v, nil), want an error: nothing about an unstattable path is known", f.unheld, held)
 		}
 	})
 }

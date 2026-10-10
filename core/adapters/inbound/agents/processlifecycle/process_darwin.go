@@ -4,11 +4,14 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 
@@ -151,16 +154,10 @@ func writerOfVia(path string, build shelloutCmd) (int, error) {
 // about (mutation 2 of tools/lib/holds-for-writing-mutations_test.sh).
 //
 // The answer is the mode rule WriterOf uses (lsofFD.Writes: 'w' or 'u'), asked
-// of pid's rows only. Exit 1 is an answer. lsof prints no rows and exits 1 when
-// pid does not hold path, when pid does not exist, and when path does not
-// exist (each run by hand on darwin for #2079); all three are (false, nil). A
-// child that could not run is an error, on the line lsofProbeRan draws for
-// WriterOf (#1537).
-//
-// One limit shared with WriterOf: without root, lsof cannot inspect another
-// user's process and reports nothing for it (as uid 501, `lsof -p 1` prints no
-// rows and exits 1), so such a pid reads as (false, nil). The pids asked about
-// here are agent processes the daemon's own user started.
+// of pid's rows only. A child that could not run is an error, on the line
+// lsofProbeRan draws for WriterOf (#1537). An lsof that printed no row for pid
+// is read by lsofSilenceVerdict, because that silence has causes on both
+// sides of the line.
 //
 // What it saves per call, from ONE TestMeasureProbeCosts run so the two rows
 // share their conditions (darwin/arm64, 10 CPU, warm, n=20, both asking about
@@ -192,7 +189,40 @@ func holdsForWritingVia(pid int, path string, build shelloutCmd) (bool, error) {
 	if !lsofProbeRan(err) {
 		return false, fmt.Errorf("lsof -p %d %s: %w", pid, path, err)
 	}
-	return pidWritesInLsof(string(out), pid), nil
+	if pidWritesInLsof(string(out), pid) {
+		return true, nil
+	}
+	return false, lsofSilenceVerdict(pid, path)
+}
+
+// lsofSilenceVerdict says what an lsof that printed no row for pid means.
+// Each cause below was observed on darwin for #2079, as uid 501. lsof
+// prints no rows and exits 1 in five cases:
+//
+//   - pid does not hold path: an answer;
+//   - pid does not exist: an answer;
+//   - path does not exist: an answer;
+//   - pid is another user's process, which lsof may not inspect without root
+//     (`lsof -a -p 1 -- /dev/null`): it could not look;
+//   - path cannot be stat'ed, e.g. it sits in a directory this user may not
+//     search (lsof prints "status error ... Permission denied"): it could not
+//     look.
+//
+// The last two are told apart here with two syscalls, no second child: signal
+// 0 to pid (EPERM is another user's live process, the distinction IsAlive
+// draws) and a stat of path (anything but "does not exist" is a stat lsof
+// could not make either). nil means the silence was an answer.
+//
+// WriterOf's whole-table scan has the same blind spots and still reads them as
+// "nobody". That is unchanged here.
+func lsofSilenceVerdict(pid int, path string) error {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("lsof cannot inspect pid %d, another user's process: %w", pid, err)
+	}
+	if _, err := os.Stat(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("lsof cannot stat %s: %w", path, err)
+	}
+	return nil
 }
 
 // pidWritesInLsof reports whether lsof's table has a row for pid whose FD
@@ -223,10 +253,10 @@ func pidWritesInLsof(out string, pid int) bool {
 // test compared the FD column's LAST BYTE against 'w', which missed 'u'
 // entirely and also missed a locked write handle like "59uW", where the last
 // byte is lsof's lock character rather than the mode. Reading the mode via
-// e.Mode() fixes both, and matches the Linux observer, whose fdWritable has
-// always accepted O_WRONLY and O_RDWR alike (flags&3 != 0) — macOS was the
-// outlier, and the disagreement was invisible because no codex recording had
-// been made since the upstream change (#1388).
+// e.Mode() fixes both, and matches the Linux observer, whose fdinfo check
+// (fdOpenForWrite) has always accepted O_WRONLY and O_RDWR alike
+// (flags&3 != 0) — macOS was the outlier, and the disagreement was invisible
+// because no codex recording had been made since the upstream change (#1388).
 func writerPIDFromLsof(out string, self int) int {
 	for _, e := range parseLsofFDs(out, self) {
 		if e.Writes() {

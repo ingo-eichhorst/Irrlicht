@@ -15,7 +15,10 @@ import (
 // down as a fake procfs tree under t.TempDir(). holdsforwriting_test.go covers
 // the answers a real holder produces against the live /proc.
 
-// fakeProc is one fake procfs root holding a single process.
+// fakePID is the one process every fake procfs tree holds.
+const fakePID = 4242
+
+// fakeProc is one fake procfs root holding fakePID.
 type fakeProc struct {
 	root string
 	pid  int
@@ -23,7 +26,7 @@ type fakeProc struct {
 
 func newFakeProc(t *testing.T) *fakeProc {
 	t.Helper()
-	p := &fakeProc{root: t.TempDir(), pid: 4242}
+	p := &fakeProc{root: t.TempDir(), pid: fakePID}
 	for _, sub := range []string{"fd", "fdinfo"} {
 		if err := os.MkdirAll(filepath.Join(p.root, fmt.Sprint(p.pid), sub), 0o755); err != nil {
 			t.Fatal(err)
@@ -136,6 +139,13 @@ func TestHoldsForWritingProcCouldNotLook(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a procfs root that is not there", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "no-proc")
+		if held, err := holdsForWritingIn(missing, fakePID, heldFile(t)); err == nil {
+			t.Fatalf("holdsForWritingIn = (%v, nil) with no procfs at all, want an error", held)
+		}
+	})
 
 	t.Run("an fd directory this user may not read", func(t *testing.T) {
 		if os.Geteuid() == 0 {

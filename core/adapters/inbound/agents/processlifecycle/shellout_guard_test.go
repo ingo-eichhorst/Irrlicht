@@ -502,9 +502,10 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	// Today's count is 11: the ten production call sites of runProbe, plus
 	// the one .Output() inside runProbe itself (whose error is returned
 	// directly, so it is clean). Read for #2079 by raising this floor to 99
-	// and taking the count from the failure message. Before #1547 it was 8 direct .Output() sites,
-	// and routing them WITHOUT teaching this scan about runProbe took it to 1
-	// — which this floor reported rather than passing over.
+	// and taking the count from the failure message. Before #1547 it was 8
+	// direct .Output() sites, and routing them WITHOUT teaching this scan
+	// about runProbe took it to 1 — which this floor reported rather than
+	// passing over.
 	const knownRunSites = 8
 	if runSites < knownRunSites {
 		t.Fatalf("found %d child-process run sites, expected at least %d: the scan is not looking where it thinks it is, so its silence proves nothing",

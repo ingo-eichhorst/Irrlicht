@@ -36,8 +36,13 @@ func (stubObserver) CWDOf(pid int) (string, error) {
 func (stubObserver) WriterOf(string) (int, error) { return 0, nil }
 
 // HoldsForWriting cannot look on this platform, and says so: per the port
-// contract, (false, nil) would mean "looked, and pid does not hold it".
-func (stubObserver) HoldsForWriting(int, string) (bool, error) {
+// contract, (false, nil) would mean "looked, and pid does not hold it". The
+// one exception is the contract's own: a non-positive pid or an empty path
+// names nothing that could hold a file, on any platform.
+func (stubObserver) HoldsForWriting(pid int, path string) (bool, error) {
+	if pid <= 0 || path == "" {
+		return false, nil
+	}
 	return false, fmt.Errorf("process observation unsupported on %s", runtime.GOOS)
 }
 

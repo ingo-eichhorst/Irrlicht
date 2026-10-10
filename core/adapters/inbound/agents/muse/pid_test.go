@@ -96,9 +96,9 @@ func TestOwnsSharedPID(t *testing.T) {
 		// DiscoverPID's fallback: a lock with no writer, a transcript with one.
 		{name: "lock unheld, transcript held by the asked pid", path: transcriptHeld, pid: holder, want: true},
 		{name: "lock unheld, transcript held by a different pid", path: transcriptHeld, pid: other},
-		// A non-positive pid names no process, so the probe answers "does not
-		// hold" without asking lsof (processlifecycle's holdsForWritingVia
-		// guard, pinned by TestHoldsForWritingNamesNothingStartsNoChild).
+		// A non-positive pid names no process, so it holds nothing (the
+		// HoldsForWriting port contract; processlifecycle's TestHoldsForWriting
+		// pins its zero and negative pid rows on darwin and linux).
 		{name: "zero pid", path: unheld, pid: 0},
 		{name: "negative pid", path: unheld, pid: -1},
 		{name: "session nobody holds", path: unheld, pid: holder},

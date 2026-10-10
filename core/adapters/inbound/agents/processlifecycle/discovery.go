@@ -258,13 +258,10 @@ func DiscoverPIDByTranscriptWriter(transcriptPath string) (int, error) {
 	return osProc.WriterOf(transcriptPath)
 }
 
-// HoldsForWriting reports whether pid holds path open for writing: the
-// question DiscoverPIDByTranscriptWriter answers for every process, asked of
-// one (#2079). A SharedPIDOwner probe already knows which pid it is asking
-// about. Answered through the transcript-writer scan, each call walks every
-// process's descriptor table, and PIDManager.confirmSharedPIDClaims makes one
-// call per non-winning root on a shared pid, on every same-PID sweep. See
-// outbound.ProcessObserver.HoldsForWriting for the three answers.
+// HoldsForWriting asks the platform observer whether pid holds path open for
+// writing: DiscoverPIDByTranscriptWriter's question asked of one pid, for the
+// SharedPIDOwner probes that already know which pid they mean (#2079). See
+// outbound.ProcessObserver.HoldsForWriting for its three answers.
 func HoldsForWriting(pid int, path string) (bool, error) {
 	return osProc.HoldsForWriting(pid, path)
 }

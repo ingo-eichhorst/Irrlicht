@@ -3,7 +3,10 @@
 package processlifecycle
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -31,7 +34,9 @@ func TestHoldsForWritingCouldNotAskIsAnError(t *testing.T) {
 // path that does not exist.
 func TestHoldsForWritingExitOneIsAnAnswer(t *testing.T) {
 	before := readProbeLedger()
-	held, err := holdsForWritingVia(4242, "/tmp/probe-2079", answeringCmd("1"))
+	// The asked pid is this process, so the no-rows checks behind exit 1 see
+	// a pid this user may inspect and a path that does not exist.
+	held, err := holdsForWritingVia(os.Getpid(), "/tmp/probe-2079-missing", answeringCmd("1"))
 	if err != nil || held {
 		t.Fatalf("lsof exit 1 = (%v, %v), want (false, nil)", held, err)
 	}
@@ -40,13 +45,10 @@ func TestHoldsForWritingExitOneIsAnAnswer(t *testing.T) {
 	}, "an lsof that ran and found nothing answered")
 }
 
-// TestHoldsForWritingNamesNothingStartsNoChild pins the guard in front of the
-// lsof child. A non-positive pid or an empty path names nothing that can hold
-// a file, so the answer is (false, nil) with no child started. The guard is
-// load-bearing for honesty, not only for cost: measured on darwin while #2079
-// was written, `lsof -a -p -1 -- <path>` prints "illegal process ID" and its
-// usage text and exits 1, the same status as "nothing to report", so without
-// the guard a usage error would read as an answer.
+// TestHoldsForWritingNamesNothingStartsNoChild pins holdsForWritingVia's guard
+// (its doc says what lsof does without it). A non-positive pid or an empty
+// path names nothing that can hold a file, so the answer is (false, nil) with
+// no child started.
 func TestHoldsForWritingNamesNothingStartsNoChild(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "held.jsonl")
 	for _, tc := range []struct {
@@ -67,5 +69,23 @@ func TestHoldsForWritingNamesNothingStartsNoChild(t *testing.T) {
 			assertProbesMoved(t, before, map[string]ProbeCount{},
 				"a call that names nothing must start no lsof child")
 		})
+	}
+}
+
+// TestHoldsForWritingAnotherUsersProcessIsAnError pins the case lsof answers
+// with silence: without root it cannot inspect another user's process, and
+// prints no rows and exits 1 for it, as for "nothing to report" (as uid 501,
+// `lsof -a -p 1 -- /dev/null` does exactly that). Not being able to look is an
+// error, never a "does not hold".
+func TestHoldsForWritingAnotherUsersProcessIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which lsof lets inspect every process")
+	}
+	if err := syscall.Kill(1, 0); !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("kill(1, 0) = %v, want EPERM: pid 1 is not another user's process here, so this case tests nothing", err)
+	}
+	held, err := HoldsForWriting(1, "/dev/null")
+	if err == nil {
+		t.Fatalf("HoldsForWriting(1, /dev/null) = (%v, nil), want an error: lsof cannot inspect another user's process", held)
 	}
 }
