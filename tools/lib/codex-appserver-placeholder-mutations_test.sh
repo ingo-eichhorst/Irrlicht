@@ -42,6 +42,8 @@
 #  14. the scanner wiring ignores SessionHostArgv → the wiring test goes red.
 #  15. SkipsPreSession ignores SessionHostArgv → its table's session-host row
 #      goes red.
+#  16. the diagnostics process landscape reads ExcludeArgv alone → the
+#      landscape test goes red: the app-server is not flagged infra.
 #
 # There is no mutation 6: which adapter's session host applies is a map
 # index (pm.sessionHosts[s.Adapter]), not a guard; the scope lock's "adapter
@@ -287,6 +289,16 @@ assert_go_test_goes_red \
   "./core/domain/agent/" \
   '^TestProcessSkipsPreSession$' \
   "session host: SkipsPreSession("
+
+# ── 16. the diagnostics landscape reads ExcludeArgv alone ──
+assert_go_test_goes_red \
+  "the diagnostics process landscape without SessionHostArgv" \
+  "core/application/services/diagnostics_service.go" \
+  'procs = append(procs, s.procInfo(pid, a.Process.SkipsPreSession, red))' \
+  'procs = append(procs, s.procInfo(pid, a.Process.ExcludeArgv, red))' \
+  "$SERVICES" \
+  '^TestDiagnosticsFlagsASessionHostOnlyInTheLandscape$' \
+  "should be flagged infra in the process landscape"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-appserver-placeholder-mutations: $fails FAILED"
