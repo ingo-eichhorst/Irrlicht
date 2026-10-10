@@ -17,15 +17,11 @@ import (
 	"irrlicht/core/ports/inbound"
 )
 
-// Issue #2080's prerequisite, segment rollover. A paginated codex thread
-// continues in a NEW rollout file, rollout-<ts>-<thread>_<segment>.jsonl, whose
-// session_meta.id is still the thread id, so the watcher maps it to the same
-// session. Observed on the dev machine (2026-10-10): thread 01a1181a rolled
-// from a 2026/10/07 rollout to a 2026/10/10 `_01a12665…` segment, and
-// `lsof -p` of the managed app-server daemon listed only the new file. A
-// session left pointing at the old
-// segment reads "released" to every probe of its transcript while the thread
-// is alive, so the detector must follow the newer segment.
+// Issue #2080's prerequisite, segment rollover: a paginated codex thread
+// continues in a newer rollout-<ts>-<thread>_<segment>.jsonl that the watcher
+// maps to the same session, and a session left on the old segment reads
+// "released" to every probe of its transcript while the thread is alive. The
+// evidence for the shape is on followRolledTranscript.
 
 // rolloverDeadline bounds every wait on the detector's event loop.
 const rolloverDeadline = 5 * time.Second
@@ -37,11 +33,7 @@ func awaitTranscriptPath(t *testing.T, repo *mockRepo, sessionID, want string) {
 	start := time.Now()
 	var got string
 	if !pollUntil(rolloverDeadline, func() bool {
-		s, err := repo.Load(sessionID)
-		if err != nil {
-			return false
-		}
-		got = s.TranscriptPath
+		got = repo.transcriptPathOf(sessionID)
 		return got == want
 	}) {
 		t.Fatalf("after %v session %s points at %q, want %q",
@@ -56,12 +48,7 @@ func writeRollout(t *testing.T, path string, mtime time.Time) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, mtime, mtime); err != nil {
-		t.Fatal(err)
-	}
+	writeTranscript(t, path, mtime)
 }
 
 // runDetector starts det and stops it when the test ends, waiting for Run to
@@ -149,9 +136,7 @@ func TestSessionDetector_CodexRolloverFollowsNewerSegment(t *testing.T) {
 
 // Lock (#2080): an adapter that declares no ReleasedPID keeps the transcript
 // path it already has when an event for the same session arrives from a
-// different, newer file. Muse is the case that depends on it: its shadow
-// session.jsonl maps to the same id as the nested copy and is created later,
-// and only the nested copy holds the subagent's stream (muse.sessionIDFromPath).
+// different, newer file. Muse depends on it (see muse's sessionIDFromPath).
 func TestSessionDetector_NonOptInSessionKeepsItsTranscriptPath(t *testing.T) {
 	for _, typ := range []agent.EventType{agent.EventNewSession, agent.EventActivity} {
 		t.Run(string(typ), func(t *testing.T) {

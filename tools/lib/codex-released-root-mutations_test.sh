@@ -39,6 +39,9 @@
 #      discovery test goes red.
 #  13. codex's filename fallback keeps a segment file's suffix → the segment
 #      test's header-less row goes red: the segment id, not the thread id.
+#  14. a root found misbound is asked again → the discovery test's "another
+#      live owner" row goes red: a whole-table discovery scan every second
+#      sweep for as long as the misbinding lasts.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -178,7 +181,7 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "release probe ignoring the consent gate" \
   "$PM_FILE" \
-  $'\tif pm.consentGate != nil && !pm.consentGate(snap.adapter) {' \
+  $'\tif !pm.observeAllowed(snap.adapter) {' \
   $'\tif false {' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_ReleaseProbeScope$/^observe_consent_withheld$' \
@@ -188,8 +191,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "release probe asking about a subagent" \
   "$PM_FILE" \
-  $'\tif snap.parentSessionID != "" || snap.transcriptPath == "" || snap.pid <= 0 {' \
-  $'\tif snap.transcriptPath == "" || snap.pid <= 0 {' \
+  $'\tif snap.parentSessionID != "" || snap.transcriptPath == "" {' \
+  $'\tif snap.transcriptPath == "" {' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_ReleaseProbeScope$/^subagent$' \
   "case subagent: the release probe ran"
@@ -237,8 +240,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "a released root ended without asking discovery for another owner" \
   "$PM_FILE" \
-  $'\tif !pm.stillBoundTo(snap) || !pm.discoveryFindsNoOwner(snap) {' \
-  $'\tif !pm.stillBoundTo(snap) {' \
+  $'\tif err != nil || owner > 0 {' \
+  $'\tif false {' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_RootBoundToANonHolderIsNotEnded$' \
   "was ended although pid"
@@ -262,6 +265,16 @@ assert_go_test_goes_red \
   "./core/adapters/inbound/agents/codex/" \
   '^TestSessionIDFromPath_SegmentFileMapsToItsThread$' \
   "want the thread id"
+
+# ── 14. a misbound root is asked again ──
+assert_go_test_goes_red \
+  "a root found misbound asked again on later sweeps" \
+  "$PM_FILE" \
+  $'\t\tif pm.misboundRoots[key] {\n\t\t\tmisbound[key] = true\n\t\t\tcontinue\n\t\t}\n' \
+  '' \
+  "$SERVICES" \
+  '^TestCheckPIDLiveness_ReleasedRootEndsOnlyWhenDiscoveryFindsNoOwner$/^another_live_owner$' \
+  "case another live owner: four sweeps ran the release probe 4 times and discovery 2 times, want 2 and 1"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-released-root-mutations: $fails FAILED"

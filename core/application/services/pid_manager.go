@@ -6,6 +6,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -221,11 +222,14 @@ type PIDManager struct {
 	assignmentMu sync.Mutex
 
 	// releaseStreaks counts, per root, how many sweeps in a row its release
-	// probe answered "released" (#2080); see endReleasedRoots. releaseMu
-	// serializes the whole release step, because the sweep goroutine and a
-	// test's direct CheckPIDLiveness call can overlap.
+	// probe answered "released" (#2080), and misboundRoots holds the roots
+	// whose PID discovery named another owner when a streak ran out; see
+	// endReleasedRoots. releaseMu serializes the whole release step, because
+	// the sweep goroutine and a test's direct CheckPIDLiveness call can
+	// overlap.
 	releaseMu      sync.Mutex
 	releaseStreaks map[releaseKey]int
+	misboundRoots  map[releaseKey]bool
 
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
@@ -1005,10 +1009,16 @@ func (pm *PIDManager) confirmsSharedPID(claim sharedPIDClaim, winnerAdapter stri
 	if probe == nil {
 		return false
 	}
-	if pm.consentGate != nil && !pm.consentGate(claim.adapter) {
+	if !pm.observeAllowed(claim.adapter) {
 		return false
 	}
 	return probe(claim.cwd, claim.transcriptPath, pid)
+}
+
+// observeAllowed reports whether adapter's observe consent is granted. A nil
+// gate allows everything, as SessionDetector.observeAllowed does.
+func (pm *PIDManager) observeAllowed(adapter string) bool {
+	return pm.consentGate == nil || pm.consentGate(adapter)
 }
 
 func sharedPIDClaimOf(state *session.SessionState) sharedPIDClaim {
@@ -1213,15 +1223,27 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 // returns; AllowsSession and replaced-session revival (issue #2059) only use
 // it as evidence.
 func (pm *PIDManager) DiscoverPIDOnly(sessionID, adapter, cwd, transcriptPath string) int {
-	discover := pm.pidDiscovers[adapter]
-	if discover == nil {
-		return 0
-	}
-	pid, err := discover(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID))
+	pid, err := pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)
 	if err != nil || pid <= 0 {
 		return 0
 	}
 	return pid
+}
+
+// errNoPIDDiscovery is discoverOwner's answer for an adapter that declares no
+// PID discovery.
+var errNoPIDDiscovery = errors.New("adapter declares no pid discovery")
+
+// discoverOwner runs adapter's PID discovery for a session and returns its
+// answer uncollapsed — an owner, (0, nil) for "looked and found nobody", or
+// an error — for the caller that must tell "nobody" from "could not ask"
+// (endReleasedRoot). DiscoverPIDOnly folds the last two into 0.
+func (pm *PIDManager) discoverOwner(sessionID, adapter, cwd, transcriptPath string) (int, error) {
+	discover := pm.pidDiscovers[adapter]
+	if discover == nil {
+		return 0, errNoPIDDiscovery
+	}
+	return discover(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID))
 }
 
 // claimAwareDisambiguate builds a disambiguator that prefers the highest
@@ -1516,6 +1538,20 @@ type releaseKey struct {
 	transcriptPath string
 }
 
+// releaseOutcome is what endReleasedRoot did with a root whose streak ran out.
+type releaseOutcome int
+
+const (
+	// releaseKept: the root moved, or its discovery could not answer; a new
+	// streak asks again.
+	releaseKept releaseOutcome = iota
+	// releaseEnded: discovery found no owner at all, and the root ended.
+	releaseEnded
+	// releaseMisbound: discovery named another live owner, so the root is
+	// bound to a process that does not write its transcript.
+	releaseMisbound
+)
+
 // endReleasedRoots ends each root session whose PID is alive but has released
 // the session's transcript for releaseStreakThreshold sweeps in a row, for an
 // adapter that declares Process.ReleasedPID (#2080). It reaches the root that
@@ -1523,7 +1559,9 @@ type releaseKey struct {
 // one — which is how a closed codex TUI's root left the dashboard only when the
 // managed app-server daemon exited. The streaks are rebuilt every sweep from
 // this sweep's answers alone, so any other answer (held, could not ask, not
-// asked) resets a root's count. Returns true when it ended a session.
+// asked) resets a root's count. A root found misbound is not asked again while
+// it keeps that PID and transcript: its bound process's exit ends it. Returns
+// true when it ended a session.
 func (pm *PIDManager) endReleasedRoots(snaps []livenessSnapshot) bool {
 	if len(pm.releasedPIDs) == 0 {
 		return false
@@ -1531,9 +1569,14 @@ func (pm *PIDManager) endReleasedRoots(snaps []livenessSnapshot) bool {
 	pm.releaseMu.Lock()
 	defer pm.releaseMu.Unlock()
 	streaks := make(map[releaseKey]int)
+	misbound := make(map[releaseKey]bool)
 	ended := false
 	for _, snap := range snaps {
 		key := releaseKey{snap.state.SessionID, snap.pid, snap.transcriptPath}
+		if pm.misboundRoots[key] {
+			misbound[key] = true
+			continue
+		}
 		if !pm.releasedTranscript(snap) {
 			continue
 		}
@@ -1542,11 +1585,14 @@ func (pm *PIDManager) endReleasedRoots(snaps []livenessSnapshot) bool {
 			continue
 		}
 		delete(streaks, key)
-		if pm.endReleasedRoot(snap) {
+		switch pm.endReleasedRoot(snap) {
+		case releaseEnded:
 			ended = true
+		case releaseMisbound:
+			misbound[key] = true
 		}
 	}
-	pm.releaseStreaks = streaks
+	pm.releaseStreaks, pm.misboundRoots = streaks, misbound
 	return ended
 }
 
@@ -1554,16 +1600,17 @@ func (pm *PIDManager) endReleasedRoots(snaps []livenessSnapshot) bool {
 // asks only about a root with a transcript and a live PID, of an adapter that
 // declares the probe and whose observe consent is granted: a subagent shares
 // its parent's PID and is reaped with it, a pre-session has no transcript to
-// release, and a dead PID is reapDeadOrInfraPID's.
+// release, and a dead PID (IsPIDAlive is false for a non-positive one too) is
+// reapDeadOrInfraPID's.
 func (pm *PIDManager) releasedTranscript(snap livenessSnapshot) bool {
-	if snap.parentSessionID != "" || snap.transcriptPath == "" || snap.pid <= 0 {
+	if snap.parentSessionID != "" || snap.transcriptPath == "" {
 		return false
 	}
 	probe := pm.releasedPIDs[snap.adapter]
 	if probe == nil {
 		return false
 	}
-	if pm.consentGate != nil && !pm.consentGate(snap.adapter) {
+	if !pm.observeAllowed(snap.adapter) {
 		return false
 	}
 	if !pm.IsPIDAlive(snap.pid) {
@@ -1574,43 +1621,33 @@ func (pm *PIDManager) releasedTranscript(snap livenessSnapshot) bool {
 
 // endReleasedRoot ends snap's root and its children, recorded as
 // transcript_removed by deleteSession, unless the root has since moved to
-// another PID or transcript — the streak was about the one it had — or the
-// adapter's own discovery still finds an owner (discoveryFindsNoOwner).
-func (pm *PIDManager) endReleasedRoot(snap livenessSnapshot) bool {
-	if !pm.stillBoundTo(snap) || !pm.discoveryFindsNoOwner(snap) {
-		return false
+// another PID or transcript (the streak was about the one it had), or the
+// adapter's own PID discovery still answers with an owner or an error.
+//
+// That last check exists because the release probe asked about the bound PID
+// only: a root bound to a live process that never held its transcript reads
+// "released" every sweep — for codex, a root that inherited a TUI's
+// pre-session PID (#2042) while the app-server daemon writes its rollout. For
+// codex the discovery is the whole-table writer scan, run once per streak
+// that runs out; a root it finds misbound is then skipped (endReleasedRoots),
+// and its binding is left as it is.
+func (pm *PIDManager) endReleasedRoot(snap livenessSnapshot) releaseOutcome {
+	if !pm.stillBoundTo(snap) {
+		return releaseKept
 	}
-	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
-		fmt.Sprintf("live pid %d released the session's transcript for %d sweeps — ending session",
-			snap.pid, releaseStreakThreshold))
-	pm.deleteWithChildren(snap.state,
-		fmt.Sprintf("transcript released by live pid %d — liveness sweep", snap.pid))
-	return true
-}
-
-// discoveryFindsNoOwner asks the adapter's own PID discovery
-// (Process.PIDForSession) who owns snap's session, once, when a release
-// streak is about to end it. The release probe asked about the bound PID
-// only, so a root bound to a live process that never held its transcript
-// reads "released" every sweep — for codex, a root that inherited a TUI's
-// pre-session PID (#2042) while the app-server daemon writes its rollout.
-// Only a discovery that ran and found no owner at all ends the root: an
-// owner, an error, or no declared discovery keeps it, and the binding is left
-// as it is. For codex that discovery is the whole-table writer scan, so this
-// costs one such scan per root about to end, not one per sweep.
-func (pm *PIDManager) discoveryFindsNoOwner(snap livenessSnapshot) bool {
-	discover := pm.pidDiscovers[snap.adapter]
-	if discover == nil {
-		return false
-	}
-	owner, err := discover(snap.cwd, snap.transcriptPath, pm.claimAwareDisambiguate(snap.state.SessionID))
+	owner, err := pm.discoverOwner(snap.state.SessionID, snap.adapter, snap.cwd, snap.transcriptPath)
 	if err != nil || owner > 0 {
 		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("pid %d released the session's transcript, but discovery answered pid %d (err %v) — keeping session",
 				snap.pid, owner, err))
-		return false
+		if err == nil && owner != snap.pid {
+			return releaseMisbound
+		}
+		return releaseKept
 	}
-	return true
+	pm.deleteWithChildren(snap.state,
+		fmt.Sprintf("transcript released by live pid %d for %d sweeps — liveness sweep", snap.pid, releaseStreakThreshold))
+	return releaseEnded
 }
 
 // stillBoundTo reports whether snap's session still exists with the PID and

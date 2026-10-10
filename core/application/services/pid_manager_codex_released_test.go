@@ -173,10 +173,7 @@ type scriptedReleaseProbe struct {
 
 func (p *scriptedReleaseProbe) probe(_, _ string, _ int) bool {
 	p.calls++
-	if p.calls > len(p.answers) {
-		return p.answers[len(p.answers)-1]
-	}
-	return p.answers[p.calls-1]
+	return p.answers[min(p.calls, len(p.answers))-1]
 }
 
 // liveRoot is a codex root bound to this test's own PID, which is alive for
@@ -296,27 +293,35 @@ func TestCheckPIDLiveness_RootBoundToANonHolderIsNotEnded(t *testing.T) {
 
 // Red-first (#2080 review): at the end of a release streak only a discovery
 // that ran and found no owner at all ends the root. An owner, a discovery
-// that could not run, or an adapter with no discovery keeps it.
+// that could not run, or an adapter with no discovery keeps it. A root whose
+// discovery named another owner is not asked again — neither the release
+// probe nor the whole-table discovery — while its binding stays the same;
+// one that could not be asked is, after a new streak.
 func TestCheckPIDLiveness_ReleasedRootEndsOnlyWhenDiscoveryFindsNoOwner(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		discover agent.PIDDiscoverFunc
-		ends     bool
+		name                  string
+		owner                 int
+		err                   error
+		undeclared            bool
+		ends                  bool
+		probeCalls, discCalls int
 	}{
-		{name: "no owner", discover: noOwner, ends: true},
-		{name: "another live owner", discover: func(string, string, func([]int) int) (int, error) { return 4242, nil }},
-		{name: "discovery could not run", discover: func(string, string, func([]int) int) (int, error) {
-			return 0, errors.New("lsof timed out")
-		}},
-		{name: "no discovery declared"},
+		{name: "no owner", ends: true, probeCalls: 2, discCalls: 1},
+		{name: "another live owner", owner: 4242, probeCalls: 2, discCalls: 1},
+		{name: "discovery could not run", err: errors.New("lsof timed out"), probeCalls: 4, discCalls: 2},
+		{name: "no discovery declared", undeclared: true, probeCalls: 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newMockRepo()
 			repo.states["codex-live"] = liveRoot("codex-live")
 			p := &scriptedReleaseProbe{answers: []bool{true}}
+			discCalls := 0
 			discovers := map[string]agent.PIDDiscoverFunc{}
-			if tc.discover != nil {
-				discovers[codex.AdapterName] = tc.discover
+			if !tc.undeclared {
+				discovers[codex.AdapterName] = func(string, string, func([]int) int) (int, error) {
+					discCalls++
+					return tc.owner, tc.err
+				}
 			}
 			pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe}, discovers)
 
@@ -324,7 +329,11 @@ func TestCheckPIDLiveness_ReleasedRootEndsOnlyWhenDiscoveryFindsNoOwner(t *testi
 
 			_, err := repo.Load("codex-live")
 			if ended := err != nil; ended != tc.ends {
-				t.Fatalf("case %s: root ended = %v after four released answers, want %v", tc.name, ended, tc.ends)
+				t.Fatalf("case %s: root ended = %v after four sweeps, want %v", tc.name, ended, tc.ends)
+			}
+			if p.calls != tc.probeCalls || discCalls != tc.discCalls {
+				t.Fatalf("case %s: four sweeps ran the release probe %d times and discovery %d times, want %d and %d",
+					tc.name, p.calls, discCalls, tc.probeCalls, tc.discCalls)
 			}
 		})
 	}

@@ -1,9 +1,7 @@
 package services
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -551,7 +549,10 @@ func (d *SessionDetector) followRolledTranscript(state *session.SessionState, ev
 // longer exists. An empty path on either side, or a current transcript that
 // cannot be stat'ed for any other reason, is no rollover.
 func transcriptRolledOver(current, candidate string) bool {
-	if current == "" || candidate == "" || current == candidate {
+	if current == "" || candidate == "" {
+		return false
+	}
+	if current == candidate {
 		return false
 	}
 	next, err := os.Stat(candidate)
@@ -560,7 +561,7 @@ func transcriptRolledOver(current, candidate string) bool {
 	}
 	prev, err := os.Stat(current)
 	if err != nil {
-		return errors.Is(err, fs.ErrNotExist)
+		return os.IsNotExist(err)
 	}
 	return next.ModTime().After(prev.ModTime())
 }

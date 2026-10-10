@@ -58,14 +58,11 @@ func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
 // through, it would read as "released" and end a session bound to no process,
 // or a pre-session that has no rollout yet.
 //
-// What releases the rollout of a root the managed app-server daemon hosts is
-// codex's thread unload, read in codex source at tag rust-v0.162.1 and NOT
-// observed live (#2077, #2080): app-server/src/request_processors/
-// thread_lifecycle.rs (UnloadingState) shuts a thread down once it has no
-// subscribers and has been inactive for thread_unload_delay, which
-// core/src/config/mod.rs defaults to 60s. Closing the TUI drops its
-// subscription, so the root is expected to end about that long after the TUI
-// exits, while the daemon itself — the PID the root is bound to — lives on.
+// What releases the rollout is the thread unload described on OwnsSharedPID
+// (codex rust-v0.162.1 thread_lifecycle.rs, read in source and NOT observed
+// live): closing the TUI drops the thread's last subscription, so the root is
+// expected to end about thread_unload_delay (60s by default) after the TUI
+// exits, while the daemon — the PID the root is bound to — lives on.
 func ReleasedPID(cwd, transcriptPath string, pid int) bool {
 	if pid <= 0 || transcriptPath == "" {
 		return false

@@ -131,9 +131,8 @@ var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 // deduplicated by ID in the repo, not by transcript path, and
 // backfillExistingSession only ever sets an EMPTY TranscriptPath for muse —
 // it replaces a known one only for an adapter that declares a ReleasedPID,
-// which muse does not: followRolledTranscript, #2080, pinned by
-// TestSessionDetector_NonOptInSessionKeepsItsTranscriptPath and
-// TestReleasedPIDs_OptInSet) PROVIDED the nested copy is discovered
+// which muse does not; see followRolledTranscript, #2080) PROVIDED the
+// nested copy is discovered
 // before the shadow, which is what makes the shadow's later arrival a
 // backfill onto an existing session rather than a race to seed a new one
 // from the wrong (tiny, approval-only) file. Verified, not assumed: `stat -f
