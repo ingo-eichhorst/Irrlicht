@@ -112,8 +112,11 @@ func ProcessNames(agents []agent.Agent) map[string]string {
 // the liveness sweep's infra re-validation: a session bound to a still-alive PID
 // whose argv the adapter rejects (e.g. Claude Code's --bg-spare pool helper) is a
 // ghost and must be reaped (#727). Only adapters that declare a non-nil
-// Process.ExcludeArgv appear (today: claude-code and gemini-cli); the rest get
-// no entry, so the sweep leaves their sessions untouched.
+// Process.ExcludeArgv appear; the rest get no entry, so the sweep leaves their
+// sessions untouched. An adapter that also declares ReleasedPID (codex, whose
+// excluder names the app-server that hosts every root, #2082) is exempt from
+// that reap in the PID manager, which instead reads its excluder to retire a
+// hosted root's leftover placeholder.
 func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 	m := make(map[string]func([]string) bool)
 	for _, a := range agents {

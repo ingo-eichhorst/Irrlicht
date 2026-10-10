@@ -418,6 +418,11 @@ type Process struct {
 	// live in the adapter package; the scanner stays generic. A nil argv
 	// (unreadable, e.g. hardened-runtime) is passed through, so an adapter's
 	// predicate must default to *not* excluding when it can't tell.
+	//
+	// The liveness sweep also reaps a session bound to an excluded process
+	// (#727), unless the adapter declares ReleasedPID: then the excluded
+	// process is the host its sessions are bound to (codex's app-server,
+	// #2082), and a root bound to it retires its client's placeholder instead.
 	ExcludeArgv func(argv []string) bool
 
 	// RequireKnownHost, when true, gates session admission on the bound

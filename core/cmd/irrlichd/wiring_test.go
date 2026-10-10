@@ -46,6 +46,27 @@ func TestDSHChildFilterWiredOnlyToNativeProviderScanners(t *testing.T) {
 	}
 }
 
+// Issue #2082: the codex process scanner must carry an argv filter, which is
+// what keeps it from minting a placeholder row for the codex app-server
+// processes (the verdicts are table-tested in the codex package, and the
+// scanner's handling of an excluding filter in processlifecycle's
+// scanner_argvfilter_test.go).
+func TestCodexScannerCarriesArgvFilter(t *testing.T) {
+	watchers, _ := buildAgentWatchers(codex.Agent(), time.Minute, nil,
+		func(string, int) bool { return false }, e2eLog{})
+	for _, watcher := range watchers {
+		scanner, ok := watcher.(*processlifecycle.Scanner)
+		if !ok {
+			continue
+		}
+		if reflect.ValueOf(scanner).Elem().FieldByName("argvFilter").IsNil() {
+			t.Fatal("the codex scanner has no argv filter, so it mints a placeholder row for every codex app-server process")
+		}
+		return
+	}
+	t.Fatal("codex has no process scanner")
+}
+
 // countWatcherKinds classifies watchers by concrete type — a process scanner,
 // an fswatcher (FilesUnderRoot), or a per-adapter store watcher
 // (ProcessOwnedStore: opencode, hermes) — failing the test on any unexpected
