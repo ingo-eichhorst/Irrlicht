@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -217,64 +218,65 @@ func TestCheckPIDLiveness_ReleasedCodexRootIsRetired(t *testing.T) {
 // records); with the shared-PID probe it now usually ends on the periodic
 // sweep, after codex unloads the old thread, so that path must record too.
 func TestSamePIDRetirement_ReleasedCodexRootRecordsTranscriptRemoved(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		run  func(f *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, first, second *session.SessionState)
-		// pidOfSecond: the assignment path binds the newer root's PID itself.
-		pidOfSecond func(f *codexSharedPIDFixture) int
-	}{
-		{
-			name:        "assignment",
-			pidOfSecond: func(*codexSharedPIDFixture) int { return 0 },
-			run: func(f *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, _, second *session.SessionState) {
-				newRecordingCodexPIDManager(repo, rec).HandlePIDAssigned(f.holderPID, second.SessionID)
-			},
-		},
-		{
-			name:        "periodic",
-			pidOfSecond: func(f *codexSharedPIDFixture) int { return f.holderPID },
-			run: func(_ *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, _, _ *session.SessionState) {
-				newRecordingCodexPIDManager(repo, rec).CheckPIDLiveness()
-			},
-		},
-		{
-			name:        "seed",
-			pidOfSecond: func(f *codexSharedPIDFixture) int { return f.holderPID },
-			run: func(_ *codexSharedPIDFixture, repo *mockRepo, rec *mockRecorder, first, second *session.SessionState) {
-				newRecordingCodexPIDManager(repo, rec).SeedPIDs([]*session.SessionState{first, second})
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newCodexSharedPIDFixture(t)
-			repo, first, second := f.seed(tc.pidOfSecond(f))
-			f.releaseFirst(t)
-			rec := &mockRecorder{}
-
-			tc.run(f, repo, rec, first, second)
-
-			if present, _ := codexRootsPresent(repo); present {
-				t.Fatal("precondition: the released codex root was not retired")
-			}
-			var removed []lifecycle.Event
-			for _, ev := range rec.snapshot() {
-				if ev.Kind == lifecycle.KindTranscriptRemoved {
-					removed = append(removed, ev)
-				}
-			}
-			want := lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved,
-				SessionID: first.SessionID, Adapter: codex.AdapterName, TranscriptPath: f.first}
-			if len(removed) != 1 || removed[0].SessionID != want.SessionID ||
-				removed[0].Adapter != want.Adapter || removed[0].TranscriptPath != want.TranscriptPath {
-				t.Fatalf("%s path: transcript_removed events = %+v, want exactly one for %s (%s, %s)",
-					tc.name, removed, want.SessionID, want.Adapter, want.TranscriptPath)
-			}
-		})
-	}
+	t.Run("assignment", func(t *testing.T) {
+		requireReleasedCodexRootRecorded(t, "assignment", false,
+			func(pm *services.PIDManager, f *codexSharedPIDFixture, _, second *session.SessionState) {
+				pm.HandlePIDAssigned(f.holderPID, second.SessionID)
+			})
+	})
+	t.Run("periodic", func(t *testing.T) {
+		requireReleasedCodexRootRecorded(t, "periodic", true,
+			func(pm *services.PIDManager, _ *codexSharedPIDFixture, _, _ *session.SessionState) {
+				pm.CheckPIDLiveness()
+			})
+	})
+	t.Run("seed", func(t *testing.T) {
+		requireReleasedCodexRootRecorded(t, "seed", true,
+			func(pm *services.PIDManager, _ *codexSharedPIDFixture, first, second *session.SessionState) {
+				pm.SeedPIDs([]*session.SessionState{first, second})
+			})
+	})
 }
 
-func newRecordingCodexPIDManager(repo *mockRepo, rec *mockRecorder) *services.PIDManager {
+// removedRecord is the part of a transcript_removed event the tests compare.
+type removedRecord struct{ sessionID, adapter, transcriptPath string }
+
+func recordedRemovals(rec *mockRecorder) []removedRecord {
+	var out []removedRecord
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindTranscriptRemoved {
+			out = append(out, removedRecord{ev.SessionID, ev.Adapter, ev.TranscriptPath})
+		}
+	}
+	return out
+}
+
+// requireReleasedCodexRootRecorded releases the older root's rollout, runs act
+// against a recording PIDManager wired from the real codex declaration, and
+// requires exactly one transcript_removed — for that root. secondBound puts
+// the newer root on the holder's PID already (the startup and periodic
+// shapes); the assignment path binds it itself.
+func requireReleasedCodexRootRecorded(t *testing.T, path string, secondBound bool,
+	act func(pm *services.PIDManager, f *codexSharedPIDFixture, first, second *session.SessionState)) {
+	t.Helper()
+	f := newCodexSharedPIDFixture(t)
+	pidOfSecond := 0
+	if secondBound {
+		pidOfSecond = f.holderPID
+	}
+	repo, first, second := f.seed(pidOfSecond)
+	f.releaseFirst(t)
+	rec := &mockRecorder{}
 	pm := newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners())
 	pm.SetRecorder(rec, nil)
-	return pm
+
+	act(pm, f, first, second)
+
+	if present, _ := codexRootsPresent(repo); present {
+		t.Fatal("precondition: the released codex root was not retired")
+	}
+	want := []removedRecord{{first.SessionID, codex.AdapterName, f.first}}
+	if got := recordedRemovals(rec); !slices.Equal(got, want) {
+		t.Fatalf("%s path: transcript_removed events = %+v, want %+v", path, got, want)
+	}
 }
