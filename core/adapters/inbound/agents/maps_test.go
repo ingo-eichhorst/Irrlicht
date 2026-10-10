@@ -70,10 +70,12 @@ func TestPIDDiscoverers_coversAllAdapters(t *testing.T) {
 	}
 }
 
-func TestSharedPIDOwners_OnlyDSHOptsIn(t *testing.T) {
+// Codex opted in for #2077: its managed app-server daemon writes every TUI's
+// rollout, so concurrent codex roots share one PID.
+func TestSharedPIDOwners_OnlyDSHAndCodexOptIn(t *testing.T) {
 	m := agents.SharedPIDOwners(append(testAgents(), dsh.Agent()))
-	if len(m) != 1 || m[dsh.AdapterName] == nil {
-		t.Fatalf("shared PID owners = %v, want only %s", m, dsh.AdapterName)
+	if len(m) != 2 || m[dsh.AdapterName] == nil || m[codex.AdapterName] == nil {
+		t.Fatalf("shared PID owners = %v, want only %s and %s", m, dsh.AdapterName, codex.AdapterName)
 	}
 }
 
