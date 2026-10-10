@@ -28,8 +28,8 @@ import (
 // These tests drive the real codex declaration's probes (projected the way
 // startup.go projects them) against a real helper process holding rollouts,
 // so "released" is what HoldsForWriting answered, never a stub's say-so —
-// except the streak and scope tests, whose subject is PIDManager's own
-// bookkeeping and which script the probe to isolate it.
+// except the streak, scope and discovery tests, whose subject is
+// PIDManager's own bookkeeping and which script the probe to isolate it.
 
 // codexReleasedPIDs projects the released-transcript probe exactly as
 // startup.go does, so a codex without a ReleasedPID yields no probe.
@@ -37,11 +37,23 @@ func codexReleasedPIDs() map[string]agent.ReleasedPIDFunc {
 	return agents.ReleasedPIDs([]agent.Agent{codex.Agent()})
 }
 
-// newCodexLivenessPIDManager wires both codex probes, the shared-PID owner
-// and the released-transcript probe, as production does.
-func newCodexLivenessPIDManager(repo *mockRepo, released map[string]agent.ReleasedPIDFunc) *services.PIDManager {
+// codexPIDDiscoverers projects codex's own PID discovery (the whole-table
+// transcript-writer scan) exactly as startup.go does.
+func codexPIDDiscoverers() map[string]agent.PIDDiscoverFunc {
+	return agents.PIDDiscoverers([]agent.Agent{codex.Agent()})
+}
+
+// noOwner is a PID discovery that ran and found nobody, for the tests that
+// script the release probe and are not about the last-moment discovery check.
+func noOwner(string, string, func([]int) int) (int, error) { return 0, nil }
+
+// newCodexLivenessPIDManager wires the shared-PID owner and the given release
+// probes and PID discovery. Pass codexReleasedPIDs and codexPIDDiscoverers
+// for production's wiring.
+func newCodexLivenessPIDManager(repo *mockRepo, released map[string]agent.ReleasedPIDFunc, discovers map[string]agent.PIDDiscoverFunc) *services.PIDManager {
 	return services.NewPIDManager(services.PIDManagerDeps{
 		Repo: repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
+		PIDDiscovers:     discovers,
 		SharedPIDOwners:  codexSharedPIDOwners(),
 		ReleasedPIDs:     released,
 		OnSessionDeleted: func(string) {},
@@ -64,7 +76,7 @@ func TestCheckPIDLiveness_LoneCodexRootEndsWhenItsRolloutIsReleased(t *testing.T
 	_ = repo.Delete("codex-second")
 	f.releaseFirst(t)
 	rec := &mockRecorder{}
-	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs())
+	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs(), codexPIDDiscoverers())
 	pm.SetRecorder(rec, nil)
 
 	sweep(pm, 2)
@@ -86,7 +98,7 @@ func TestCheckPIDLiveness_NewestCodexRootEndsWhenOnlyItsRolloutIsReleased(t *tes
 	repo, _, second := f.seed(f.holderPID)
 	f.releaseSecond(t)
 	rec := &mockRecorder{}
-	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs())
+	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs(), codexPIDDiscoverers())
 	pm.SetRecorder(rec, nil)
 
 	sweep(pm, 2)
@@ -142,7 +154,7 @@ func TestCheckPIDLiveness_InconclusiveReleaseProbeNeverEndsCodexRoot(t *testing.
 		SessionID: "codex-unknown", Adapter: codex.AdapterName, State: session.StateReady,
 		PID: f.holderPID, TranscriptPath: rollout, FirstSeen: now, UpdatedAt: now,
 	}
-	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs())
+	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs(), codexPIDDiscoverers())
 
 	sweep(pm, 3)
 
@@ -186,7 +198,8 @@ func TestCheckPIDLiveness_ReleaseStreakResetsOnAnyOtherAnswer(t *testing.T) {
 	repo := newMockRepo()
 	repo.states["codex-live"] = liveRoot("codex-live")
 	p := &scriptedReleaseProbe{answers: []bool{true, false, true, true}}
-	pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe})
+	pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe},
+		map[string]agent.PIDDiscoverFunc{codex.AdapterName: noOwner})
 
 	for i, answer := range p.answers[:3] {
 		pm.CheckPIDLiveness()
@@ -237,7 +250,8 @@ func TestCheckPIDLiveness_ReleaseProbeScope(t *testing.T) {
 			repo := newMockRepo()
 			repo.states[s.SessionID] = s
 			p := &scriptedReleaseProbe{answers: []bool{true}}
-			pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe})
+			pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe},
+				map[string]agent.PIDDiscoverFunc{codex.AdapterName: noOwner})
 			pm.SetConsentGate(func(string) bool { return tc.consent })
 
 			sweep(pm, 3)
@@ -247,6 +261,70 @@ func TestCheckPIDLiveness_ReleaseProbeScope(t *testing.T) {
 			}
 			if _, err := repo.Load(s.SessionID); err != nil {
 				t.Fatalf("case %s: the liveness sweep ended the session", tc.name)
+			}
+		})
+	}
+}
+
+// Red-first (#2080 review): the release probe asks about the BOUND pid only,
+// so a root bound to a live process that never held its rollout reads
+// "released" every sweep — the shape of a codex root that inherited a TUI's
+// pre-session PID (#2042) while the app-server daemon writes its rollout.
+// Before ending a root, PIDManager asks the adapter's own discovery who
+// writes the transcript, and a writer anywhere keeps the root. Here the root
+// is bound to this test's process, which holds nothing, while the helper
+// holds the rollout.
+func TestCheckPIDLiveness_RootBoundToANonHolderIsNotEnded(t *testing.T) {
+	f := newCodexSharedPIDFixture(t)
+	now := time.Now().Unix()
+	repo := newMockRepo()
+	repo.states["codex-misbound"] = &session.SessionState{
+		SessionID: "codex-misbound", Adapter: codex.AdapterName, State: session.StateReady,
+		PID: os.Getpid(), TranscriptPath: f.first, FirstSeen: now, UpdatedAt: now,
+	}
+	if !codex.ReleasedPID("", f.first, os.Getpid()) {
+		t.Fatal("precondition: the release probe does not read this root as released, so this case tests nothing")
+	}
+	pm := newCodexLivenessPIDManager(repo, codexReleasedPIDs(), codexPIDDiscoverers())
+
+	sweep(pm, 4)
+
+	if _, err := repo.Load("codex-misbound"); err != nil {
+		t.Fatalf("a codex root bound to pid %d was ended although pid %d still writes its rollout", os.Getpid(), f.holderPID)
+	}
+}
+
+// Red-first (#2080 review): at the end of a release streak only a discovery
+// that ran and found no owner at all ends the root. An owner, a discovery
+// that could not run, or an adapter with no discovery keeps it.
+func TestCheckPIDLiveness_ReleasedRootEndsOnlyWhenDiscoveryFindsNoOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		discover agent.PIDDiscoverFunc
+		ends     bool
+	}{
+		{name: "no owner", discover: noOwner, ends: true},
+		{name: "another live owner", discover: func(string, string, func([]int) int) (int, error) { return 4242, nil }},
+		{name: "discovery could not run", discover: func(string, string, func([]int) int) (int, error) {
+			return 0, errors.New("lsof timed out")
+		}},
+		{name: "no discovery declared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRepo()
+			repo.states["codex-live"] = liveRoot("codex-live")
+			p := &scriptedReleaseProbe{answers: []bool{true}}
+			discovers := map[string]agent.PIDDiscoverFunc{}
+			if tc.discover != nil {
+				discovers[codex.AdapterName] = tc.discover
+			}
+			pm := newCodexLivenessPIDManager(repo, map[string]agent.ReleasedPIDFunc{codex.AdapterName: p.probe}, discovers)
+
+			sweep(pm, 4)
+
+			_, err := repo.Load("codex-live")
+			if ended := err != nil; ended != tc.ends {
+				t.Fatalf("case %s: root ended = %v after four released answers, want %v", tc.name, ended, tc.ends)
 			}
 		})
 	}

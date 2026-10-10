@@ -1497,11 +1497,15 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 }
 
 // releaseStreakThreshold is how many sweeps in a row must find a root's
-// transcript released before the root ends (#2080), so that one answer racing
-// the agent's move to a new file cannot end a live session: if a codex thread
-// that rolls over to a new segment is released from the old one before the
-// detector re-points the session (followRolledTranscript), a sweep in between
-// reads "released". The order of those two is not measured.
+// transcript released before endReleasedRoots ends it (#2080), so that one
+// answer racing the agent's move to a new file cannot end a live session
+// there: if a codex thread that rolls over to a new segment is released from
+// the old one before the detector re-points the session
+// (followRolledTranscript), a sweep in between reads "released". The order of
+// those two is not measured. The streak covers only this step. A root that is
+// not the newest on a shared PID is judged by the same-PID sweep first
+// (dedupeByPIDPeriodic), which still retires it on one OwnsSharedPID answer
+// (#2077), so for that root the re-point is the only protection.
 const releaseStreakThreshold = 2
 
 // releaseKey identifies one release question. A root that is re-pointed at a
@@ -1570,9 +1574,10 @@ func (pm *PIDManager) releasedTranscript(snap livenessSnapshot) bool {
 
 // endReleasedRoot ends snap's root and its children, recorded as
 // transcript_removed by deleteSession, unless the root has since moved to
-// another PID or transcript — the streak was about the one it had.
+// another PID or transcript — the streak was about the one it had — or the
+// adapter's own discovery still finds an owner (discoveryFindsNoOwner).
 func (pm *PIDManager) endReleasedRoot(snap livenessSnapshot) bool {
-	if !pm.stillBoundTo(snap) {
+	if !pm.stillBoundTo(snap) || !pm.discoveryFindsNoOwner(snap) {
 		return false
 	}
 	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
@@ -1580,6 +1585,31 @@ func (pm *PIDManager) endReleasedRoot(snap livenessSnapshot) bool {
 			snap.pid, releaseStreakThreshold))
 	pm.deleteWithChildren(snap.state,
 		fmt.Sprintf("transcript released by live pid %d — liveness sweep", snap.pid))
+	return true
+}
+
+// discoveryFindsNoOwner asks the adapter's own PID discovery
+// (Process.PIDForSession) who owns snap's session, once, when a release
+// streak is about to end it. The release probe asked about the bound PID
+// only, so a root bound to a live process that never held its transcript
+// reads "released" every sweep — for codex, a root that inherited a TUI's
+// pre-session PID (#2042) while the app-server daemon writes its rollout.
+// Only a discovery that ran and found no owner at all ends the root: an
+// owner, an error, or no declared discovery keeps it, and the binding is left
+// as it is. For codex that discovery is the whole-table writer scan, so this
+// costs one such scan per root about to end, not one per sweep.
+func (pm *PIDManager) discoveryFindsNoOwner(snap livenessSnapshot) bool {
+	discover := pm.pidDiscovers[snap.adapter]
+	if discover == nil {
+		return false
+	}
+	owner, err := discover(snap.cwd, snap.transcriptPath, pm.claimAwareDisambiguate(snap.state.SessionID))
+	if err != nil || owner > 0 {
+		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
+			fmt.Sprintf("pid %d released the session's transcript, but discovery answered pid %d (err %v) — keeping session",
+				snap.pid, owner, err))
+		return false
+	}
 	return true
 }
 

@@ -62,6 +62,29 @@ func TestSessionIDFromPath_FallsBackToRolloutThreadID(t *testing.T) {
 	}
 }
 
+// A paginated thread continues in rollout-<ts>-<thread>_<segment>.jsonl
+// (#2080; real names on the dev machine, 2026-10-10). Its session_meta.id is
+// the thread id, and so must be the filename fallback used before that header
+// is readable: the segment id would mint a second session for the thread.
+func TestSessionIDFromPath_SegmentFileMapsToItsThread(t *testing.T) {
+	const thread = "01a1181a-0349-7712-8ec0-c750ef098f2e"
+	name := "rollout-2026-10-10T17-19-15-" + thread + "_01a12665-9cc8-7d70-9842-833231c6622e.jsonl"
+	for _, tc := range []struct{ name, record string }{
+		{"with its session_meta header", `{"type":"session_meta","payload":{"id":"` + thread + `","session_id":"` + thread + `"}}`},
+		{"before its header is readable", `{"type":"session_meta","payload":{"id":"` + thread},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, []byte(tc.record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := sessionIDFromPath(path); got != thread {
+				t.Errorf("sessionIDFromPath(%s) = %q, want the thread id %q", name, got, thread)
+			}
+		})
+	}
+}
+
 // TestSessionMetaPayload_RejectsParentTraversal pins the sink-local traversal
 // guard: a path that resolves to a real, readable session_meta file is still
 // refused when a literal ".." got into it, so neither extractor opens it.

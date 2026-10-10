@@ -84,6 +84,12 @@ func rolloutThreadID(path string) string {
 	if !strings.HasPrefix(base, "rollout-") {
 		return ""
 	}
+	// A paginated thread continues in rollout-<ts>-<thread>_<segment>.jsonl
+	// (#2080): the thread id comes before the underscore, the segment's own
+	// id after it.
+	if i := strings.IndexByte(base, '_'); i >= 0 {
+		base = base[:i]
+	}
 	if i := strings.LastIndex(base, "-"); i >= 0 && len(base)-i-1 == 12 {
 		// A UUID's final group is 12 characters. The preceding groups remain
 		// in the suffix and are restored by the fixed-width slice below.

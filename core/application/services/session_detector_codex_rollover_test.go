@@ -84,6 +84,7 @@ func newProbedDetector(tw *mockAgentWatcher, repo *mockRepo) *services.SessionDe
 	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
 		PW: newMockProcessWatcher(), Repo: repo, Log: &mockLogger{}, Git: &mockGit{},
 		Metrics: &mockMetrics{}, Version: "test",
+		PIDDiscovers:    codexPIDDiscoverers(),
 		SharedPIDOwners: codexSharedPIDOwners(),
 		ReleasedPIDs:    codexReleasedPIDs(),
 	})

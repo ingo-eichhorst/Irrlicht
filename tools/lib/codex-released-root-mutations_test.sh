@@ -32,6 +32,13 @@
 #  10. the rollover follows an OLDER file → TestTranscriptRolledOver's "older
 #      candidate" row goes red: a late event from an old segment would move the
 #      session back.
+#  11. no last-moment discovery check before ending a root → the non-holder
+#      test goes red: a root bound to a live pid that never held its rollout
+#      is ended while another process writes it.
+#  12. a discovery that could not run reads as "no owner" → that row of the
+#      discovery test goes red.
+#  13. codex's filename fallback keeps a segment file's suffix → the segment
+#      test's header-less row goes red: the segment id, not the thread id.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -225,6 +232,36 @@ assert_go_test_goes_red \
   "$SERVICES" \
   '^TestTranscriptRolledOver$/^older_candidate$' \
   "transcriptRolledOver(rollout-current.jsonl, rollout-older.jsonl) = true, want false"
+
+# ── 11. no discovery check before a root ends ──
+assert_go_test_goes_red \
+  "a released root ended without asking discovery for another owner" \
+  "$PM_FILE" \
+  $'\tif !pm.stillBoundTo(snap) || !pm.discoveryFindsNoOwner(snap) {' \
+  $'\tif !pm.stillBoundTo(snap) {' \
+  "$SERVICES" \
+  '^TestCheckPIDLiveness_RootBoundToANonHolderIsNotEnded$' \
+  "was ended although pid"
+
+# ── 12. a discovery error reads as "no owner" ──
+assert_go_test_goes_red \
+  "a discovery error read as no owner" \
+  "$PM_FILE" \
+  $'\tif err != nil || owner > 0 {' \
+  $'\tif owner > 0 {' \
+  "$SERVICES" \
+  '^TestCheckPIDLiveness_ReleasedRootEndsOnlyWhenDiscoveryFindsNoOwner$/^discovery_could_not_run$' \
+  "case discovery could not run: root ended = true"
+
+# ── 13. a segment file's filename fallback names the segment ──
+assert_go_test_goes_red \
+  "codex filename fallback keeping a segment suffix" \
+  "core/adapters/inbound/agents/codex/session_meta.go" \
+  $'\tif i := strings.IndexByte(base, \'_\'); i >= 0 {\n\t\tbase = base[:i]\n\t}\n' \
+  '' \
+  "./core/adapters/inbound/agents/codex/" \
+  '^TestSessionIDFromPath_SegmentFileMapsToItsThread$' \
+  "want the thread id"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-released-root-mutations: $fails FAILED"
