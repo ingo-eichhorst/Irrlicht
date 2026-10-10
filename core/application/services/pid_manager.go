@@ -2397,7 +2397,14 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 // deleteWithChildren, it does NOT emit a lifecycle recorder event — these
 // paths reconcile bookkeeping artifacts (a duplicate PID row, a superseded
 // proc-* placeholder) rather than tearing down a session whose disappearance
-// belongs in the offline replay trace. tag and msg are the caller's log
+// belongs in the offline replay trace. One caller does not fit that
+// description: for an adapter declaring a SharedPIDOwner (dsh, codex),
+// retireUnprovenPIDVictim retires a root once its probe stops confirming the
+// shared PID — for codex, that is how a /new supersession now ends, after the
+// app-server unloads the old thread (read in codex source, not observed live;
+// see codex.OwnsSharedPID, #2077). That is a real teardown, and it
+// goes unrecorded here as well: a known gap, not a design property of this
+// function. tag and msg are the caller's log
 // identity and message, kept verbatim so log output is unchanged by this
 // extraction. supersededBy is the reconciled session's id s is being retired
 // in favor of (empty for a plain same-PID dedup, which has no single

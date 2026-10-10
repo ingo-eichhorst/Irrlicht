@@ -104,14 +104,22 @@ FILE="core/adapters/inbound/agents/codex/pid.go"
 ANCHOR=$'\towner, err := DiscoverPID(cwd, transcriptPath, nil)\n\treturn err == nil && owner == pid'
 
 # ── 1. no root ever proves ownership: concurrent live roots are deleted ──
-assert_go_test_goes_red \
-  "OwnsSharedPID answering false for a rollout the daemon still holds" \
-  "$FILE" \
-  "$ANCHOR" \
-  $'\treturn false' \
-  "./core/application/services/" \
-  "ConcurrentCodexRootsKeepDaemonPID" \
-  "removed a live codex root sharing the app-server daemon's pid"
+# One run per path, each -run anchored to a single test, so every path has to
+# go red on its own — a single shared run would pass if any one of the three
+# failed and hide a sibling that silently stopped testing anything.
+for path_test in \
+  "assignment:TestHandlePIDAssigned_ConcurrentCodexRootsKeepDaemonPID" \
+  "periodic:TestCheckPIDLiveness_ConcurrentCodexRootsKeepDaemonPID" \
+  "seed:TestSeedPIDs_ConcurrentCodexRootsKeepDaemonPID"; do
+  assert_go_test_goes_red \
+    "OwnsSharedPID answering false for a rollout the daemon still holds (${path_test%%:*} path)" \
+    "$FILE" \
+    "$ANCHOR" \
+    $'\treturn false' \
+    "./core/application/services/" \
+    "^${path_test#*:}\$" \
+    "removed a live codex root sharing the app-server daemon's pid"
+done
 
 # ── 2. every root proves ownership: a released root is never retired ──
 assert_go_test_goes_red \
@@ -120,7 +128,7 @@ assert_go_test_goes_red \
   "$ANCHOR" \
   $'\treturn true' \
   "./core/application/services/" \
-  "TestCheckPIDLiveness_ReleasedCodexRootIsRetired" \
+  "^TestCheckPIDLiveness_ReleasedCodexRootIsRetired\$" \
   "a codex root whose rollout the daemon released survived the same-PID sweep"
 
 if [[ $fails -gt 0 ]]; then
