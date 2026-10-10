@@ -42,6 +42,9 @@ func (f *diagFakeObserver) FindByCmdline(string) ([]int, error) { return nil, ni
 func (f *diagFakeObserver) ArgvOf(pid int) ([]string, error)    { return f.argv[pid], nil }
 func (f *diagFakeObserver) CWDOf(pid int) (string, error)       { return f.cwd[pid], nil }
 func (f *diagFakeObserver) WriterOf(string) (int, error)        { return 0, nil }
+func (f *diagFakeObserver) HoldsForWriting(int, string) (bool, error) {
+	return false, nil
+}
 func (f *diagFakeObserver) EnvOf(int, map[string]struct{}) (map[string]string, error) {
 	return nil, nil
 }

@@ -4,11 +4,14 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 
@@ -143,6 +146,104 @@ func writerOfVia(path string, build shelloutCmd) (int, error) {
 	return writerPIDFromLsof(string(out), os.Getpid()), nil
 }
 
+// HoldsForWriting reports whether pid holds path open for writing, via
+// `lsof -a -p <pid> -- <path>`: lsof inspects one process's descriptors rather
+// than every process's, which is the whole point of the method (#2079). The
+// `-a` is load-bearing. Without it lsof ORs the two selections and lists every
+// file pid has open, so any other file pid writes answers for the path asked
+// about (mutation 2 of tools/lib/holds-for-writing-mutations_test.sh).
+//
+// The answer is the mode rule WriterOf uses (lsofFD.Writes: 'w' or 'u'), asked
+// of pid's rows only. A child that could not run is an error, on the line
+// lsofProbeRan draws for WriterOf (#1537). An lsof that printed no row for pid
+// is read by lsofSilenceVerdict, because that silence has causes on both
+// sides of the line.
+//
+// What it saves per call, from ONE TestMeasureProbeCosts run so the two rows
+// share their conditions (darwin/arm64, 10 CPU, warm, n=20, both asking about
+// a file the measuring process holds open; read min across machines):
+//
+//	lsof.writer              median 137.4ms  p99 157.5ms  min 133.9ms
+//	lsof.holds_for_writing   median  24.5ms  p99  25.5ms  min  24.2ms
+//
+// regenerate: IRRLICHT_MEASURE_PROBE_COSTS=1 go test
+// ./core/adapters/inbound/agents/processlifecycle/ -run TestMeasureProbeCosts -v
+func (darwinObserver) HoldsForWriting(pid int, path string) (bool, error) {
+	return holdsForWritingVia(pid, path, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, lsofPath, "-a", "-p", strconv.Itoa(pid), "--", path)
+	})
+}
+
+// holdsForWritingVia is HoldsForWriting with the shellout injected.
+//
+// The guard in front of the child is load-bearing for honesty, not only for
+// cost: `lsof -a -p -1 -- <path>` prints "illegal process ID" and its usage
+// text and exits 1, the same status as "nothing to report", so without the
+// guard a usage error would read as an answer (measured on darwin while #2079
+// was written; TestHoldsForWritingNamesNothingStartsNoChild pins it).
+func holdsForWritingVia(pid int, path string, build shelloutCmd) (bool, error) {
+	if pid <= 0 || path == "" {
+		return false, nil
+	}
+	out, err := runProbe(context.Background(), probeLsofHoldsForWriting, build)
+	if !lsofProbeRan(err) {
+		return false, fmt.Errorf("lsof -p %d %s: %w", pid, path, err)
+	}
+	if pidWritesInLsof(string(out), pid) {
+		return true, nil
+	}
+	return false, lsofSilenceVerdict(pid, path)
+}
+
+// lsofSilenceVerdict says what an lsof that printed no row for pid means.
+// Each cause below was observed on darwin for #2079, as uid 501. lsof
+// prints no rows and exits 1 in five cases:
+//
+//   - pid does not hold path: an answer;
+//   - pid does not exist: an answer;
+//   - path does not exist: an answer;
+//   - pid is another user's process, which lsof may not inspect without root
+//     (`lsof -a -p 1 -- /dev/null`): it could not look;
+//   - path cannot be stat'ed, e.g. it sits in a directory this user may not
+//     search (lsof prints "status error ... Permission denied"): it could not
+//     look.
+//
+// The last two are told apart here with two syscalls, no second child: signal
+// 0 to pid (EPERM is another user's live process, the distinction IsAlive
+// draws) and a stat of path (anything but "does not exist" is a stat lsof
+// could not make either). nil means the silence was an answer.
+//
+// WriterOf's whole-table scan has the same blind spots and still reads them as
+// "nobody". That is unchanged here.
+func lsofSilenceVerdict(pid int, path string) error {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("lsof cannot inspect pid %d, another user's process: %w", pid, err)
+	}
+	if _, err := os.Stat(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("lsof cannot stat %s: %w", path, err)
+	}
+	return nil
+}
+
+// pidWritesInLsof reports whether lsof's table has a row for pid whose FD
+// mode is a writer's: writerPIDFromLsof's rule, asked of one pid. It matches
+// the row's PID instead of comparing writerPIDFromLsof's result with pid,
+// because that result's "no writer" is 0, and 0 == pid would make a zero pid
+// hold every file nobody writes. (That comparison was this function's first
+// draft; with the pid guard above mutated away, the zero-pid row of
+// TestHoldsForWritingNamesNothingStartsNoChild answered (true, nil).)
+//
+// self=0 drops nothing: the caller named pid, so the calling process is a
+// legitimate answer here, unlike in WriterOf's candidate scan.
+func pidWritesInLsof(out string, pid int) bool {
+	for _, e := range parseLsofFDs(out, 0) {
+		if e.PID == pid && e.Writes() {
+			return true
+		}
+	}
+	return false
+}
+
 // writerPIDFromLsof picks the first PID holding the file open for writing out
 // of lsof's table. Split out of WriterOf so the mode predicate — the part that
 // actually decides — is testable without shelling out to lsof.
@@ -152,13 +253,13 @@ func writerOfVia(path string, build shelloutCmd) (int, error) {
 // test compared the FD column's LAST BYTE against 'w', which missed 'u'
 // entirely and also missed a locked write handle like "59uW", where the last
 // byte is lsof's lock character rather than the mode. Reading the mode via
-// e.Mode() fixes both, and matches the Linux observer, whose fdWritable has
-// always accepted O_WRONLY and O_RDWR alike (flags&3 != 0) — macOS was the
-// outlier, and the disagreement was invisible because no codex recording had
-// been made since the upstream change (#1388).
+// e.Mode() fixes both, and matches the Linux observer, whose fdinfo check
+// (fdOpenForWrite) has always accepted O_WRONLY and O_RDWR alike
+// (flags&3 != 0) — macOS was the outlier, and the disagreement was invisible
+// because no codex recording had been made since the upstream change (#1388).
 func writerPIDFromLsof(out string, self int) int {
 	for _, e := range parseLsofFDs(out, self) {
-		if m := e.Mode(); m == 'w' || m == 'u' {
+		if e.Writes() {
 			return e.PID
 		}
 	}
@@ -188,13 +289,23 @@ func (e lsofFD) Mode() byte {
 	return 0
 }
 
+// Writes reports whether the FD column's mode is a writer's: 'w' (write-only)
+// or 'u' (read/write). It is the one rule WriterOf and HoldsForWriting share,
+// since they ask the same question of every process and of one; see
+// writerPIDFromLsof for why 'u' counts.
+func (e lsofFD) Writes() bool {
+	m := e.Mode()
+	return m == 'w' || m == 'u'
+}
+
 // parseLsofFDs tokenizes lsof's default table, dropping the header row, rows
 // too short to carry an FD column, and self. It deliberately applies no mode
-// filter, leaving the predicate at each call site. Both current callers —
-// WriterOf here and herdr client discovery (osutil_darwin.go) — happen to
-// count 'w' and 'u' alike, since a read/write handle is a writer; keeping the
-// filter out of the parser is what lets either change without silently
-// redefining the other.
+// filter, leaving the predicate at each call site. Its callers — WriterOf and
+// HoldsForWriting here (one question, so one rule: lsofFD.Writes) and herdr
+// client discovery (osutil_darwin.go, its own inline rule) — happen to count
+// 'w' and 'u' alike, since a read/write handle is a writer; keeping the
+// filter out of the parser is what lets the herdr rule and the writer rule
+// change without silently redefining each other.
 func parseLsofFDs(out string, self int) []lsofFD {
 	var entries []lsofFD
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {

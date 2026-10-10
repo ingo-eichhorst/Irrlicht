@@ -15,7 +15,7 @@ import "testing"
 // dropped the proc-<pid> presession that hangs off it, and every codex cell's
 // expected.jsonl failed at its first phase (#1388).
 //
-// The Linux observer never had this bug: fdWritable accepts O_WRONLY *and*
+// The Linux observer never had this bug: fdOpenForWrite accepts O_WRONLY *and*
 // O_RDWR (flags&3 != 0), so the two platforms disagreed about the same
 // process. macOS was the outlier.
 func TestWriterPIDFromLsof_AcceptsReadWriteHandles(t *testing.T) {

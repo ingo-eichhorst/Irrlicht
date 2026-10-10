@@ -109,7 +109,7 @@ assert_go_test_goes_red() {
 }
 
 FILE="core/adapters/inbound/agents/codex/pid.go"
-ANCHOR=$'\towner, err := DiscoverPID(cwd, transcriptPath, nil)\n\treturn err == nil && owner == pid'
+ANCHOR=$'\theld, err := processlifecycle.HoldsForWriting(pid, transcriptPath)\n\treturn err == nil && held'
 
 # ── 1. no root ever proves ownership: concurrent live roots are deleted ──
 # One run per path, each -run anchored to a single test, so every path has to

@@ -257,3 +257,11 @@ func DiscoverPIDByTranscriptWriter(transcriptPath string) (int, error) {
 	}
 	return osProc.WriterOf(transcriptPath)
 }
+
+// HoldsForWriting asks the platform observer whether pid holds path open for
+// writing: DiscoverPIDByTranscriptWriter's question asked of one pid, for the
+// SharedPIDOwner probes that already know which pid they mean (#2079). See
+// outbound.ProcessObserver.HoldsForWriting for its three answers.
+func HoldsForWriting(pid int, path string) (bool, error) {
+	return osProc.HoldsForWriting(pid, path)
+}

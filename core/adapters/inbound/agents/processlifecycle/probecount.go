@@ -66,6 +66,11 @@ const (
 	probeLsofCWD probeKind = "lsof.cwd"
 	// probeLsofWriter is the observer's WriterOf `lsof <path>` (#1537).
 	probeLsofWriter probeKind = "lsof.writer"
+	// probeLsofHoldsForWriting is the observer's HoldsForWriting
+	// `lsof -a -p <pid> -- <path>` (#2079) — the per-pid twin of
+	// probeLsofWriter, and its own row so a reader can see which of the two
+	// questions the SharedPIDOwner probes are asking.
+	probeLsofHoldsForWriting probeKind = "lsof.holds_for_writing"
 	// probeLsofHerdrClients is herdrClientPIDs' `lsof <client log>` (#1485).
 	probeLsofHerdrClients probeKind = "lsof.herdr_clients"
 	// probePgrepDiscover is runPgrep, behind both FindByName and FindByCmdline
@@ -91,6 +96,7 @@ var allProbeKinds = []probeKind{
 	probePlutilBundleID,
 	probeLsofCWD,
 	probeLsofWriter,
+	probeLsofHoldsForWriting,
 	probeLsofHerdrClients,
 	probePgrepDiscover,
 	probeKittenWindow,

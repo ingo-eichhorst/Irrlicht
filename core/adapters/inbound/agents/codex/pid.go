@@ -22,11 +22,12 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 }
 
 // OwnsSharedPID reports whether this rollout is still held open for writing by
-// pid — the same transcript-writer probe DiscoverPID uses, asked of one root
-// that shares pid with a newer codex root. An erroring probe, no writer, or a
-// different writer does not confirm ownership (agent.SharedPIDOwnerFunc's
-// contract: inconclusive is false), so the root falls back to the exclusive
-// same-PID policy and is retired.
+// pid — the question DiscoverPID answers by scanning every process, asked
+// instead of pid alone (processlifecycle.HoldsForWriting, #2079), for one root
+// that shares pid with a newer codex root. A probe that could not run, or a
+// pid that does not hold the rollout, does not confirm ownership
+// (agent.SharedPIDOwnerFunc's contract: inconclusive is false), so the root
+// falls back to the exclusive same-PID policy and is retired.
 //
 // What turns the answer false for a root the daemon still hosts is codex's
 // thread unload, read in codex source at tag rust-v0.162.1 and NOT observed
@@ -40,9 +41,6 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // being assigned, or the newest root on the PID for the startup and periodic
 // sweeps); see isDedupDeleteCandidate in core/application/services/pid_manager.go.
 func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	owner, err := DiscoverPID(cwd, transcriptPath, nil)
-	return err == nil && owner == pid
+	held, err := processlifecycle.HoldsForWriting(pid, transcriptPath)
+	return err == nil && held
 }

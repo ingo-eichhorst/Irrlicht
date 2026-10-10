@@ -4,7 +4,9 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -158,15 +160,9 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
-	// /proc/<pid>/fd/* readlinks are fully symlink-resolved by the kernel,
-	// but the caller's transcript path is only filepath.Clean'd (fswatcher
-	// joins os.UserHomeDir() + a relative dir, no symlink resolution). On a
-	// host where $HOME or the data dir traverses a symlink, an exact string
-	// compare would never match — so canonicalise the target path too.
-	want := path
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		want = resolved
-	}
+	// An unresolvable path is still scanned for as given: WriterOf answers
+	// "nobody" for what it cannot see, unlike HoldsForWriting.
+	want, _ := resolveProcTarget(path)
 	pids, err := procPIDs()
 	if err != nil {
 		// #1537: an unreadable /proc is the linux spelling of a killed lsof —
@@ -186,25 +182,117 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 	return 0, nil
 }
 
-// pidHasFileOpenForWrite reports whether pid has an fd resolving to want open
-// for writing, by scanning /proc/<pid>/fd/* symlinks and confirming write
-// access via /proc/<pid>/fdinfo for any fd that already points at want.
+// pidHasFileOpenForWrite is procFDsHoldForWriting for WriterOf's scan, where a
+// pid whose fds cannot be read is one more candidate that is not a writer.
 func pidHasFileOpenForWrite(pid int, want string) bool {
-	fdDir := fmt.Sprintf("/proc/%d/fd", pid)
+	held, err := procFDsHoldForWriting("/proc", pid, want)
+	return err == nil && held
+}
+
+// resolveProcTarget resolves path the way the kernel resolves the
+// /proc/<pid>/fd/* links it is compared with. The caller's transcript path is
+// only filepath.Clean'd (fswatcher joins os.UserHomeDir() + a relative dir,
+// no symlink resolution), so on a host where $HOME or the data dir traverses a
+// symlink an exact compare would never match. A path that does not exist is
+// returned as given with no error, since nothing can hold it under that name;
+// any other failure is returned with the unresolved path.
+func resolveProcTarget(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return path, nil
+	}
+	return path, err
+}
+
+// HoldsForWriting reports whether pid holds path open for writing, read from
+// pid's own /proc/<pid>/fd links and the flags in /proc/<pid>/fdinfo — one
+// process's descriptors, where WriterOf walks every process's (#2079).
+//
+// The three answers of the port contract, as /proc spells them: a missing
+// /proc/<pid> under a procfs that is there is a pid that does not exist, so
+// (false, nil); an fd that vanishes between two reads was closed under us, so
+// it is skipped; any other unreadable entry (EACCES on another user's process,
+// an fdinfo with no parseable flags, no procfs at all) means the probe could
+// not look, so it is an error.
+func (linuxObserver) HoldsForWriting(pid int, path string) (bool, error) {
+	return holdsForWritingIn("/proc", pid, path)
+}
+
+// holdsForWritingIn is HoldsForWriting reading procfs at procRoot, so a test
+// can lay down the unreadable and malformed entries a live /proc cannot be
+// arranged into.
+//
+// A path resolveProcTarget cannot resolve (one in a directory this user may
+// not search, say) is still compared as given: a link that matches it is a
+// real hold, but no match proves nothing, so that case is an error.
+func holdsForWritingIn(procRoot string, pid int, path string) (bool, error) {
+	if pid <= 0 || path == "" {
+		return false, nil
+	}
+	want, resolveErr := resolveProcTarget(path)
+	held, err := procFDsHoldForWriting(procRoot, pid, want)
+	if err != nil || held {
+		return held, err
+	}
+	if resolveErr != nil {
+		return false, fmt.Errorf("resolve %s: %w", path, resolveErr)
+	}
+	return false, nil
+}
+
+// procFDsHoldForWriting scans pid's fd links for one that resolves to want and
+// was opened for writing. An fd it cannot read does not end the scan, since a
+// writable fd later in the table is still a real hold; the first such error
+// is returned only when no fd holds want.
+func procFDsHoldForWriting(procRoot string, pid int, want string) (bool, error) {
+	fdDir := fmt.Sprintf("%s/%d/fd", procRoot, pid)
 	fds, err := os.ReadDir(fdDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		// No such pid, provided there is a procfs to have asked.
+		if _, rootErr := os.Stat(procRoot); rootErr != nil {
+			return false, fmt.Errorf("read %s: %w", procRoot, rootErr)
+		}
+		return false, nil
+	}
 	if err != nil {
-		return false // process exited or fds unreadable (not ours)
+		return false, fmt.Errorf("read %s: %w", fdDir, err)
 	}
+	var firstErr error
 	for _, fd := range fds {
-		target, err := os.Readlink(fdDir + "/" + fd.Name())
-		if err != nil || target != want {
-			continue
+		held, err := procFDHoldsForWriting(procRoot, pid, fd.Name(), want)
+		if held {
+			return true, nil
 		}
-		if fdWritable(pid, fd.Name()) {
-			return true
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return false
+	return false, firstErr
+}
+
+// procFDHoldsForWriting reads one fd link and, when it names want, its open
+// flags. An fd closed between the directory read and either of these reads
+// holds nothing.
+func procFDHoldsForWriting(procRoot string, pid int, fd, want string) (bool, error) {
+	link := fmt.Sprintf("%s/%d/fd/%s", procRoot, pid, fd)
+	target, err := os.Readlink(link)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("readlink %s: %w", link, err)
+	}
+	if target != want {
+		return false, nil
+	}
+	writable, err := fdOpenForWrite(procRoot, pid, fd)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return writable, err
 }
 
 // EnvOf returns the values of keys retained from pid's env, via
@@ -235,13 +323,18 @@ func procPIDs() ([]int, error) {
 	return pids, nil
 }
 
-// fdWritable reports whether the given fd of pid was opened for writing,
-// read from the "flags:" line of /proc/<pid>/fdinfo/<fd> (octal open flags).
-// The access mode is the low two bits: O_RDONLY(0), O_WRONLY(1), O_RDWR(2).
-func fdWritable(pid int, fd string) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%s", pid, fd))
+// fdOpenForWrite reports whether the given fd of pid was opened for writing,
+// read from the "flags:" line of <procRoot>/<pid>/fdinfo/<fd> (octal open
+// flags). The access mode is the low two bits: O_RDONLY(0), O_WRONLY(1),
+// O_RDWR(2).
+// An unreadable fdinfo returns the read error unchanged, so a caller can tell
+// a closed fd (fs.ErrNotExist) from one it may not read; an fdinfo with no
+// parseable flags line is an error too, never a "read-only".
+func fdOpenForWrite(procRoot string, pid int, fd string) (bool, error) {
+	fdinfo := fmt.Sprintf("%s/%d/fdinfo/%s", procRoot, pid, fd)
+	data, err := os.ReadFile(fdinfo)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		rest, ok := strings.CutPrefix(line, "flags:")
@@ -250,11 +343,11 @@ func fdWritable(pid int, fd string) bool {
 		}
 		flags, err := strconv.ParseInt(strings.TrimSpace(rest), 8, 64)
 		if err != nil {
-			return false
+			return false, fmt.Errorf("parse flags of %s: %w", fdinfo, err)
 		}
-		return flags&3 != 0 // O_ACCMODE bits non-zero ⇒ writable
+		return flags&3 != 0, nil // O_ACCMODE bits non-zero ⇒ writable
 	}
-	return false
+	return false, fmt.Errorf("%s has no flags line", fdinfo)
 }
 
 // cmdlineRECache memoizes compiled FindByCmdline patterns. The pattern set is

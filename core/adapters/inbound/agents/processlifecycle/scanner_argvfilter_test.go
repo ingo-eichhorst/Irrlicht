@@ -25,6 +25,9 @@ func (f fakeObserver) FindByCmdline(string) ([]int, error) { return nil, nil }
 func (f fakeObserver) ArgvOf(pid int) ([]string, error)    { return f.argv[pid], nil }
 func (f fakeObserver) CWDOf(pid int) (string, error)       { return f.cwd[pid], nil }
 func (f fakeObserver) WriterOf(string) (int, error)        { return 0, nil }
+func (f fakeObserver) HoldsForWriting(int, string) (bool, error) {
+	return false, nil
+}
 func (f fakeObserver) EnvOf(int, map[string]struct{}) (map[string]string, error) {
 	return map[string]string{}, nil
 }

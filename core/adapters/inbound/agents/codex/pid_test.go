@@ -65,8 +65,9 @@ func TestOwnsSharedPID(t *testing.T) {
 	}{
 		{name: "held by the asked pid", path: held, pid: holder, want: true},
 		{name: "held by a different pid", path: held, pid: os.Getpid()},
-		// On the unheld path DiscoverPID answers 0, so only the pid <= 0 guard
-		// keeps a zero pid from "matching" no writer at all.
+		// A non-positive pid names no process, so it holds nothing (the
+		// HoldsForWriting port contract; processlifecycle's TestHoldsForWriting
+		// pins its zero and negative pid rows on darwin and linux).
 		{name: "zero pid", path: unheld, pid: 0},
 		{name: "negative pid", path: unheld, pid: -1},
 		{name: "file nobody holds open", path: unheld, pid: holder},

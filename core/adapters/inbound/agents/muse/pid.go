@@ -56,12 +56,21 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 	return processlifecycle.DiscoverPIDByTranscriptWriter(transcriptPath)
 }
 
-// OwnsSharedPID reports whether this session is still bound to pid by the same
-// probe DiscoverPID uses — its .session.lock's writer, else its transcript's —
-// asked of one root that shares pid with a newer muse root. An erroring probe,
-// no writer, or a different writer does not confirm ownership
-// (agent.SharedPIDOwnerFunc's contract: inconclusive is false), so the root
-// falls back to the exclusive same-PID policy and is retired.
+// OwnsSharedPID reports whether this session is still bound to pid, asked of
+// pid alone (processlifecycle.HoldsForWriting, #2079) for one root that shares
+// pid with a newer muse root: does pid hold the session's .session.lock open
+// for writing, else its session.jsonl — DiscoverPID's two files, in its order.
+// A probe that could not run, or a pid that holds neither, does not confirm
+// ownership (agent.SharedPIDOwnerFunc's contract: inconclusive is false), so
+// the root falls back to the exclusive same-PID policy and is retired.
+//
+// One case answers differently from DiscoverPID, by construction rather than
+// by observation: a lock held by ANOTHER pid while pid holds the transcript.
+// DiscoverPID names the lock's holder, so that pid would not match; asked of
+// pid, the transcript fallback confirms it. No muse shape producing that
+// split is known (format-spec has no evidence about session.jsonl's fd at all,
+// see DiscoverPID), and asking "who holds the lock?" would bring back the
+// whole-table scan this probe exists to avoid.
 //
 // Under `muse serve` this keeps every root whose lock the host still holds.
 // In the dedicated one-session-per-process mode, /clear starts a new session
@@ -75,11 +84,22 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // the old root is kept at assignment and retired by a later periodic
 // same-PID sweep instead (SweepDeadPIDs ticks every 5s, backing off to 15s).
 func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
-	if pid <= 0 {
-		return false
+	held, err := holdsSessionForWriting(pid, transcriptPath)
+	return err == nil && held
+}
+
+// holdsSessionForWriting asks whether pid holds this session's .session.lock
+// for writing, else its transcript. A lock probe that could not run ends the
+// question there as an error, as it ends DiscoverPID's: not knowing about the
+// lock is not a "no" that licenses asking about the transcript instead.
+func holdsSessionForWriting(pid int, transcriptPath string) (bool, error) {
+	if lockPath := sessionLockPath(transcriptPath); lockPath != "" {
+		held, err := processlifecycle.HoldsForWriting(pid, lockPath)
+		if err != nil || held {
+			return held, err
+		}
 	}
-	owner, err := DiscoverPID(cwd, transcriptPath, nil)
-	return err == nil && owner == pid
+	return processlifecycle.HoldsForWriting(pid, transcriptPath)
 }
 
 // sessionLockPath derives a session's .session.lock path from its
