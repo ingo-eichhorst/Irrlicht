@@ -4,7 +4,9 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -207,6 +209,65 @@ func pidHasFileOpenForWrite(pid int, want string) bool {
 	return false
 }
 
+// HoldsForWriting reports whether pid holds path open for writing, read from
+// pid's own /proc/<pid>/fd links and the flags in /proc/<pid>/fdinfo — one
+// process's descriptors, where WriterOf walks every process's (#2079). The
+// target path is canonicalised as WriterOf canonicalises it, since the fd
+// links are fully symlink-resolved.
+//
+// The three answers of the port contract, as /proc spells them: a missing
+// /proc/<pid> is a pid that does not exist, so (false, nil); an fd that
+// vanishes between two reads was closed under us, so it is skipped; any other
+// unreadable entry (EACCES on another user's process, an fdinfo with no
+// parseable flags) means the probe could not look, so it is an error.
+func (linuxObserver) HoldsForWriting(pid int, path string) (bool, error) {
+	return holdsForWritingIn("/proc", pid, path)
+}
+
+// holdsForWritingIn is HoldsForWriting reading procfs at procRoot, so a test
+// can lay down the unreadable and malformed entries a live /proc cannot be
+// arranged into.
+func holdsForWritingIn(procRoot string, pid int, path string) (bool, error) {
+	if pid <= 0 || path == "" {
+		return false, nil
+	}
+	want := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		want = resolved
+	}
+	fdDir := fmt.Sprintf("%s/%d/fd", procRoot, pid)
+	fds, err := os.ReadDir(fdDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", fdDir, err)
+	}
+	for _, fd := range fds {
+		target, err := os.Readlink(fdDir + "/" + fd.Name())
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("readlink %s/%s: %w", fdDir, fd.Name(), err)
+		}
+		if target != want {
+			continue
+		}
+		writable, err := fdOpenForWrite(procRoot, pid, fd.Name())
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if writable {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // EnvOf returns the values of keys retained from pid's env, via
 // /proc/<pid>/environ (readProcessEnv, defined in osutil_linux.go) —
 // selective RETENTION, not selective reading: the kernel exposes the whole
@@ -235,13 +296,25 @@ func procPIDs() ([]int, error) {
 	return pids, nil
 }
 
-// fdWritable reports whether the given fd of pid was opened for writing,
-// read from the "flags:" line of /proc/<pid>/fdinfo/<fd> (octal open flags).
-// The access mode is the low two bits: O_RDONLY(0), O_WRONLY(1), O_RDWR(2).
+// fdWritable is fdOpenForWrite for WriterOf's scan, where an fd that cannot
+// be read is one more candidate that is not a writer.
 func fdWritable(pid int, fd string) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%s", pid, fd))
+	writable, err := fdOpenForWrite("/proc", pid, fd)
+	return err == nil && writable
+}
+
+// fdOpenForWrite reports whether the given fd of pid was opened for writing,
+// read from the "flags:" line of <procRoot>/<pid>/fdinfo/<fd> (octal open
+// flags). The access mode is the low two bits: O_RDONLY(0), O_WRONLY(1),
+// O_RDWR(2).
+// An unreadable fdinfo returns the read error unchanged, so a caller can tell
+// a closed fd (fs.ErrNotExist) from one it may not read; an fdinfo with no
+// parseable flags line is an error too, never a "read-only".
+func fdOpenForWrite(procRoot string, pid int, fd string) (bool, error) {
+	fdinfo := fmt.Sprintf("%s/%d/fdinfo/%s", procRoot, pid, fd)
+	data, err := os.ReadFile(fdinfo)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		rest, ok := strings.CutPrefix(line, "flags:")
@@ -250,11 +323,11 @@ func fdWritable(pid int, fd string) bool {
 		}
 		flags, err := strconv.ParseInt(strings.TrimSpace(rest), 8, 64)
 		if err != nil {
-			return false
+			return false, fmt.Errorf("parse flags of %s: %w", fdinfo, err)
 		}
-		return flags&3 != 0 // O_ACCMODE bits non-zero ⇒ writable
+		return flags&3 != 0, nil // O_ACCMODE bits non-zero ⇒ writable
 	}
-	return false
+	return false, fmt.Errorf("%s has no flags line", fdinfo)
 }
 
 // cmdlineRECache memoizes compiled FindByCmdline patterns. The pattern set is

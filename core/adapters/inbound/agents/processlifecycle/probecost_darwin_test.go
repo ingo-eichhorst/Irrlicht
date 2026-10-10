@@ -170,6 +170,19 @@ func probeCostPlans(tb testing.TB) []probeCostPlan {
 			},
 		},
 		{
+			// The same file and the same holder as lsof.writer, so the two rows
+			// are the per-pid and the whole-table answer to one question (#2079).
+			// HoldsForWriting does not exclude the caller, so asking about self
+			// is a hit, as lsof.writer's subject is.
+			kind:    probeLsofHoldsForWriting,
+			note:    "lsof -a -p <self> -- <a file this process holds open>",
+			samples: scanProbeSamples,
+			call: func(context.Context) bool {
+				_, err := newObserver().HoldsForWriting(self, writable)
+				return err == nil
+			},
+		},
+		{
 			kind:    probeLsofHerdrClients,
 			note:    "lsof <synthetic herdr-client.log, no clients attached>",
 			samples: scanProbeSamples,

@@ -800,6 +800,21 @@ type ProcessObserver interface {
 	// the implementation looked and found nobody, never that it could not
 	// look (#1537).
 	WriterOf(path string) (int, error)
+	// HoldsForWriting is WriterOf asked of ONE named pid: does pid hold path
+	// open with write access (write-only or read/write)? It exists because
+	// that per-pid question answered through WriterOf costs a scan of every
+	// process's descriptor table (#2079). Three answers, kept apart on the
+	// line WriterOf draws (#1537):
+	//
+	//   - (true, nil): pid holds path open for writing;
+	//   - (false, nil): the probe ran and pid does not — including when path
+	//     or pid does not exist, and for a non-positive pid or an empty path,
+	//     which name nothing that could hold a file;
+	//   - non-nil error: the probe could not run, so nothing is known.
+	//
+	// Unlike WriterOf, the calling process is not excluded: the caller names
+	// the pid, so there is no candidate set to filter it out of.
+	HoldsForWriting(pid int, path string) (bool, error)
 	// EnvOf returns pid's environment values for keys, and only for keys —
 	// there is no unscoped read. keys is a permission's own extraction set
 	// (e.g. processlifecycle's launcherEnvKeys or endpointEnvKeys); every

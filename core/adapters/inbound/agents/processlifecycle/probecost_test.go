@@ -38,6 +38,11 @@ var costFigureAnchors = []costreport.Anchor{
 		Why:    "the tmux/lsof scan costs are the order-of-magnitude gap the one-constant decision is argued against",
 	},
 	{
+		File:   "process_darwin.go",
+		Symbol: "func (darwinObserver) HoldsForWriting",
+		Why:    "the per-call gap against lsof.writer's whole-table scan is why the SharedPIDOwner probes ask the per-pid question (#2079)",
+	},
+	{
 		File:   "osutil_darwin.go",
 		Symbol: "type bundleIDMemo",
 		Why:    "the per-call plutil cost is what the memo saves — and the figure whose two incompatible values (#1524's 2.2ms, #1544's 9.7ms) #1572 was filed about",

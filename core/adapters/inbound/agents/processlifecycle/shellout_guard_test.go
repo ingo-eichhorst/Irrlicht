@@ -499,9 +499,10 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	// intentional removal does not fail here for the wrong reason, but a
 	// scan that stops seeing the package fails loudly.
 	//
-	// Today's count is 9: the eight production call sites of runProbe, plus
+	// Today's count is 11: the ten production call sites of runProbe, plus
 	// the one .Output() inside runProbe itself (whose error is returned
-	// directly, so it is clean). Before #1547 it was 8 direct .Output() sites,
+	// directly, so it is clean). Read for #2079 by raising this floor to 99
+	// and taking the count from the failure message. Before #1547 it was 8 direct .Output() sites,
 	// and routing them WITHOUT teaching this scan about runProbe took it to 1
 	// — which this floor reported rather than passing over.
 	const knownRunSites = 8

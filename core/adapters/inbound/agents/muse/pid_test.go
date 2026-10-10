@@ -81,8 +81,8 @@ func TestOwnsSharedPID(t *testing.T) {
 	transcriptHeld := newSessionDir(t, filepath.Join(root, "01a1181a-0000-7000-8000-000000000002"))
 	unheld := newSessionDir(t, filepath.Join(root, "01a1181a-0000-7000-8000-000000000003"))
 	holder := startHolder(t, lockHeld, transcriptHeld)
-	// WriterOf never reports the calling process, so this pid is never the
-	// writer of anything the holder has open.
+	// This test process writes the session files with os.WriteFile, which
+	// closes them, so it holds none of them open: asked about, it never owns.
 	other := os.Getpid()
 
 	for _, tc := range []struct {
@@ -96,8 +96,9 @@ func TestOwnsSharedPID(t *testing.T) {
 		// DiscoverPID's fallback: a lock with no writer, a transcript with one.
 		{name: "lock unheld, transcript held by the asked pid", path: transcriptHeld, pid: holder, want: true},
 		{name: "lock unheld, transcript held by a different pid", path: transcriptHeld, pid: other},
-		// On the unheld session DiscoverPID answers 0, so only the pid <= 0
-		// guard keeps a zero pid from "matching" no writer at all.
+		// A non-positive pid names no process, so the probe answers "does not
+		// hold" without asking lsof (processlifecycle's holdsForWritingVia
+		// guard, pinned by TestHoldsForWritingNamesNothingStartsNoChild).
 		{name: "zero pid", path: unheld, pid: 0},
 		{name: "negative pid", path: unheld, pid: -1},
 		{name: "session nobody holds", path: unheld, pid: holder},

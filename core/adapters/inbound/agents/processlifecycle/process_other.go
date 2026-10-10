@@ -35,6 +35,12 @@ func (stubObserver) CWDOf(pid int) (string, error) {
 
 func (stubObserver) WriterOf(string) (int, error) { return 0, nil }
 
+// HoldsForWriting cannot look on this platform, and says so: per the port
+// contract, (false, nil) would mean "looked, and pid does not hold it".
+func (stubObserver) HoldsForWriting(int, string) (bool, error) {
+	return false, fmt.Errorf("process observation unsupported on %s", runtime.GOOS)
+}
+
 func (stubObserver) EnvOf(pid int, keys map[string]struct{}) (map[string]string, error) {
 	return readProcessEnv(pid, keys)
 }
