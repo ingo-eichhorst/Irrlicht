@@ -28,7 +28,7 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // contract: inconclusive is false), so the root falls back to the exclusive
 // same-PID policy and is retired.
 //
-// When the answer turns false for a root the daemon still hosts is codex's
+// What turns the answer false for a root the daemon still hosts is codex's
 // thread unload, read in codex source at tag rust-v0.162.1 and NOT observed
 // live (#2077): app-server/src/request_processors/thread_lifecycle.rs
 // (UnloadingState) shuts a thread down once it has no subscribers and has been
@@ -36,11 +36,9 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // 60s. So a root left behind by /new is expected to keep the daemon's PID
 // until that unload, and to be retired by the next same-PID sweep after it —
 // not within milliseconds of the new root's PID binding, as the exclusive
-// policy did. That holds only for a root that is not the NEWEST on the PID:
-// the same-PID paths never probe their winner (isDedupDeleteCandidate in
-// pid_manager.go skips it), so a released newest root — e.g. the last TUI
-// opened, then closed — stays until a newer codex root binds the PID or the
-// daemon exits (#2077's named residual).
+// policy did. The same-PID paths never ask about their winner (the root
+// being assigned, or the newest root on the PID for the startup and periodic
+// sweeps); see isDedupDeleteCandidate in core/application/services/pid_manager.go.
 func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
 	if pid <= 0 {
 		return false

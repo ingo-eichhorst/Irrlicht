@@ -1455,9 +1455,13 @@ func TestHandlePIDAssigned_PresessionNeverEvictsRealSession(t *testing.T) {
 }
 
 func newSharedPIDManagerForTest(repo *mockRepo, owns agent.SharedPIDOwnerFunc) *services.PIDManager {
+	return newPIDManagerWithSharedPIDOwners(repo, map[string]agent.SharedPIDOwnerFunc{"dsh": owns})
+}
+
+func newPIDManagerWithSharedPIDOwners(repo *mockRepo, owners map[string]agent.SharedPIDOwnerFunc) *services.PIDManager {
 	return services.NewPIDManager(services.PIDManagerDeps{
 		Repo: repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
-		SharedPIDOwners:  map[string]agent.SharedPIDOwnerFunc{"dsh": owns},
+		SharedPIDOwners:  owners,
 		OnSessionDeleted: func(string) {},
 	})
 }

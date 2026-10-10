@@ -12,7 +12,6 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/codex"
-	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 )
@@ -35,27 +34,41 @@ import (
 // deadline leaves room for several slow probes on a loaded runner.
 const codexWriterDeadline = 10 * time.Second
 
-// codexRolloutHolder is ONE process holding two codex rollouts open for
-// writing — the managed app-server daemon's shape. It has to be a child
-// process: WriterOf never reports the calling process (darwin's
-// writerPIDFromLsof drops self, linux's WriterOf skips os.Getpid()).
-type codexRolloutHolder struct {
-	pid   int
-	stdin io.WriteCloser
+// codexSharedPIDFixture is two codex rollouts held open for writing by ONE
+// helper process — the managed app-server daemon's shape. first is the older
+// root. The helper has to be a child process: WriterOf never reports the
+// calling process (darwin's writerPIDFromLsof drops self, linux's WriterOf
+// skips os.Getpid()).
+type codexSharedPIDFixture struct {
+	first, second string
+	holderPID     int
+	holderStdin   io.WriteCloser
 }
 
-// startCodexRolloutHolder opens first on fd 3 and second on fd 4, then blocks
-// in `read`. read is a shell builtin, so the holder never forks: a forked
-// child would inherit both descriptors and show up as a second writer of the
-// same files. One line on stdin closes fd 3 (first's rollout released, the
-// shape of the daemon unloading a thread) while fd 4 stays open.
+// newCodexSharedPIDFixture lays the rollouts down and starts the holder, which
+// opens first on fd 3 and second on fd 4 and then blocks in `read`. read is a
+// shell builtin, so the holder never forks: a forked child would inherit both
+// descriptors and show up as a second writer of the same files.
 //
 // It returns only once the real codex probe reports the helper as the writer
 // of both files, polled to codexWriterDeadline — never after a sleep.
-func startCodexRolloutHolder(t *testing.T, first, second string) *codexRolloutHolder {
+func newCodexSharedPIDFixture(t *testing.T) *codexSharedPIDFixture {
 	t.Helper()
+	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")
+	if err := os.MkdirAll(day, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &codexSharedPIDFixture{
+		first:  filepath.Join(day, "rollout-2026-10-10T13-40-00-01a1181a-0000-7000-8000-000000000001.jsonl"),
+		second: filepath.Join(day, "rollout-2026-10-10T13-41-00-01a12197-0000-7000-8000-000000000002.jsonl"),
+	}
+	for _, p := range []string{f.first, f.second} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cmd := exec.Command("/bin/sh", "-c",
-		`exec 3>>"$1" 4>>"$2"; read line; exec 3>&-; read line`, "sh", first, second)
+		`exec 3>>"$1" 4>>"$2"; read line; exec 3>&-; read line`, "sh", f.first, f.second)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -68,21 +81,41 @@ func startCodexRolloutHolder(t *testing.T, first, second string) *codexRolloutHo
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	h := &codexRolloutHolder{pid: cmd.Process.Pid, stdin: stdin}
-	awaitCodexWriter(t, first, h.pid)
-	awaitCodexWriter(t, second, h.pid)
-	return h
+	f.holderPID, f.holderStdin = cmd.Process.Pid, stdin
+	awaitCodexWriter(t, f.first, f.holderPID)
+	awaitCodexWriter(t, f.second, f.holderPID)
+	return f
 }
 
-// releaseFirst closes the holder's handle on the first rollout and waits until
-// the probe sees it released while the second is still held.
-func (h *codexRolloutHolder) releaseFirst(t *testing.T, first, second string) {
+// releaseFirst sends the holder one line, which closes its handle on the first
+// rollout (the shape of the daemon unloading that thread) while the second
+// stays held, and waits until the probe sees exactly that.
+func (f *codexSharedPIDFixture) releaseFirst(t *testing.T) {
 	t.Helper()
-	if _, err := io.WriteString(h.stdin, "\n"); err != nil {
+	if _, err := io.WriteString(f.holderStdin, "\n"); err != nil {
 		t.Fatalf("signal rollout holder: %v", err)
 	}
-	awaitCodexWriter(t, first, 0)
-	awaitCodexWriter(t, second, h.pid)
+	awaitCodexWriter(t, f.first, 0)
+	awaitCodexWriter(t, f.second, f.holderPID)
+}
+
+// seed stores both roots in a fresh repo and returns them. pidOfSecond lets the
+// assignment test leave the newer root unbound, as it is just before its PID
+// is discovered.
+func (f *codexSharedPIDFixture) seed(pidOfSecond int) (repo *mockRepo, first, second *session.SessionState) {
+	now := time.Now().Unix()
+	first = &session.SessionState{
+		SessionID: "codex-first", Adapter: codex.AdapterName, State: session.StateReady,
+		PID: f.holderPID, TranscriptPath: f.first, FirstSeen: now - 1, UpdatedAt: now,
+	}
+	second = &session.SessionState{
+		SessionID: "codex-second", Adapter: codex.AdapterName, State: session.StateReady,
+		PID: pidOfSecond, TranscriptPath: f.second, FirstSeen: now, UpdatedAt: now,
+	}
+	repo = newMockRepo()
+	repo.states[first.SessionID] = first
+	repo.states[second.SessionID] = second
+	return repo, first, second
 }
 
 // awaitCodexWriter polls codex.DiscoverPID — the production transcript-writer
@@ -93,81 +126,33 @@ func awaitCodexWriter(t *testing.T, path string, want int) {
 	start := time.Now()
 	var got int
 	var err error
-	for time.Since(start) < codexWriterDeadline {
+	if !pollUntil(codexWriterDeadline, func() bool {
 		got, err = codex.DiscoverPID("", path, nil)
-		if err == nil && got == want {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+		return err == nil && got == want
+	}) {
+		t.Fatalf("after %v the writer of %s is pid %d (err %v), want %d",
+			time.Since(start).Round(time.Millisecond), path, got, err, want)
 	}
-	t.Fatalf("after %v the writer of %s is pid %d (err %v), want %d",
-		time.Since(start).Round(time.Millisecond), path, got, err, want)
 }
 
-// codexSharedPIDFixture lays down two codex rollouts under a codex-shaped
-// sessions tree and starts one holder for both. first is the older root.
-type codexSharedPIDFixture struct {
-	cwd, first, second string
-	holder             *codexRolloutHolder
-}
-
-func newCodexSharedPIDFixture(t *testing.T) codexSharedPIDFixture {
-	t.Helper()
-	root := t.TempDir()
-	day := filepath.Join(root, "sessions", "2026", "10", "10")
-	if err := os.MkdirAll(day, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f := codexSharedPIDFixture{
-		cwd:    t.TempDir(),
-		first:  filepath.Join(day, "rollout-2026-10-10T13-40-00-01a1181a-0000-7000-8000-000000000001.jsonl"),
-		second: filepath.Join(day, "rollout-2026-10-10T13-41-00-01a12197-0000-7000-8000-000000000002.jsonl"),
-	}
-	for _, p := range []string{f.first, f.second} {
-		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.holder = startCodexRolloutHolder(t, f.first, f.second)
-	return f
-}
-
-// roots returns the two root sessions. pidOfSecond lets the assignment test
-// leave the newer root unbound, as it is just before its PID is discovered.
-func (f codexSharedPIDFixture) roots(pidOfSecond int) (first, second *session.SessionState) {
-	now := time.Now().Unix()
-	first = &session.SessionState{
-		SessionID: "codex-first", Adapter: codex.AdapterName, State: session.StateReady,
-		PID: f.holder.pid, CWD: f.cwd, TranscriptPath: f.first,
-		FirstSeen: now - 1, UpdatedAt: now,
-	}
-	second = &session.SessionState{
-		SessionID: "codex-second", Adapter: codex.AdapterName, State: session.StateReady,
-		PID: pidOfSecond, CWD: f.cwd, TranscriptPath: f.second,
-		FirstSeen: now, UpdatedAt: now,
-	}
-	return first, second
-}
-
-// newCodexSharedPIDManager wires ownership probes exactly as startup.go does:
+// codexSharedPIDOwners wires ownership probes exactly as startup.go does:
 // projected from the real codex declaration, so a codex without a
 // SharedPIDOwner yields no probe and the exclusive same-PID policy applies.
-func newCodexSharedPIDManager(repo *mockRepo) *services.PIDManager {
-	return services.NewPIDManager(services.PIDManagerDeps{
-		Repo: repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
-		SharedPIDOwners:  agents.SharedPIDOwners([]agent.Agent{codex.Agent()}),
-		OnSessionDeleted: func(string) {},
-	})
+func codexSharedPIDOwners() map[string]agent.SharedPIDOwnerFunc {
+	return agents.SharedPIDOwners([]agent.Agent{codex.Agent()})
+}
+
+func codexRootsPresent(repo *mockRepo) (first, second bool) {
+	_, errFirst := repo.Load("codex-first")
+	_, errSecond := repo.Load("codex-second")
+	return errFirst == nil, errSecond == nil
 }
 
 func requireBothCodexRoots(t *testing.T, repo *mockRepo, path string) {
 	t.Helper()
-	repo.mu.Lock()
-	first, second := repo.states["codex-first"], repo.states["codex-second"]
-	repo.mu.Unlock()
-	if first == nil || second == nil {
+	if first, second := codexRootsPresent(repo); !first || !second {
 		t.Fatalf("%s removed a live codex root sharing the app-server daemon's pid "+
-			"(codex-first present=%v, codex-second present=%v)", path, first != nil, second != nil)
+			"(codex-first present=%v, codex-second present=%v)", path, first, second)
 	}
 }
 
@@ -175,12 +160,9 @@ func requireBothCodexRoots(t *testing.T, repo *mockRepo, path string) {
 // already carries. Both rollouts are held, so both roots stay.
 func TestHandlePIDAssigned_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 	f := newCodexSharedPIDFixture(t)
-	first, second := f.roots(0)
-	repo := newMockRepo()
-	repo.states[first.SessionID] = first
-	repo.states[second.SessionID] = second
+	repo, _, second := f.seed(0)
 
-	newCodexSharedPIDManager(repo).HandlePIDAssigned(f.holder.pid, second.SessionID)
+	newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners()).HandlePIDAssigned(f.holderPID, second.SessionID)
 
 	requireBothCodexRoots(t, repo, "assigning the daemon pid to a second codex root")
 }
@@ -189,12 +171,9 @@ func TestHandlePIDAssigned_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 // the daemon's PID, both rollouts held, survive a sweep.
 func TestCheckPIDLiveness_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 	f := newCodexSharedPIDFixture(t)
-	first, second := f.roots(f.holder.pid)
-	repo := newMockRepo()
-	repo.states[first.SessionID] = first
-	repo.states[second.SessionID] = second
+	repo, _, _ := f.seed(f.holderPID)
 
-	newCodexSharedPIDManager(repo).CheckPIDLiveness()
+	newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners()).CheckPIDLiveness()
 
 	requireBothCodexRoots(t, repo, "the periodic same-PID sweep")
 }
@@ -203,12 +182,9 @@ func TestCheckPIDLiveness_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 // the codex daemon's PID keeps both.
 func TestSeedPIDs_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 	f := newCodexSharedPIDFixture(t)
-	first, second := f.roots(f.holder.pid)
-	repo := newMockRepo()
-	repo.states[first.SessionID] = first
-	repo.states[second.SessionID] = second
+	repo, first, second := f.seed(f.holderPID)
 
-	newCodexSharedPIDManager(repo).SeedPIDs([]*session.SessionState{first, second})
+	newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners()).SeedPIDs([]*session.SessionState{first, second})
 
 	requireBothCodexRoots(t, repo, "the startup same-PID dedup")
 }
@@ -218,21 +194,16 @@ func TestSeedPIDs_ConcurrentCodexRootsKeepDaemonPID(t *testing.T) {
 // and keeps the newer one. Shared ownership must not mean "kept forever".
 func TestCheckPIDLiveness_ReleasedCodexRootIsRetired(t *testing.T) {
 	f := newCodexSharedPIDFixture(t)
-	first, second := f.roots(f.holder.pid)
-	repo := newMockRepo()
-	repo.states[first.SessionID] = first
-	repo.states[second.SessionID] = second
-	f.holder.releaseFirst(t, f.first, f.second)
+	repo, _, _ := f.seed(f.holderPID)
+	f.releaseFirst(t)
 
-	newCodexSharedPIDManager(repo).CheckPIDLiveness()
+	newPIDManagerWithSharedPIDOwners(repo, codexSharedPIDOwners()).CheckPIDLiveness()
 
-	repo.mu.Lock()
-	gotFirst, gotSecond := repo.states["codex-first"], repo.states["codex-second"]
-	repo.mu.Unlock()
-	if gotFirst != nil {
+	first, second := codexRootsPresent(repo)
+	if first {
 		t.Fatal("a codex root whose rollout the daemon released survived the same-PID sweep")
 	}
-	if gotSecond == nil {
+	if !second {
 		t.Fatal("the periodic sweep removed the codex root whose rollout is still held")
 	}
 }

@@ -70,21 +70,21 @@ assert_go_test_goes_red() {
 
   if [[ $rc -ne 0 ]]; then
     echo "FAIL: $label — mutate.sh refused (exit $rc). A STALE or ambiguous anchor means the"
-    echo "      probe's source moved and this fixture needs updating — it does NOT mean the"
-    echo "      probe is fine."
+    echo "      guard's source moved and this fixture needs updating — it does NOT mean the"
+    echo "      guard is fine."
     echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
   if grep -q 'GO_TEST_RC=0' <<<"$out"; then
-    echo "FAIL: $label — the test stayed GREEN under the mutation, so it does not reach"
-    echo "      the probe it claims to protect."
+    echo "FAIL: $label — the test stayed GREEN under the mutation, so the guard does not reach"
+    echo "      what it claims to protect."
     echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
   if grep -qE '^# |build failed|cannot use|undefined:' <<<"$out"; then
-    echo "FAIL: $label — the mutation broke the BUILD rather than the probe. A fixture that"
+    echo "FAIL: $label — the mutation broke the BUILD rather than the guard. A fixture that"
     echo "      cannot compile proves nothing about the behavior it is meant to exercise."
     echo "$out" | quote_output
     fails=$((fails + 1))

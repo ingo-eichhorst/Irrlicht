@@ -2397,18 +2397,17 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 // deleteWithChildren, it does NOT emit a lifecycle recorder event — these
 // paths reconcile bookkeeping artifacts (a duplicate PID row, a superseded
 // proc-* placeholder) rather than tearing down a session whose disappearance
-// belongs in the offline replay trace. One caller does not fit that
-// description: for an adapter declaring a SharedPIDOwner (dsh, codex),
-// retireUnprovenPIDVictim retires a root once its probe stops confirming the
-// shared PID — for codex, that is how a /new supersession now ends, after the
-// app-server unloads the old thread (read in codex source, not observed live;
-// see codex.OwnsSharedPID, #2077). That is a real teardown, and it
-// goes unrecorded here as well: a known gap, not a design property of this
-// function. tag and msg are the caller's log
+// belongs in the offline replay trace. tag and msg are the caller's log
 // identity and message, kept verbatim so log output is unchanged by this
 // extraction. supersededBy is the reconciled session's id s is being retired
 // in favor of (empty for a plain same-PID dedup, which has no single
 // superseding identity to re-key state onto — issue #997).
+//
+// Exception: retireUnprovenPIDVictim also routes here when an adapter's
+// SharedPIDOwner probe stops confirming a root (for codex, how a /new
+// supersession ends: read in codex source, not observed live; see
+// codex.OwnsSharedPID, #2077). That is a real teardown left unrecorded: a
+// known gap, not a design property of this function.
 func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState, msg string, supersededBy string) {
 	pm.log.LogInfo(tag, s.SessionID, msg)
 	if supersededBy != "" && pm.onSessionSuperseded != nil {
@@ -2423,7 +2422,11 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 
 // isDedupDeleteCandidate returns true when victim is a duplicate PID
 // candidate. The caller still checks opt-in shared-PID ownership before
-// deletion. This candidate policy is shared by all three same-PID
+// deletion — and only for candidates: the winner is never one, so for an
+// adapter declaring a SharedPIDOwner a root whose probe would no longer
+// confirm the PID is kept while it is the winner (for the startup and
+// periodic sweeps, the newest root on that PID), until a newer root binds the
+// PID or the process exits (#2077's residual). This candidate policy is shared by all three same-PID
 // reconciliation paths (issue #1992 unified these from two independent
 // spellings): assignment-time cleanup (assignPIDLocked's same-PID scan, acted
 // on by cleanupStalePIDHolders), seed-time dedup (dedupeByPID, via SeedPIDs),
