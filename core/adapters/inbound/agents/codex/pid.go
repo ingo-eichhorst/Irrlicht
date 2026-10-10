@@ -40,7 +40,36 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // policy did. The same-PID paths never ask about their winner (the root
 // being assigned, or the newest root on the PID for the startup and periodic
 // sweeps); see isDedupDeleteCandidate in core/application/services/pid_manager.go.
+// ReleasedPID below is what ends that winner once its rollout is released
+// (#2080).
 func OwnsSharedPID(cwd, transcriptPath string, pid int) bool {
 	held, err := processlifecycle.HoldsForWriting(pid, transcriptPath)
 	return err == nil && held
+}
+
+// ReleasedPID reports that pid verifiably no longer holds this rollout open
+// for writing (#2080): the per-pid probe ran and answered "does not hold"
+// (processlifecycle.HoldsForWriting's (false, nil)). A probe that could not
+// run answers false, as does a rollout still held, so neither ends a session.
+//
+// The guard comes first because HoldsForWriting answers (false, nil) for a
+// non-positive pid or an empty path, which name nothing that could hold a
+// file. That is a safe "no" for OwnsSharedPID and the opposite here: passed
+// through, it would read as "released" and end a session bound to no process,
+// or a pre-session that has no rollout yet.
+//
+// What releases the rollout of a root the managed app-server daemon hosts is
+// codex's thread unload, read in codex source at tag rust-v0.162.1 and NOT
+// observed live (#2077, #2080): app-server/src/request_processors/
+// thread_lifecycle.rs (UnloadingState) shuts a thread down once it has no
+// subscribers and has been inactive for thread_unload_delay, which
+// core/src/config/mod.rs defaults to 60s. Closing the TUI drops its
+// subscription, so the root is expected to end about that long after the TUI
+// exits, while the daemon itself — the PID the root is bound to — lives on.
+func ReleasedPID(cwd, transcriptPath string, pid int) bool {
+	if pid <= 0 || transcriptPath == "" {
+		return false
+	}
+	held, err := processlifecycle.HoldsForWriting(pid, transcriptPath)
+	return err == nil && !held
 }

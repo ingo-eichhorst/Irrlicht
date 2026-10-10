@@ -702,6 +702,7 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 
 	pidDiscovers := agents.PIDDiscoverers(deps.AllAgents)
 	sharedPIDOwners := agents.SharedPIDOwners(deps.AllAgents)
+	releasedPIDs := agents.ReleasedPIDs(deps.AllAgents)
 	processNames := agents.ProcessNames(deps.AllAgents)
 
 	detector := services.NewSessionDetector(nil, services.SessionDetectorDeps{
@@ -715,6 +716,7 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 		ReadyTTL:        deps.Cfg.ReadySessionTTL,
 		PIDDiscovers:    pidDiscovers,
 		SharedPIDOwners: sharedPIDOwners,
+		ReleasedPIDs:    releasedPIDs,
 		ProcessNames:    processNames,
 		LiveCWDs:        processlifecycle.LiveCWDs,
 	})

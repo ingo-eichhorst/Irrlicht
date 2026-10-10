@@ -81,3 +81,43 @@ func TestOwnsSharedPID(t *testing.T) {
 		})
 	}
 }
+
+// TestReleasedPID pins ReleasedPID's one-way contract (#2080): true only when
+// the per-pid probe ran and the asked pid does not hold the rollout. A held
+// rollout, and anything that names no process or no file, is not "released".
+func TestReleasedPID(t *testing.T) {
+	dir := t.TempDir()
+	held := filepath.Join(dir, "rollout-held.jsonl")
+	unheld := filepath.Join(dir, "rollout-unheld.jsonl")
+	for _, p := range []string{held, unheld} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	holder := holdRolloutOpen(t, held)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		pid  int
+		want bool
+	}{
+		{name: "held by the asked pid", path: held, pid: holder},
+		{name: "held by a different pid", path: held, pid: os.Getpid(), want: true},
+		{name: "file nobody holds open", path: unheld, pid: holder, want: true},
+		// HoldsForWriting answers (false, nil) for a file that does not exist:
+		// the probe ran, and the pid holds nothing by that name.
+		{name: "missing file", path: filepath.Join(dir, "rollout-missing.jsonl"), pid: holder, want: true},
+		// HoldsForWriting answers (false, nil) here too, which would read as
+		// "released" without ReleasedPID's own guard.
+		{name: "zero pid", path: unheld},
+		{name: "negative pid", path: unheld, pid: -1},
+		{name: "empty transcript path", path: "", pid: holder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReleasedPID("", tc.path, tc.pid); got != tc.want {
+				t.Fatalf("ReleasedPID(%q, %d) = %v, want %v", tc.path, tc.pid, got, tc.want)
+			}
+		})
+	}
+}

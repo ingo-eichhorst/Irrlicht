@@ -401,6 +401,14 @@ type Process struct {
 	// SharedPIDOwner is optional. It keeps an existing same-adapter root only
 	// when that root independently proves it still owns the shared PID.
 	SharedPIDOwner SharedPIDOwnerFunc
+	// ReleasedPID is optional. It ends a root session whose PID is still alive
+	// but has provably released the session's transcript, for an agent whose
+	// sessions are hosted by a process that outlives them, so no exit ever
+	// arrives (#2080). Declaring it also makes the session detector follow a
+	// session's transcript to a newer file the watcher maps to the same
+	// session id, because the probe means something only for the file the
+	// agent writes now.
+	ReleasedPID ReleasedPIDFunc
 
 	// ExcludeArgv, when non-nil, lets an adapter reject a matched process by
 	// inspecting its argv. The process scanner consults it after a PID

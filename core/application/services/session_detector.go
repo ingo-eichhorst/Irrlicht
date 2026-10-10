@@ -304,6 +304,7 @@ type SessionDetectorDeps struct {
 	ReadyTTL        time.Duration
 	PIDDiscovers    map[string]agent.PIDDiscoverFunc
 	SharedPIDOwners map[string]agent.SharedPIDOwnerFunc
+	ReleasedPIDs    map[string]agent.ReleasedPIDFunc
 	ProcessNames    map[string]string
 	LiveCWDs        LiveCWDsFunc
 }
@@ -384,6 +385,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		ReadyTTL:          deps.ReadyTTL,
 		PIDDiscovers:      deps.PIDDiscovers,
 		SharedPIDOwners:   deps.SharedPIDOwners,
+		ReleasedPIDs:      deps.ReleasedPIDs,
 		ProcessNames:      deps.ProcessNames,
 		LiveCWDs:          deps.LiveCWDs,
 		OnSessionDeleted:  det.removeFromProjectSessions,

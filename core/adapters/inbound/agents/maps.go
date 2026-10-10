@@ -77,6 +77,18 @@ func SharedPIDOwners(agents []agent.Agent) map[string]agent.SharedPIDOwnerFunc {
 	return m
 }
 
+// ReleasedPIDs projects opt-in released-transcript probes (#2080). Other
+// adapters keep ending a session only on process exit or idle expiry.
+func ReleasedPIDs(agents []agent.Agent) map[string]agent.ReleasedPIDFunc {
+	m := make(map[string]agent.ReleasedPIDFunc)
+	for _, a := range agents {
+		if a.Process.ReleasedPID != nil {
+			m[a.Identity.Name] = a.Process.ReleasedPID
+		}
+	}
+	return m
+}
+
 // ProcessNames produces the adapter-name → OS-process-name map used by
 // the startup zombie sweep. For ExactName matchers the OS process name
 // IS the matcher name. For CommandPattern matchers no reliable OS

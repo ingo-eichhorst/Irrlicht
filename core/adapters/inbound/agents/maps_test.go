@@ -91,6 +91,24 @@ func TestSharedPIDOwners_OptInSet(t *testing.T) {
 	}
 }
 
+// TestReleasedPIDs_OptInSet pins which adapters end a root whose live PID
+// released its transcript (#2080). Only codex: muse and dsh opting in is a
+// separate decision, and opting in also makes the detector follow a newer
+// transcript mapped to the same session id, which muse's shadow file must not
+// (see muse.sessionIDFromPath).
+func TestReleasedPIDs_OptInSet(t *testing.T) {
+	var got []string
+	for name, probe := range agents.ReleasedPIDs(agents.All()) {
+		if probe != nil {
+			got = append(got, name)
+		}
+	}
+	sort.Strings(got)
+	if want := []string{codex.AdapterName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released-transcript probes = %v, want %v", got, want)
+	}
+}
+
 func TestProcessNames_matchesConfigShape(t *testing.T) {
 	got := agents.ProcessNames(testAgents())
 	want := map[string]string{

@@ -95,7 +95,9 @@ type PIDManager struct {
 	pidDiscovers map[string]agent.PIDDiscoverFunc
 	// sharedPIDOwners is opt-in. The consent gate applies before each probe.
 	sharedPIDOwners map[string]agent.SharedPIDOwnerFunc
-	consentGate     func(adapter string) bool
+	// releasedPIDs is opt-in too, behind the same consent gate (#2080).
+	releasedPIDs map[string]agent.ReleasedPIDFunc
+	consentGate  func(adapter string) bool
 
 	// processNames maps adapter name → OS process name (the binary `pgrep -x`
 	// would match). Used by the startup zombie sweep to detect orphaned
@@ -218,6 +220,13 @@ type PIDManager struct {
 	// outside assignMu. It is released before watcher and deletion callbacks.
 	assignmentMu sync.Mutex
 
+	// releaseStreaks counts, per root, how many sweeps in a row its release
+	// probe answered "released" (#2080); see endReleasedRoots. releaseMu
+	// serializes the whole release step, because the sweep goroutine and a
+	// test's direct CheckPIDLiveness call can overlap.
+	releaseMu      sync.Mutex
+	releaseStreaks map[releaseKey]int
+
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
 	recorder    outbound.EventRecorder
@@ -235,6 +244,7 @@ type PIDManagerDeps struct {
 	ReadyTTL         time.Duration
 	PIDDiscovers     map[string]agent.PIDDiscoverFunc
 	SharedPIDOwners  map[string]agent.SharedPIDOwnerFunc
+	ReleasedPIDs     map[string]agent.ReleasedPIDFunc
 	ProcessNames     map[string]string
 	LiveCWDs         LiveCWDsFunc
 	OnSessionDeleted func(sessionID string)
@@ -253,6 +263,7 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		readyTTL:          deps.ReadyTTL,
 		pidDiscovers:      deps.PIDDiscovers,
 		sharedPIDOwners:   deps.SharedPIDOwners,
+		releasedPIDs:      deps.ReleasedPIDs,
 		processNames:      deps.ProcessNames,
 		liveCWDs:          deps.LiveCWDs,
 		onSessionDeleted:  deps.OnSessionDeleted,
@@ -1371,6 +1382,7 @@ type livenessSnapshot struct {
 	parentSessionID string
 	transcriptPath  string
 	adapter         string
+	cwd             string
 	// multiplexerPane marks a session hosted in a herdr or tmux pane — the
 	// Launchers whose host identity is not static for the process's lifetime,
 	// and so the only ones the sweep re-resolves (#1405 for herdr, #1501 for
@@ -1428,6 +1440,7 @@ func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
 			parentSessionID: state.ParentSessionID,
 			transcriptPath:  state.TranscriptPath,
 			adapter:         state.Adapter,
+			cwd:             state.CWD,
 			multiplexerPane: hostedInAMultiplexerPane(state.Launcher),
 		})
 	}
@@ -1459,6 +1472,11 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			foundDead = true
 		}
 	}
+	// A root hosted by a process that outlives it never sees that process
+	// exit, so the reap above never fires for it (#2080).
+	if pm.endReleasedRoots(snaps) {
+		foundDead = true
+	}
 
 	// Sweep stale sessions that can't be cleaned up via PID liveness:
 	// - Ready sessions (idle beyond TTL)
@@ -1476,6 +1494,109 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// out again.
 	pm.refreshMultiplexerHosts(snaps)
 	return foundDead
+}
+
+// releaseStreakThreshold is how many sweeps in a row must find a root's
+// transcript released before the root ends (#2080), so that one answer racing
+// the agent's move to a new file cannot end a live session: if a codex thread
+// that rolls over to a new segment is released from the old one before the
+// detector re-points the session (followRolledTranscript), a sweep in between
+// reads "released". The order of those two is not measured.
+const releaseStreakThreshold = 2
+
+// releaseKey identifies one release question. A root that is re-pointed at a
+// new transcript or bound to a new PID starts its streak again.
+type releaseKey struct {
+	sessionID      string
+	pid            int
+	transcriptPath string
+}
+
+// endReleasedRoots ends each root session whose PID is alive but has released
+// the session's transcript for releaseStreakThreshold sweeps in a row, for an
+// adapter that declares Process.ReleasedPID (#2080). It reaches the root that
+// the same-PID sweep never asks about — the newest on its PID, or the only
+// one — which is how a closed codex TUI's root left the dashboard only when the
+// managed app-server daemon exited. The streaks are rebuilt every sweep from
+// this sweep's answers alone, so any other answer (held, could not ask, not
+// asked) resets a root's count. Returns true when it ended a session.
+func (pm *PIDManager) endReleasedRoots(snaps []livenessSnapshot) bool {
+	if len(pm.releasedPIDs) == 0 {
+		return false
+	}
+	pm.releaseMu.Lock()
+	defer pm.releaseMu.Unlock()
+	streaks := make(map[releaseKey]int)
+	ended := false
+	for _, snap := range snaps {
+		key := releaseKey{snap.state.SessionID, snap.pid, snap.transcriptPath}
+		if !pm.releasedTranscript(snap) {
+			continue
+		}
+		streaks[key] = pm.releaseStreaks[key] + 1
+		if streaks[key] < releaseStreakThreshold {
+			continue
+		}
+		delete(streaks, key)
+		if pm.endReleasedRoot(snap) {
+			ended = true
+		}
+	}
+	pm.releaseStreaks = streaks
+	return ended
+}
+
+// releasedTranscript runs the adapter's release probe for one snapshot. It
+// asks only about a root with a transcript and a live PID, of an adapter that
+// declares the probe and whose observe consent is granted: a subagent shares
+// its parent's PID and is reaped with it, a pre-session has no transcript to
+// release, and a dead PID is reapDeadOrInfraPID's.
+func (pm *PIDManager) releasedTranscript(snap livenessSnapshot) bool {
+	if snap.parentSessionID != "" || snap.transcriptPath == "" || snap.pid <= 0 {
+		return false
+	}
+	probe := pm.releasedPIDs[snap.adapter]
+	if probe == nil {
+		return false
+	}
+	if pm.consentGate != nil && !pm.consentGate(snap.adapter) {
+		return false
+	}
+	if !pm.IsPIDAlive(snap.pid) {
+		return false
+	}
+	return probe(snap.cwd, snap.transcriptPath, snap.pid)
+}
+
+// endReleasedRoot ends snap's root and its children, recorded as
+// transcript_removed by deleteSession, unless the root has since moved to
+// another PID or transcript — the streak was about the one it had.
+func (pm *PIDManager) endReleasedRoot(snap livenessSnapshot) bool {
+	if !pm.stillBoundTo(snap) {
+		return false
+	}
+	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
+		fmt.Sprintf("live pid %d released the session's transcript for %d sweeps — ending session",
+			snap.pid, releaseStreakThreshold))
+	pm.deleteWithChildren(snap.state,
+		fmt.Sprintf("transcript released by live pid %d — liveness sweep", snap.pid))
+	return true
+}
+
+// stillBoundTo reports whether snap's session still exists with the PID and
+// transcript the snapshot froze. It reads under assignMu, like the snapshot.
+func (pm *PIDManager) stillBoundTo(snap livenessSnapshot) bool {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+	state, err := pm.repo.Load(snap.state.SessionID)
+	return err == nil && state != nil && state.PID == snap.pid && state.TranscriptPath == snap.transcriptPath
+}
+
+// probesRelease reports whether adapter declares a release probe. The session
+// detector asks it before following a session to a newer transcript, which
+// that probe needs (followRolledTranscript).
+func (pm *PIDManager) probesRelease(adapter string) bool {
+	return pm.releasedPIDs[adapter] != nil
 }
 
 // IsPIDAlive reports whether pid still refers to a live OS process, using the
@@ -2449,7 +2570,9 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 // adapter declaring a SharedPIDOwner a root whose probe would no longer
 // confirm the PID is kept while it is the winner (for the startup and
 // periodic sweeps, the newest root on that PID), until a newer root binds the
-// PID or the process exits (#2077's residual).
+// PID or the process exits (#2077's residual). An adapter that also declares
+// a ReleasedPID has that winner ended by CheckPIDLiveness's release step
+// instead, once its transcript is released (endReleasedRoots, #2080).
 //
 // This candidate policy is shared by all three same-PID reconciliation paths
 // (issue #1992 unified these from two independent spellings):
