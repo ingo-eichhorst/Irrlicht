@@ -527,7 +527,7 @@ func (s *DiagnosticsService) processes(red *Redactor) []adapterProcesses {
 		sort.Ints(pids)
 		procs := make([]processInfo, 0, len(pids))
 		for _, pid := range pids {
-			procs = append(procs, s.procInfo(pid, a.Process.ExcludeArgv, red))
+			procs = append(procs, s.procInfo(pid, a.Process.SkipsPreSession, red))
 		}
 		out = append(out, adapterProcesses{Adapter: a.Identity.Name, Processes: procs})
 	}

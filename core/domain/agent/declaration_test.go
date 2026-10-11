@@ -43,3 +43,28 @@ func TestAgentZeroValue(t *testing.T) {
 		t.Fatalf("zero-value Source should be nil interface")
 	}
 }
+
+// Issue #2082: the scanner mints no pre-session for a process that either
+// ExcludeArgv rejects or SessionHostArgv recognizes; a nil predicate matches
+// nothing.
+func TestProcessSkipsPreSession(t *testing.T) {
+	is := func(word string) func([]string) bool {
+		return func(argv []string) bool { return len(argv) > 1 && argv[1] == word }
+	}
+	for _, tc := range []struct {
+		name string
+		p    Process
+		argv []string
+		want bool
+	}{
+		{"neither declared", Process{}, []string{"codex", "app-server"}, false},
+		{"excluded", Process{ExcludeArgv: is("daemon")}, []string{"claude", "daemon"}, true},
+		{"session host", Process{SessionHostArgv: is("app-server")}, []string{"codex", "app-server"}, true},
+		{"both declared, host matches", Process{ExcludeArgv: is("daemon"), SessionHostArgv: is("app-server")}, []string{"codex", "app-server"}, true},
+		{"both declared, neither matches", Process{ExcludeArgv: is("daemon"), SessionHostArgv: is("app-server")}, []string{"codex", "--yolo"}, false},
+	} {
+		if got := tc.p.SkipsPreSession(tc.argv); got != tc.want {
+			t.Errorf("%s: SkipsPreSession(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)
+		}
+	}
+}

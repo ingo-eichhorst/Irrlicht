@@ -124,6 +124,19 @@ func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 	return m
 }
 
+// SessionHosts produces the adapter-name → Process.SessionHostArgv map the
+// PID manager uses to retire the pre-session a hosted root's client left
+// behind (#2082). Only adapters that declare one appear (today: codex).
+func SessionHosts(agents []agent.Agent) map[string]func([]string) bool {
+	m := make(map[string]func([]string) bool)
+	for _, a := range agents {
+		if a.Process.SessionHostArgv != nil {
+			m[a.Identity.Name] = a.Process.SessionHostArgv
+		}
+	}
+	return m
+}
+
 // RequireKnownHost produces the adapter-name → Process.RequireKnownHost map
 // consumed by session admission's host-ancestry gate: a candidate PID
 // launched by something other than a known terminal or IDE is rejected before

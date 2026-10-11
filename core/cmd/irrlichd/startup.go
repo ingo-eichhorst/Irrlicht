@@ -947,6 +947,9 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// processes, so leave the reaper unwired there.
 	if !deps.DemoMode {
 		detector.SetInfraReaper(agents.ArgvExcluders(allAgents), processlifecycle.ReadArgv)
+		// Let the presession sweep retire a codex TUI's placeholder once a
+		// root in its cwd binds to the app-server hosting its thread (#2082).
+		detector.SetSessionHosts(agents.SessionHosts(allAgents), processlifecycle.ReadArgv)
 		// Reject a candidate PID launched by something other than a known
 		// terminal or IDE before a session is ever created — e.g. CodexBar
 		// keeping an Antigravity `agy` process running in the background for

@@ -47,6 +47,10 @@ func Agent() agent.Agent {
 			PIDForSession:  DiscoverPID,
 			SharedPIDOwner: OwnsSharedPID,
 			ReleasedPID:    ReleasedPID,
+			// Not ExcludeArgv: every codex root is bound to an app-server
+			// (#2077), and the #727 infra reaper ends a session bound to a
+			// process ExcludeArgv rejects.
+			SessionHostArgv: IsAppServerArgv,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{
@@ -55,10 +59,11 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
+				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data, including codex process arguments to tell app-server processes from sessions; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
 				Detail: "Tails *.jsonl session files under ~/.codex/sessions/YYYY/MM/DD/ " +
 					"to derive session state, cost, and token metrics. Scans Codex processes " +
-					"to show sessions before their first message. With DSH consent, checks " +
+					"to show sessions before their first message, reading each one's arguments " +
+					"so app-server processes get no row. With DSH consent, checks " +
 					"process arguments and parent PIDs to avoid duplicate one-shot child rows. Read-only — " +
 					"no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
@@ -102,6 +107,50 @@ func Agent() agent.Agent {
 			},
 		},
 	}
+}
+
+// IsAppServerArgv reports whether a `codex`-binary process is a codex
+// app-server rather than a TUI a user talks to (#2082): an argument after
+// argv[0] equal to "app-server" that is not an option's value. The shapes it
+// covers, read with `ps -o args=`
+// on the dev machine on 2026-10-11:
+//
+//   - `codex app-server --listen unix:// --analytics-default-enabled --managed-daemon`
+//     (the shared daemon that hosts every TUI's threads, #2077)
+//   - `codex app-server daemon pid-update-loop` (that daemon's supervisor)
+//   - `codex -c features.code_mode_host=true app-server --analytics-default-enabled`
+//     (the VS Code ChatGPT extension's app-server)
+//
+// A prompt is a single argv slot, so a TUI started with a prompt that merely
+// mentions the word is not matched; a TUI whose whole prompt is exactly
+// `app-server` would be. Nor is the value of one of valueOptions matched (a TUI
+// started with `--cd app-server` for a package directory of that name); the
+// value of an option missing from that list still is. A nil or empty argv
+// (unreadable) is never an app-server.
+//
+// Declared as codex's Process.SessionHostArgv: the scanner mints no
+// placeholder row for an app-server, and a root bound to one retires its TUI's
+// placeholder. Exported for #2083.
+func IsAppServerArgv(argv []string) bool {
+	for i := 1; i < len(argv); i++ {
+		if argv[i] == "app-server" && !valueOptions[argv[i-1]] {
+			return true
+		}
+	}
+	return false
+}
+
+// valueOptions are the codex options that take their value as the next
+// argument. Read from the clap strings of the installed 0.162.1 binary
+// (option name beside its value name: cd/DIR, add-dir/ADD_DIR, model/MODEL,
+// profile/CONFIG_PROFILE_V2, sandbox/SANDBOX_MODE, image/IMAGES,
+// local-provider/OSS_PROVIDER, config key=value) plus `-c`, which the VS Code
+// extension's argv uses. Other short aliases were not verified there and are
+// left out.
+var valueOptions = map[string]bool{
+	"-c": true, "--config": true, "--cd": true, "--add-dir": true,
+	"--model": true, "--profile": true, "--sandbox": true, "--image": true,
+	"--local-provider": true,
 }
 
 // Source is this adapter's transcript-source declaration, split out of Agent so

@@ -947,8 +947,8 @@ func applyKittyAncestryBackfill(ctx context.Context, l *session.Launcher, pid in
 // ReadArgv returns pid's argument vector (argv[0] is the executable as invoked),
 // or nil when it can't be read (hardened-runtime process, already exited). It
 // wraps the platform ProcessObserver so the services-layer liveness sweep can
-// apply an adapter's ExcludeArgv predicate to a bound PID without importing the
-// observer. Mirrors ReadLauncherEnv's contract: never blocks long, never prompts.
+// apply an adapter's ExcludeArgv or SessionHostArgv predicate to a bound PID
+// without importing the observer. Mirrors ReadLauncherEnv's contract: never blocks long, never prompts.
 func ReadArgv(pid int) []string {
 	if pid <= 0 {
 		return nil
