@@ -101,7 +101,7 @@
           <ul>
             <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
             <li><a href="https://github.com/openai/codex">OpenAI Codex CLI</a></li>
-            <li><a href="https://github.com/inflectionAI/pi-cli">Pi</a></li>
+            <li><a href="https://github.com/earendil-works/pi">Pi</a></li>
             <li><a href="https://aider.chat">Aider</a></li>
             <li><a href="https://opencode.ai">OpenCode</a></li>
             <li><a href="https://kiro.dev">Kiro CLI</a></li>
@@ -353,7 +353,7 @@ cd Irrlicht
 
       <div class="callout callout-info">
         <strong>Deleting the app by hand leaves hooks behind</strong>
-        If you remove Irrlicht by dragging it to the Trash or with <code>rm -rf /Applications/Irrlicht.app</code>, the hook entries stay in your agent configs and keep firing at a port nothing is listening on. Run <code>--uninstall</code> above instead &mdash; or, if the binary is already gone, clear Irrlicht's entries from <code>~/.claude/settings.json</code> and <code>~/.codex/hooks.json</code> yourself.
+        If you remove Irrlicht by dragging it to the Trash or with <code>rm -rf /Applications/Irrlicht.app</code>, the hook entries stay in your agent configs and keep firing at a port nothing is listening on. Run <code>--uninstall</code> above instead &mdash; or, if the binary is already gone, clean up by hand. At their default locations: remove Irrlicht's hook entries from <code>~/.claude/settings.json</code>, <code>~/.codex/hooks.json</code>, <code>~/.gemini/settings.json</code> (Gemini CLI), <code>~/.gemini/config/hooks.json</code> (Antigravity), <code>~/.hermes/config.yaml</code> and <code>~/.hermes/shell-hooks-allowlist.json</code>, and <code>~/.vibe/hooks.toml</code> (plus the <code>enable_experimental_hooks</code> flag Irrlicht set in <code>~/.vibe/config.toml</code>); remove the marked Irrlicht blocks from <code>~/.claude/CLAUDE.md</code> and <code>~/.config/kitty/kitty.conf</code>; delete <code>~/.copilot/hooks/irrlicht.json</code>, <code>~/.kiro/agents/irrlicht.json</code>, <code>~/.pi/agent/extensions/irrlicht.js</code> and <code>~/.config/opencode/plugin/irrlicht.js</code>; and for Kiro CLI, restore <code>chat.defaultAgent</code> in <code>~/.kiro/settings/cli.json</code> (its previous value is in <code>~/.kiro/.irrlicht-prior-default.json</code>), then delete that file and <code>~/.kiro/.irrlicht-agent-snapshot.json</code>. While the binary still exists, <code>irrlichd --print-managed-files</code> prints the exact resolved list.
       </div>
 
       <!-- ── Bottom nav ── -->

@@ -11,7 +11,7 @@ comment both scope it that way, and §9's answer is that the rules are worth
 landing on their own because they protect the attribution model from the
 shortcuts most likely to be taken later.
 
-## The three outcomes this exists to keep apart
+## The five outcomes this exists to keep apart
 
 | Outcome | What it means | What it does **not** mean |
 |---|---|---|

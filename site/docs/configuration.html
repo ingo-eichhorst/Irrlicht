@@ -153,6 +153,12 @@
             <td>Relocate the Pi adapter's transcript root. Read once at daemon startup; restart required after changing. Non-absolute values are rejected with a log warning</td>
           </tr>
           <tr>
+            <td><code>PI_CODING_AGENT_DIR</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.pi/agent</code></td>
+            <td>Pi's own agent-directory override. The Pi adapter watches <code>$PI_CODING_AGENT_DIR/sessions</code> (unless <code>PI_CODING_AGENT_SESSION_DIR</code> overrides it) and installs its extension under it. Non-absolute values are rejected with a log warning</td>
+          </tr>
+          <tr>
             <td><code>CLAUDE_CONFIG_DIR</code></td>
             <td>Absolute path</td>
             <td><code>~/.claude</code></td>
@@ -187,6 +193,18 @@
             <td>Absolute path</td>
             <td><code>~/.hermes</code></td>
             <td>Relocate the Hermes Agent adapter's home (the daemon reads <code>state.db</code> under it)</td>
+          </tr>
+          <tr>
+            <td><code>DSH_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.dsh</code></td>
+            <td>Relocate the DeepSeek Harness adapter's root (the daemon appends <code>/sessions</code>). Non-absolute values are rejected with a log warning</td>
+          </tr>
+          <tr>
+            <td><code>MUSE_AUTH_PATH</code></td>
+            <td>Path</td>
+            <td>unset</td>
+            <td>Location of the Muse OAuth credential the &ldquo;Muse account quota&rdquo; permission reads, once granted. Unset, the daemon uses <code>$XDG_CONFIG_HOME/muse/auth.json</code>, else <code>~/.config/muse/auth.json</code></td>
           </tr>
           <tr>
             <td><code>IRRLICHT_PERMISSION_MODE</code></td>

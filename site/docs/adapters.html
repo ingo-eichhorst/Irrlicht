@@ -151,7 +151,7 @@
         <li>Parent-child session linking via <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly, no path-based heuristics</li>
         <li>CWD-based PID discovery via <code>pgrep -x opencode</code></li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
-        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>) all map to <code>turn_done</code></li>
+        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>, <code>content-filter</code>) all map to <code>turn_done</code></li>
         <li><strong>Adapter name:</strong> <code>"opencode"</code></li>
         <li>Stage: <strong>alpha</strong> &mdash; closes #100</li>
       </ul>
@@ -317,13 +317,13 @@
 
       <h2 id="adapter-interfaces">Adapter Interfaces</h2>
 
-      <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, process-name, subagent-count, and metrics-reader maps the rest of the daemon consumes.</p>
+      <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, shared-PID-owner, released-PID, process-name, argv-exclusion, session-host, launcher-PID, known-host, subagent-count, and metrics-reader maps the rest of the daemon consumes.</p>
 
       <p>An adapter package therefore satisfies the contract by exporting a single top-level <code>Agent()</code> function that returns a fully-populated <code>agent.Agent</code>. Watching the filesystem, scanning processes, and broadcasting events are handled by the shared infrastructure (<code>core/adapters/inbound/agents/fswatcher/</code>, <code>core/adapters/inbound/agents/processlifecycle/</code>) plus the per-adapter watcher when the source needs one (e.g. OpenCode's SQLite WAL watcher).</p>
 
       <h3 id="iface-config">Adapter declaration &mdash; <code>agent.Agent</code></h3>
 
-      <p>Defined as a sealed-sum across three orthogonal axes in <code>core/domain/agent/</code>: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), and <code>Source</code> (where the conversation lives).</p>
+      <p>Defined in <code>core/domain/agent/</code> as three orthogonal axes plus a permission list: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), <code>Source</code> (a sealed sum: where the conversation lives), and <code>Permissions</code> (the consent-gated capabilities the daemon may exercise).</p>
 
 <pre><code>// Top-level declaration — Identity × Process × Source × Permissions.
 type Agent struct {
@@ -346,7 +346,11 @@ type Identity struct {
 type Process struct {
     Match            ProcessMatcher
     PIDForSession    PIDDiscoverFunc
+    SharedPIDOwner   SharedPIDOwnerFunc       // optional: keep a root that still proves it owns a PID another root shares
+    ReleasedPID      ReleasedPIDFunc          // optional: end a root whose long-lived host process released its transcript (#2080)
+    LauncherPID      LauncherPIDFunc          // optional: process whose env + tty feed a hosted session's launcher (#2083)
     ExcludeArgv      func(argv []string) bool // reject a matched PID by argv shape; nil = never exclude
+    SessionHostArgv  func(argv []string) bool // recognize a shared session host (the codex app-server, #2077): no pre-session, roots may bind to it
     RequireKnownHost bool                     // gate admission on OS-level process ancestry (issue #784)
 }
 
@@ -354,6 +358,10 @@ type PIDDiscoverFunc func(
     cwd, transcriptPath string,
     disambiguate func([]int) int,
 ) (int, error)
+
+type SharedPIDOwnerFunc func(cwd, transcriptPath string, pid int) bool // inconclusive = false
+type ReleasedPIDFunc    func(cwd, transcriptPath string, pid int) bool // true only for a definitive "no longer holds it"
+type LauncherPIDFunc    func(cwd, transcriptPath string, pid int) int  // 0 = keep pid
 
 // ProcessMatcher — sealed sum, exactly one of:
 type ProcessMatcher interface{ isProcessMatcher() }
@@ -373,11 +381,13 @@ type Source interface{ isSource() }
 // JSONL transcripts under a fixed $HOME-relative directory tree
 // (Claude Code, Codex, Pi).
 type FilesUnderRoot struct {
-    Dir               string                    // path relative to $HOME, e.g. ".claude/projects"
-    Parser            FileParser                // JSONLineParser or RawLineParser
-    DirByOS           map[string]string         // per-GOOS override of Dir, e.g. Windows %APPDATA%
-    ExtraDirs         []string                  // additional roots watched alongside Dir
-    SessionIDFromPath func(path string) string  // override: derive session ID from path, not filename stem
+    Dir                     string                    // path relative to $HOME, e.g. ".claude/projects"
+    Parser                  FileParser                // JSONLineParser or RawLineParser
+    DirFunc                 func() string             // optional resolver that replaces Dir, run only once observe consent is granted
+    DirByOS                 map[string]string         // per-GOOS override of Dir, e.g. Windows %APPDATA%
+    ExtraDirs               []string                  // additional roots watched alongside Dir
+    SessionIDFromPath       func(path string) string  // override: derive session ID from path, not filename stem
+    ParentSessionIDFromPath func(path string) string  // derive a session's parent from its transcript; "" = top-level
 }
 
 // One transcript per running process inside its CWD (aider).
@@ -411,6 +421,8 @@ type Permission struct {
     Detail          string          // expanded (i) text: exact paths/commands, how to undo
     Apply           func() error    // performs the modification on grant (nil for observe-kind)
     Remove          func() error    // undoes it on revoke (nil for observe-kind)
+    Writes          *ManagedUserFile // non-nil when Apply writes a shared, user-owned file (follows $HOME, not IRRLICHT_HOME)
+    Advisory        []AdvisoryWrite  // paths Apply is known to cause to be written that hold no irrlicht content (issue #1748)
 }
 </code></pre>
 
@@ -491,6 +503,7 @@ type Event struct {
     CWD             string // working directory of the agent process
     ParentSessionID string // empty unless this is a subagent
     Terminal        bool   // true when this activity event ends the agent's turn (fast-path debounce)
+    Synthetic       bool   // true when injected by a hook handler, not a real transcript write (issue #905)
 }
 
 // The port the daemon consumes. Each per-watcher drain goroutine in

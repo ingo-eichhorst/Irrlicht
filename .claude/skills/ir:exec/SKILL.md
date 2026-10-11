@@ -61,6 +61,11 @@ git -C <main-repo> config --local \
   "branch.feat/<N>-<slug>.irExecBase" "$BASE_SHA"
 ```
 
+`<main-repo>` is the main checkout:
+`$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")` — not
+`--show-toplevel`, which answers with the worktree when run inside one (see
+`ir:fleet`, #2045).
+
 Do all work in the new worktree. Never use `git stash`; worktrees share one
 stash. Use a local commit for a checkpoint.
 

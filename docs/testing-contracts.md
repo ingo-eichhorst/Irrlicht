@@ -538,12 +538,16 @@ below.
   `Uninstall`, and `Verify`/`Version` (each described in its own bullet
   above)). Since #1731 it also carries `Also []func() (string, error)`, for
   the rare permission whose ONE `Apply` writes a SECOND shared file beyond
-  `Path` — two adapters use it today: mistral-vibe's hooks install writes
+  `Path` — three adapters use it today: mistral-vibe's hooks install writes
   `$VIBE_HOME/hooks.toml` (Path) plus the `enable_experimental_hooks` gate in
   `$VIBE_HOME/config.toml` (Also), without which the CLI never reads the
   hooks at all; kiro-cli's writes its hook entries (Path) plus
   `chat.defaultAgent` in `settings/cli.json` (Also), so the entries are read
-  by the agent kiro-cli actually dispatches to. `Path` stays what every
+  by the agent kiro-cli actually dispatches to, along with two irrlicht state
+  files beside it (`.irrlicht-prior-default.json`,
+  `.irrlicht-agent-snapshot.json`); hermes' writes its hook block in
+  `config.yaml` (Path) plus its approval allowlist (`AllowlistPath`, Also),
+  without which Hermes skips the hooks as "not allowlisted". `Path` stays what every
   narrowed projection below means by "the file this permission writes" —
   `Also` changes that for nobody — but both consumers that protect an
   undeclared write (`PermissionService.sharedConfigRefusal` and

@@ -202,7 +202,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.6.6"
+  "version": "0.6.7"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -525,6 +525,13 @@ curl -X POST http://127.0.0.1:7837/api/v1/hooks/claudecode/statusline \
 
       <p>Every other hook-capable adapter has its own receiver, one route per adapter: <code>/api/v1/hooks/codex</code>, <code>/api/v1/hooks/copilot</code>, <code>/api/v1/hooks/gemini-cli</code>, <code>/api/v1/hooks/mistral-vibe</code>, <code>/api/v1/hooks/kiro-cli</code>, <code>/api/v1/hooks/pi</code>, <code>/api/v1/hooks/opencode</code>, <code>/api/v1/hooks/hermes</code>, and <code>/api/v1/hooks/antigravity</code>. The body is that agent&rsquo;s own hook-event JSON, delivered by the hook entry, extension, or plugin the daemon installs for it &mdash; for agents that can only run a command, that entry is <code>irrlichd hook-post &lt;adapter&gt;</code>, which reads the payload on stdin and POSTs it to the running daemon&rsquo;s address. The daemon uses the events to refine that adapter&rsquo;s session state. Each route accepts <code>POST</code> only and is consent-gated behind the adapter&rsquo;s hook permission: while that permission is pending or denied, payloads are dropped. These routes are local and unauthenticated; a <code>transcript_path</code> in a body is only opened when it lies under the adapter&rsquo;s own watched root. See <a href="adapters.html">Adapters</a> for what each agent installs.</p>
 
+      <p>Every receiver returns <code>200</code> with an empty body, including when the payload is dropped for missing consent or for a <code>transcript_path</code> outside the adapter&rsquo;s root &mdash; refusals are logged, never reported by status code. It returns <code>400</code> for a body that is not valid JSON (and, on a receiver that confines a <code>transcript_path</code>, for one that has none), and <code>405</code> for any method other than <code>POST</code>.</p>
+
+<pre><code># A Codex Stop hook event, as the installed hook entry delivers it
+curl -X POST http://127.0.0.1:7837/api/v1/hooks/codex \
+  -H 'Content-Type: application/json' \
+  -d '{"transcript_path": "/Users/me/.codex/sessions/2026/10/11/rollout-2026-10-11T09-00-00-00000000-0000-7000-8000-000000000001.jsonl", "hook_event_name": "Stop"}'</code></pre>
+
       <h3>GET /debug/bundle</h3>
 
       <p>Collects a redacted diagnostics snapshot for bug reports and returns it as a gzipped tar (<code>Content-Disposition: attachment; filename="irrlicht-diag-&lt;version&gt;.tar.gz"</code>). The bundle captures the daemon's resolved stores and config with sensitive values redacted. <strong>Loopback only.</strong> Headless installs that can't hit this route can produce the same bundle from the CLI with <code>irrlichd --diagnose</code>, which writes <code>irrlicht-diag.tar.gz</code> to the current directory without starting the daemon.</p>
@@ -541,7 +548,7 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
 
       <h3>GET /</h3>
 
-      <p>Serves the web dashboard UI from disk &mdash; <code>resolveUIDir</code> in <code>core/cmd/irrlichd/paths.go</code> walks up from the executable to find <code>platforms/web/index.html</code>, with the production .app bundle layout and the curl <code>--daemon-only</code> install path as fallbacks.</p>
+      <p>Serves the web dashboard UI from disk. <code>resolveUIDir</code> in <code>core/cmd/irrlichd/paths.go</code> uses the first of these that contains an <code>index.html</code>: <code>$IRRLICHT_UI_DIR</code>, the production .app bundle (<code>&lt;exe&gt;/../Resources/web/</code>), the curl <code>--daemon-only</code> install (<code>~/.local/share/irrlicht/web/</code>, or <code>$IRRLICHT_HOME/web/</code> when that is set), then a walk up from the executable to the enclosing repo root for <code>platforms/web/index.html</code> (a dev checkout). See <a href="configuration.html#when-to-use">Configuration</a>.</p>
 
       <h3>Relay endpoints</h3>
 
@@ -559,9 +566,14 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
         </thead>
         <tbody>
           <tr>
+            <td><code>version</code></td>
+            <td>int</td>
+            <td>Session record format version; <code>1</code> today</td>
+          </tr>
+          <tr>
             <td><code>session_id</code></td>
             <td>string</td>
-            <td>Unique session identifier (UUID or <code>proc-&lt;pid&gt;</code>)</td>
+            <td>Unique session identifier: the agent&rsquo;s own session ID (usually a UUID; Claude Code subagents use <code>agent-&lt;id&gt;</code>, and adapters with a constant transcript filename derive it from a directory name), or <code>proc-&lt;pid&gt;</code> for a process seen before its transcript</td>
           </tr>
           <tr>
             <td><code>state</code></td>
@@ -572,6 +584,11 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td><code>adapter</code></td>
             <td>string</td>
             <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, <code>gemini-cli</code>, <code>antigravity</code>, <code>mistral-vibe</code>, <code>copilot</code>, <code>hermes</code>, <code>muse</code>, <code>junie</code>, <code>dsh</code>, or empty (legacy / unknown)</td>
+          </tr>
+          <tr>
+            <td><code>model</code></td>
+            <td>string</td>
+            <td>Legacy session-level model; the current daemon does not set it &mdash; read <code>metrics.model_name</code></td>
           </tr>
           <tr>
             <td><code>cwd</code></td>
@@ -594,9 +611,34 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td>Project name derived from git root</td>
           </tr>
           <tr>
+            <td><code>head_commit</code></td>
+            <td>string</td>
+            <td>Full SHA of the working directory&rsquo;s <code>HEAD</code>, captured when the session transitions to <code>ready</code>; empty outside a git repo</td>
+          </tr>
+          <tr>
+            <td><code>yield_state</code></td>
+            <td>string</td>
+            <td>Whether the session&rsquo;s work survived: <code>productive</code> (shipped a commit that has not been reverted), <code>reverted</code> (its <code>HEAD</code> commit was later <code>git revert</code>ed), or <code>unknown</code> (not git-tracked, or not yet evaluated)</td>
+          </tr>
+          <tr>
             <td><code>pid</code></td>
             <td>int</td>
             <td>Process ID of the agent</td>
+          </tr>
+          <tr>
+            <td><code>launcher</code></td>
+            <td>object</td>
+            <td>The terminal or IDE that launched the agent process, captured when the PID is first assigned &mdash; e.g. <code>term_program</code>, <code>tty</code>, <code>tmux_pane</code>, <code>iterm_session_id</code>, <code>vscode_pid</code>, the <code>kitty_*</code> and <code>herdr_*</code> fields, <code>host_bundle_id</code>. Absent when nothing could be captured</td>
+          </tr>
+          <tr>
+            <td><code>route</code></td>
+            <td>object</td>
+            <td>Provider-endpoint evidence observed from the process environment when the PID is first assigned: <code>status</code> (<code>observed</code>, <code>absent</code>, <code>unreadable</code>, <code>denied</code> or <code>malformed</code>), plus, when observed, the redacted <code>endpoint</code>, the <code>source</code> variable and <code>local</code>. Evidence only, not a billing verdict</td>
+          </tr>
+          <tr>
+            <td><code>background</code></td>
+            <td>object</td>
+            <td>Present for a background agent (Claude Code Agent View): <code>name</code> (its label, may be empty) and <code>detached</code> (true when it has no controlling terminal). Absent for normal sessions</td>
           </tr>
           <tr>
             <td><code>first_seen</code></td>
@@ -607,6 +649,26 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td><code>updated_at</code></td>
             <td>int64</td>
             <td>Unix timestamp of the last state update</td>
+          </tr>
+          <tr>
+            <td><code>confidence</code></td>
+            <td>string</td>
+            <td>The detector&rsquo;s confidence label for the record: <code>medium</code> when it is created from a new transcript, <code>high</code> once its transcript is removed</td>
+          </tr>
+          <tr>
+            <td><code>event_count</code></td>
+            <td>int</td>
+            <td>Events recorded on the session: <code>1</code> at creation, incremented each time its transcript grows</td>
+          </tr>
+          <tr>
+            <td><code>last_event</code></td>
+            <td>string</td>
+            <td>The last event recorded on it, e.g. <code>transcript_new</code>, <code>transcript_activity</code>, <code>transcript_removed</code></td>
+          </tr>
+          <tr>
+            <td><code>last_matcher</code></td>
+            <td>string</td>
+            <td>Legacy field; the current daemon does not set it</td>
           </tr>
           <tr>
             <td><code>metrics</code></td>
@@ -626,7 +688,32 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
           <tr>
             <td><code>daemon_version</code></td>
             <td>string</td>
-            <td>Version of the running daemon</td>
+            <td>Version of the daemon that created this session record</td>
+          </tr>
+          <tr>
+            <td><code>last_transcript_size</code></td>
+            <td>int64</td>
+            <td>Transcript size in bytes when the daemon last checked it for growth</td>
+          </tr>
+          <tr>
+            <td><code>waiting_start_time</code></td>
+            <td>int64</td>
+            <td>Unix timestamp at which the session last entered <code>waiting</code>; cleared when it returns to <code>working</code></td>
+          </tr>
+          <tr>
+            <td><code>autonomy_span_start</code></td>
+            <td>int64</td>
+            <td>Unix timestamp at which the current unbroken stretch of <code>working</code> began; absent when no span is open</td>
+          </tr>
+          <tr>
+            <td><code>autonomy_span_pending_end</code></td>
+            <td>int64</td>
+            <td>Unix timestamp at which an open span provisionally ended by reaching <code>ready</code>, held back by a flicker grace in case <code>working</code> resumes</td>
+          </tr>
+          <tr>
+            <td><code>autonomy_span_start_lower_bound</code></td>
+            <td>bool</td>
+            <td>The session was already working when it was discovered, so the span began at or before <code>autonomy_span_start</code></td>
           </tr>
         </tbody>
       </table>
@@ -704,6 +791,11 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td>Normalized model name</td>
           </tr>
           <tr>
+            <td><code>agent_version</code></td>
+            <td>string</td>
+            <td>The agent CLI&rsquo;s own version as its transcript reports it (e.g. Claude Code <code>2.1.143</code>), distinct from the daemon&rsquo;s version; absent for adapters whose transcript omits it</td>
+          </tr>
+          <tr>
             <td><code>context_window</code></td>
             <td>int64</td>
             <td>Total context window size for the model</td>
@@ -716,7 +808,12 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
           <tr>
             <td><code>pressure_level</code></td>
             <td>string</td>
-            <td>Context pressure level (<code>safe</code>, <code>caution</code>, <code>warning</code>, <code>critical</code>)</td>
+            <td>Context pressure level (<code>safe</code>, <code>caution</code>, <code>warning</code>, <code>critical</code>, or <code>unknown</code> when there are no tokens or model yet, or no context window is known for the model)</td>
+          </tr>
+          <tr>
+            <td><code>context_window_unknown</code></td>
+            <td>bool</td>
+            <td>No context window could be resolved for the model, so <code>context_window</code> stays zero; show tokens without a percentage rather than hiding the context display</td>
           </tr>
           <tr>
             <td><code>has_open_tool_call</code></td>
@@ -727,6 +824,21 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td><code>open_tool_call_count</code></td>
             <td>int</td>
             <td>Number of currently open tool calls</td>
+          </tr>
+          <tr>
+            <td><code>open_subagents</code></td>
+            <td>int</td>
+            <td>In-process child agents currently running, as the adapter counts them (merged with file-based child sessions in the subagent summary)</td>
+          </tr>
+          <tr>
+            <td><code>pending_background_agent_count</code></td>
+            <td>int</td>
+            <td>Claude Code&rsquo;s own last-reported count of still-running background subagents; an extra signal ORed with child-session tracking, never a replacement for it</td>
+          </tr>
+          <tr>
+            <td><code>background_process_count</code></td>
+            <td>int</td>
+            <td>Agent-spawned background processes the transcript shows as still open (the agent&rsquo;s claimed count, not the daemon&rsquo;s liveness verdict)</td>
           </tr>
           <tr>
             <td><code>last_event_type</code></td>
@@ -744,9 +856,129 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td>Whether the most recent user event was an ESC cancellation</td>
           </tr>
           <tr>
+            <td><code>last_was_tool_denial</code></td>
+            <td>bool</td>
+            <td>Whether the most recent user event was a tool-permission denial; unlike an ESC cancellation it does not end the turn</td>
+          </tr>
+          <tr>
             <td><code>estimated_cost_usd</code></td>
             <td>float64</td>
             <td>Estimated session cost in USD</td>
+          </tr>
+          <tr>
+            <td><code>estimated_co2_grams</code></td>
+            <td>float64</td>
+            <td>Estimated CO2e footprint in grams, from cumulative tokens and per-model energy coefficients &mdash; a model, never a measurement; read it together with <code>co2_tier</code></td>
+          </tr>
+          <tr>
+            <td><code>co2_tier</code></td>
+            <td>string</td>
+            <td>Confidence tier behind <code>estimated_co2_grams</code>: <code>provider_disclosed</code> or <code>fallback</code></td>
+          </tr>
+          <tr>
+            <td><code>cum_input_tokens</code></td>
+            <td>int64</td>
+            <td>Cumulative input tokens across all API turns</td>
+          </tr>
+          <tr>
+            <td><code>cum_output_tokens</code></td>
+            <td>int64</td>
+            <td>Cumulative output tokens across all API turns</td>
+          </tr>
+          <tr>
+            <td><code>cum_cache_read_tokens</code></td>
+            <td>int64</td>
+            <td>Cumulative cache-read tokens across all API turns</td>
+          </tr>
+          <tr>
+            <td><code>cum_cache_creation_tokens</code></td>
+            <td>int64</td>
+            <td>Cumulative cache-creation tokens across all API turns</td>
+          </tr>
+          <tr>
+            <td><code>completed_turns</code></td>
+            <td>int</td>
+            <td>Finished agent turns in this session (each turn ending in <code>ready</code>, or in <code>waiting</code> on a question)</td>
+          </tr>
+          <tr>
+            <td><code>cache_bloat</code></td>
+            <td>bool</td>
+            <td>The cache-creation regression detector found this session&rsquo;s median cache creation per turn above the project&rsquo;s baseline; both UIs show it as a &ldquo;&uarr;&rdquo; badge</td>
+          </tr>
+          <tr>
+            <td><code>cache_bloat_percent</code></td>
+            <td>int</td>
+            <td>How far above the project baseline that median sits, as a rounded percentage (e.g. <code>340</code>); zero when <code>cache_bloat</code> is false</td>
+          </tr>
+          <tr>
+            <td><code>cache_bloat_tooltip</code></td>
+            <td>string</td>
+            <td>Daemon-composed hover text for the badge, naming the regressing agent version when one can be attributed</td>
+          </tr>
+          <tr>
+            <td><code>cache_bloat_explanation</code></td>
+            <td>string</td>
+            <td>Longer plain-language hover text for the badge; empty when <code>cache_bloat</code> is false</td>
+          </tr>
+          <tr>
+            <td><code>execution_confidence</code></td>
+            <td>int</td>
+            <td>How decisive the agent sounds, 0&ndash;100 (100 = decisive), scored from hedging and uncertainty language in its recent assistant messages. A real <code>0</code> is sent; absent until the first assistant message with prose is scored, and for adapter paths that feed no full assistant text</td>
+          </tr>
+          <tr>
+            <td><code>execution_confidence_low</code></td>
+            <td>bool</td>
+            <td>The daemon&rsquo;s verdict that <code>execution_confidence</code> is below 50 &mdash; the condition both UIs show their low-confidence chip on</td>
+          </tr>
+          <tr>
+            <td><code>execution_confidence_tooltip</code></td>
+            <td>string</td>
+            <td>Daemon-composed hover text for that chip; empty exactly when <code>execution_confidence</code> is absent</td>
+          </tr>
+          <tr>
+            <td><code>last_assistant_text</code></td>
+            <td>string</td>
+            <td>The most recent assistant message, truncated to about 200 characters; surfaces the question while a session is <code>waiting</code></td>
+          </tr>
+          <tr>
+            <td><code>task_summary</code></td>
+            <td>string</td>
+            <td>One-line description of the current task, from the first user message; no UI renders it</td>
+          </tr>
+          <tr>
+            <td><code>intent_headline</code></td>
+            <td>string</td>
+            <td>Terse one-line version of <code>task_summary</code>; no UI renders it</td>
+          </tr>
+          <tr>
+            <td><code>question_headline</code></td>
+            <td>string</td>
+            <td>Terse pending-question headline shaped <code>&lt;topic&gt;: &lt;question&gt;</code>, rendered in the waiting block; <code>last_assistant_text</code> is its tooltip. Empty when there is no question source</td>
+          </tr>
+          <tr>
+            <td><code>permission_mode</code></td>
+            <td>string</td>
+            <td>The session&rsquo;s permission mode as the transcript records it (e.g. <code>auto</code>, <code>plan</code>); passthrough only, never used to classify state</td>
+          </tr>
+          <tr>
+            <td><code>transcript_permission_pending</code></td>
+            <td>bool</td>
+            <td>The transcript itself shows a permission prompt still open (no hook involved); survives a daemon restart</td>
+          </tr>
+          <tr>
+            <td><code>tasks</code></td>
+            <td>[]object</td>
+            <td>The session&rsquo;s task list from <code>TaskCreate</code> / <code>TaskUpdate</code> calls &mdash; each with <code>id</code>, <code>subject</code>, <code>status</code> (<code>pending</code>, <code>in_progress</code>, <code>completed</code>) and optional <code>description</code>, <code>active_form</code>, <code>completed_at</code>; absent for sessions that never created a task</td>
+          </tr>
+          <tr>
+            <td><code>rate_limit</code></td>
+            <td>object</td>
+            <td>Most recent subscription quota snapshot for this session, including <code>windows</code> (each with <code>used_percent</code>, <code>window_minutes</code>, <code>resets_at</code>), <code>plan_type</code>, <code>credits</code>, <code>reached_type</code> and <code>sampled_at</code>; absent when the provider surfaces no quota or none has arrived yet</td>
+          </tr>
+          <tr>
+            <td><code>rate_limit_forecast_eta</code></td>
+            <td>int64</td>
+            <td>Projected unix-seconds time at which the most imminent rate-limit window reaches 100%; absent when no forecast is possible</td>
           </tr>
           <tr>
             <td><code>task_estimate</code></td>

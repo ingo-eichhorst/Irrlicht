@@ -29,8 +29,8 @@ would report a failed session as `ready` -- green, and silent.
 
 ### Leaving `error`
 
-Two edges, and they clear the failure on different conditions. Neither is a
-timeout and neither has a minimum hold (`clearSessionErrorOnRecovery`, in the
+Three ways out, and they clear the failure on different conditions. None is a
+timeout and none has a minimum hold (`clearSessionErrorOnRecovery`, in the
 tailer):
 
 - `error -> working` when the user's next message arrives. This clears the
@@ -41,6 +41,12 @@ tailer):
 - `error -> ready` on `turn_done`, but ONLY for a failure whose phase is
   `retrying` (`SessionError.ClearedByTurnBoundary`). A terminal failure is not
   retired by a turn boundary.
+- An agent-initiated resume, but ONLY for a failure whose phase is `terminal`
+  (`ParsedEvent.IsAgentResume`, gated on `SessionError.ClearedByAgentResume`,
+  #1858): Claude Code's `isMeta` auto-continuation once a usage limit resets,
+  which `StartsNewUserTurn` does not see. The pass that clears it is marked
+  substantive, so the session is re-classified at once. Set only by claudecode
+  today.
 
 EVERY PRODUCER OF `error` READS A TRANSCRIPT. #1800 added one that did not --
 the daemon synthesizing a failure when the agent PROCESS went away mid-turn --
@@ -72,7 +78,6 @@ These events manage the existence of sessions -- creation and deletion. They are
 | User types first message | pre-session exists | real session created | New `.jsonl` file created | fsnotify CREATE |
 | Real transcript appears for pre-session | pre-session + real session | real session only | `cleanupPreSessionsForProject` | Automatic on EventNewSession with transcript path |
 | User exits normally (`/quit`, Ctrl-D) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
-| User cancels (ESC) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
 | Process killed (SIGKILL, SIGTERM, crash) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
 | Transcript file deleted | any state | `ready` | File removed from disk | fsnotify REMOVE |
 | Daemon starts, finds dead PID on disk | session file exists | **deleted** | `syscall.Kill(pid, 0)` returns ESRCH | Synchronous check in `seedFromDisk` |

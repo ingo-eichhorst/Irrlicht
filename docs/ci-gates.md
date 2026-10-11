@@ -126,8 +126,8 @@ CI parity section (chunking, the budget, and what it makes visible).
 - POSIX shell scripts: `tools/posix-lint.sh` checks every file git knows
   about — tracked, plus **untracked and not gitignored** (#1611) — whose
   **first line** is a `#!/bin/sh` shebang; today `site/install.sh`,
-  `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim` (#1591 brought
-  the third into scope, which is the whole reason that file was written in
+  `site/relay.sh`, `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim`
+  (#1591 brought the shim into scope, which is the whole reason that file was written in
   POSIX sh rather than bash). Line 1 only, because
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
   stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
@@ -186,9 +186,10 @@ CI parity section (chunking, the budget, and what it makes visible).
   only the lines a case runs, where the linter reads every line.
 - Bash scripts: `tools/bash-lint.sh` runs `shellcheck --shell=bash
   --severity=warning` over every file git knows about — tracked, plus untracked
-  and not gitignored — whose **first line** is a bash shebang. 118 files
-  (83 at #1684, plus the 34 #1687 brought in, plus one since — the count is
-  hand-kept and moves with any added script), and until #1684 **no static
+  and not gitignored — whose **first line** is a bash shebang. The live count
+  is the `bash-lint: N of M bash file(s)` line the script prints on every run
+  (83 files at #1684, plus the 34 #1687 brought in; a hand-kept total here
+  went stale as scripts were added), and until #1684 **no static
   linter read one of them**: the bullet
   above selects on `#!/bin/sh` line 1, deliberately (#1611), so every bash file
   fell through — including the bounded gate runner (`gate-budget.sh`), the
@@ -261,8 +262,9 @@ CI parity section (chunking, the budget, and what it makes visible).
     disable IS still honoured (measured on both versions), but the reason must
     go behind a second `#`.
   The sanctioned escape hatch is a per-SITE `# shellcheck disable=SCxxxx  #
-  <reason>` naming its consumer's `file:line` — all 94 SC2034s are that (17 at
-  #1684, 77 at #1687), each verified to have a real reader — and never a code
+  <reason>` naming its consumer's `file:line` — the 94 SC2034s those two PRs
+  added are all that (17 at #1684, 77 at #1687), each verified then to have a
+  real reader — and never a code
   removed from the gate.
   A directive covers only the NEXT command, so four adjacent knob assignments
   need four. Two consequences #1687 measured and had to work around: a `;`-
@@ -368,9 +370,11 @@ CI parity section (chunking, the budget, and what it makes visible).
   - **No function is blind-called.** Each has a named setup+call recipe;
     expected statuses are chosen DISTINCTIVE (0, 2, 3, 124) because a documented
     1 is indistinguishable from an errexit abort, which also exits 1. Anything
-    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today one entry,
-    `swift_suite_run` on a non-Darwin host, and it is inactive on macOS where
-    the suite actually runs. Recipe keys and exemption keys are existence-
+    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today two entries:
+    `swift_suite_run` on a non-Darwin host, inactive on macOS where the suite
+    actually runs, and `assert_mutation_is_red` (#1839), which drives
+    `tools/mutate.sh` against a real tracked file and needs a clean worktree.
+    Recipe keys and exemption keys are existence-
     checked against the walk in BOTH directions, so a library that stopped
     being walked surfaces as its recipes naming nothing rather than as silence.
   - Its own mutation evidence is committed (`tw_fixture_correct` /
@@ -846,16 +850,16 @@ for any subagent driving an interactive
 process, not just preflight — one Bash call per step, every wait a bounded
 polling loop, `timeout N` on anything that can hang, and findings
 checkpointed to a file before they're used, so a stall costs a turn instead
-of the work — see the two bullets that skill's Notes section carries beside
-that same incident (#1726). Chunking is still the recipe for a *manual* unscoped run;
+of the work (#1726) — `ir:exec`'s §4 "Prove and verify" carries the same
+bounded-wait rules (a log marker per wait, `timeout <N>` on the command). Chunking is still the recipe for a *manual* unscoped run;
 `--budget` is what covers the `--changed` run the hook performs, and the two
 compose — `--only <group> --budget <n>` bounds one group.
 
 Also read a push's exit status directly, never through a pipe: `git push … |
 tail` reports `tail`'s status, so a push the hook refused looks like a success
 to the caller. Assert afterwards that `git status -sb` shows a tracking branch —
-this is a plausible cause of the "committed but never pushed" incident recorded
-in `ir:exec`'s verification stage (#1570).
+this is a plausible cause of the "committed but never pushed" incident (#1570);
+`ir:exec`'s §6 now requires confirming the push landed before opening the PR.
 
 **Not `PIPESTATUS`**, which is what this paragraph advised until #1559's agent
 tried it: this repo's shell is zsh, where the array is spelled `$pipestatus` and
@@ -944,8 +948,9 @@ measured while #1570 was being fixed:
   not parse, or whose own `.Stats.files` is 0, is refused rather than read as
   clean: a scan that read nothing produces "no High/High findings" too.
 - **The `swift` gate can consume the whole budget on its own.** Its trigger
-  includes `tools/preflight.sh` itself, and `SWIFT_SUITE_TIMEOUT` defaults to
-  600s — equal to an automated caller's entire command budget, so the gate's
+  includes `tools/preflight.sh` itself, and `SWIFT_SUITE_TIMEOUT` defaulted to
+  600s when this was measured (240s since #1614 — `tools/lib/swift-suite.sh`;
+  see `docs/swift-testing.md`) — equal to an automated caller's entire command budget, so the gate's
   own careful HUNG diagnosis could never print before the caller killed
   everything. Measured on this machine at `origin/main`, the suite reaches
   `SessionRowSnapshotTests.testRelayCloudOnline` and stops there (twice, at the

@@ -53,6 +53,7 @@ assets/
   bg_lights.png             ← Starry night bg with wisps (full-bleed)
   bg_no_lights.png          ← Starry night bg — clean (hero)
   favicon.svg               ← The wisp flame mark (vector, on-brand)
+  favicon-off.svg           ← dimmed grey flame for "no sessions"
   favicon-16x16.png · favicon-32x32.png · apple-touch-icon.png
 
 preview/                    ← Design-system cards — open any file directly in a browser to view
@@ -267,7 +268,7 @@ Six small outline SVGs appear on the marketing feature grid (real-time monitorin
 ### 4. State icons in the web dashboard
 
 Six small 12×12 SVGs live inline in `platforms/web/formatters.js` (see the `svgIcons` object) — one per state (working, waiting, ready, error) plus two non-state entries:
-- **working**: dashed-stroke circle, spinning.
+- **working**: solid purple dot (`circle.core`, r=8, `#8B5CF6`) with an opacity-only breathe (`irrlicht-breathe`, 1.4s in `platforms/web/irrlicht.css`; static under reduced motion).
 - **waiting**: two vertical bars (pause).
 - **ready**: circle + checkmark.
 - **error**: circle + exclamation mark, in `--error` red; deliberately not animated.
