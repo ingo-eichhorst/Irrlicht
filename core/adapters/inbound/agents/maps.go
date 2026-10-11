@@ -137,6 +137,20 @@ func SessionHosts(agents []agent.Agent) map[string]func([]string) bool {
 	return m
 }
 
+// LauncherPIDs produces the adapter-name → Process.LauncherPID map the PID
+// manager uses to read a hosted session's launcher from the process the user
+// talks to rather than from its host (#2083). Only adapters that declare one
+// appear (today: codex).
+func LauncherPIDs(agents []agent.Agent) map[string]agent.LauncherPIDFunc {
+	m := make(map[string]agent.LauncherPIDFunc)
+	for _, a := range agents {
+		if a.Process.LauncherPID != nil {
+			m[a.Identity.Name] = a.Process.LauncherPID
+		}
+	}
+	return m
+}
+
 // RequireKnownHost produces the adapter-name → Process.RequireKnownHost map
 // consumed by session admission's host-ancestry gate: a candidate PID
 // launched by something other than a known terminal or IDE is rejected before

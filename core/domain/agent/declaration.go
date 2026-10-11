@@ -425,6 +425,11 @@ type Process struct {
 	// session id, because the probe means something only for the file the
 	// agent writes now.
 	ReleasedPID ReleasedPIDFunc
+	// LauncherPID is optional. For a session bound to a host process, it
+	// names the process whose environment and tty feed the session's
+	// launcher instead (#2083); see LauncherPIDFunc. The session's PID is
+	// untouched.
+	LauncherPID LauncherPIDFunc
 
 	// ExcludeArgv, when non-nil, lets an adapter reject a matched process by
 	// inspecting its argv. The process scanner consults it after a PID
