@@ -31,8 +31,8 @@
 #      last unique attribution.
 #  10. an undecided hook falls through to a read of the daemon → the same row
 #      goes red.
-#  11. the re-evaluation keeps the stored launcher instead of taking the
-#      named TUI's read → the lone-TUI row goes red.
+#  11. the re-evaluation never takes the named TUI's read → the lone-TUI row
+#      goes red: a launcher captured from the daemon never moves.
 #  12. the hosted check reads argv without observe consent → the backfill's
 #      consent row goes red.
 #  13. agents.LauncherPIDs projects no adapter → the opt-in pin goes red.
@@ -49,16 +49,13 @@
 #      daemon and its supervisor share the TUI's cwd and make it ambiguous.
 #  20. the hook runs while the launcher read is denied → the read-gate lock
 #      goes red.
-#  21. the stored tty is never carried onto a read without one → the seed row
-#      for the same TUI read without a tty goes red: its stored tty is erased.
+#  21. any stored launcher moves, not only the daemon's → the seed row for a
+#      TUI re-read without its host goes red: the last unique attribution is
+#      replaced by a degraded read of it.
 #  22. the pane refresh reads a hosted root → the skip test goes red: every
 #      sweep reads the daemon (and would pay the hook's scan to do better).
-#  23. the stored tty is carried whatever terminal it belongs to → the seed
-#      row for another TUI's launcher and a read without a tty goes red.
-#  24. a read whose host is unknown is applied → the host-unknown seed row
-#      goes red (#1485).
-#  25. sameTerminalExceptTTY compares the tty too → the seed row for the same
-#      TUI read without a tty goes red.
+#  23. a TUI read whose host is unknown is applied → the host-unknown seed
+#      row goes red (#1485).
 #
 # Not covered: the startup.go lines that pass agents.LauncherPIDs to
 # SetLauncherPIDs and the launcher grant to SetLauncherReadGate are reached by
@@ -259,12 +256,12 @@ assert_go_test_goes_red \
   "$SEED/^TUI_launcher,_ambiguous_cwd\$" \
   "want no read"
 
-# ── 11. a different terminal merged instead of replacing ──
+# ── 11. the TUI's read never taken ──
 assert_go_test_goes_red \
-  "the hosted re-evaluation keeping the stored launcher" \
+  "the hosted re-evaluation never taking the named TUI's read" \
   "$PM_FILE" \
-  $'\tnext := *fresh\n' \
-  $'\tnext := *state.Launcher\n' \
+  $'\tstate.Launcher = fresh\n\tpm.touchAndSave(state)\n' \
+  $'\tpm.touchAndSave(state)\n' \
   "$SERVICES" \
   "$SEED/^daemon_launcher,_lone_TUI\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/daemon_launcher,_lone_TUI"
@@ -359,15 +356,15 @@ assert_go_test_goes_red \
   '^TestLauncherPIDHookSkippedWhileLauncherReadIsDenied$' \
   "while the launcher read was denied"
 
-# ── 21. the stored tty never carried ──
+# ── 21. any stored launcher moves ──
 assert_go_test_goes_red \
-  "the hosted re-evaluation dropping the stored tty on a tty-less read" \
+  "the hosted re-evaluation moving a launcher that is not the daemon's" \
   "$PM_FILE" \
-  'if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {' \
-  'if false {' \
+  'if host == nil || *host != *state.Launcher {' \
+  'if host == nil {' \
   "$SERVICES" \
-  "$SEED/^TUI_launcher,_same_TUI_read_without_a_tty\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_same_TUI_read_without_a_tty"
+  "$SEED/^TUI_launcher,_its_TUI_re-read_without_its_host\$" \
+  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_its_TUI_re-read_without_its_host"
 
 # ── 22. the pane refresh reads a hosted root ──
 assert_go_test_goes_red \
@@ -379,17 +376,7 @@ assert_go_test_goes_red \
   '^TestCheckPIDLiveness_HostedCodexRootIsSkippedByThePaneRefresh$' \
   "for a hosted root, want neither"
 
-# ── 23. another terminal's tty carried ──
-assert_go_test_goes_red \
-  "the hosted re-evaluation carrying another terminal's tty" \
-  "$PM_FILE" \
-  'if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {' \
-  'if next.TTY == "" {' \
-  "$SERVICES" \
-  "$SEED/^other_TUI_launcher,_fresh_read_without_a_tty\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/other_TUI_launcher,_fresh_read_without_a_tty"
-
-# ── 24. a read with an unknown host applied ──
+# ── 23. a TUI read with an unknown host applied ──
 assert_go_test_goes_red \
   "the hosted re-evaluation applying a read whose host is unknown" \
   "$PM_FILE" \
@@ -398,16 +385,6 @@ assert_go_test_goes_red \
   "$SERVICES" \
   "$SEED/^host_unknown_on_the_TUI_read\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/host_unknown_on_the_TUI_read"
-
-# ── 25. the tty compared too ──
-assert_go_test_goes_red \
-  "sameTerminalExceptTTY comparing the tty" \
-  "$PM_FILE" \
-  'if vs.Type().Field(i).Name == "TTY" {' \
-  'if false {' \
-  "$SERVICES" \
-  "$SEED/^TUI_launcher,_same_TUI_read_without_a_tty\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_same_TUI_read_without_a_tty"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-tui-launcher-mutations: $fails FAILED"

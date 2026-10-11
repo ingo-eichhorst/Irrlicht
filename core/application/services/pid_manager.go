@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -524,59 +523,42 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 }
 
 // backfillHostedLauncher is backfillLauncher's re-evaluation for a root bound
-// to its adapter's session host (#2083), whose stored launcher may have come
-// from the host — whose env is that of whichever client first spawned it,
-// pane address included — or from a client process the hook named earlier.
+// to its adapter's session host (#2083). Its stored launcher came either from
+// the host — whose env, pane address included, is that of whichever client
+// first spawned it: captured before #2083, or while the root's cwd was
+// ambiguous — or from a client the hook named at an earlier read.
 //
-// A hook answer that names a process is applied by taking that process's
-// fresh launcher whole: a field-by-field merge would keep the spawning
-// client's fields beside the named one's whenever the two set different
-// fields, and the result would describe neither. One field is carried over:
-// when the fresh read has no tty and the stored launcher is otherwise the same
-// terminal's (sameTerminalExceptTTY), the stored tty is kept, because an empty
-// tty is not evidence — darwin's tty read comes back empty when its `ps` is
-// killed by the 2s ceiling (processTTYVia), and Linux reads none at all
-// (osutil_linux.go's processTTY stub).
+// Only a launcher that is the host's moves, and it moves to the named
+// client's fresh read whole: a field merge would keep the spawning client's
+// fields beside the named one's, and the result would describe neither. The
+// stored launcher counts as the host's when it equals a fresh read of the
+// host. Field shapes alone cannot tell "the host's launcher, against a client
+// that sets fewer fields" from "this client's launcher, against a degraded
+// re-read of it" — darwin's tty and ancestry reads come back empty when their
+// `ps` is killed by the 2s ceiling — so a launcher that is not the host's,
+// the last unique attribution, is kept as it is. A read of the host that
+// differs only because one of its own probes timed out leaves the host's
+// launcher in place too; the next startup asks again.
 //
-// A read whose host could not be determined (hostKnown false) changes
+// A client read whose host could not be determined (hostKnown false) changes
 // nothing, as the refresh paths decline to clear host fields on it (#1485).
-// An undecided hook keeps what is stored — the last unique attribution, or the
-// host's — and reads nothing, so an ambiguous cwd never brings the host's
-// fields back.
+// An undecided hook keeps what is stored and reads nothing, so an ambiguous
+// cwd never brings the host's fields back.
 func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 	src := pm.launcherSourcePID(state, state.PID)
 	if src == state.PID {
+		return
+	}
+	host, _ := pm.launcherEnv(state.PID)
+	if host == nil || *host != *state.Launcher {
 		return
 	}
 	fresh, hostKnown := pm.launcherEnv(src)
 	if fresh == nil || !hostKnown {
 		return
 	}
-	next := *fresh
-	if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {
-		next.TTY = state.Launcher.TTY
-	}
-	if next != *state.Launcher {
-		state.Launcher = &next
-		pm.touchAndSave(state)
-	}
-}
-
-// sameTerminalExceptTTY reports whether every field stored sets, other than
-// TTY, is set to the same value in fresh — so that fresh describes the
-// terminal stored does and adds to it. Fields are walked by reflection, so a
-// field added to Launcher later takes part without a second edit here.
-func sameTerminalExceptTTY(stored, fresh *session.Launcher) bool {
-	vs, vf := reflect.ValueOf(*stored), reflect.ValueOf(*fresh)
-	for i := range vs.NumField() {
-		if vs.Type().Field(i).Name == "TTY" {
-			continue
-		}
-		if fs := vs.Field(i); !fs.IsZero() && !fs.Equal(vf.Field(i)) {
-			return false
-		}
-	}
-	return true
+	state.Launcher = fresh
+	pm.touchAndSave(state)
 }
 
 // captureRoute invokes the route reader if one is installed and the session

@@ -286,15 +286,28 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			daemonRead: zed, tuiRead: ghostty, want: zed, noReads: true,
 		},
 		{
-			// The same TUI answering again is an ordinary backfill: missing
-			// fields are filled from it, present ones kept.
-			name: "TUI launcher, same TUI alone", stored: kittyPartial,
-			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true, want: kittyTUI,
+			// A launcher that is not the daemon's is the last unique
+			// attribution, and the re-evaluation leaves it as it is, even
+			// when its TUI is alone again (fourth review of #2083).
+			name: "TUI launcher, its TUI alone again", stored: kittyPartial,
+			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true, want: kittyPartial,
+		},
+		{
+			// A re-read of the same TUI whose ancestry walk was cut short
+			// (darwin's 2s `ps` ceiling, reported with hostKnown true) has
+			// lost its host; the stored launcher keeps it.
+			name: "TUI launcher, its TUI re-read without its host", stored: obsidian,
+			daemonRead: zed, tuiRead: session.Launcher{TTY: "/dev/ttys009"}, unique: true, want: obsidian,
+		},
+		{
+			name: "kitty TUI launcher, its TUI re-read without its terminal", stored: kittyTUI,
+			daemonRead: kittyDaemon, unique: true, want: kittyTUI,
+			tuiRead: session.Launcher{TTY: "/dev/ttys013", KittyPID: 4242},
 		},
 		{
 			// A tty read that came back empty (darwin's `ps` killed by its
-			// 2s ceiling) is unknown, not a different terminal: the same
-			// TUI's stored tty survives (review of #2083).
+			// 2s ceiling) does not erase the same TUI's stored tty (review
+			// of #2083).
 			name:   "TUI launcher, same TUI read without a tty",
 			stored: ghostty, daemonRead: zed, unique: true, want: ghostty,
 			tuiRead: session.Launcher{TermProgram: "ghostty"},
@@ -325,10 +338,18 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			daemonRead: daemonTerminal, tuiRead: obsidian, unique: true, want: obsidian,
 		},
 		{
-			// Another terminal's tty is never carried onto a read without one.
-			name: "other TUI launcher, fresh read without a tty", stored: iTermTTY1,
+			// A TUI attribution is not moved to another TUI that is now
+			// alone in the cwd: the stored one is the last unique answer.
+			name: "other TUI launcher, another TUI alone", stored: iTermTTY1,
 			daemonRead: zed, tuiRead: session.Launcher{TermProgram: "ghostty"}, unique: true,
-			want: session.Launcher{TermProgram: "ghostty"},
+			want: iTermTTY1,
+		},
+		{
+			// A daemon read that no longer equals the stored launcher (one of
+			// its own probes answered differently) leaves it in place.
+			name: "daemon launcher, daemon re-read differently", stored: zed,
+			daemonRead: session.Launcher{TermProgram: "zed", HostBundleID: "dev.zed.Zed"},
+			tuiRead:    ghostty, unique: true, want: zed,
 		},
 		{
 			// A read that could not determine its host moves nothing (#1485).
