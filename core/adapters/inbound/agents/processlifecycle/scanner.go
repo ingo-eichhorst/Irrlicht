@@ -50,9 +50,10 @@ type Scanner struct {
 
 	// argvFilter is an optional per-adapter predicate that excludes a matched
 	// PID by inspecting its argv. Set via WithArgvFilter from the adapter's
-	// Process.ExcludeArgv declaration. When it returns true the scanner mints
-	// no pre-session for that PID — the binary matched but it's infrastructure
-	// (e.g. a background daemon/wrapper running the same binary), not a
+	// Process.SkipsPreSession (its ExcludeArgv or SessionHostArgv). When it
+	// returns true the scanner mints no pre-session for that PID — the binary
+	// matched but it's infrastructure (e.g. a background daemon/wrapper running
+	// the same binary, or the host of other processes' sessions), not a
 	// session. Keeping the predicate here (not in poll's matcher) keeps the
 	// scanner generic; the format-specific argv shapes live in the adapter.
 	argvFilter func(argv []string) bool
@@ -141,7 +142,7 @@ func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *
 }
 
 // WithArgvFilter sets a per-adapter predicate that excludes a matched PID by
-// its argv (the adapter's Process.ExcludeArgv). When fn reports true the
+// its argv (the adapter's Process.SkipsPreSession). When fn reports true the
 // scanner skips the PID entirely — no pre-session is minted and it is never
 // tracked. Returns the scanner for chaining.
 func (s *Scanner) WithArgvFilter(fn func(argv []string) bool) *Scanner {

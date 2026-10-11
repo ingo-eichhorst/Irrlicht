@@ -103,6 +103,17 @@ func TestReleasedPIDs_OptInSet(t *testing.T) {
 	}
 }
 
+// TestSessionHosts_OptInSet pins which adapters declare a session host
+// (#2082): only codex, whose app-server hosts every TUI's threads. Startup
+// projects this set into SetSessionHosts, so an adapter dropping out of it
+// turns the hosted-placeholder pairing off for that adapter.
+func TestSessionHosts_OptInSet(t *testing.T) {
+	got := slices.Sorted(maps.Keys(agents.SessionHosts(agents.All())))
+	if want := []string{codex.AdapterName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("session hosts = %v, want %v", got, want)
+	}
+}
+
 func TestProcessNames_matchesConfigShape(t *testing.T) {
 	got := agents.ProcessNames(testAgents())
 	want := map[string]string{

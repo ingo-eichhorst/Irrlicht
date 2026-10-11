@@ -44,6 +44,12 @@
 #      goes red.
 #  16. the diagnostics process landscape reads ExcludeArgv alone → the
 #      landscape test goes red: the app-server is not flagged infra.
+#  17. agents.SessionHosts projects no adapter → the opt-in pin goes red:
+#      startup would hand the PID manager no session host.
+#
+# Not covered: the startup.go line that passes agents.SessionHosts to
+# SetSessionHosts is reached by no test, like its SetInfraReaper and
+# SetHostGate neighbours.
 #
 # There is no mutation 6: which adapter's session host applies is a map
 # index (pm.sessionHosts[s.Adapter]), not a guard; the scope lock's "adapter
@@ -299,6 +305,16 @@ assert_go_test_goes_red \
   "$SERVICES" \
   '^TestDiagnosticsFlagsASessionHostOnlyInTheLandscape$' \
   "should be flagged infra in the process landscape"
+
+# ── 17. the SessionHosts projection drops every adapter ──
+assert_go_test_goes_red \
+  "agents.SessionHosts projecting no adapter" \
+  "core/adapters/inbound/agents/maps.go" \
+  'if a.Process.SessionHostArgv != nil {' \
+  'if false && a.Process.SessionHostArgv != nil {' \
+  "./core/adapters/inbound/agents/" \
+  '^TestSessionHosts_OptInSet$' \
+  "session hosts = [], want [codex]"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-appserver-placeholder-mutations: $fails FAILED"
