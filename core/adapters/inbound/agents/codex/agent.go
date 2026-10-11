@@ -51,6 +51,9 @@ func Agent() agent.Agent {
 			// (#2077), and the #727 infra reaper ends a session bound to a
 			// process ExcludeArgv rejects.
 			SessionHostArgv: IsAppServerArgv,
+			// A hosted root's launcher comes from its TUI when that TUI is
+			// the only one in the root's cwd (#2083).
+			LauncherPID: LauncherPID,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{
@@ -59,11 +62,13 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data, including codex process arguments to tell app-server processes from sessions; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
+				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data, including codex process arguments to tell app-server processes from sessions and codex working directories to find the terminal a hosted session runs in; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
 				Detail: "Tails *.jsonl session files under ~/.codex/sessions/YYYY/MM/DD/ " +
 					"to derive session state, cost, and token metrics. Scans Codex processes " +
 					"to show sessions before their first message, reading each one's arguments " +
-					"so app-server processes get no row. With DSH consent, checks " +
+					"so app-server processes get no row, and reads their working " +
+					"directories to tie a session hosted by the shared app-server to " +
+					"the one terminal running codex in its directory. With DSH consent, checks " +
 					"process arguments and parent PIDs to avoid duplicate one-shot child rows. Read-only — " +
 					"no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
@@ -141,16 +146,18 @@ func IsAppServerArgv(argv []string) bool {
 }
 
 // valueOptions are the codex options that take their value as the next
-// argument. Read from the clap strings of the installed 0.162.1 binary
-// (option name beside its value name: cd/DIR, add-dir/ADD_DIR, model/MODEL,
-// profile/CONFIG_PROFILE_V2, sandbox/SANDBOX_MODE, image/IMAGES,
-// local-provider/OSS_PROVIDER, config key=value) plus `-c`, which the VS Code
-// extension's argv uses. Other short aliases were not verified there and are
-// left out.
+// argument: every option `codex --help` lists with a value placeholder at
+// 0.162.1, under each name it accepts (read 2026-10-11 for #2083).
+//
+// `-i/--image <FILE>...` takes several values, of which only the first is
+// skipped here, so `codex -i a.png app-server` still reads as an app-server.
 var valueOptions = map[string]bool{
-	"-c": true, "--config": true, "--cd": true, "--add-dir": true,
-	"--model": true, "--profile": true, "--sandbox": true, "--image": true,
-	"--local-provider": true,
+	"-c": true, "--config": true, "--enable": true, "--disable": true,
+	"--remote": true, "--remote-auth-token-env": true,
+	"-i": true, "--image": true, "-m": true, "--model": true,
+	"--local-provider": true, "-p": true, "--profile": true,
+	"-s": true, "--sandbox": true, "-C": true, "--cd": true,
+	"--add-dir": true, "-a": true, "--ask-for-approval": true,
 }
 
 // Source is this adapter's transcript-source declaration, split out of Agent so

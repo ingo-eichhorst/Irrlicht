@@ -46,6 +46,8 @@
 #      landscape test goes red: the app-server is not flagged infra.
 #  17. agents.SessionHosts projects no adapter → the opt-in pin goes red:
 #      startup would hand the PID manager no session host.
+#  18. a short option form is missing from valueOptions → the codex table's
+#      `-C app-server` row goes red (#2083, from the QA of #2082).
 #
 # Not covered: the startup.go line that passes agents.SessionHosts to
 # SetSessionHosts is reached by no test, like its SetInfraReaper and
@@ -315,6 +317,16 @@ assert_go_test_goes_red \
   "./core/adapters/inbound/agents/" \
   '^TestSessionHosts_OptInSet$' \
   "session hosts = [], want [codex]"
+
+# ── 18. a short option form missing from valueOptions ──
+assert_go_test_goes_red \
+  "codex.IsAppServerArgv without the -C short form" \
+  "$CODEX_FILE" \
+  '"-s": true, "--sandbox": true, "-C": true, "--cd": true,' \
+  '"-s": true, "--sandbox": true, "--cd": true,' \
+  "$CODEX" \
+  "$CODEX_TABLE" \
+  "TUI with -C app-server: SessionHostArgv("
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-appserver-placeholder-mutations: $fails FAILED"

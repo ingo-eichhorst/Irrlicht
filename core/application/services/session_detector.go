@@ -587,6 +587,20 @@ func (d *SessionDetector) SetSessionHosts(hosts map[string]func([]string) bool, 
 	d.pidMgr.SetSessionHosts(hosts, readArgv)
 }
 
+// SetLauncherPIDs installs the launcher-capture seam that reads a hosted
+// root's launcher from the process the user talks to (#2083). Nil disables
+// it. Call before Run.
+func (d *SessionDetector) SetLauncherPIDs(hooks map[string]agent.LauncherPIDFunc) {
+	d.pidMgr.SetLauncherPIDs(hooks)
+}
+
+// SetLauncherReadGate installs the check that the launcher read is granted,
+// so the LauncherPID hook is not run for a read that would be refused
+// (#2083). Nil allows it. Call before Run.
+func (d *SessionDetector) SetLauncherReadGate(fn func() bool) {
+	d.pidMgr.SetLauncherReadGate(fn)
+}
+
 // SetHostGate installs the session-admission seam that rejects a candidate PID
 // launched by something other than a known terminal or IDE (#784). Both args
 // nil disables the check. Call before Run.

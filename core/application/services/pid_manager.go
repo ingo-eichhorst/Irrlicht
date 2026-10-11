@@ -239,6 +239,14 @@ type PIDManager struct {
 	// nil disables that pairing; installed once at startup via SetSessionHosts.
 	sessionHosts map[string]func([]string) bool
 	hostReadArgv func(pid int) []string
+	// launcherPIDs maps adapter name → its Process.LauncherPID: for a root
+	// bound to a host process, the process whose env and tty feed the
+	// launcher instead (#2083). Nil disables it; installed once at startup
+	// via SetLauncherPIDs. Consulted only behind observe consent.
+	launcherPIDs map[string]agent.LauncherPIDFunc
+	// launcherReadAllowed reports whether the launcher read the hook's answer
+	// feeds is granted. Nil allows it; installed via SetLauncherReadGate.
+	launcherReadAllowed func() bool
 	// hostClaims holds the hosted roots that have already retired a
 	// placeholder, so a root retires at most one however many sweeps see it;
 	// see hostedPlaceholderVictims. hostClaimMu guards it for the same reason
@@ -374,6 +382,23 @@ func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, read
 	pm.hostReadArgv = readArgv
 }
 
+// SetLauncherPIDs installs the seam launcher capture uses to read a hosted
+// root's launcher from the process the user talks to (#2083). hooks maps
+// adapter name → Process.LauncherPID. Nil (the default, and what tests/demo
+// mode leave) keeps every launcher read on the session's own PID. Called once
+// at startup.
+func (pm *PIDManager) SetLauncherPIDs(hooks map[string]agent.LauncherPIDFunc) {
+	pm.launcherPIDs = hooks
+}
+
+// SetLauncherReadGate installs the check that the launcher read is granted
+// (#2083): the LauncherPID hook's answer feeds only that read, so while it is
+// not granted the hook's process scan is skipped. Nil (tests, demo mode)
+// allows it. Checked per call, so a grant takes effect on the next read.
+func (pm *PIDManager) SetLauncherReadGate(fn func() bool) {
+	pm.launcherReadAllowed = fn
+}
+
 // SetHostGate installs the seam session admission uses to reject a candidate
 // PID launched by something other than a known terminal or IDE (issue #784).
 // requireKnownHost maps adapter name → Process.RequireKnownHost; isKnownHost
@@ -433,6 +458,10 @@ func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath stri
 // captureLauncher invokes the launcher-env reader if one is installed and
 // the session does not yet have a launcher recorded. Safe to call multiple
 // times; only populates on the first successful read.
+//
+// The read is of launcherSourcePID's answer, which is pid itself except for a
+// root its adapter's Process.LauncherPID attributes to another process
+// (#2083); state.PID is never changed here.
 func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if pm.launcherEnv == nil || state == nil || state.Launcher != nil || pid <= 0 {
 		return
@@ -442,9 +471,56 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	// session with no Launcher at all — losing the herdr address, and with it
 	// herdr host resolution, to buy nothing. The refresh paths, which do have
 	// something to lose, are where it is honoured (#1485).
-	if l, _ := pm.launcherEnv(pid); l != nil {
+	if l, _ := pm.launcherEnv(pm.launcherSourcePID(state, pid)); l != nil {
 		state.Launcher = l
 	}
+}
+
+// launcherSourcePID returns the PID whose env and tty feed state's launcher
+// while state is bound to pid: its adapter's Process.LauncherPID answer when
+// that names a process (#2083), else pid. The hook reads the adapter's own
+// processes, so it runs only behind the adapter's observe consent, like
+// sharedPIDOwners and releasedPIDs, and only while the launcher read it feeds
+// is granted.
+//
+// Its caller is captureLauncher, so it runs on three paths, each where the
+// launcher read it feeds already runs and only while the session has no
+// launcher yet. Both bind paths hold assignMu: assignPIDLocked takes it
+// directly, and the detector's applyPendingPID runs inside
+// processActivityLocked, which both of its callers wrap in
+// WithSessionStateLock (read in session_detector_activity.go). The third is
+// the startup seed (backfillLauncher). Its cost is the adapter's to bound;
+// codex's is described on codex.LauncherPID.
+// refreshMultiplexerHosts skips a hosted root rather than ask it on every
+// sweep, and AdoptSelfReportedHerdrPane does not consult it: only pi's hooks
+// send that report, and pi declares no LauncherPID.
+func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) int {
+	hook := pm.launcherPIDs[state.Adapter]
+	if hook == nil || !pm.observeAllowed(state.Adapter) {
+		return pid
+	}
+	if pm.launcherReadAllowed != nil && !pm.launcherReadAllowed() {
+		return pid
+	}
+	if src := hook(state.CWD, state.TranscriptPath, pid); src > 0 {
+		return src
+	}
+	return pid
+}
+
+// boundToSessionHost reports whether state is bound to its adapter's session
+// host (Process.SessionHostArgv) and that adapter declares a LauncherPID —
+// the roots whose launcher must never be read from their own PID once set
+// (#2083). Behind observe consent, because it reads the bound PID's argv.
+func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
+	isHost := pm.sessionHosts[state.Adapter]
+	if isHost == nil || pm.launcherPIDs[state.Adapter] == nil {
+		return false
+	}
+	if pm.hostReadArgv == nil || !pm.observeAllowed(state.Adapter) {
+		return false
+	}
+	return isHost(pm.hostReadArgv(state.PID))
 }
 
 // captureRoute invokes the route reader if one is installed and the session
@@ -2058,6 +2134,16 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //     also re-resolved on every periodic liveness sweep (refreshMultiplexerHosts,
 //     #1405). Both share launcherBackfillNeedsFor/applyLauncherBackfill, so
 //     the seed and the sweep cannot drift apart on what a refresh means.
+//
+// A root bound to its adapter's session host whose adapter declares a
+// LauncherPID keeps a launcher it already has (#2083): its own PID is the
+// host's, whose env is not this session's terminal, so nothing is merged in
+// from it. Nor is the stored launcher re-attributed: nothing records whether
+// it was read from the host or from a client the hook named, and the review of
+// PR #2090 found a counterexample for each rule tried that inferred it from
+// the fields. A root with no launcher yet is captured above, through
+// the hook. So a hosted root whose launcher came from the host — captured
+// before #2083, or while its cwd was ambiguous — keeps it for its life.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -2067,6 +2153,9 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 		return
 	}
 	if pm.launcherEnv == nil {
+		return
+	}
+	if pm.boundToSessionHost(state) {
 		return
 	}
 	needs := launcherBackfillNeedsFor(state.Launcher)
@@ -2350,6 +2439,16 @@ func (pm *PIDManager) refreshMultiplexerHosts(snaps []livenessSnapshot) {
 	read := memoizedLauncherEnv(pm.launcherEnv)
 	for _, snap := range snaps {
 		if !snap.multiplexerPane || snap.pid <= 0 {
+			continue
+		}
+		// A root bound to its adapter's session host is skipped (#2083): its
+		// PID is the host's, whose env carries whichever pane the client that
+		// spawned the host was in, and asking the LauncherPID hook for the
+		// right process costs a process scan with no bound on every sweep. So
+		// a hosted pane root's client reattach is not followed for that
+		// root's life. The check is one argv read, and only for a pane
+		// launcher of an adapter declaring the hook.
+		if pm.boundToSessionHost(snap.state) {
 			continue
 		}
 		fresh, hostKnown := read(snap.pid)

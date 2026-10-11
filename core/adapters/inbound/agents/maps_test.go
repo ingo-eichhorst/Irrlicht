@@ -114,6 +114,17 @@ func TestSessionHosts_OptInSet(t *testing.T) {
 	}
 }
 
+// TestLauncherPIDs_OptInSet pins which adapters attribute a hosted session's
+// launcher to another process (#2083): only codex. Startup projects this set
+// into SetLauncherPIDs, so an adapter dropping out of it returns every one of
+// its hosted roots to the host's launcher.
+func TestLauncherPIDs_OptInSet(t *testing.T) {
+	got := slices.Sorted(maps.Keys(agents.LauncherPIDs(agents.All())))
+	if want := []string{codex.AdapterName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("launcher PIDs = %v, want %v", got, want)
+	}
+}
+
 func TestProcessNames_matchesConfigShape(t *testing.T) {
 	got := agents.ProcessNames(testAgents())
 	want := map[string]string{

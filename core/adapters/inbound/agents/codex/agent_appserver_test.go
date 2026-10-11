@@ -35,6 +35,22 @@ func TestAgentDeclaresCodexAppServerAsSessionHost(t *testing.T) {
 		{"TUI with --cd app-server", []string{"codex", "--cd", "app-server"}, false},
 		{"TUI with --add-dir app-server", []string{"codex", "--yolo", "--add-dir", "app-server"}, false},
 		{"app-server after a -c value", []string{"codex", "-c", "app-server", "--yolo"}, false},
+		// The short forms and the remaining value-taking options `codex
+		// --help` lists at 0.162.1 (#2083, from the QA of #2082).
+		{"TUI with -C app-server", []string{"codex", "-C", "app-server"}, false},
+		{"TUI with -m app-server", []string{"codex", "-m", "app-server"}, false},
+		{"TUI with -p app-server", []string{"codex", "-p", "app-server"}, false},
+		{"TUI with -s app-server", []string{"codex", "-s", "app-server"}, false},
+		{"TUI with -i app-server", []string{"codex", "-i", "app-server"}, false},
+		{"TUI with -a app-server", []string{"codex", "-a", "app-server"}, false},
+		{"TUI with --ask-for-approval app-server", []string{"codex", "--ask-for-approval", "app-server"}, false},
+		{"TUI with --enable app-server", []string{"codex", "--enable", "app-server"}, false},
+		{"TUI with --disable app-server", []string{"codex", "--disable", "app-server"}, false},
+		{"TUI with --remote app-server", []string{"codex", "--remote", "app-server"}, false},
+		{"TUI with --remote-auth-token-env app-server", []string{"codex", "--remote-auth-token-env", "app-server"}, false},
+		// Known limit, pinned so it is not mistaken for covered: -i takes
+		// several values and only the first is skipped.
+		{"app-server as a second -i value", []string{"codex", "-i", "a.png", "app-server"}, true},
 	} {
 		if got := isHost(tc.argv); got != tc.want {
 			t.Errorf("%s: SessionHostArgv(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)
