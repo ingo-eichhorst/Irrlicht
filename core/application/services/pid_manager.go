@@ -485,10 +485,12 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 // is granted.
 //
 // Its callers are captureLauncher and backfillHostedLauncher, so it runs on
-// three paths, each where the launcher read it feeds already runs:
-// assignPIDLocked (under assignMu), the detector's applyPendingPID (on the
-// event loop, outside assignMu) and the startup seed (backfillLauncher). Its
-// cost is the adapter's to bound; codex's is described on codex.LauncherPID.
+// three paths, each where the launcher read it feeds already runs. Both bind
+// paths hold assignMu: assignPIDLocked takes it directly, and the detector's
+// applyPendingPID runs inside processActivityLocked, which both of its callers
+// wrap in WithSessionStateLock (read in session_detector_activity.go). The
+// third is the startup seed (backfillLauncher). Its cost is the adapter's to
+// bound; codex's is described on codex.LauncherPID.
 // refreshMultiplexerHosts skips a hosted root rather than ask it on every
 // sweep, and AdoptSelfReportedHerdrPane does not consult it: only pi's hooks
 // send that report, and pi declares no LauncherPID.
@@ -521,76 +523,60 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 	return isHost(pm.hostReadArgv(state.PID))
 }
 
-// launchersConflict reports whether a and b describe different terminals:
-// some field is set in both and differs. A field empty on either side is
-// unknown rather than different, so emptiness never decides it — darwin's tty
-// read comes back empty when its `ps` is killed by the 2s ceiling
-// (processTTYVia), and Linux reads no tty at all (osutil_linux.go's
-// processTTY stub). Every field takes part, by reflection, so a field added to
-// Launcher later is compared without a second edit here.
-func launchersConflict(a, b *session.Launcher) bool {
-	va, vb := reflect.ValueOf(*a), reflect.ValueOf(*b)
-	for i := range va.NumField() {
-		fa, fb := va.Field(i), vb.Field(i)
-		if !fa.IsZero() && !fb.IsZero() && !fa.Equal(fb) {
-			return true
-		}
-	}
-	return false
-}
-
 // backfillHostedLauncher is backfillLauncher's re-evaluation for a root bound
 // to its adapter's session host (#2083), whose stored launcher may have come
-// from the host — whose env is that of whichever client first spawned it —
-// or from a client process the hook named earlier.
+// from the host — whose env is that of whichever client first spawned it,
+// pane address included — or from a client process the hook named earlier.
 //
-// A hook answer that names a process is applied: a read that conflicts with
-// the stored launcher (launchersConflict: a field set in both that differs)
-// is another terminal's and replaces it whole, since merging two processes'
-// fields would describe neither; a read that does not conflict fills every
-// field the stored launcher lacks (fillMissingLauncherFields) — wider than
-// the ordinary backfill's needs, because a launcher read from the host has no
-// pane, and the TUI's tmux or herdr address is exactly what it lacks. hostKnown
-// is ignored on both branches: a replacement for captureLauncher's reason (the
-// conflict shows the stored host fields are another terminal's), and a fill
-// never erases a field. So a herdr client that detached since the stored read
-// keeps its old host here; the periodic refresh, which honours hostKnown,
-// skips hosted roots (see refreshMultiplexerHosts). An undecided hook keeps
-// what is stored — the last unique attribution, or the host's — and reads
-// nothing, so an ambiguous cwd never merges the host's fields back in.
+// A hook answer that names a process is applied by taking that process's
+// fresh launcher whole: a field-by-field merge would keep the spawning
+// client's fields beside the named one's whenever the two set different
+// fields, and the result would describe neither. One field is carried over:
+// when the fresh read has no tty and the stored launcher is otherwise the same
+// terminal's (sameTerminalExceptTTY), the stored tty is kept, because an empty
+// tty is not evidence — darwin's tty read comes back empty when its `ps` is
+// killed by the 2s ceiling (processTTYVia), and Linux reads none at all
+// (osutil_linux.go's processTTY stub).
+//
+// A read whose host could not be determined (hostKnown false) changes
+// nothing, as the refresh paths decline to clear host fields on it (#1485).
+// An undecided hook keeps what is stored — the last unique attribution, or the
+// host's — and reads nothing, so an ambiguous cwd never brings the host's
+// fields back.
 func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 	src := pm.launcherSourcePID(state, state.PID)
 	if src == state.PID {
 		return
 	}
-	fresh, _ := pm.launcherEnv(src)
-	if fresh == nil {
+	fresh, hostKnown := pm.launcherEnv(src)
+	if fresh == nil || !hostKnown {
 		return
 	}
-	if launchersConflict(state.Launcher, fresh) {
-		state.Launcher = fresh
-		pm.touchAndSave(state)
-		return
+	next := *fresh
+	if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {
+		next.TTY = state.Launcher.TTY
 	}
-	if fillMissingLauncherFields(state.Launcher, fresh) {
+	if next != *state.Launcher {
+		state.Launcher = &next
 		pm.touchAndSave(state)
 	}
 }
 
-// fillMissingLauncherFields copies into dst every field that is empty there
-// and set in src, by reflection like launchersConflict, and reports whether
-// anything changed. It never erases a field.
-func fillMissingLauncherFields(dst, src *session.Launcher) bool {
-	vd, vs := reflect.ValueOf(dst).Elem(), reflect.ValueOf(*src)
-	changed := false
-	for i := range vd.NumField() {
-		fd, fs := vd.Field(i), vs.Field(i)
-		if fd.IsZero() && !fs.IsZero() {
-			fd.Set(fs)
-			changed = true
+// sameTerminalExceptTTY reports whether every field stored sets, other than
+// TTY, is set to the same value in fresh — so that fresh describes the
+// terminal stored does and adds to it. Fields are walked by reflection, so a
+// field added to Launcher later takes part without a second edit here.
+func sameTerminalExceptTTY(stored, fresh *session.Launcher) bool {
+	vs, vf := reflect.ValueOf(*stored), reflect.ValueOf(*fresh)
+	for i := range vs.NumField() {
+		if vs.Type().Field(i).Name == "TTY" {
+			continue
+		}
+		if fs := vs.Field(i); !fs.IsZero() && !fs.Equal(vf.Field(i)) {
+			return false
 		}
 	}
-	return changed
+	return true
 }
 
 // captureRoute invokes the route reader if one is installed and the session

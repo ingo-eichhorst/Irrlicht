@@ -38,6 +38,9 @@ type codexLauncherFixture struct {
 	// launcherDenied withholds the launcher-read grant the hook's answer
 	// feeds (the reader itself returns nil then, as startup.go's does).
 	launcherDenied bool
+	// hostUnknown makes the TUI's read report that its host could not be
+	// determined (LauncherEnvReader's hostKnown false).
+	hostUnknown bool
 }
 
 func newCodexLauncherFixture(t *testing.T) *codexLauncherFixture {
@@ -86,7 +89,7 @@ func (f *codexLauncherFixture) pidManager() *services.PIDManager {
 		f.reads = append(f.reads, pid)
 		if l := f.launchers[pid]; l != nil {
 			cp := *l
-			return &cp, true
+			return &cp, !(f.hostUnknown && pid == f.tui)
 		}
 		return nil, true
 	})
@@ -244,6 +247,16 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 	// tmux pane shown in ghostty.
 	ghosttyBare := session.Launcher{TermProgram: "ghostty"}
 	ghosttyTmux := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys009", TmuxPane: "%3", TmuxSocket: "/private/tmp/tmux-501/default"}
+	// A daemon whose spawner sat in a herdr pane, a tmux pane, an iTerm tab
+	// or a Terminal.app tab, against TUIs that set different fields from it.
+	ghosttyTTY9 := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys009"}
+	daemonHerdr := session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/cfg/herdr/herdr.sock", TermProgram: "ghostty"}
+	daemonTmux := session.Launcher{TmuxPane: "%1", TmuxSocket: "/private/tmp/tmux-501/default", TermProgram: "ghostty"}
+	daemonITerm := session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:AAA"}
+	daemonTerminal := session.Launcher{TermProgram: "Apple_Terminal", TermSessionID: "AAA"}
+	tmuxUnresolved := session.Launcher{TmuxPane: "%3", TmuxSocket: "/private/tmp/tmux-501/default", TTY: "/dev/ttys009"}
+	obsidian := session.Launcher{HostBundleID: "md.obsidian", TTY: "/dev/ttys009"}
+	iTermTTY1 := session.Launcher{TermProgram: "iTerm.app", TTY: "/dev/ttys001"}
 	for _, tc := range []struct {
 		name                string
 		stored              session.Launcher
@@ -253,6 +266,7 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 		want                session.Launcher
 		noReads             bool // the launcher reader must not be asked at all
 		noConsent           bool // codex's observe consent is withheld
+		hostUnknown         bool // the TUI's read could not determine its host
 	}{
 		{
 			// A launcher captured from the daemon (before this change, or
@@ -286,12 +300,40 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			tuiRead: session.Launcher{TermProgram: "ghostty"},
 		},
 		{
-			// A launcher read from the host has no pane; a lone TUI in a tmux
-			// pane of the same terminal program does not conflict with it,
-			// and its whole address is filled in, not only the fields the
-			// ordinary backfill asks for (second review of #2083).
+			// The lone TUI's whole launcher is taken, pane address included,
+			// not only the fields the ordinary backfill asks for (second
+			// review of #2083).
 			name: "daemon launcher, lone TUI in a tmux pane", stored: ghosttyBare,
 			daemonRead: ghosttyBare, tuiRead: ghosttyTmux, unique: true, want: ghosttyTmux,
+		},
+		{
+			// The daemon inherits its spawner's herdr pane; the lone TUI in a
+			// plain tab must not keep it (third review of #2083).
+			name: "daemon launcher in a herdr pane, lone TUI in a tab", stored: daemonHerdr,
+			daemonRead: daemonHerdr, tuiRead: ghosttyTTY9, unique: true, want: ghosttyTTY9,
+		},
+		{
+			name: "daemon launcher in a tmux pane, lone TUI in a tab", stored: daemonTmux,
+			daemonRead: daemonTmux, tuiRead: ghosttyTTY9, unique: true, want: ghosttyTTY9,
+		},
+		{
+			name: "daemon launcher in iTerm, lone TUI in tmux", stored: daemonITerm,
+			daemonRead: daemonITerm, tuiRead: tmuxUnresolved, unique: true, want: tmuxUnresolved,
+		},
+		{
+			name: "daemon launcher in Terminal.app, lone TUI in Obsidian", stored: daemonTerminal,
+			daemonRead: daemonTerminal, tuiRead: obsidian, unique: true, want: obsidian,
+		},
+		{
+			// Another terminal's tty is never carried onto a read without one.
+			name: "other TUI launcher, fresh read without a tty", stored: iTermTTY1,
+			daemonRead: zed, tuiRead: session.Launcher{TermProgram: "ghostty"}, unique: true,
+			want: session.Launcher{TermProgram: "ghostty"},
+		},
+		{
+			// A read that could not determine its host moves nothing (#1485).
+			name: "host unknown on the TUI read", stored: zed, hostUnknown: true,
+			daemonRead: zed, tuiRead: ghostty, unique: true, want: zed,
 		},
 		{
 			// Linux reads no controlling tty at all, so neither launcher has
@@ -329,6 +371,7 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			if tc.noConsent {
 				f.consent = func(string) bool { return false }
 			}
+			f.hostUnknown = tc.hostUnknown
 			stored := tc.stored
 			s := f.boundRoot("codex-root", &stored)
 			pm := f.pidManager()

@@ -31,8 +31,8 @@
 #      last unique attribution.
 #  10. an undecided hook falls through to a read of the daemon → the same row
 #      goes red.
-#  11. a read from a different terminal is merged instead of replacing → the
-#      lone-TUI row goes red: the daemon's terminal keeps the TUI's tty.
+#  11. the re-evaluation keeps the stored launcher instead of taking the
+#      named TUI's read → the lone-TUI row goes red.
 #  12. the hosted check reads argv without observe consent → the backfill's
 #      consent row goes red.
 #  13. agents.LauncherPIDs projects no adapter → the opt-in pin goes red.
@@ -49,12 +49,16 @@
 #      daemon and its supervisor share the TUI's cwd and make it ambiguous.
 #  20. the hook runs while the launcher read is denied → the read-gate lock
 #      goes red.
-#  21. a field empty on one side counts as a conflict → the seed row for the
-#      same TUI read without a tty goes red: its stored tty is erased.
+#  21. the stored tty is never carried onto a read without one → the seed row
+#      for the same TUI read without a tty goes red: its stored tty is erased.
 #  22. the pane refresh reads a hosted root → the skip test goes red: every
 #      sweep reads the daemon (and would pay the hook's scan to do better).
-#  23. the no-conflict branch merges only the ordinary backfill's needs → the
-#      seed row for a lone TUI in a tmux pane goes red: its pane is dropped.
+#  23. the stored tty is carried whatever terminal it belongs to → the seed
+#      row for another TUI's launcher and a read without a tty goes red.
+#  24. a read whose host is unknown is applied → the host-unknown seed row
+#      goes red (#1485).
+#  25. sameTerminalExceptTTY compares the tty too → the seed row for the same
+#      TUI read without a tty goes red.
 #
 # Not covered: the startup.go lines that pass agents.LauncherPIDs to
 # SetLauncherPIDs and the launcher grant to SetLauncherReadGate are reached by
@@ -257,10 +261,10 @@ assert_go_test_goes_red \
 
 # ── 11. a different terminal merged instead of replacing ──
 assert_go_test_goes_red \
-  "the hosted re-evaluation merging a different terminal's read" \
+  "the hosted re-evaluation keeping the stored launcher" \
   "$PM_FILE" \
-  'if launchersConflict(state.Launcher, fresh) {' \
-  'if false {' \
+  $'\tnext := *fresh\n' \
+  $'\tnext := *state.Launcher\n' \
   "$SERVICES" \
   "$SEED/^daemon_launcher,_lone_TUI\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/daemon_launcher,_lone_TUI"
@@ -355,12 +359,12 @@ assert_go_test_goes_red \
   '^TestLauncherPIDHookSkippedWhileLauncherReadIsDenied$' \
   "while the launcher read was denied"
 
-# ── 21. an empty field counted as a conflict ──
+# ── 21. the stored tty never carried ──
 assert_go_test_goes_red \
-  "launchersConflict reading an empty field as a different terminal" \
+  "the hosted re-evaluation dropping the stored tty on a tty-less read" \
   "$PM_FILE" \
-  'if !fa.IsZero() && !fb.IsZero() && !fa.Equal(fb) {' \
-  'if !fa.Equal(fb) {' \
+  'if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {' \
+  'if false {' \
   "$SERVICES" \
   "$SEED/^TUI_launcher,_same_TUI_read_without_a_tty\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_same_TUI_read_without_a_tty"
@@ -375,15 +379,35 @@ assert_go_test_goes_red \
   '^TestCheckPIDLiveness_HostedCodexRootIsSkippedByThePaneRefresh$' \
   "for a hosted root, want neither"
 
-# ── 23. the no-conflict branch merges only the backfill's needs ──
+# ── 23. another terminal's tty carried ──
 assert_go_test_goes_red \
-  "the hosted re-evaluation filling only the ordinary backfill's needs" \
+  "the hosted re-evaluation carrying another terminal's tty" \
   "$PM_FILE" \
-  $'\tif fillMissingLauncherFields(state.Launcher, fresh) {\n' \
-  $'\tif needs := launcherBackfillNeedsFor(state.Launcher); needs.any() && applyLauncherBackfill(state.Launcher, needs, fresh, true) {\n' \
+  'if next.TTY == "" && sameTerminalExceptTTY(state.Launcher, fresh) {' \
+  'if next.TTY == "" {' \
   "$SERVICES" \
-  "$SEED/^daemon_launcher,_lone_TUI_in_a_tmux_pane\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/daemon_launcher,_lone_TUI_in_a_tmux_pane"
+  "$SEED/^other_TUI_launcher,_fresh_read_without_a_tty\$" \
+  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/other_TUI_launcher,_fresh_read_without_a_tty"
+
+# ── 24. a read with an unknown host applied ──
+assert_go_test_goes_red \
+  "the hosted re-evaluation applying a read whose host is unknown" \
+  "$PM_FILE" \
+  'if fresh == nil || !hostKnown {' \
+  'if _ = hostKnown; fresh == nil {' \
+  "$SERVICES" \
+  "$SEED/^host_unknown_on_the_TUI_read\$" \
+  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/host_unknown_on_the_TUI_read"
+
+# ── 25. the tty compared too ──
+assert_go_test_goes_red \
+  "sameTerminalExceptTTY comparing the tty" \
+  "$PM_FILE" \
+  'if vs.Type().Field(i).Name == "TTY" {' \
+  'if false {' \
+  "$SERVICES" \
+  "$SEED/^TUI_launcher,_same_TUI_read_without_a_tty\$" \
+  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_same_TUI_read_without_a_tty"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-tui-launcher-mutations: $fails FAILED"
