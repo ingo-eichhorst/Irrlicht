@@ -842,28 +842,21 @@ func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
 // #2081: (pid, nil) for a writer, (0, nil) when the probe found none or was
 // not asked, and an error when the probe could not run.
 //
-// Only an adapter declaring a SharedPIDOwner is asked: codex, dsh and muse.
-// Their PIDForSession is a writer probe, read in each pid.go. Codex asks
-// processlifecycle.DiscoverPIDByTranscriptWriter about the rollout, dsh about
-// the session lock, and muse about the lock and then the transcript. Every
-// other adapter, including claude-code, which writes and closes its
-// transcript, gets (0, nil) and no probe. The probe sits behind the same
-// observe-consent gate as the shared-PID probes.
-//
-// The probe is a system-wide `lsof <path>` on darwin, whose median was
-// 137.4ms in the measurement quoted on darwinObserver.HoldsForWriting. The
-// detector asks once for each stale root transcript that reaches admission as
-// a new session. Those come from the watcher's startup scan, or from a
-// backfill after consent is granted.
+// Only an adapter declaring a SharedPIDOwner is asked, because its
+// PIDForSession is a writer probe: read in each such adapter's pid.go (codex,
+// dsh and muse on 2026-10-11), each one asks
+// processlifecycle.DiscoverPIDByTranscriptWriter about the transcript or its
+// session lock. Muse asks about the lock and then the transcript, so a muse
+// session nobody holds costs two probes. Every other adapter, including
+// claude-code, which writes and closes its transcript, gets (0, nil) and no
+// probe. The probe sits behind the same observe-consent gate as the shared-PID
+// probes. Its darwin cost is the lsof.writer row of the measurement quoted on
+// darwinObserver.HoldsForWriting.
 func (pm *PIDManager) StaleTranscriptWriter(sessionID, adapter, cwd, transcriptPath string) (int, error) {
 	if pm.sharedPIDOwners[adapter] == nil || pm.pidDiscovers[adapter] == nil || !pm.observeAllowed(adapter) {
 		return 0, nil
 	}
-	pid, err := pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)
-	if err != nil {
-		return 0, err
-	}
-	return max(pid, 0), nil
+	return pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)
 }
 
 // isStartupZombie returns true for sessions whose process is provably gone.

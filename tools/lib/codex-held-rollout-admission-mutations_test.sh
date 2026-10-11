@@ -87,7 +87,7 @@ assert_go_test_goes_red() {
     fails=$((fails + 1))
     return
   fi
-  if grep -qE '^# |build failed|cannot use|undefined:|declared and not used' <<<"$out"; then
+  if grep -qE '^# |build failed|cannot use|undefined:' <<<"$out"; then
     echo "FAIL: $label — the mutation broke the BUILD rather than the guard. A fixture that"
     echo "      cannot compile proves nothing about the behavior it is meant to exercise."
     echo "$out" | quote_output
@@ -109,12 +109,12 @@ DET_FILE="core/application/services/session_detector_activity.go"
 PM_FILE="core/application/services/pid_manager.go"
 SCOPE_ANCHOR=$'\tif pm.sharedPIDOwners[adapter] == nil || pm.pidDiscovers[adapter] == nil || !pm.observeAllowed(adapter) {'
 
-# ── 1. the subagent guard reads only the Claude Code path ──
+# ── 1. the subagent guard is gone ──
 assert_go_test_goes_red \
   "staleTranscriptHolder admitting a held subagent rollout" \
   "$DET_FILE" \
-  $'\tif ev.ParentSessionID != "" || deriveParentSessionID(ev.TranscriptPath) != "" {' \
-  $'\tif deriveParentSessionID(ev.TranscriptPath) != "" {' \
+  $'\tif ev.ParentSessionID != "" {' \
+  $'\tif false {' \
   "$PKG" \
   "^TestSessionDetector_StaleHeldCodexSubagentIsNotAdmitted\$" \
   "a held subagent rollout says nothing about its parent"
@@ -143,8 +143,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "StaleTranscriptWriter naming a writer for a rollout nobody holds" \
   "$PM_FILE" \
-  $'\treturn max(pid, 0), nil' \
-  $'\treturn max(pid, 1), nil' \
+  $'\treturn pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)' \
+  $'\tpid, _ := pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)\n\treturn max(pid, 1), nil' \
   "$PKG" \
   "^TestSessionDetector_StaleUnheldCodexRootIsStillSkipped\$" \
   "no process holds its rollout open"

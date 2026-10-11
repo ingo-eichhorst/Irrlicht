@@ -36,42 +36,34 @@ const (
 	threadB = "01a12065-fe16-7dd0-a249-4f7b5c55f7cc"
 	threadC = "01a1181a-0349-7712-8ec0-c750ef098f2e"
 	threadD = "01a126a0-82f9-7a13-8638-9dec848ecb6b"
+	// subThread is a subagent thread: on the dev machine, 01a122be's
+	// session_meta names 01a12197 (threadA) as its parent.
+	subThread = "01a122be-de9f-77d3-9203-48c45ff83bbc"
 )
 
-// sharedPIDAgents are the adapters that declare a SharedPIDOwner. The detector
-// wires their ownership and release probes the way startup.go does, by
-// projecting each declaration.
-func sharedPIDAgents() []agent.Agent {
-	return []agent.Agent{codex.Agent(), dsh.Agent(), muse.Agent()}
-}
-
-// newStaleAdmissionDetector wires the shared-PID adapters' probes as
-// startup.go does, plus a live-process lookup that reports a process of every
-// adapter in cwd. So the cwd rescue gets every chance to admit. When a test
-// still sees a skip, a heuristic made it: no process lookup was missing.
+// newStaleAdmissionDetector projects every adapter's ownership, release and
+// process-name declarations as startup.go does, plus a live-process lookup that
+// reports a process of every adapter in cwd. So the cwd rescue gets every
+// chance to admit. When a test still sees a skip, a heuristic made it: no
+// process lookup was missing.
 func newStaleAdmissionDetector(tw *mockAgentWatcher, repo *mockRepo, git outbound.GitResolver,
 	discovers map[string]agent.PIDDiscoverFunc, cwd string, log *mockLogger,
 ) *services.SessionDetector {
-	return services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
-		PW: newMockProcessWatcher(), Repo: repo, Log: log, Git: git,
-		Metrics: &mockMetrics{}, Version: "test",
-		PIDDiscovers:    discovers,
-		SharedPIDOwners: agents.SharedPIDOwners(sharedPIDAgents()),
-		ReleasedPIDs:    agents.ReleasedPIDs(sharedPIDAgents()),
-		ProcessNames:    map[string]string{codex.AdapterName: codex.ProcessName, "claude-code": "claude"},
-		LiveCWDs:        liveCWDSet(cwd),
-	})
+	deps := defaultSessionDetectorDeps(newMockProcessWatcher(), repo, discovers)
+	deps.Log, deps.Git = log, git
+	deps.SharedPIDOwners = agents.SharedPIDOwners(agents.All())
+	deps.ReleasedPIDs = agents.ReleasedPIDs(agents.All())
+	deps.ProcessNames = agents.ProcessNames(agents.All())
+	deps.LiveCWDs = liveCWDSet(cwd)
+	return services.NewSessionDetector([]inbound.Watcher{tw}, deps)
 }
 
-// stampAge sets path's mtime age in the past. It runs after the holder has
-// opened the file, so "stale" is what the detector sees, whatever the open did.
-func stampAge(t *testing.T, path string, age time.Duration) {
-	t.Helper()
-	at := time.Now().Add(-age)
-	if err := os.Chtimes(path, at, at); err != nil {
-		t.Fatal(err)
-	}
-}
+// staleAge is the age every test gives a rollout it means to be stale. A
+// rollout is written with its mtime already in the past: the holder's
+// `exec N>>file` opens it for appending without writing, which leaves the mtime
+// alone: checked on darwin with stat before and after `sh -c 'exec 3>>"$1"'`
+// (session_detector_codex_rollover_test.go relies on the same order).
+func staleAge(age time.Duration) time.Time { return time.Now().Add(-age) }
 
 // awaitAdmitted polls the repo until sessionID exists, and fails with the
 // elapsed time otherwise. Each admission of a stale codex rollout runs one
@@ -120,12 +112,9 @@ func TestSessionDetector_StaleHeldCodexRootsInOneDateDirAreAdmitted(t *testing.T
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "09")
 	older := rolloutPath(day, "2026-10-09T18-55-16", threadA)
 	newer := rolloutPath(day, "2026-10-09T13-21-57", threadB)
-	now := time.Now()
-	writeRollout(t, older, now)
-	writeRollout(t, newer, now)
+	writeRollout(t, older, staleAge(10*time.Minute))
+	writeRollout(t, newer, staleAge(5*time.Minute))
 	startRolloutHolder(t, older, newer)
-	stampAge(t, older, 10*time.Minute)
-	stampAge(t, newer, 5*time.Minute)
 
 	repo := newMockRepo()
 	tw := codexWatcher()
@@ -146,9 +135,8 @@ func TestSessionDetector_StaleHeldCodexRootWithoutReadableCWDIsAdmitted(t *testi
 	cwd := rescueCWD(t)
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "07")
 	lone := rolloutPath(day, "2026-10-07T22-42-00", threadC)
-	writeRollout(t, lone, time.Now())
+	writeRollout(t, lone, staleAge(3*time.Minute))
 	startRolloutHolder(t, lone)
-	stampAge(t, lone, 3*time.Minute)
 
 	repo := newMockRepo()
 	tw := codexWatcher()
@@ -172,14 +160,10 @@ func TestSessionDetector_StaleHeldCodexSegmentIsAdmittedOnTheSegment(t *testing.
 	oldSeg := rolloutPath(filepath.Join(month, "07"), "2026-10-07T22-42-00", threadC)
 	heldSeg := filepath.Join(month, "10", "rollout-2026-10-10T17-19-15-"+threadC+"_01a12665-9cc8-7d70-9842-833231c6622e.jsonl")
 	newerRoot := rolloutPath(filepath.Join(month, "10"), "2026-10-10T18-23-35", threadD)
-	now := time.Now()
-	for _, p := range []string{oldSeg, heldSeg, newerRoot} {
-		writeRollout(t, p, now)
-	}
+	writeRollout(t, oldSeg, staleAge(40*time.Minute))
+	writeRollout(t, heldSeg, staleAge(20*time.Minute))
+	writeRollout(t, newerRoot, staleAge(10*time.Minute))
 	startRolloutHolder(t, heldSeg, newerRoot)
-	stampAge(t, oldSeg, 40*time.Minute)
-	stampAge(t, heldSeg, 20*time.Minute)
-	stampAge(t, newerRoot, 10*time.Minute)
 
 	repo := newMockRepo()
 	tw := codexWatcher()
@@ -206,12 +190,9 @@ func TestSessionDetector_StaleUnheldCodexRootIsStillSkipped(t *testing.T) {
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "09")
 	unheld := rolloutPath(day, "2026-10-09T18-55-16", threadA)
 	held := rolloutPath(day, "2026-10-09T13-21-57", threadB)
-	now := time.Now()
-	writeRollout(t, unheld, now)
-	writeRollout(t, held, now)
+	writeRollout(t, unheld, staleAge(10*time.Minute))
+	writeRollout(t, held, staleAge(5*time.Minute))
 	startRolloutHolder(t, held)
-	stampAge(t, unheld, 10*time.Minute)
-	stampAge(t, held, 5*time.Minute)
 
 	repo := newMockRepo()
 	tw := codexWatcher()
@@ -234,20 +215,17 @@ func TestSessionDetector_StaleUnheldCodexRootIsStillSkipped(t *testing.T) {
 func TestSessionDetector_StaleHeldCodexSubagentIsNotAdmitted(t *testing.T) {
 	cwd := rescueCWD(t)
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")
-	sub := rolloutPath(day, "2026-10-10T00-18-16", "01a122be-de9f-77d3-9203-48c45ff83bbc")
+	sub := rolloutPath(day, "2026-10-10T00-18-16", subThread)
 	root := rolloutPath(day, "2026-10-10T18-23-35", threadD)
-	now := time.Now()
-	writeRollout(t, sub, now)
-	writeRollout(t, root, now)
+	writeRollout(t, sub, staleAge(10*time.Minute))
+	writeRollout(t, root, staleAge(5*time.Minute))
 	startRolloutHolder(t, sub, root)
-	stampAge(t, sub, 10*time.Minute)
-	stampAge(t, root, 5*time.Minute)
 
 	repo := newMockRepo()
 	tw := codexWatcher()
 	runDetector(t, newStaleAdmissionDetector(tw, repo, &cwdGit{cwd: cwd}, codexPIDDiscoverers(), cwd, &mockLogger{}))
 
-	subEv := codexEvent("01a122be-de9f-77d3-9203-48c45ff83bbc", sub)
+	subEv := codexEvent(subThread, sub)
 	subEv.ParentSessionID = threadA
 	tw.ch <- subEv
 	tw.ch <- codexEvent(threadD, root)
@@ -293,8 +271,8 @@ func TestSessionDetector_StaleCodexRootWhoseProbeFailedIsSkippedAndLogged(t *tes
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "09")
 	older := rolloutPath(day, "2026-10-09T18-55-16", threadA)
 	newer := rolloutPath(day, "2026-10-09T13-21-57", threadB)
-	writeRollout(t, older, time.Now().Add(-10*time.Minute))
-	writeRollout(t, newer, time.Now().Add(-5*time.Minute))
+	writeRollout(t, older, staleAge(10*time.Minute))
+	writeRollout(t, newer, staleAge(5*time.Minute))
 
 	probeErr := errors.New("lsof could not run")
 	discovers := map[string]agent.PIDDiscoverFunc{
@@ -325,7 +303,7 @@ func TestSessionDetector_StaleCodexRootIsNotProbedWithoutConsent(t *testing.T) {
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "09")
 	stale := rolloutPath(day, "2026-10-09T18-55-16", threadA)
 	fresh := rolloutPath(day, "2026-10-09T13-21-57", threadB)
-	writeRollout(t, stale, time.Now().Add(-10*time.Minute))
+	writeRollout(t, stale, staleAge(10*time.Minute))
 	writeRollout(t, fresh, time.Now())
 
 	stub := newPathDiscovery(stale)
@@ -377,13 +355,13 @@ func (p *pathDiscovery) wasAsked(path string) bool {
 	return slices.Contains(p.asked, path)
 }
 
-// Lock (#2081): dsh and muse declare a SharedPIDOwner as well, and their writer
-// probe asks about the session's sibling lock file rather than the transcript
-// (dsh/pid.go, muse/pid.go). A stale session whose lock a live process holds is
-// admitted. The transcript yields no cwd, so the #576 rescue would decline it.
-// These cases pass by construction; mutation 5 of
+// Red-first (#2081): dsh and muse declare a SharedPIDOwner as well, and their
+// writer probe asks about the session's sibling lock file rather than the
+// transcript (dsh/pid.go, muse/pid.go). A stale session whose lock a live
+// process holds is admitted. The transcript yields no cwd, so the #576 rescue
+// declines it: both cases failed on the unfixed code. Mutation 5 of
 // tools/lib/codex-held-rollout-admission-mutations_test.sh, which stops asking
-// any adapter but codex, is their red evidence.
+// any adapter but codex, turns each red on its own.
 func TestSessionDetector_StaleHeldLockSessionsAreAdmitted(t *testing.T) {
 	for _, tc := range []struct {
 		adapter          string
@@ -398,15 +376,14 @@ func TestSessionDetector_StaleHeldLockSessionsAreAdmitted(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "sessions", id)
 			transcript := filepath.Join(dir, tc.transcript)
 			lock := filepath.Join(dir, tc.lock)
-			writeRollout(t, transcript, time.Now())
+			writeRollout(t, transcript, staleAge(10*time.Minute))
 			writeRollout(t, lock, time.Now())
 			startRolloutHolder(t, lock)
-			stampAge(t, transcript, 10*time.Minute)
 
 			repo := newMockRepo()
 			tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: tc.adapter})
 			runDetector(t, newStaleAdmissionDetector(tw, repo, &mockGit{},
-				agents.PIDDiscoverers(sharedPIDAgents()), cwd, &mockLogger{}))
+				agents.PIDDiscoverers(agents.All()), cwd, &mockLogger{}))
 
 			tw.ch <- agent.Event{Type: agent.EventNewSession, SessionID: id,
 				ProjectDir: filepath.Base(dir), TranscriptPath: transcript}

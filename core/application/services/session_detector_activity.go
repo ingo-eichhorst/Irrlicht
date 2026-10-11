@@ -585,15 +585,15 @@ func transcriptRolledOver(current, candidate string) bool {
 // nothing about its parent: on the dev machine on 2026-10-11, `lsof -p` of
 // the 0.162.1 managed daemon listed subagent rollout 01a122be (session_meta
 // thread_source "subagent", parent 01a12197) about 26 hours after its last
-// write, while no rollout of the parent was held. Codex, dsh and muse report
-// that parent as ev.ParentSessionID (their sources' ParentSessionIDFromPath),
-// Claude Code in the path, hence both checks. A subagent then meets
-// isLiveStaleSession unchanged.
+// write, while no rollout of the parent was held. Every adapter this probe
+// asks reports a subagent's parent as ev.ParentSessionID (codex, dsh and muse
+// declare ParentSessionIDFromPath, which fswatcher's eventFor sets on each
+// event). A subagent then meets isLiveStaleSession unchanged.
 //
 // A probe that could not run admits nothing here and is logged, so it reads
 // differently in events.log from a probe that found no writer.
 func (d *SessionDetector) staleTranscriptHolder(adapter string, ev agent.Event) int {
-	if ev.ParentSessionID != "" || deriveParentSessionID(ev.TranscriptPath) != "" {
+	if ev.ParentSessionID != "" {
 		return 0
 	}
 	pid, err := d.pidMgr.StaleTranscriptWriter(ev.SessionID, adapter, ev.CWD, ev.TranscriptPath)
