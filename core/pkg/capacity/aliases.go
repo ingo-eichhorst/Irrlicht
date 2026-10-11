@@ -140,6 +140,16 @@ var modelAliases = map[string]string{
 	// credit pool (public tracker: openai/codex#32224). Price as the bundled
 	// review model rather than treating the id as honestly $0.
 	"codex-auto-review": "gpt-5.5",
+	// Codex's "Luna Reserve" fallback quota (codeburn sync for v0.6.7). The
+	// backend picks the real model and rollouts don't record it; codeburn
+	// prices it as GPT-5.6 Luna, an upper bound since GPT-6 Luna took over
+	// the fallback. gpt-5.6-luna is in the LiteLLM snapshot (capacity cache,
+	// 2026-10-10).
+	"gpt-reserve": "gpt-5.6-luna",
+	// Short spelling of GPT-5.3 Codex Spark. The canonical is not in the
+	// LiteLLM snapshot yet (same cache check), so it resolves to a zero-value
+	// capacity and logs on miss until it lands.
+	"gpt-5.3-spark": "gpt-5.3-codex-spark",
 
 	// Moonshot Kimi family — codeburn maps three coding-focused aliases to
 	// "kimi-k2-thinking", which LiteLLM ships only under the dotted
@@ -157,6 +167,10 @@ var modelAliases = map[string]string{
 	"k2d6-agent": "kimi-k2p6",
 	"k3":         modelKimiK3,
 	"k3-agent":   modelKimiK3,
+	// Kimi Code HighSpeed (codeburn sync for v0.6.7) — same verbatim
+	// treatment: "kimi-k2.7-code-highspeed" is not in the LiteLLM snapshot
+	// (capacity cache, 2026-10-10).
+	"kimi-for-coding-highspeed": "kimi-k2.7-code-highspeed",
 
 	// Antigravity Gemini IDs resolve to preview-priced entries. The conversation
 	// store also emits ids the transcript never shows: "gemini-pro-default" (the

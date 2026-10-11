@@ -82,7 +82,17 @@ The **config inventory** that completeness checks against is the user-facing sub
 - **Out of the recipe's reach (verify by hand):** vars read via a named Go constant rather than a
   string literal — e.g. `IRRLICHT_UI_DIR`, read as `os.Getenv(envUIDir)` in
   `core/cmd/irrlichd/main.go` / `paths.go` — and vars read from Swift rather than Go, e.g.
-  `IRRLICHT_DAEMON_PORT` in `platforms/macos/Irrlicht/Managers/DaemonEndpoint.swift`.
+  `IRRLICHT_DAEMON_PORT` in `platforms/macos/Irrlicht/Managers/DaemonEndpoint.swift`. That
+  class is not small: `core/domain/config/config.go` reads its tunables through a helper
+  (`os.Getenv(key)`), `core/pkg/daemonaddr` reads `IRRLICHT_BIND_ADDR` via `EnvBindAddr`, and
+  `core/cmd/irrlichtrelay/main.go` reads its `IRRLICHT_RELAY_*` limits by name. Sweep every
+  literal instead, then drop the test helpers (`IRRLICHT_SKIP_GIT_PRIME` lives in the
+  `gittest` package, which is non-`_test.go` but test-only):
+
+```bash
+grep -rhoE '"IRRLICHT_[A-Z_]+"' core platforms/macos --include='*.go' --include='*.swift' \
+  --exclude='*_test.go' | tr -d '"' | sort -u
+```
 
 ```bash
 grep -rhoE 'os\.Getenv\("(IRRLICHT_[A-Z_]+|NO_COLOR|GT_BIN|GT_ROOT)"\)' core --include='*.go' \
@@ -178,8 +188,15 @@ bash tools/version.sh --base                                                # sa
 
 Derived user-facing numbers to validate doc claims against (axis V, V2/V5):
 - **supported-agents count** = the adapter count from recipe 1.
-- **default daemon port** `7837`, **relay port** `7839` — `core/cmd/irrlichd/main.go`,
+- **default daemon port** `7837`, **relay port** `7839` — the daemon's lives in
+  `core/pkg/daemonaddr/daemonaddr.go` (`defaultPort`, `defaultBindAddr`), not in
+  `core/cmd/irrlichd/main.go`, which names no port; the relay's is the `--addr` default in
   `core/cmd/irrlichtrelay/main.go`.
+
+```bash
+grep -nE 'defaultPort *=|defaultBindAddr *=' core/pkg/daemonaddr/daemonaddr.go
+grep -nE 'fs\.String\("addr"' core/cmd/irrlichtrelay/main.go
+```
 - **CHANGELOG head version** should match `version.json` at release time.
 
 ---

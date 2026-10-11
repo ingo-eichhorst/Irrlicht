@@ -160,7 +160,7 @@
         A <code>grep</code> that matched nothing, a failing build, a <code>find</code> hitting a protected directory &mdash; those are the agent working normally and stay <span class="badge badge-working">working</span>. A red light is about the session, not about what the agent found.
       </div>
 
-      <p>Two things clear <span class="badge badge-error">error</span>, and neither is a timeout or has a minimum hold. Your next message clears it immediately and moves the session to <span class="badge badge-working">working</span>; a completed turn takes it to <span class="badge badge-ready">ready</span>, but only when the failure was a retrying one &mdash; a terminal failure is not retired by a turn boundary. The tradeoff is accepted and named: a provider error that recovers within a few hundred milliseconds can enter and leave <span class="badge badge-error">error</span> inside one poll interval and never be seen.</p>
+      <p>Three things clear <span class="badge badge-error">error</span>, and none is a timeout or has a minimum hold. Your next message clears it immediately and moves the session to <span class="badge badge-working">working</span>; a completed turn takes it to <span class="badge badge-ready">ready</span>, but only when the failure was a retrying one &mdash; a terminal failure is not retired by a turn boundary, but it is cleared when the agent resumes the failed session on its own, as Claude Code does once a usage limit resets. The tradeoff is accepted and named: a provider error that recovers within a few hundred milliseconds can enter and leave <span class="badge badge-error">error</span> inside one poll interval and never be seen.</p>
 
       <div class="callout callout-info">
         <strong>No "cancelled" state</strong>

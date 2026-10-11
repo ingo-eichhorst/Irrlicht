@@ -12,6 +12,81 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-10-11
+
+### Every codex session on codex's shared background process shows up, and a chip flags agents that sound unsure
+
+### Highlights
+
+#### Every codex session shows up
+![Before: one codex row in ai-developer-cards; after: all three](assets/releases/v0.6.7/codex-shared-daemon-sessions.png)
+
+Since version 0.162, codex runs all of its terminal sessions inside one shared background process. Irrlicht treated them as duplicates and kept only the newest one. Now each one gets its own row, a session idle when Irrlicht restarts appears right away, and codex's background processes no longer show up as placeholder rows.
+
+**Why it matters:** three codex agents working in one project show as three rows, not one.
+
+(#2077, #2078, #2087, #2088, #2089, #2090)
+
+#### A chip for agents that sound unsure
+![Two sessions; the second shows an amber "? 31" chip after its context bar](assets/releases/v0.6.7/execution-confidence-chip.png)
+
+When an agent's recent messages are full of hedging ("I think", "might", "not sure"), its row shows a small "? 31" chip next to the context bar, in the menu bar app and the web dashboard. Hover it for the score and what it measures. Confident sessions show nothing.
+
+**Why it matters:** a session that sounds unsure about its own work is worth checking before you trust its output.
+
+(#737, #2072, #2075, #2076)
+
+#### Join a relay by pasting one URL
+![The enrollment URL field with a Join button in Settings](assets/releases/v0.6.7/relay-enrollment-url.png)
+
+Settings → Advanced Settings → Sources has a new enrollment field. Paste the `https://<relay>/enroll/XXXX-XXXX` link that `irrlichtrelay enroll new` prints and press Join. Irrlicht redeems the one-time code, stores the token in the Keychain and starts publishing to that relay.
+
+**Why it matters:** connecting a Mac to a relay no longer means copying a token and a URL by hand.
+
+(#1965, #2071)
+
+### Also in this release
+
+**Added**
+- DeepSeek prepaid-balance parsing and the rule for when a credits balance covers a session. These ship as rules and fixtures only, with no live balance poll yet (#2009, #2070)
+
+**Fixed**
+- Codex: closing a codex TUI ends its row one to two minutes later, once codex unloads the thread, instead of leaving it until codex's background process exits (#2080, #2087)
+- Codex: a long thread that continues in a new rollout file keeps its session and metrics (#2080, #2087)
+- Codex: click-to-focus goes to the session's own terminal when it is the only codex TUI in that folder. Several TUIs in one folder keep the previous behaviour (#2083, #2090)
+- Muse: concurrent sessions hosted by one `muse serve` process no longer replace each other (#2084, #2085)
+- The shared-process ownership check asks about one process instead of scanning every process on the machine (#2079, #2086)
+- Pricing: three new model aliases synced from codeburn: Codex Luna Reserve, GPT-5.3 Spark and Kimi Code HighSpeed
+
+**Security**
+- Dependencies: `golang.org/x/net` 0.60.0 and the test-only `source-map-js` 1.2.2, clearing five HTTP/2 advisories and one high npm advisory (#2092)
+
+**Changed / Docs**
+- codex and pi are now listed at beta maturity (#2068)
+- Docs: a Troubleshooting entry for hook POSTs answered with HTTP 403 when Claude Code's sandbox is enabled (#2051, #2069)
+
+### Technical appendix
+
+- **Shared app-server daemon (#2077, PR #2078).** codex ≥0.162 runs every TUI's threads inside one managed app-server daemon, which holds every live rollout open for writing. The transcript-writer probe therefore resolved every codex root to the daemon's PID, and the #169 same-PID supersession deleted all but the newest. codex now declares `codex.OwnsSharedPID` as its `Process.SharedPIDOwner`, the #1989 opt-in dsh already used: an older root keeps the shared PID while the daemon still holds its rollout open. `PIDManager` consults it on the assignment, startup-seed and periodic same-PID paths, behind the consent gate. A root left behind by `/new` is now retired by the periodic sweep after codex unloads the thread, instead of within milliseconds. The unload delay is 60 s by default, read in codex source at rust-v0.162.1 and not observed live.
+- **Muse on one `muse serve` (#2084, PR #2085).** `muse serve` holds the `.session.lock` of every session it hosts, so the same supersession hit concurrent Muse roots. `muse.OwnsSharedPID` keeps an older root while `DiscoverPID` still answers that PID for it. A root whose lock is released is retired and recorded as `transcript_removed`.
+- **Per-PID writer probe (#2079, PR #2086).** `ProcessObserver.HoldsForWriting(pid, path)` returns held, not held, or could-not-ask, and the three answers stay distinct. On darwin it runs `lsof -a -p <pid> -- <path>`, counted as the `lsof.holds_for_writing` probe kind. `TestMeasureProbeCosts` measured it at a 24.2 ms minimum, against 133.9 ms for the system-wide `lsof.writer` in the same run. On linux it reads `/proc/<pid>/fd` plus fdinfo flags. On other platforms it is always an error, never a false. The codex, dsh and muse `SharedPIDOwner` probes use it, and an lsof that prints no row is classified rather than read as "not held". Mutation fixture: `tools/lib/holds-for-writing-mutations_test.sh`.
+- **Released roots end (#2080, PR #2087).** A daemon-hosted root carries the daemon's PID and never sees `process_exited`. The new optional `agent.Process.ReleasedPID` returns true only on a definitive `(false, nil)` from `HoldsForWriting`. `PIDManager.CheckPIDLiveness` asks it once per sweep for every root with a transcript and a live PID. After two consecutive "released" answers it ends the root with its children, recorded as `transcript_removed`; any other answer resets the streak. **Segment rollover:** a paginated codex thread continues in `rollout-<ts>-<thread>_<segment>.jsonl`. For adapters declaring `ReleasedPID`, the detector now follows the session to the newer segment and drops the old tailer, so no probe asks about a segment the daemon released. A unit test proves the release path with a helper process; it was not observed against a live codex TUI. Live, 26 release probes against a live root never ended it. Mutation fixture: `tools/lib/codex-released-root-mutations_test.sh`.
+- **App-server placeholders (#2082, PR #2088).** codex declares `Process.ExcludeArgv = IsAppServerArgv`, so the process scanner mints no `proc-<pid>` row for the managed daemon, its pid-update-loop supervisor, or the VS Code extension's app-server. `app-server` given as the value of a value-taking option (`--cd app-server`, `-c app-server`, …) does not match. `isBoundToInfra` exempts adapters declaring `ReleasedPID`, so the #727 infra reaper leaves idle hosted roots alone. Within one cwd, a root bound to an excluded host retires the oldest placeholder first seen before it, or up to 6 s after it, at most one per root. Mutation fixture: `tools/lib/codex-appserver-placeholder-mutations_test.sh`.
+- **Idle roots after a restart (#2081, PR #2089).** At daemon start, an idle codex rollout older than two minutes was skipped as an orphan transcript. The #576 stale-transcript rescue reads a cwd from the transcript's last 32 KB, and a codex rollout keeps its cwd only in `session_meta`/`turn_context`. Admission now first asks the adapter's writer probe, behind observe consent and only for adapters declaring a `SharedPIDOwner` (codex, dsh, muse), whether a live process holds the stale transcript open. A held subagent transcript is not admitted. Live A/B under an isolated daemon: idle roots visible after a restart went from 0 on main to 4 with the PR. Mutation fixture: `tools/lib/codex-held-rollout-admission-mutations_test.sh`.
+- **Launcher from the lone TUI (#2083, PR #2090).** The new `agent.Process.LauncherPID` hook names the process whose env and tty feed a session's launcher; the session's PID is untouched. `codex.LauncherPID` returns a TUI only when two conditions hold. The bound PID must be a socket-listening codex app-server (`--listen` other than `stdio://` or `off`). And exactly one other codex process must run in the root's cwd with a readable argv. Otherwise it returns 0. On startup backfill, a unique answer replaces a launcher read from a different terminal; an undecided answer keeps what is stored. `IsAppServerArgv` gained the short value options (`-C -m -p -s -i -a`). A thread↔client mapping over the app-server socket was investigated and ruled out: the protocol at rust-v0.162.1 has no method that names a thread's subscribers. Mutation fixture: `tools/lib/codex-tui-launcher-mutations_test.sh`.
+- **Execution confidence (#737; PRs #2072, #2075, #2076).** `core/domain/session/execution_confidence.go` is a lexical, deterministic scorer with one tunable lexicon and per-category weights. Asking phrases weigh 0 because they already drive `waiting`. It scores each assistant message's full text at the adapters' existing full-text call sites (`ParsedEvent.Hedge`). The tailer folds samples into a recency-weighted accumulator: half-life of 5 assistant messages, reset on rotation or rewrite, and a keyed re-emitted message counted once (`ParsedEvent.HedgeKey`). The accumulator is persisted in `LedgerState`, which bumps the ledger schema from 7 to 8. `SessionMetrics` gains `execution_confidence` (0–100), `execution_confidence_low` (below 50) and a daemon-composed `execution_confidence_tooltip`. The web and macOS rows render the low verdict as a `? <score>` chip after the context bar, with the tooltip verbatim. On macOS the bar column gives up the chip's width, so the model label keeps its width at 350 pt. Mutation fixture: `tools/lib/execution-confidence-swift-mutations_test.sh`.
+- **Relay enrollment field (#1965, PR #2071).** `RelayEnrollmentField` / `RelayEnrollmentClient` redeem a pasted `https://<relay>/enroll/XXXX-XXXX` via `POST /api/v1/enroll/redeem` (#1963). They store the token under the existing `relayToken` Keychain account, set `relayServerURL` to the origin, turn on `publishToRelay` and reconfigure the running daemon live. A bare `XXXX-XXXX` code is redeemed against the configured relay when that is https/wss. A refused Keychain write throws before any setting changes. A redeem is never cancelled when the panel hides, because the relay may already have spent the code. `site/docs/elfdans.html` now leads with enrollment.
+- **DeepSeek balance (#2009, PR #2070).** `core/adapters/outbound/deepseekaccountapi` is a reviewed destination (`GET https://api.deepseek.com/user/balance`) with an allowlist parser and redactor. The parser keeps the currency, the total/granted/topped-up amounts and an observed zero. It refuses multi-currency, unlabeled, missing or non-numeric amounts. `session.BalanceCovers` never lets a credits balance cover a BYOK request, an unestablished arrangement, a different provider, or another key or account. It ships with fixtures under `replaydata/providers/deepseek/` and five mutation fixtures. It has no credential resolver, permission or poller yet.
+- **Alias sync.** Added three codeburn aliases:
+  - `gpt-reserve` → `gpt-5.6-luna`, which is priced;
+  - `gpt-5.3-spark` → `gpt-5.3-codex-spark`, not in the LiteLLM snapshot;
+  - `kimi-for-coding-highspeed` → `kimi-k2.7-code-highspeed`, not in the LiteLLM snapshot.
+
+  The two unpriced aliases resolve to a zero-value capacity and log on miss. Upstream changed five canonicals that are left for maintainer review: `codex-auto-review` → `gpt-5.6-luna`, which codeburn prices by timestamp, and the four GLM spellings → `z-ai/glm-5.2` / `z-ai/glm-5.3`. Neither GLM target is in the snapshot. Upstream also re-pointed `kimi-code`/`kimi-for-coding` → `kimi-k2.7-code`, which is not in the snapshot, so their LOCAL_OVERRIDEs stay. `gpt-4.1` is skipped as a self-mapping.
+- **Onboarding maturity (PR #2068).** codex and pi claim beta: both earn stable on the core-12 floor (`of status --summary`).
+- **Sandbox 403 (#2051, PR #2069).** With `sandbox.enabled`, Claude Code routes HTTP hooks through its sandbox network proxy, whose allowlist starts empty, so every hook POST is answered 403 before it reaches `irrlichd`. A new Troubleshooting section documents the `allowedDomains` workaround.
+- **Dependency advisories (PR #2092).** The release security gate blocked on `golang.org/x/net` v0.59.0, indirect via `grandcat/zeroconf` in `adapters/outbound/mdns` (GO-2026-6603, -6610, -6611, -6612, -6617; fixed in v0.60.0), and on the dev-only `source-map-js` 1.2.1 in both web trees (GHSA-68fv-2mgg-jv7q; fixed in 1.2.2). The lockfiles were edited by hand because `npm audit fix` on macOS pruned the optional platform bindings that Linux CI's `npm ci` needs.
+
 ## [0.6.6] — 2026-09-27
 
 ### Your Meta (Muse) subscription joins the quota header, and sessions stop getting stuck in the wrong state
@@ -2039,7 +2114,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.7
 [0.6.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.6
 [0.6.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.5
 [0.6.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.4

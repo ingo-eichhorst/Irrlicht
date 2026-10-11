@@ -139,7 +139,7 @@
       <h3>OpenAI Codex</h3>
 
       <ul>
-        <li><strong>Transcript location:</strong> <code>~/.codex/sessions/YYYY/MM/DD/&lt;session-id&gt;.jsonl</code></li>
+        <li><strong>Transcript location:</strong> <code>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;timestamp&gt;-&lt;session-id&gt;.jsonl</code></li>
         <li>Deep directory structure (recursive watching)</li>
         <li><strong>Adapter name:</strong> <code>codex</code></li>
         <li>Model detection from <code>~/.codex/config.toml</code></li>
@@ -334,8 +334,8 @@
       <h2>Session ID</h2>
 
       <ul>
-        <li><strong>File-based (UUID filename):</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>) &mdash; Claude Code, Codex, Kiro CLI</li>
-        <li><strong>File-based (path-derived):</strong> Antigravity's <code>transcript.jsonl</code> and Junie's <code>events.jsonl</code> use constant filenames, so their session IDs come from directory paths. Gemini CLI's filename is <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>, not a bare UUID</li>
+        <li><strong>File-based (UUID filename):</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>) &mdash; Claude Code, Kiro CLI. Codex reads the ID from the rollout&rsquo;s <code>session_meta</code> header, falling back to the UUID at the end of <code>rollout-&lt;timestamp&gt;-&lt;uuid&gt;.jsonl</code></li>
+        <li><strong>File-based (path-derived):</strong> Antigravity, Mistral Vibe, GitHub Copilot, Junie, Muse and DeepSeek Harness use constant (for DeepSeek Harness, generation-numbered) transcript filenames (e.g. Antigravity&rsquo;s <code>transcript.jsonl</code>, Junie&rsquo;s <code>events.jsonl</code>), so their session IDs come from directory paths. Gemini CLI's filename is <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>, not a bare UUID</li>
         <li><strong>Process-based:</strong> <code>proc-&lt;pid&gt;</code> format, used for pre-sessions before a transcript file is found</li>
       </ul>
 

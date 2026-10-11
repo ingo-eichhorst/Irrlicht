@@ -48,7 +48,8 @@ timeout/witness design.
   counts those seven suites' tests off the live bundle through XCTest's own
   `XCTestSuite(forTestCaseClass:)` — so it agrees with a run's `Executed N
   tests` by construction rather than by a source scan agreeing with a test
-  runner by luck — pins the total at **56**, and prints the whole census on
+  runner by luck — pins the total (`committedUngatedTestCount`, **58** as of
+  #2076), and prints the whole census on
   every run. It also fails if a skipped suite goes EMPTY, which is the rot this
   decision creates: a suite that runs on one machine and holds nothing runs
   nowhere, and reads exactly like one that passes everywhere. The gated
@@ -112,7 +113,7 @@ timeout/witness design.
   it any more; it is recorded because a prediction that quietly stops being
   checkable should not read as one that was checked.
   **What the decision costs, stated here rather than discovered later: a
-  contributor without a Mac cannot run these 56 tests at all, and CI will not
+  contributor without a Mac cannot run these tests at all, and CI will not
   run them either.** An outside contributor's image-snapshot change is ungraded
   until the maintainer next runs `tools/preflight.sh --only swift` or pushes
   through the pre-push hook — and CI is not merely silent about it, it is
@@ -121,7 +122,7 @@ timeout/witness design.
   touching five files in `platforms/macos/`. It touched no image-snapshot suite,
   so it is the shape rather than an instance, and no cheap mitigation is built
   here — the honest statement is that the local gate and the pre-push hook are
-  the whole of the coverage for those 56, and that a fork PR's green `swift-test`
+  the whole of the coverage for those tests, and that a fork PR's green `swift-test`
   check says nothing about them.
   **The pixels can still be collected, on demand.** `swift-snapshot-evidence`
   ran on every PR while the policy question was open and now runs on
@@ -130,7 +131,7 @@ timeout/witness design.
   contributor asking whether the residual moved, #1615 reopened), and a third
   macOS job per PR at 10× billing buys nothing while the answer stands. `gh
   workflow run "macOS (Swift)" --ref <branch>` publishes the failure images, the
-  committed references beside them and the six primitive rasters; the job still
+  committed references beside them and the seven primitive rasters; the job still
   fails loudly when it cannot COLLECT, which is the property that made its
   output trustworthy in the first place.
   Four host dependencies had to go first, and the general lesson is worth more
@@ -561,7 +562,7 @@ timeout/witness design.
   **And the `rate_limit` fixture #1663 anticipated is seeded, but NOT as a
   committed PNG.** The clock obstacle is gone; what remains is unrelated to it
   and is why the PNG form is still the wrong one — a new committed-reference
-  image suite is a coin flip on whether it is gradeable in CI at all (5 of the 7
+  image suite is a coin flip on whether it is gradeable in CI at all (7 of the 9
   existing ones are not; see the reference-host-only decision record in the
   macOS bullet above), and one that lands on the wrong side buys a check that
   runs on one Mac. The two-render-in-memory form runs everywhere, so that is

@@ -98,7 +98,8 @@
 
       <h3>Usage</h3>
 
-      <pre><code>irrlichd [flags]</code></pre>
+      <pre><code>irrlichd [flags]
+irrlichd hook-post &lt;adapter&gt;</code></pre>
 
       <h3>Flags</h3>
 
@@ -113,6 +114,14 @@
       </ul>
 
       <p>That list is exhaustive, and it is enforced. An unrecognized flag makes <code>irrlichd</code> print a message naming it to stderr and exit <code>2</code> <em>without</em> starting the daemon. Earlier versions ignored the unknown flag and started anyway, so a typo such as <code>irrlichd --recrod</code> produced a running daemon with recording silently off &mdash; a failure that looked exactly like success. None of these flags takes a value, so a <code>--flag=value</code> form is rejected too.</p>
+
+      <h3>Subcommands</h3>
+
+      <ul>
+        <li><code>hook-post &lt;adapter&gt;</code> &mdash; Reads one hook payload from stdin and POSTs it to the running daemon&rsquo;s <code>/api/v1/hooks/&lt;adapter&gt;</code>, resolving the daemon&rsquo;s address when it fires. The daemon installs it, by absolute path, into agents that can run a command but cannot POST to a URL themselves. It exits <code>0</code> on every path &mdash; daemon down, malformed stdin, an error response &mdash; so a stopped daemon never blocks a tool call. Not meant to be run by hand.</li>
+      </ul>
+
+      <p>Any other positional argument prints <code>irrlichd: unknown subcommand</code> naming it and exits <code>2</code> without starting the daemon.</p>
 
       <h3>Flag Examples</h3>
 
@@ -132,7 +141,7 @@ irrlichd --record</code></pre>
         <li>Tracks session state via deterministic state machine</li>
         <li>Serves HTTP API on <code>localhost:7837</code></li>
         <li>Serves WebSocket stream for real-time updates</li>
-        <li>Advertises via mDNS (<code>_irrlicht._tcp</code>)</li>
+        <li>Advertises via mDNS (<code>_irrlicht._tcp</code>) when <code>IRRLICHT_MDNS=1</code> is set &mdash; off by default (see <a href="configuration.html">Configuration</a>)</li>
         <li>Listens on Unix socket at <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
       </ul>
 
@@ -210,14 +219,14 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
 
       <h3>Example</h3>
 
-      <pre><code>irrlicht-focus 52d087d1</code></pre>
+      <pre><code>irrlicht-focus 52d087d1-4c2e-4b8a-9f1e-0a7d3c5e6b21</code></pre>
 
-      <p>Brings the terminal/IDE window for session <code>52d087d1</code> (see <code>irrlicht-ls</code> above for session IDs) to the foreground; exits <code>0</code> on success.</p>
+      <p>Brings the terminal/IDE window for that session to the foreground; exits <code>0</code> on success. Pass the <strong>full</strong> session ID &mdash; the daemon looks it up exactly, so the 8-character prefix <code>irrlicht-ls</code> prints in its table is not resolved. Get the full ID with <code>irrlicht-ls --id 52d087d1 --format json</code>.</p>
 
       <h3>Arguments</h3>
 
       <ul>
-        <li><code>&lt;sessionID&gt;</code> &mdash; The session ID to focus (required positional argument; no flags)</li>
+        <li><code>&lt;sessionID&gt;</code> &mdash; The full session ID to focus (required positional argument; no flags)</li>
       </ul>
 
       <h3>What It Does</h3>
@@ -247,7 +256,7 @@ irrlichtrelay token issue|list|revoke [flags]
 irrlichtrelay enroll new [flags]
 irrlichtrelay --version</code></pre>
 
-      <p>The default subcommand is <code>serve</code> (used when the first argument is a flag or absent); it runs the relay until <code>SIGINT</code>/<code>SIGTERM</code>. The <code>token</code> subcommand manages the hashed bearer-token store used by <code>--auth tokens-file</code>. The <code>enroll</code> subcommand mints one-time desktop enrollment codes. Any other subcommand exits with status <code>2</code>.</p>
+      <p>The default subcommand is <code>serve</code> (used when the first argument is a flag or absent); it runs the relay until <code>SIGINT</code>/<code>SIGTERM</code>. The <code>token</code> subcommand manages the hashed bearer-token store used by <code>--auth tokens-file</code>. The <code>enroll</code> subcommand mints one-time desktop enrollment codes. Any other subcommand exits with status <code>2</code>. <code>--version</code> / <code>-v</code> prints the version and exits only as the first argument (<code>irrlichtrelay --version</code>); <code>serve</code> defines no such flag, so after it or another <code>serve</code> flag it is rejected as unknown.</p>
 
       <h3>serve Flags</h3>
 
@@ -263,7 +272,6 @@ irrlichtrelay --version</code></pre>
         <li><code>--max-conns-per-ip</code> &mdash; Max concurrent connections per remote IP; <code>0</code> disables (meaningless behind a proxy/NAT &mdash; see <code>--max-conns</code>) (default <code>32</code>)</li>
         <li><code>--public-url</code> &mdash; Phone-reachable HTTPS origin (e.g. <code>https://relay.example.com</code>) used to build phone-pairing QR/URLs and desktop enrollment URLs (default empty &rarr; manual codes only; see <a href="elfdans.html">Phone Notifications</a>)</li>
         <li><code>--vapid-subject</code> &mdash; Contact URI signed into every Web Push JWT as the VAPID <code>sub</code> claim; must be a <code>mailto:</code> or <code>https:</code> URI, and any other set value stops the relay at startup (default: <code>$IRRLICHT_RELAY_VAPID_SUBJECT</code>, else <code>https://github.com/ingo-eichhorst/Irrlicht</code>)</li>
-        <li><code>--version</code>, <code>-v</code> &mdash; Print version and exit</li>
       </ul>
 
       <h3>serve Flag Examples</h3>
@@ -284,9 +292,13 @@ irrlichtrelay serve --max-msg-bytes 524288 --max-conns-per-ip 8</code></pre>
         <li><code>--workspace</code> &mdash; Tenant workspace the issued token is scoped to (<code>issue</code> only; empty means the default single-tenant workspace)</li>
       </ul>
 
-      <p>Example:</p>
+      <p><code>token revoke</code> takes the token's ID as a positional argument (the first column of <code>token list</code>); without one it exits with <code>token revoke: want a token id</code>. <code>token list</code> prints one tab-separated line per token: ID, creation time (RFC 3339), workspace (<code>-</code> when empty) and label.</p>
 
-      <pre><code>irrlichtrelay token issue --label "laptop" --workspace default</code></pre>
+      <p>Examples:</p>
+
+      <pre><code>irrlichtrelay token issue --label "laptop" --workspace default
+irrlichtrelay token list
+irrlichtrelay token revoke &lt;token-id&gt;   # &lt;token-id&gt; is the first column of token list</code></pre>
 
       <h3>enroll Flags</h3>
 

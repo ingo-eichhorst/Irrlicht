@@ -156,7 +156,7 @@ On the GitHub release body, wrap the appendix in `<details><summary>Technical de
 
 **`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new `## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under `## [Unreleased]`), using the three-layer template structure drafted in Step 2c: Headline → Highlights (with images) → Also (Keep-a-Changelog buckets: **Added** / **Changed** / **Fixed** / **Docs** / **Distribution** / **Security**) → Technical appendix. Reuse the release notes drafted in Step 2c — don't paraphrase them into something different.
 
-In `CHANGELOG.md` and `site/docs/changelog.html` the appendix renders inline (no `<details>` collapse — those audiences want the depth). The Highlights images use relative paths (`assets/releases/v$NEW_VERSION/<slug>.png` from the repo root for `CHANGELOG.md`; `../../assets/releases/v$NEW_VERSION/<slug>.webp` from the site root with PNG fallback for the HTML changelog — see Step 4a-img for the exact `<picture>` shape).
+In `CHANGELOG.md` and `site/docs/changelog.html` the appendix renders inline (no `<details>` collapse — those audiences want the depth). The Highlights images use relative paths (`assets/releases/v$NEW_VERSION/<slug>.png` from the repo root for `CHANGELOG.md`; `../assets/releases/v$NEW_VERSION/<slug>.webp` relative to `site/docs/changelog.html` (i.e. `site/assets/releases/…`) with PNG fallback for the HTML changelog — see the `<picture>` shape two paragraphs below, and Step 4a-img for the asset checklist).
 
 Also add the new version to the reference-link section at the bottom of `CHANGELOG.md` (`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`) and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`. This step is mandatory — never ship a release without updating `CHANGELOG.md`.
 
@@ -727,7 +727,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      || echo "OK: get-task-allow not true"
    ```
 
-   Notarize and staple the DMG after packaging (step 9):
+   Notarize and staple the DMG after packaging (the Branded DMG step below):
    ```bash
    xcrun notarytool submit .build/Irrlicht-${NEW_VERSION}.dmg \
        --keychain-profile irrlicht-notarytool --wait
@@ -787,7 +787,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    </item>
    ```
    Run `xmllint --noout site/appcast.xml` before committing. The release
-   commit in step 10 must include `site/appcast.xml` — GitHub Pages serves
+   commit in Step 7a must include `site/appcast.xml` (its `git add … site/` covers it) — GitHub Pages serves
    it from `https://irrlicht.io/appcast.xml` so existing installs see the
    new entry.
 7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
@@ -1000,10 +1000,14 @@ on `main`.
 git add version.json CHANGELOG.md site/ docs/ \
         platforms/macos/Irrlicht/Resources/Info.plist \
         tools/homebrew-tap/Casks/irrlicht.rb
-git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md 2>/dev/null || true
+# Highlight sources (Step 2b — `site/` covers only the site copies; the GitHub
+# release body links these through the tag, so a missing one 404s there) and
+# the Step 1.5 alias sync.
+git add -- "assets/releases/v$NEW_VERSION" core/pkg/capacity/aliases.go 2>/dev/null || true
+git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md events.md 2>/dev/null || true
 # ir:doc-review's fuller surface — tool/skill docs the sweep can also touch.
 git add -- tools/*/README.md tools/*/SKILL.md \
-        .claude/skills/*/SKILL.md \
+        .claude/skills/*/SKILL.md .claude/skills/*/references/*.md \
         tools/irrlicht-design-system/README.md \
         tools/irrlicht-design-system/ui_kits/*/README.md 2>/dev/null || true
 
@@ -1108,8 +1112,8 @@ if a regression surfaces).
 
 The squash creates a new commit SHA on `origin/main`, so a plain
 `git pull` reports diverged branches. Hard-reset local `main` to the
-remote — your local release commit (the pre-squash one on the deleted
-branch) is now redundant.
+remote — your local release commit (the pre-squash one on the kept
+`release/v$NEW_VERSION` branch) is now redundant.
 
 Tag the **squash-merge commit by its explicit SHA** — resolved from the
 merged PR (`gh pr view <N> --json mergeCommit`) — never `HEAD`. In the

@@ -165,7 +165,7 @@
 
       <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
 
-      <p>Two things clear it, on different conditions. Your next message clears it <em>immediately</em>, before the new turn's outcome is known &mdash; someone who has typed again has moved on, and holding the old failure against the new turn would pin the session red for the rest of its life. A completed turn also clears it, but only when the failure was a <em>retrying</em> one; a terminal failure is not retired by a turn boundary. Neither edge is a timeout and neither has a minimum hold.</p>
+      <p>Three things clear it, on different conditions. Your next message clears it <em>immediately</em>, before the new turn's outcome is known &mdash; someone who has typed again has moved on, and holding the old failure against the new turn would pin the session red for the rest of its life. A completed turn also clears it, but only when the failure was a <em>retrying</em> one; a terminal failure is not retired by a turn boundary. A terminal failure is retired instead when the agent resumes the session on its own &mdash; Claude Code&rsquo;s auto-continuation once a usage limit resets (#1858). None of the three is a timeout or has a minimum hold.</p>
 
       <p>Every producer of <span class="badge badge-error">error</span> reads a transcript. A crashed agent is <em>not</em> one of them, and that is a deliberate call: Irrlicht is not the agent&rsquo;s parent process, so it gets no exit status on any platform &mdash; a segfault, an OOM kill, a <code>kill -9</code> and a clean exit are the same observation. A version that guessed a crash from what the session looked like when the PID went away painted ordinary endings red (an ESC interrupt, a denied tool prompt), so the guess was removed. A process exit deletes the session row, whatever state the row was in &mdash; which means a genuine mid-turn crash disappears silently too. That is the accepted cost of never showing a false one.</p>
 
@@ -238,8 +238,11 @@
 
       <p>Note that the last two rows clear the failure on different conditions:
       your next message clears it outright, while a completed turn clears it only
-      when the failure was a retrying one. A terminal failure on a session nobody
-      returns to is cleared by neither &mdash; it ages out of the list instead.</p>
+      when the failure was a retrying one. A terminal failure is also cleared when
+      the agent itself resumes the session (above). One that neither you nor the
+      agent follows up stays <span class="badge badge-error">error</span> until its
+      process exits, which deletes the row; only a session with no known process
+      ages out of the list via the idle sweep.</p>
 
       <div class="diagram">                  +-----------+
   user sends  |           |  end_turn / ESC
@@ -404,6 +407,10 @@
             <td><code>critical</code></td>
             <td>Context window nearly full. Compaction is imminent or underway.</td>
           </tr>
+          <tr>
+            <td><code>unknown</code></td>
+            <td>No tokens or model seen yet, or no context window is known for the model, so no utilization can be computed.</td>
+          </tr>
         </tbody>
       </table>
 
@@ -435,17 +442,17 @@
           <tr>
             <td><code>transcript_new</code></td>
             <td>Transcript events</td>
-            <td>fswatcher/AgentWatcher detects a session's <code>.jsonl</code> transcript file appearing for the first time.</td>
+            <td>An adapter's watcher (the shared fswatcher, or OpenCode's / Hermes Agent's store watcher) reports a session's transcript appearing for the first time.</td>
           </tr>
           <tr>
             <td><code>transcript_activity</code></td>
             <td>Transcript events</td>
-            <td>fswatcher/AgentWatcher observes further writes to an already-known transcript file.</td>
+            <td>An adapter's watcher reports further writes to an already-known transcript.</td>
           </tr>
           <tr>
             <td><code>transcript_removed</code></td>
             <td>Transcript events</td>
-            <td>fswatcher/AgentWatcher sees a tracked transcript file deleted.</td>
+            <td>An adapter's watcher reports a tracked transcript removed.</td>
           </tr>
           <tr>
             <td><code>pid_discovered</code></td>
@@ -490,7 +497,7 @@
           <tr>
             <td><code>hook_received</code></td>
             <td>Agent hooks</td>
-            <td>Emitted by <code>dispatchHookActivity</code> whenever a claudecode permission hook (<code>PreToolUse</code>/<code>PostToolUse</code>/etc.) or a manual <code>/compact</code> (<code>PreCompact</code>) fires; carries the hook name in <code>HookName</code>. The sibling <code>HookData</code> field exists but is currently always empty.</td>
+            <td>Emitted by <code>dispatchHookActivity</code> whenever an agent hook drives the detector &mdash; permission/tool hooks (<code>PreToolUse</code>/<code>PostToolUse</code>/etc.), <code>Stop</code>, the <code>Notification</code> idle and permission prompts, and a manual <code>/compact</code> (<code>PreCompact</code>) &mdash; from Claude Code or any other hook-installing adapter; carries the hook name in <code>HookName</code>. The sibling <code>HookData</code> field exists but is currently always empty.</td>
           </tr>
           <tr>
             <td><code>presession_created</code></td>

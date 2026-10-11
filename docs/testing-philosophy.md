@@ -114,7 +114,7 @@ a floor. Note what that costs: quoting a wrong comment to write it up puts the
 phrase back in the tree, so the grep that would answer "does this still exist in
 code?" now hits this paragraph. Scope it past the write-up — `git grep -F
 "<phrase>" -- ':!docs/'` returns nothing for all three, while the same grep for
-`transcript tier` returns 7 files, so the empty result is a real absence and not a
+`transcript tier` returns a non-empty list (7 files when this was written), so the empty result is a real absence and not a
 broken command.
 
 **Every one was found by RUNNING or GREPPING what the comment described, never by

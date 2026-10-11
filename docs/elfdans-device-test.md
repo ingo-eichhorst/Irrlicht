@@ -1,6 +1,6 @@
 # Irrlicht Elfdans — device test plan
 
-**Status:** not yet run. Everything it grades is built (slices 1–9), so this is the gate on
+**Status:** not yet run. Everything it grades is built (slices 1–10), so this is the gate on
 calling the feature done — and it should run again before any release that touches the push path.
 **Why it exists:** every defect found in Elfdans so far was found by *reading* code. Two of them —
 a VAPID JWT with no `sub` claim, which Apple rejects, and `pushManager.subscribe()` called before
