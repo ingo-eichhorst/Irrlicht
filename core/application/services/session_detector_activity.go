@@ -177,13 +177,20 @@ func (d *SessionDetector) recentlyDeleted(ev agent.Event) bool {
 
 // admitStaleTranscript reports whether a stale transcript should still admit
 // a new session: skip orphan transcripts left by exited processes, but not
-// when a live agent process still owns the transcript's cwd (issue #576:
-// consent granted after sessions started makes "stale at first sight" the
-// canonical backfill path). A non-stale transcript always admits. Threads
-// the transcript-derived cwd into ev so EnrichNewSession and PID discovery's
-// fallback don't have to re-read the transcript for it.
+// when a live process still holds the transcript open for writing (issue
+// #2081, see staleTranscriptHolder) or a live agent process owns the
+// transcript's cwd (issue #576: consent granted after sessions started makes
+// "stale at first sight" the canonical backfill path). A non-stale transcript
+// always admits. Threads the transcript-derived cwd into ev so
+// EnrichNewSession and PID discovery's fallback don't have to re-read the
+// transcript for it.
 func (d *SessionDetector) admitStaleTranscript(id agent.Identity, ev *agent.Event) bool {
 	if !isStaleTranscript(ev.TranscriptPath) {
+		return true
+	}
+	if pid := d.staleTranscriptHolder(id.Name, *ev); pid > 0 {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+			fmt.Sprintf("stale transcript but pid %d holds it open for writing — creating session", pid))
 		return true
 	}
 	liveCWD, live := d.isLiveStaleSession(id.Name, *ev)
@@ -564,6 +571,38 @@ func transcriptRolledOver(current, candidate string) bool {
 		return os.IsNotExist(err)
 	}
 	return next.ModTime().After(prev.ModTime())
+}
+
+// staleTranscriptHolder returns the pid of a live process holding a stale
+// root transcript open for writing, or 0 (issue #2081). It runs before
+// isLiveStaleSession because that rescue's assumptions do not hold for codex:
+// rollouts sit in date directories rather than project directories, so a live
+// root need not be the newest file in its directory, and since codex ~0.162
+// one shared app-server daemon holds every live root's rollout open.
+// PIDManager.StaleTranscriptWriter decides which adapters are asked.
+//
+// A subagent transcript is never admitted here. A held subagent rollout says
+// nothing about its parent: on the dev machine on 2026-10-11, `lsof -p` of
+// the 0.162.1 managed daemon listed subagent rollout 01a122be (session_meta
+// thread_source "subagent", parent 01a12197) about 26 hours after its last
+// write, while no rollout of the parent was held. Every adapter this probe
+// asks reports a subagent's parent as ev.ParentSessionID (codex, dsh and muse
+// declare ParentSessionIDFromPath, which fswatcher's eventFor sets on each
+// event). A subagent then meets isLiveStaleSession unchanged.
+//
+// A probe that could not run admits nothing here and is logged, so it reads
+// differently in events.log from a probe that found no writer.
+func (d *SessionDetector) staleTranscriptHolder(adapter string, ev agent.Event) int {
+	if ev.ParentSessionID != "" {
+		return 0
+	}
+	pid, err := d.pidMgr.StaleTranscriptWriter(ev.SessionID, adapter, ev.CWD, ev.TranscriptPath)
+	if err != nil {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+			fmt.Sprintf("stale transcript: could not ask which process holds it open (%v) — trying the cwd rescue", err))
+		return 0
+	}
+	return pid
 }
 
 // isLiveStaleSession reports whether a stale transcript should still produce

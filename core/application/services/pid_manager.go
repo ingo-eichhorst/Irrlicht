@@ -837,6 +837,28 @@ func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
 	return alive
 }
 
+// StaleTranscriptWriter returns the pid of the live process holding
+// transcriptPath open for writing, for the stale-transcript admission of issue
+// #2081: (pid, nil) for a writer, (0, nil) when the probe found none or was
+// not asked, and an error when the probe could not run.
+//
+// Only an adapter declaring a SharedPIDOwner is asked, because its
+// PIDForSession is a writer probe: read in each such adapter's pid.go (codex,
+// dsh and muse on 2026-10-11), each one asks
+// processlifecycle.DiscoverPIDByTranscriptWriter about the transcript or its
+// session lock. Muse asks about the lock and then the transcript, so a muse
+// session nobody holds costs two probes. Every other adapter, including
+// claude-code, which writes and closes its transcript, gets (0, nil) and no
+// probe. The probe sits behind the same observe-consent gate as the shared-PID
+// probes. Its darwin cost is the lsof.writer row of the measurement quoted on
+// darwinObserver.HoldsForWriting.
+func (pm *PIDManager) StaleTranscriptWriter(sessionID, adapter, cwd, transcriptPath string) (int, error) {
+	if pm.sharedPIDOwners[adapter] == nil || pm.pidDiscovers[adapter] == nil || !pm.observeAllowed(adapter) {
+		return 0, nil
+	}
+	return pm.discoverOwner(sessionID, adapter, cwd, transcriptPath)
+}
+
 // isStartupZombie returns true for sessions whose process is provably gone.
 // Mirrors the predicate documented on CleanupZombies. liveLookup may be nil
 // (disables the DB-backed-orphan branch); callers that need the branch must
