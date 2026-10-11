@@ -36,10 +36,11 @@ import (
 // for pid; when pid is a listening app-server, one pgrep for `codex`, an argv
 // sysctl per codex process and an lsof cwd read per non-app-server codex
 // process (processlifecycle.PIDsByCWDExcludingArgv), plus one more argv
-// sysctl for a lone candidate. The PID manager asks it only where a codex
-// session's launcher is read, and never while that read is not granted: when
-// a PID is bound to a session that has no launcher yet, and at most once per
-// session at daemon startup — never on the periodic liveness sweep.
+// sysctl for a lone candidate. The PID manager asks it only while a codex
+// session has no launcher yet, and never while the launcher read is not
+// granted: when a PID is bound to such a session, and at daemon startup for
+// one — never on the periodic liveness sweep, and never again for a session
+// once its launcher is set.
 //
 // What it cannot tell apart: a codex process of another user, or one whose
 // cwd cannot be read for any other reason, makes the scan fail

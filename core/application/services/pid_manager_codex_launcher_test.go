@@ -38,9 +38,6 @@ type codexLauncherFixture struct {
 	// launcherDenied withholds the launcher-read grant the hook's answer
 	// feeds (the reader itself returns nil then, as startup.go's does).
 	launcherDenied bool
-	// hostUnknown makes the TUI's read report that its host could not be
-	// determined (LauncherEnvReader's hostKnown false).
-	hostUnknown bool
 }
 
 func newCodexLauncherFixture(t *testing.T) *codexLauncherFixture {
@@ -89,7 +86,7 @@ func (f *codexLauncherFixture) pidManager() *services.PIDManager {
 		f.reads = append(f.reads, pid)
 		if l := f.launchers[pid]; l != nil {
 			cp := *l
-			return &cp, !(f.hostUnknown && pid == f.tui)
+			return &cp, true
 		}
 		return nil, true
 	})
@@ -232,9 +229,14 @@ func TestHandlePIDAssigned_LauncherPIDHookIgnoredForOtherAdapters(t *testing.T) 
 	}
 }
 
-// The startup backfill re-evaluates a hosted root's attribution (#2083): a
-// unique answer is applied, an undecidable one keeps what is stored.
-func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
+// The startup backfill leaves a hosted root's launcher as it is (#2083):
+// nothing records whether it was read from the daemon or from a TUI the hook
+// named, and every rule the review of PR #2090 tried that inferred it from the
+// fields had a counterexample. So nothing is read for such a root — no daemon
+// merge, no move, no fill — while a hosted root with no launcher yet is
+// captured through the hook, and a root not bound to a session host keeps
+// today's backfill from its own PID.
+func TestSeedPIDs_HostedCodexRootKeepsItsLauncher(t *testing.T) {
 	zed := session.Launcher{TermProgram: "zed"} // the daemon's: no tty
 	ghostty := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys007"}
 	// A kitty launcher missing its kitty fields is one the ordinary backfill
@@ -243,138 +245,51 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 	kittyPartial := session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013"}
 	kittyTUI := session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013", KittyPID: 4242}
 	kittyDaemon := session.Launcher{TermProgram: "kitty", KittyPID: 1111}
-	// The daemon spawned by a TUI in a plain ghostty tab, and a TUI in a
-	// tmux pane shown in ghostty.
-	ghosttyBare := session.Launcher{TermProgram: "ghostty"}
-	ghosttyTmux := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys009", TmuxPane: "%3", TmuxSocket: "/private/tmp/tmux-501/default"}
-	// A daemon whose spawner sat in a herdr pane, a tmux pane, an iTerm tab
-	// or a Terminal.app tab, against TUIs that set different fields from it.
-	ghosttyTTY9 := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys009"}
-	daemonHerdr := session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/cfg/herdr/herdr.sock", TermProgram: "ghostty"}
-	daemonTmux := session.Launcher{TmuxPane: "%1", TmuxSocket: "/private/tmp/tmux-501/default", TermProgram: "ghostty"}
-	daemonITerm := session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:AAA"}
-	daemonTerminal := session.Launcher{TermProgram: "Apple_Terminal", TermSessionID: "AAA"}
-	tmuxUnresolved := session.Launcher{TmuxPane: "%3", TmuxSocket: "/private/tmp/tmux-501/default", TTY: "/dev/ttys009"}
-	obsidian := session.Launcher{HostBundleID: "md.obsidian", TTY: "/dev/ttys009"}
-	iTermTTY1 := session.Launcher{TermProgram: "iTerm.app", TTY: "/dev/ttys001"}
 	for _, tc := range []struct {
 		name                string
-		stored              session.Launcher
+		stored              *session.Launcher // nil: no launcher yet
 		daemonRead, tuiRead session.Launcher
 		unique              bool     // the hook names the TUI; else it cannot decide
 		boundArgv           []string // the bound PID's argv; nil keeps the managed daemon's
+		noConsent           bool     // codex's observe consent is withheld
 		want                session.Launcher
-		noReads             bool // the launcher reader must not be asked at all
-		noConsent           bool // codex's observe consent is withheld
-		hostUnknown         bool // the TUI's read could not determine its host
+		noReads             bool // the launcher reader and the hook must not be asked
 	}{
 		{
-			// A launcher captured from the daemon (before this change, or
-			// while the cwd was ambiguous) moves to the TUI now alone there.
-			name: "daemon launcher, lone TUI", stored: zed,
-			daemonRead: zed, tuiRead: ghostty, unique: true, want: ghostty,
+			// A launcher captured from the daemon stays, even with a lone
+			// TUI in the cwd now.
+			name: "daemon launcher, lone TUI", stored: &zed,
+			daemonRead: zed, tuiRead: ghostty, unique: true, want: zed, noReads: true,
 		},
 		{
 			// The last unique attribution survives a restart into an
 			// ambiguous cwd, and nothing is merged in from the daemon.
-			name: "TUI launcher, ambiguous cwd", stored: kittyPartial,
+			name: "TUI launcher, ambiguous cwd", stored: &kittyPartial,
 			daemonRead: kittyDaemon, tuiRead: kittyTUI, want: kittyPartial, noReads: true,
 		},
 		{
-			// A daemon attribution in a still-ambiguous cwd stays put.
-			name: "daemon launcher, ambiguous cwd", stored: zed,
-			daemonRead: zed, tuiRead: ghostty, want: zed, noReads: true,
+			name: "TUI launcher, its TUI alone again", stored: &kittyPartial,
+			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true, want: kittyPartial, noReads: true,
 		},
 		{
-			// A launcher that is not the daemon's is the last unique
-			// attribution, and the re-evaluation leaves it as it is, even
-			// when its TUI is alone again (fourth review of #2083).
-			name: "TUI launcher, its TUI alone again", stored: kittyPartial,
-			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true, want: kittyPartial,
+			// A hosted root with no launcher yet is captured through the hook.
+			name: "no launcher yet, lone TUI", daemonRead: zed, tuiRead: ghostty, unique: true, want: ghostty,
 		},
 		{
-			// A re-read of the same TUI whose ancestry walk was cut short
-			// (darwin's 2s `ps` ceiling, reported with hostKnown true) has
-			// lost its host; the stored launcher keeps it.
-			name: "TUI launcher, its TUI re-read without its host", stored: obsidian,
-			daemonRead: zed, tuiRead: session.Launcher{TTY: "/dev/ttys009"}, unique: true, want: obsidian,
-		},
-		{
-			name: "kitty TUI launcher, its TUI re-read without its terminal", stored: kittyTUI,
-			daemonRead: kittyDaemon, unique: true, want: kittyTUI,
-			tuiRead: session.Launcher{TTY: "/dev/ttys013", KittyPID: 4242},
-		},
-		{
-			// A tty read that came back empty (darwin's `ps` killed by its
-			// 2s ceiling) does not erase the same TUI's stored tty (review
-			// of #2083).
-			name:   "TUI launcher, same TUI read without a tty",
-			stored: ghostty, daemonRead: zed, unique: true, want: ghostty,
-			tuiRead: session.Launcher{TermProgram: "ghostty"},
-		},
-		{
-			// The lone TUI's whole launcher is taken, pane address included,
-			// not only the fields the ordinary backfill asks for (second
-			// review of #2083).
-			name: "daemon launcher, lone TUI in a tmux pane", stored: ghosttyBare,
-			daemonRead: ghosttyBare, tuiRead: ghosttyTmux, unique: true, want: ghosttyTmux,
-		},
-		{
-			// The daemon inherits its spawner's herdr pane; the lone TUI in a
-			// plain tab must not keep it (third review of #2083).
-			name: "daemon launcher in a herdr pane, lone TUI in a tab", stored: daemonHerdr,
-			daemonRead: daemonHerdr, tuiRead: ghosttyTTY9, unique: true, want: ghosttyTTY9,
-		},
-		{
-			name: "daemon launcher in a tmux pane, lone TUI in a tab", stored: daemonTmux,
-			daemonRead: daemonTmux, tuiRead: ghosttyTTY9, unique: true, want: ghosttyTTY9,
-		},
-		{
-			name: "daemon launcher in iTerm, lone TUI in tmux", stored: daemonITerm,
-			daemonRead: daemonITerm, tuiRead: tmuxUnresolved, unique: true, want: tmuxUnresolved,
-		},
-		{
-			name: "daemon launcher in Terminal.app, lone TUI in Obsidian", stored: daemonTerminal,
-			daemonRead: daemonTerminal, tuiRead: obsidian, unique: true, want: obsidian,
-		},
-		{
-			// A TUI attribution is not moved to another TUI that is now
-			// alone in the cwd: the stored one is the last unique answer.
-			name: "other TUI launcher, another TUI alone", stored: iTermTTY1,
-			daemonRead: zed, tuiRead: session.Launcher{TermProgram: "ghostty"}, unique: true,
-			want: iTermTTY1,
-		},
-		{
-			// A daemon read that no longer equals the stored launcher (one of
-			// its own probes answered differently) leaves it in place.
-			name: "daemon launcher, daemon re-read differently", stored: zed,
-			daemonRead: session.Launcher{TermProgram: "zed", HostBundleID: "dev.zed.Zed"},
-			tuiRead:    ghostty, unique: true, want: zed,
-		},
-		{
-			// A read that could not determine its host moves nothing (#1485).
-			name: "host unknown on the TUI read", stored: zed, hostUnknown: true,
-			daemonRead: zed, tuiRead: ghostty, unique: true, want: zed,
-		},
-		{
-			// Linux reads no controlling tty at all, so neither launcher has
-			// one; the terminal program alone tells the TUI from the daemon.
-			name: "no tty on either read", stored: zed, daemonRead: zed, unique: true,
-			tuiRead: session.Launcher{TermProgram: "ghostty"},
-			want:    session.Launcher{TermProgram: "ghostty"},
+			name: "no launcher yet, ambiguous cwd", daemonRead: zed, tuiRead: ghostty, want: zed,
 		},
 		{
 			// A root not bound to a session host keeps today's backfill from
 			// its own PID, whatever the hook would say.
-			name: "root bound to a TUI", stored: kittyPartial, boundArgv: codexTUIArgv,
+			name: "root bound to a TUI", stored: &kittyPartial, boundArgv: codexTUIArgv,
 			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true,
 			want: session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013", KittyPID: 1111},
 		},
 		{
-			// Without codex's observe consent neither the bound PID's argv nor
-			// the TUIs are read, so the root gets today's backfill from its
-			// own PID, which only the launcher consent gates.
-			name: "observe consent withheld", stored: kittyPartial, noConsent: true,
+			// Without codex's observe consent the bound PID's argv is not
+			// read, so the root gets today's backfill from its own PID, which
+			// only the launcher consent gates.
+			name: "observe consent withheld", stored: &kittyPartial, noConsent: true,
 			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true,
 			want: session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013", KittyPID: 1111},
 		},
@@ -392,9 +307,12 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			if tc.noConsent {
 				f.consent = func(string) bool { return false }
 			}
-			f.hostUnknown = tc.hostUnknown
-			stored := tc.stored
-			s := f.boundRoot("codex-root", &stored)
+			var stored *session.Launcher
+			if tc.stored != nil {
+				cp := *tc.stored
+				stored = &cp
+			}
+			s := f.boundRoot("codex-root", stored)
 			pm := f.pidManager()
 
 			pm.SeedPIDs([]*session.SessionState{s})
@@ -402,8 +320,8 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			if got := launcherOf(f.state("codex-root")); got != tc.want {
 				t.Errorf("launcher = %+v, want %+v", got, tc.want)
 			}
-			if tc.noReads && len(f.reads) != 0 {
-				t.Errorf("launcher reader asked about pids %v, want no read", f.reads)
+			if tc.noReads && (len(f.reads) != 0 || f.hookCalls != 0) {
+				t.Errorf("launcher reader asked about pids %v and hook ran %d times, want neither", f.reads, f.hookCalls)
 			}
 			if tc.noConsent && f.hookCalls != 0 {
 				t.Errorf("hook ran %d times with observe consent withheld", f.hookCalls)

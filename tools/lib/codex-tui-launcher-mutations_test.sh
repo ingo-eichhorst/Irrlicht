@@ -29,33 +29,24 @@
 #   9. the startup backfill treats a hosted root like any other → the
 #      ambiguous-cwd row goes red: the daemon's fields are merged into the
 #      last unique attribution.
-#  10. an undecided hook falls through to a read of the daemon → the same row
-#      goes red.
-#  11. the re-evaluation never takes the named TUI's read → the lone-TUI row
-#      goes red: a launcher captured from the daemon never moves.
-#  12. the hosted check reads argv without observe consent → the backfill's
+#  10. the hosted check reads argv without observe consent → the backfill's
 #      consent row goes red.
-#  13. agents.LauncherPIDs projects no adapter → the opt-in pin goes red.
-#  14. codex declares no LauncherPID → the declaration test goes red.
-#  15. PIDsByCWDExcludingArgv skips a candidate whose cwd it cannot read →
+#  11. agents.LauncherPIDs projects no adapter → the opt-in pin goes red.
+#  12. codex declares no LauncherPID → the declaration test goes red.
+#  13. PIDsByCWDExcludingArgv skips a candidate whose cwd it cannot read →
 #      its unreadable-cwd row goes red: a skipped TUI reads as one fewer.
-#  16. PIDsByCWDExcludingArgv keeps the daemon's own PID → its every-match row
+#  14. PIDsByCWDExcludingArgv keeps the daemon's own PID → its every-match row
 #      goes red.
-#  17. PIDsByCWDExcludingArgv compares the cwd as given → its every-match row
+#  15. PIDsByCWDExcludingArgv compares the cwd as given → its every-match row
 #      goes red: a symlinked spelling of the cwd matches nothing.
-#  18. codex's scan asks for the wrong process name → the process-table test
+#  16. codex's scan asks for the wrong process name → the process-table test
 #      goes red: the hook finds no TUI.
-#  19. codex's scan keeps app-servers → the process-table test goes red: the
+#  17. codex's scan keeps app-servers → the process-table test goes red: the
 #      daemon and its supervisor share the TUI's cwd and make it ambiguous.
-#  20. the hook runs while the launcher read is denied → the read-gate lock
+#  18. the hook runs while the launcher read is denied → the read-gate lock
 #      goes red.
-#  21. any stored launcher moves, not only the daemon's → the seed row for a
-#      TUI re-read without its host goes red: the last unique attribution is
-#      replaced by a degraded read of it.
-#  22. the pane refresh reads a hosted root → the skip test goes red: every
+#  19. the pane refresh reads a hosted root → the skip test goes red: every
 #      sweep reads the daemon (and would pay the hook's scan to do better).
-#  23. a TUI read whose host is unknown is applied → the host-unknown seed
-#      row goes red (#1485).
 #
 # Not covered: the startup.go lines that pass agents.LauncherPIDs to
 # SetLauncherPIDs and the launcher grant to SetLauncherReadGate are reached by
@@ -152,7 +143,7 @@ PM_FILE="core/application/services/pid_manager.go"
 LAUNCHER_FILE="core/adapters/inbound/agents/codex/launcher.go"
 DISCOVERY_FILE="core/adapters/inbound/agents/processlifecycle/discovery.go"
 RULE='^TestLauncherPID$'
-SEED='^TestSeedPIDs_HostedCodexRootLauncherReevaluation$'
+SEED='^TestSeedPIDs_HostedCodexRootKeepsItsLauncher$'
 SCAN='^TestPIDsByCWDExcludingArgv$'
 UNIQUE_LINE='if err != nil || len(tuis) != 1 {'
 
@@ -236,37 +227,17 @@ assert_go_test_goes_red \
   '^TestHandlePIDAssigned_LauncherPIDHookIsConsentGated$' \
   "hook ran 1 times with observe consent withheld"
 
-# ── 9. the backfill treats a hosted root like any other ──
+# ── 9. the backfill reads a hosted root's daemon ──
 assert_go_test_goes_red \
-  "the startup backfill without the hosted-root re-evaluation" \
+  "the startup backfill reading a hosted root's daemon" \
   "$PM_FILE" \
   'if pm.boundToSessionHost(state) {' \
   'if false && pm.boundToSessionHost(state) {' \
   "$SERVICES" \
   "$SEED/^TUI_launcher,_ambiguous_cwd\$" \
-  "want no read"
+  "want neither"
 
-# ── 10. an undecided hook reads the daemon ──
-assert_go_test_goes_red \
-  "the hosted re-evaluation reading the daemon when undecided" \
-  "$PM_FILE" \
-  $'\tsrc := pm.launcherSourcePID(state, state.PID)\n\tif src == state.PID {\n\t\treturn\n\t}\n' \
-  $'\tsrc := pm.launcherSourcePID(state, state.PID)\n' \
-  "$SERVICES" \
-  "$SEED/^TUI_launcher,_ambiguous_cwd\$" \
-  "want no read"
-
-# ── 11. the TUI's read never taken ──
-assert_go_test_goes_red \
-  "the hosted re-evaluation never taking the named TUI's read" \
-  "$PM_FILE" \
-  $'\tstate.Launcher = fresh\n\tpm.touchAndSave(state)\n' \
-  $'\tpm.touchAndSave(state)\n' \
-  "$SERVICES" \
-  "$SEED/^daemon_launcher,_lone_TUI\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/daemon_launcher,_lone_TUI"
-
-# ── 12. the hosted check without observe consent ──
+# ── 10. the hosted check without observe consent ──
 assert_go_test_goes_red \
   "the hosted-root check reading argv without observe consent" \
   "$PM_FILE" \
@@ -274,9 +245,9 @@ assert_go_test_goes_red \
   'if pm.hostReadArgv == nil {' \
   "$SERVICES" \
   "$SEED/^observe_consent_withheld\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/observe_consent_withheld"
+  "--- FAIL: TestSeedPIDs_HostedCodexRootKeepsItsLauncher/observe_consent_withheld"
 
-# ── 13. the projection drops every adapter ──
+# ── 11. the projection drops every adapter ──
 assert_go_test_goes_red \
   "agents.LauncherPIDs projecting no adapter" \
   "core/adapters/inbound/agents/maps.go" \
@@ -286,7 +257,7 @@ assert_go_test_goes_red \
   '^TestLauncherPIDs_OptInSet$' \
   "launcher PIDs = [], want [codex]"
 
-# ── 14. codex declares no LauncherPID ──
+# ── 12. codex declares no LauncherPID ──
 assert_go_test_goes_red \
   "codex without a LauncherPID declaration" \
   "core/adapters/inbound/agents/codex/agent.go" \
@@ -296,7 +267,7 @@ assert_go_test_goes_red \
   '^TestAgentDeclaresLauncherPID$' \
   "codex declares no Process.LauncherPID"
 
-# ── 15. an unreadable cwd skipped ──
+# ── 13. an unreadable cwd skipped ──
 assert_go_test_goes_red \
   "PIDsByCWDExcludingArgv skipping an unreadable cwd" \
   "$DISCOVERY_FILE" \
@@ -306,7 +277,7 @@ assert_go_test_goes_red \
   "$SCAN/^unreadable_cwd\$" \
   "--- FAIL: TestPIDsByCWDExcludingArgv/unreadable_cwd"
 
-# ── 16. the daemon's own PID kept ──
+# ── 14. the daemon's own PID kept ──
 assert_go_test_goes_red \
   "PIDsByCWDExcludingArgv keeping the daemon's own PID" \
   "$DISCOVERY_FILE" \
@@ -316,7 +287,7 @@ assert_go_test_goes_red \
   "$SCAN/^every_match\$" \
   "--- FAIL: TestPIDsByCWDExcludingArgv/every_match"
 
-# ── 17. the cwd compared as given ──
+# ── 15. the cwd compared as given ──
 assert_go_test_goes_red \
   "PIDsByCWDExcludingArgv comparing a symlinked cwd as given" \
   "$DISCOVERY_FILE" \
@@ -326,7 +297,7 @@ assert_go_test_goes_red \
   "$SCAN/^every_match\$" \
   "--- FAIL: TestPIDsByCWDExcludingArgv/every_match"
 
-# ── 18. codex's scan asks for the wrong process name ──
+# ── 16. codex's scan asks for the wrong process name ──
 assert_go_test_goes_red \
   "codex's TUI scan looking for another process name" \
   "$LAUNCHER_FILE" \
@@ -336,7 +307,7 @@ assert_go_test_goes_red \
   '^TestCodexLauncherPIDReadsTheProcessTable$' \
   "want the lone TUI"
 
-# ── 19. codex's scan keeps app-servers ──
+# ── 17. codex's scan keeps app-servers ──
 assert_go_test_goes_red \
   "codex's TUI scan counting app-servers" \
   "$LAUNCHER_FILE" \
@@ -346,7 +317,7 @@ assert_go_test_goes_red \
   '^TestCodexLauncherPIDReadsTheProcessTable$' \
   "want the lone TUI"
 
-# ── 20. the hook while the launcher read is denied ──
+# ── 18. the hook while the launcher read is denied ──
 assert_go_test_goes_red \
   "the LauncherPID hook ignoring the launcher-read gate" \
   "$PM_FILE" \
@@ -356,17 +327,7 @@ assert_go_test_goes_red \
   '^TestLauncherPIDHookSkippedWhileLauncherReadIsDenied$' \
   "while the launcher read was denied"
 
-# ── 21. any stored launcher moves ──
-assert_go_test_goes_red \
-  "the hosted re-evaluation moving a launcher that is not the daemon's" \
-  "$PM_FILE" \
-  'if host == nil || *host != *state.Launcher {' \
-  'if host == nil {' \
-  "$SERVICES" \
-  "$SEED/^TUI_launcher,_its_TUI_re-read_without_its_host\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_its_TUI_re-read_without_its_host"
-
-# ── 22. the pane refresh reads a hosted root ──
+# ── 19. the pane refresh reads a hosted root ──
 assert_go_test_goes_red \
   "the pane refresh reading a hosted root's daemon" \
   "$PM_FILE" \
@@ -375,16 +336,6 @@ assert_go_test_goes_red \
   "$SERVICES" \
   '^TestCheckPIDLiveness_HostedCodexRootIsSkippedByThePaneRefresh$' \
   "for a hosted root, want neither"
-
-# ── 23. a TUI read with an unknown host applied ──
-assert_go_test_goes_red \
-  "the hosted re-evaluation applying a read whose host is unknown" \
-  "$PM_FILE" \
-  'if fresh == nil || !hostKnown {' \
-  'if _ = hostKnown; fresh == nil {' \
-  "$SERVICES" \
-  "$SEED/^host_unknown_on_the_TUI_read\$" \
-  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/host_unknown_on_the_TUI_read"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-tui-launcher-mutations: $fails FAILED"

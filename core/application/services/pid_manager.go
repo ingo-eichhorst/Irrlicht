@@ -483,13 +483,14 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 // sharedPIDOwners and releasedPIDs, and only while the launcher read it feeds
 // is granted.
 //
-// Its callers are captureLauncher and backfillHostedLauncher, so it runs on
-// three paths, each where the launcher read it feeds already runs. Both bind
-// paths hold assignMu: assignPIDLocked takes it directly, and the detector's
-// applyPendingPID runs inside processActivityLocked, which both of its callers
-// wrap in WithSessionStateLock (read in session_detector_activity.go). The
-// third is the startup seed (backfillLauncher). Its cost is the adapter's to
-// bound; codex's is described on codex.LauncherPID.
+// Its caller is captureLauncher, so it runs on three paths, each where the
+// launcher read it feeds already runs and only while the session has no
+// launcher yet. Both bind paths hold assignMu: assignPIDLocked takes it
+// directly, and the detector's applyPendingPID runs inside
+// processActivityLocked, which both of its callers wrap in
+// WithSessionStateLock (read in session_detector_activity.go). The third is
+// the startup seed (backfillLauncher). Its cost is the adapter's to bound;
+// codex's is described on codex.LauncherPID.
 // refreshMultiplexerHosts skips a hosted root rather than ask it on every
 // sweep, and AdoptSelfReportedHerdrPane does not consult it: only pi's hooks
 // send that report, and pi declares no LauncherPID.
@@ -509,8 +510,8 @@ func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) in
 
 // boundToSessionHost reports whether state is bound to its adapter's session
 // host (Process.SessionHostArgv) and that adapter declares a LauncherPID —
-// the roots whose launcher is the hook's to attribute (#2083). Behind observe
-// consent, because it reads the bound PID's argv.
+// the roots whose launcher must never be read from their own PID once set
+// (#2083). Behind observe consent, because it reads the bound PID's argv.
 func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 	isHost := pm.sessionHosts[state.Adapter]
 	if isHost == nil || pm.launcherPIDs[state.Adapter] == nil {
@@ -520,45 +521,6 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 		return false
 	}
 	return isHost(pm.hostReadArgv(state.PID))
-}
-
-// backfillHostedLauncher is backfillLauncher's re-evaluation for a root bound
-// to its adapter's session host (#2083). Its stored launcher came either from
-// the host — whose env, pane address included, is that of whichever client
-// first spawned it: captured before #2083, or while the root's cwd was
-// ambiguous — or from a client the hook named at an earlier read.
-//
-// Only a launcher that is the host's moves, and it moves to the named
-// client's fresh read whole: a field merge would keep the spawning client's
-// fields beside the named one's, and the result would describe neither. The
-// stored launcher counts as the host's when it equals a fresh read of the
-// host. Field shapes alone cannot tell "the host's launcher, against a client
-// that sets fewer fields" from "this client's launcher, against a degraded
-// re-read of it" — darwin's tty and ancestry reads come back empty when their
-// `ps` is killed by the 2s ceiling — so a launcher that is not the host's,
-// the last unique attribution, is kept as it is. A read of the host that
-// differs only because one of its own probes timed out leaves the host's
-// launcher in place too; the next startup asks again.
-//
-// A client read whose host could not be determined (hostKnown false) changes
-// nothing, as the refresh paths decline to clear host fields on it (#1485).
-// An undecided hook keeps what is stored and reads nothing, so an ambiguous
-// cwd never brings the host's fields back.
-func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
-	src := pm.launcherSourcePID(state, state.PID)
-	if src == state.PID {
-		return
-	}
-	host, _ := pm.launcherEnv(state.PID)
-	if host == nil || *host != *state.Launcher {
-		return
-	}
-	fresh, hostKnown := pm.launcherEnv(src)
-	if fresh == nil || !hostKnown {
-		return
-	}
-	state.Launcher = fresh
-	pm.touchAndSave(state)
 }
 
 // captureRoute invokes the route reader if one is installed and the session
@@ -2174,8 +2136,14 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //     the seed and the sweep cannot drift apart on what a refresh means.
 //
 // A root bound to its adapter's session host whose adapter declares a
-// LauncherPID is re-evaluated by backfillHostedLauncher instead (#2083): its
-// own PID is the host's, whose env is not this session's terminal.
+// LauncherPID keeps a launcher it already has (#2083): its own PID is the
+// host's, whose env is not this session's terminal, so nothing is merged in
+// from it. Nor is the stored launcher re-attributed: nothing records whether
+// it was read from the host or from a client the hook named, and the review of
+// PR #2090 found a counterexample for each rule tried that inferred it from
+// the fields. A root with no launcher yet is captured above, through
+// the hook. So a hosted root whose launcher came from the host — captured
+// before #2083, or while its cwd was ambiguous — keeps it for its life.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -2188,7 +2156,6 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 		return
 	}
 	if pm.boundToSessionHost(state) {
-		pm.backfillHostedLauncher(state)
 		return
 	}
 	needs := launcherBackfillNeedsFor(state.Launcher)
@@ -2477,10 +2444,10 @@ func (pm *PIDManager) refreshMultiplexerHosts(snaps []livenessSnapshot) {
 		// A root bound to its adapter's session host is skipped (#2083): its
 		// PID is the host's, whose env carries whichever pane the client that
 		// spawned the host was in, and asking the LauncherPID hook for the
-		// right process costs a process scan with no bound on every sweep. A
-		// hosted pane root's client reattach is picked up at the next daemon
-		// startup instead (backfillHostedLauncher). The check is one argv
-		// read, and only for a pane launcher of an adapter declaring the hook.
+		// right process costs a process scan with no bound on every sweep. So
+		// a hosted pane root's client reattach is not followed for that
+		// root's life. The check is one argv read, and only for a pane
+		// launcher of an adapter declaring the hook.
 		if pm.boundToSessionHost(snap.state) {
 			continue
 		}
