@@ -953,6 +953,9 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		// Read a hosted codex root's launcher from its TUI when that TUI is
 		// the only one in the root's cwd, rather than from the daemon (#2083).
 		detector.SetLauncherPIDs(agents.LauncherPIDs(allAgents))
+		detector.SetLauncherReadGate(func() bool {
+			return permService.Granted(processlifecycle.LauncherName, processlifecycle.PermissionKeyLauncherEnv)
+		})
 		// Reject a candidate PID launched by something other than a known
 		// terminal or IDE before a session is ever created — e.g. CodexBar
 		// keeping an Antigravity `agy` process running in the background for

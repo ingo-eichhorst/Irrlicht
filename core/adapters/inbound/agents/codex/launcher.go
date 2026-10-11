@@ -37,8 +37,10 @@ import (
 // sysctl per codex process and an lsof cwd read per non-app-server codex
 // process (processlifecycle.PIDsByCWDExcludingArgv), plus one more argv
 // sysctl for a lone candidate. The PID manager asks it only where a codex
-// session's launcher is read: when a PID is bound to a session that has no
-// launcher yet, and at most once per session at daemon startup.
+// session's launcher is read, and never while that read is not granted: when
+// a PID is bound to a session that has no launcher yet, at most once per
+// session at daemon startup, and once per liveness sweep for each hosted root
+// whose launcher is a herdr or tmux pane (memoized per sweep by cwd and PID).
 func LauncherPID(cwd, transcriptPath string, pid int) int {
 	return launcherPID(cwd, pid, processlifecycle.ReadArgv, tuisIn)
 }
@@ -51,7 +53,10 @@ func tuisIn(cwd string) ([]int, error) {
 // launcherPID is LauncherPID with its process reads injected, so the rule can
 // be tested against a fake process table.
 func launcherPID(cwd string, pid int, readArgv func(int) []string, tuisIn func(cwd string) ([]int, error)) int {
-	if pid <= 0 || cwd == "" || !listensForClients(readArgv(pid)) {
+	if pid <= 0 || cwd == "" {
+		return 0
+	}
+	if !listensForClients(readArgv(pid)) {
 		return 0
 	}
 	tuis, err := tuisIn(cwd)

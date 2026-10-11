@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -244,6 +245,9 @@ type PIDManager struct {
 	// launcher instead (#2083). Nil disables it; installed once at startup
 	// via SetLauncherPIDs. Consulted only behind observe consent.
 	launcherPIDs map[string]agent.LauncherPIDFunc
+	// launcherReadAllowed reports whether the launcher read the hook's answer
+	// feeds is granted. Nil allows it; installed via SetLauncherReadGate.
+	launcherReadAllowed func() bool
 	// hostClaims holds the hosted roots that have already retired a
 	// placeholder, so a root retires at most one however many sweeps see it;
 	// see hostedPlaceholderVictims. hostClaimMu guards it for the same reason
@@ -388,6 +392,14 @@ func (pm *PIDManager) SetLauncherPIDs(hooks map[string]agent.LauncherPIDFunc) {
 	pm.launcherPIDs = hooks
 }
 
+// SetLauncherReadGate installs the check that the launcher read is granted
+// (#2083): the LauncherPID hook's answer feeds only that read, so while it is
+// not granted the hook's process scan is skipped. Nil (tests, demo mode)
+// allows it. Checked per call, so a grant takes effect on the next read.
+func (pm *PIDManager) SetLauncherReadGate(fn func() bool) {
+	pm.launcherReadAllowed = fn
+}
+
 // SetHostGate installs the seam session admission uses to reject a candidate
 // PID launched by something other than a known terminal or IDE (issue #784).
 // requireKnownHost maps adapter name → Process.RequireKnownHost; isKnownHost
@@ -469,14 +481,21 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 // while state is bound to pid: its adapter's Process.LauncherPID answer when
 // that names a process (#2083), else pid. The hook reads the adapter's own
 // processes, so it runs only behind the adapter's observe consent, like
-// sharedPIDOwners and releasedPIDs.
+// sharedPIDOwners and releasedPIDs, and only while the launcher read it feeds
+// is granted.
 //
-// It runs wherever the launcher is read, including under assignMu inside
-// assignPIDLocked, as the launcher read itself already does. Its cost is the
-// adapter's to bound; codex's is described on codex.LauncherPID.
+// Its callers are the launcher reads that can concern a hosted root:
+// captureLauncher (under assignMu inside assignPIDLocked, as the launcher read
+// itself already is), backfillHostedLauncher and refreshMultiplexerHosts.
+// AdoptSelfReportedHerdrPane does not consult it: only pi's hooks send that
+// report, and pi declares no LauncherPID. Its cost is the adapter's to bound;
+// codex's is described on codex.LauncherPID.
 func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) int {
 	hook := pm.launcherPIDs[state.Adapter]
 	if hook == nil || !pm.observeAllowed(state.Adapter) {
+		return pid
+	}
+	if pm.launcherReadAllowed != nil && !pm.launcherReadAllowed() {
 		return pid
 	}
 	if src := hook(state.CWD, state.TranscriptPath, pid); src > 0 {
@@ -491,10 +510,44 @@ func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) in
 // consent, because it reads the bound PID's argv.
 func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 	isHost := pm.sessionHosts[state.Adapter]
-	if isHost == nil || pm.hostReadArgv == nil || pm.launcherPIDs[state.Adapter] == nil {
+	if isHost == nil || pm.launcherPIDs[state.Adapter] == nil {
 		return false
 	}
-	return pm.observeAllowed(state.Adapter) && isHost(pm.hostReadArgv(state.PID))
+	if pm.hostReadArgv == nil || !pm.observeAllowed(state.Adapter) {
+		return false
+	}
+	return isHost(pm.hostReadArgv(state.PID))
+}
+
+// hostedRefreshSource is the PID a periodic refresh reads state's launcher
+// from, and false when it should read nothing (#2083). A root bound to its
+// adapter's session host reads from the process the hook names, and when the
+// hook cannot decide it keeps what is stored, as backfillHostedLauncher does at
+// startup. Every other session reads from pid.
+func (pm *PIDManager) hostedRefreshSource(state *session.SessionState, pid int) (int, bool) {
+	if !pm.boundToSessionHost(state) {
+		return pid, true
+	}
+	src := pm.launcherSourcePID(state, pid)
+	return src, src != pid
+}
+
+// launchersConflict reports whether a and b describe different terminals:
+// some field is set in both and differs. A field empty on either side is
+// unknown rather than different, so emptiness never decides it — darwin's tty
+// read comes back empty when its `ps` is killed by the 2s ceiling
+// (processTTYVia), and Linux reads no tty at all (osutil_linux.go's
+// processTTY stub). Every field takes part, by reflection, so a field added to
+// Launcher later is compared without a second edit here.
+func launchersConflict(a, b *session.Launcher) bool {
+	va, vb := reflect.ValueOf(*a), reflect.ValueOf(*b)
+	for i := range va.NumField() {
+		fa, fb := va.Field(i), vb.Field(i)
+		if !fa.IsZero() && !fb.IsZero() && !fa.Equal(fb) {
+			return true
+		}
+	}
+	return false
 }
 
 // backfillHostedLauncher is backfillLauncher's re-evaluation for a root bound
@@ -502,14 +555,15 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 // from the host — whose env is that of whichever client first spawned it —
 // or from a client process the hook named earlier.
 //
-// A hook answer that names a process is applied: a read from the same
-// terminal (equal TTY) is merged field by field like any other backfill, and
-// a read from a different one replaces the stored launcher whole, since
-// merging two processes' fields would describe neither. hostKnown is ignored
-// on a replacement for captureLauncher's reason: the host fields being
-// replaced are the wrong process's. An undecided hook keeps what is stored —
-// the last unique attribution, or the host's — and reads nothing, so an
-// ambiguous cwd never merges the host's fields back in.
+// A hook answer that names a process is applied: a read that conflicts with
+// the stored launcher (launchersConflict: a field set in both that differs)
+// is another terminal's and replaces it whole, since merging two processes'
+// fields would describe neither; a read that does not conflict is merged
+// field by field like any other backfill. hostKnown is ignored on a
+// replacement for captureLauncher's reason: the conflict shows the stored host
+// fields are another terminal's. An undecided hook keeps what is stored — the
+// last unique attribution, or the host's — and reads nothing, so an ambiguous
+// cwd never merges the host's fields back in.
 func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 	src := pm.launcherSourcePID(state, state.PID)
 	if src == state.PID {
@@ -519,7 +573,7 @@ func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 	if fresh == nil {
 		return
 	}
-	if fresh.TTY != state.Launcher.TTY {
+	if launchersConflict(state.Launcher, fresh) {
 		state.Launcher = fresh
 		pm.touchAndSave(state)
 		return
@@ -2439,11 +2493,31 @@ func (pm *PIDManager) refreshMultiplexerHosts(snaps []livenessSnapshot) {
 	// with five subagents in one pane would otherwise pay six identical reads,
 	// every one of them a `ps` shellout for the controlling tty.
 	read := memoizedLauncherEnv(pm.launcherEnv)
+	// A hosted root's pane is its TUI's, not the daemon's (#2083). Memoized
+	// per pass like read, since subagents share their parent's PID and cwd.
+	type sourceKey struct {
+		adapter, cwd string
+		pid          int
+	}
+	type source struct {
+		pid int
+		ok  bool
+	}
+	sources := map[sourceKey]source{}
 	for _, snap := range snaps {
 		if !snap.multiplexerPane || snap.pid <= 0 {
 			continue
 		}
-		fresh, hostKnown := read(snap.pid)
+		key := sourceKey{snap.adapter, snap.cwd, snap.pid}
+		src, seen := sources[key]
+		if !seen {
+			src.pid, src.ok = pm.hostedRefreshSource(snap.state, snap.pid)
+			sources[key] = src
+		}
+		if !src.ok {
+			continue
+		}
+		fresh, hostKnown := read(src.pid)
 		if fresh == nil {
 			continue
 		}

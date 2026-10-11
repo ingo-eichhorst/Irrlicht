@@ -35,6 +35,9 @@ type codexLauncherFixture struct {
 	hookCalls int
 	reads     []int // PIDs the launcher reader was asked about, in order
 	consent   func(adapter string) bool
+	// launcherDenied withholds the launcher-read grant the hook's answer
+	// feeds (the reader itself returns nil then, as startup.go's does).
+	launcherDenied bool
 }
 
 func newCodexLauncherFixture(t *testing.T) *codexLauncherFixture {
@@ -77,6 +80,9 @@ func (f *codexLauncherFixture) boundRoot(id string, launcher *session.Launcher) 
 func (f *codexLauncherFixture) pidManager() *services.PIDManager {
 	pm := newPIDManagerForTest(f.repo)
 	pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
+		if f.launcherDenied {
+			return nil, false
+		}
 		f.reads = append(f.reads, pid)
 		if l := f.launchers[pid]; l != nil {
 			cp := *l
@@ -98,6 +104,7 @@ func (f *codexLauncherFixture) pidManager() *services.PIDManager {
 	if f.consent != nil {
 		pm.SetConsentGate(f.consent)
 	}
+	pm.SetLauncherReadGate(func() bool { return !f.launcherDenied })
 	return pm
 }
 
@@ -181,6 +188,28 @@ func TestHandlePIDAssigned_LauncherPIDHookIsConsentGated(t *testing.T) {
 	f.assertBoundToDaemon("codex-root")
 }
 
+// Review of #2083: the hook's answer only feeds the launcher read, so while
+// that read is not granted the hook's process scan buys nothing and is not
+// run — on a bind or at startup.
+func TestLauncherPIDHookSkippedWhileLauncherReadIsDenied(t *testing.T) {
+	f := newCodexLauncherFixture(t)
+	f.root("codex-root")
+	f.hookPID = f.tui
+	f.launcherDenied = true
+	pm := f.pidManager()
+
+	pm.HandlePIDAssigned(f.daemon, "codex-root")
+	pm.SeedPIDs([]*session.SessionState{f.state("codex-root")})
+
+	if f.hookCalls != 0 {
+		t.Errorf("hook ran %d times while the launcher read was denied", f.hookCalls)
+	}
+	if s := f.state("codex-root"); s.Launcher != nil {
+		t.Errorf("launcher = %+v, want none while the read is denied", *s.Launcher)
+	}
+	f.assertBoundToDaemon("codex-root")
+}
+
 // Lock: the hook is keyed by adapter; a session of an adapter that declares
 // none never consults it.
 func TestHandlePIDAssigned_LauncherPIDHookIgnoredForOtherAdapters(t *testing.T) {
@@ -245,6 +274,21 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			daemonRead: kittyDaemon, tuiRead: kittyTUI, unique: true, want: kittyTUI,
 		},
 		{
+			// A tty read that came back empty (darwin's `ps` killed by its
+			// 2s ceiling) is unknown, not a different terminal: the same
+			// TUI's stored tty survives (review of #2083).
+			name:   "TUI launcher, same TUI read without a tty",
+			stored: ghostty, daemonRead: zed, unique: true, want: ghostty,
+			tuiRead: session.Launcher{TermProgram: "ghostty"},
+		},
+		{
+			// Linux reads no controlling tty at all, so neither launcher has
+			// one; the terminal program alone tells the TUI from the daemon.
+			name: "no tty on either read", stored: zed, daemonRead: zed, unique: true,
+			tuiRead: session.Launcher{TermProgram: "ghostty"},
+			want:    session.Launcher{TermProgram: "ghostty"},
+		},
+		{
 			// A root not bound to a session host keeps today's backfill from
 			// its own PID, whatever the hook would say.
 			name: "root bound to a TUI", stored: kittyPartial, boundArgv: codexTUIArgv,
@@ -287,6 +331,48 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			}
 			if tc.noConsent && f.hookCalls != 0 {
 				t.Errorf("hook ran %d times with observe consent withheld", f.hookCalls)
+			}
+			f.assertBoundToDaemon("codex-root")
+		})
+	}
+}
+
+// Review of #2083: the periodic multiplexer refresh (#1405) re-reads a pane
+// launcher on every sweep. For a hosted root that read must come from the
+// TUI the hook names — the daemon's env carries whichever pane the spawning
+// TUI was in — and an undecided hook reads nothing, as at startup.
+func TestCheckPIDLiveness_HostedCodexRootPaneRefreshReadsItsTUI(t *testing.T) {
+	const sock = "/cfg/herdr/herdr.sock"
+	stored := session.Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: sock, TermProgram: "iTerm.app", TTY: "/dev/ttys012"}
+	reattached := session.Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: sock, TermProgram: "ghostty", TTY: "/dev/ttys077"}
+	for _, tc := range []struct {
+		name    string
+		unique  bool
+		want    session.Launcher
+		noReads bool
+	}{
+		{name: "lone TUI", unique: true, want: reattached},
+		{name: "ambiguous cwd", want: stored, noReads: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCodexLauncherFixture(t)
+			// The daemon was spawned by a TUI in another herdr pane.
+			f.launchers[f.daemon] = &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: sock, TermProgram: "zed"}
+			f.launchers[f.tui] = &reattached
+			if tc.unique {
+				f.hookPID = f.tui
+			}
+			launcher := stored
+			f.boundRoot("codex-root", &launcher)
+			pm := f.pidManager()
+
+			pm.CheckPIDLiveness()
+
+			if got := launcherOf(f.state("codex-root")); got != tc.want {
+				t.Errorf("launcher = %+v, want %+v", got, tc.want)
+			}
+			if tc.noReads && len(f.reads) != 0 {
+				t.Errorf("launcher reader asked about pids %v, want no read", f.reads)
 			}
 			f.assertBoundToDaemon("codex-root")
 		})
