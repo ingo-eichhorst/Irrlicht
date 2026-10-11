@@ -7,9 +7,11 @@
 # WHY THIS FILE EXISTS. #2081 admits a stale transcript at daemon start when a
 # live process holds it open for writing. The admission tests in
 # core/application/services/session_detector_stale_held_admission_test.go were
-# seen red on the unfixed code. The four guards around that admission were
-# added by the change, so the locks that pin them were green on the unfixed
-# code by construction, and their only red evidence is a mutation below:
+# seen red on the unfixed code. The guards around that admission were added by
+# the change. The tests that pin mutations 1-4 and 6 were green on the unfixed
+# code by construction (mutation 6's test went red there only on its log line),
+# so a mutation below is their red evidence. Mutation 5's test was also seen
+# red on the unfixed code; its mutation shows the adapter scope keeps it:
 #
 #   1. subagent guard dropped        → a held subagent rollout is admitted;
 #   2. adapter scope dropped         → claude-code's discovery is asked at
@@ -19,7 +21,9 @@
 #   4. a probe that found no writer names pid 1 → a stale rollout nobody holds
 #                                      is admitted;
 #   5. only codex is asked           → a stale dsh or muse session whose lock a
-#                                      live process holds is not admitted.
+#                                      live process holds is not admitted;
+#   6. a probe that could not run admits → a stale rollout is admitted on a
+#                                      writer probe's error.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -162,6 +166,16 @@ for adapter in dsh muse; do
     "^TestSessionDetector_StaleHeldLockSessionsAreAdmitted\$/^${adapter}\$" \
     "was not admitted"
 done
+
+# ── 6. a probe that could not run admits the transcript ──
+assert_go_test_goes_red \
+  "staleTranscriptHolder admitting on a writer probe that could not run" \
+  "$DET_FILE" \
+  $'— trying the cwd rescue", err))\n\t\treturn 0' \
+  $'— trying the cwd rescue", err))\n\t\treturn 1' \
+  "$PKG" \
+  "^TestSessionDetector_StaleCodexRootWhoseProbeFailedIsSkippedAndLogged\$" \
+  "a probe that could not run is no evidence of a writer"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-held-rollout-admission-mutations: $fails FAILED"

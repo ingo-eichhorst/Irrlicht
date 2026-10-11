@@ -262,10 +262,13 @@ func TestSessionDetector_StaleClaudeTranscriptIsNotProbedForAWriter(t *testing.T
 	}
 }
 
-// Lock (#2081): a writer probe that could not run admits nothing by itself,
-// and says so in the log, so events.log tells "could not ask" apart from "no
-// writer". The rollout is not the newest in its directory, so the cwd rescue
-// declines it as before.
+// Red-first for the log line, lock for the skip (#2081): a writer probe that
+// could not run admits nothing by itself, and says so in the log, so events.log
+// tells "could not ask" apart from "no writer". The log assertion failed on the
+// unfixed code. The skip held there by construction; mutation 6 of
+// tools/lib/codex-held-rollout-admission-mutations_test.sh, which admits on a
+// probe error, is its red evidence. The rollout is not the newest in its
+// directory, so the cwd rescue declines it as before.
 func TestSessionDetector_StaleCodexRootWhoseProbeFailedIsSkippedAndLogged(t *testing.T) {
 	cwd := rescueCWD(t)
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "09")
@@ -363,17 +366,19 @@ func (p *pathDiscovery) wasAsked(path string) bool {
 // tools/lib/codex-held-rollout-admission-mutations_test.sh, which stops asking
 // any adapter but codex, turns each red on its own.
 func TestSessionDetector_StaleHeldLockSessionsAreAdmitted(t *testing.T) {
+	const id = "01a1181a-0000-7000-8000-000000000001"
 	for _, tc := range []struct {
-		adapter          string
-		transcript, lock string
+		adapter                   string
+		dirName, transcript, lock string
 	}{
-		{dsh.AdapterName, "session.v3.jsonl.zstd", "session.lock"},
-		{muse.AdapterName, "session.jsonl", ".session.lock"},
+		// dsh takes a root only from a session-<uuid> directory; a bare uuid
+		// directory is its child shape (dsh/adapter.go).
+		{dsh.AdapterName, "session-" + id, "session.v3.jsonl.zstd", "session.lock"},
+		{muse.AdapterName, id, "session.jsonl", ".session.lock"},
 	} {
 		t.Run(tc.adapter, func(t *testing.T) {
 			cwd := rescueCWD(t)
-			const id = "01a1181a-0000-7000-8000-000000000001"
-			dir := filepath.Join(t.TempDir(), "sessions", id)
+			dir := filepath.Join(t.TempDir(), "sessions", tc.dirName)
 			transcript := filepath.Join(dir, tc.transcript)
 			lock := filepath.Join(dir, tc.lock)
 			writeRollout(t, transcript, staleAge(10*time.Minute))

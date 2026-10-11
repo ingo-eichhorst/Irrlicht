@@ -408,11 +408,14 @@ type Process struct {
 	PIDForSession PIDDiscoverFunc
 	// SharedPIDOwner is optional. It keeps an existing same-adapter root only
 	// when that root independently proves it still owns the shared PID.
-	// Declaring it also makes the session detector admit a stale transcript at
-	// startup when PIDForSession names a live process holding it open (#2081).
-	// So an adapter declaring it must have a PIDForSession that is a
-	// transcript-writer probe, never a cwd match: a cwd match would admit every
-	// stale transcript in a directory one of its processes runs in.
+	// Declaring it also makes the session detector admit a stale transcript
+	// that reaches admission as a new session (the startup scan, or a backfill
+	// after consent is granted) when PIDForSession names a live process holding
+	// it open (#2081). So an adapter declaring it must have a PIDForSession that
+	// is a transcript-writer probe, never a cwd match: a cwd match would admit
+	// every stale transcript in a directory one of its processes runs in. Its
+	// Source must also declare ParentSessionIDFromPath, because that admission
+	// excludes subagents only through the event's ParentSessionID.
 	SharedPIDOwner SharedPIDOwnerFunc
 	// ReleasedPID is optional. It ends a root session whose PID is still alive
 	// but has provably released the session's transcript, for an agent whose
