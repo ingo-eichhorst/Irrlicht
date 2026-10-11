@@ -54,18 +54,61 @@ func DiscoverPIDByCWDExcludingArgv(processName, cwd string, disambiguate func([]
 	if err != nil {
 		return 0, fmt.Errorf("find %s processes: %w", processName, err)
 	}
-	if excludeArgv != nil {
-		kept := make([]int, 0, len(pids))
-		for _, pid := range pids {
-			argv, _ := osProc.ArgvOf(pid)
-			if excludeArgv(argv) {
-				continue
-			}
-			kept = append(kept, pid)
-		}
-		pids = kept
+	return narrowByCWD(withoutExcludedArgv(pids, excludeArgv), cwd, disambiguate), nil
+}
+
+// PIDsByCWDExcludingArgv returns every process named processName whose cwd is
+// cwd and whose argv excludeArgv does not reject — all of them, where
+// DiscoverPIDByCWDExcludingArgv narrows to one. It is for a caller that counts
+// matches (codex's LauncherPID, #2083), so it differs from that function in
+// what it does when it cannot look: a candidate whose cwd cannot be read is an
+// error rather than a silent skip, because a skipped match and a non-match
+// would otherwise produce the same count. The daemon's own PID is excluded.
+//
+// argv is read first (a sysctl on darwin) and cwd only for the PIDs it keeps
+// (an lsof on darwin), so a rejected process costs no cwd read.
+func PIDsByCWDExcludingArgv(processName, cwd string, excludeArgv func([]string) bool) ([]int, error) {
+	if cwd == "" || processName == "" {
+		return nil, nil
 	}
-	return narrowByCWD(pids, cwd, disambiguate), nil
+	pids, err := osProc.FindByName(processName)
+	if err != nil {
+		return nil, fmt.Errorf("find %s processes: %w", processName, err)
+	}
+	cwd = canonicalCWD(cwd)
+	myPID := os.Getpid()
+	var matches []int
+	for _, pid := range withoutExcludedArgv(pids, excludeArgv) {
+		if pid == myPID {
+			continue
+		}
+		dir, err := osProc.CWDOf(pid)
+		if err != nil {
+			return nil, fmt.Errorf("cwd of %s pid %d: %w", processName, pid, err)
+		}
+		if dir == cwd {
+			matches = append(matches, pid)
+		}
+	}
+	return matches, nil
+}
+
+// withoutExcludedArgv drops the PIDs whose argv excludeArgv rejects. A nil
+// excludeArgv keeps every PID; an unreadable argv is passed to the predicate
+// as nil, which per the ExcludeArgv contract must not exclude on it.
+func withoutExcludedArgv(pids []int, excludeArgv func([]string) bool) []int {
+	if excludeArgv == nil {
+		return pids
+	}
+	kept := make([]int, 0, len(pids))
+	for _, pid := range pids {
+		argv, _ := osProc.ArgvOf(pid)
+		if excludeArgv(argv) {
+			continue
+		}
+		kept = append(kept, pid)
+	}
+	return kept
 }
 
 // DiscoverPIDByCWDAndCmdLine finds a process whose full command line matches
@@ -99,18 +142,7 @@ func DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd string, disambi
 	if err != nil {
 		return 0, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
 	}
-	if excludeArgv != nil {
-		kept := make([]int, 0, len(pids))
-		for _, pid := range pids {
-			argv, _ := osProc.ArgvOf(pid)
-			if excludeArgv(argv) {
-				continue
-			}
-			kept = append(kept, pid)
-		}
-		pids = kept
-	}
-	return narrowByCWD(pids, cwd, disambiguate), nil
+	return narrowByCWD(withoutExcludedArgv(pids, excludeArgv), cwd, disambiguate), nil
 }
 
 // LiveCWDs returns the set of working directories currently held by live
@@ -191,15 +223,7 @@ func LiveCWDsByCmdline(cmdLinePattern string, excludeArgv func([]string) bool) (
 // resolves to a single PID via disambiguate (falling back to highest PID).
 // Excludes the daemon's own PID. Returns 0 when no match.
 func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
-	// CWDOf returns the OS-canonical working directory (e.g. on Linux
-	// /proc/<pid>/cwd is fully symlink-resolved). The caller's cwd may carry
-	// symlink components, so canonicalise it before the equality check or a
-	// symlinked $HOME would never match. EvalSymlinks needs the dir to exist;
-	// it does (the process is live), and on failure we keep the original.
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		cwd = resolved
-	}
-	matches := matchingCWDPids(pids, cwd)
+	matches := matchingCWDPids(pids, canonicalCWD(cwd))
 	switch len(matches) {
 	case 0:
 		return 0
@@ -212,6 +236,19 @@ func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
 		// Default: highest PID (most recently started on macOS).
 		return highestPID(matches)
 	}
+}
+
+// canonicalCWD resolves symlinks in cwd. CWDOf returns the OS-canonical
+// working directory (e.g. on Linux /proc/<pid>/cwd is fully symlink-resolved),
+// while the caller's cwd may carry symlink components, so it is canonicalised
+// before an equality check or a symlinked $HOME would never match.
+// EvalSymlinks needs the dir to exist; it does when a process runs in it, and
+// on failure the original is kept.
+func canonicalCWD(cwd string) string {
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return cwd
 }
 
 // matchingCWDPids filters pids to those whose CWD equals cwd exactly,

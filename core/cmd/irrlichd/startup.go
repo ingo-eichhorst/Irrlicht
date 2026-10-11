@@ -950,6 +950,9 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		// Let the presession sweep retire a codex TUI's placeholder once a
 		// root in its cwd binds to the app-server hosting its thread (#2082).
 		detector.SetSessionHosts(agents.SessionHosts(allAgents), processlifecycle.ReadArgv)
+		// Read a hosted codex root's launcher from its TUI when that TUI is
+		// the only one in the root's cwd, rather than from the daemon (#2083).
+		detector.SetLauncherPIDs(agents.LauncherPIDs(allAgents))
 		// Reject a candidate PID launched by something other than a known
 		// terminal or IDE before a session is ever created — e.g. CodexBar
 		// keeping an Antigravity `agy` process running in the background for

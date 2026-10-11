@@ -16,3 +16,12 @@ type SharedPIDOwnerFunc func(cwd, transcriptPath string, pid int) bool
 // return true; a probe that could not run, or a transcript still held, must
 // return false — "could not ask" is not "released".
 type ReleasedPIDFunc func(cwd, transcriptPath string, pid int) bool
+
+// LauncherPIDFunc names the process whose environment and controlling
+// terminal should feed a session's launcher (terminal/IDE identity, used for
+// click-to-focus) when the session is bound to pid, for an agent whose
+// sessions live in a host process the user never talks to (#2083). It
+// returns 0 to keep pid, which is also the answer whenever it cannot decide.
+// It never changes the session's PID: liveness and the same-PID policy stay
+// on pid.
+type LauncherPIDFunc func(cwd, transcriptPath string, pid int) int
