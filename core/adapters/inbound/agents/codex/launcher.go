@@ -38,9 +38,13 @@ import (
 // process (processlifecycle.PIDsByCWDExcludingArgv), plus one more argv
 // sysctl for a lone candidate. The PID manager asks it only where a codex
 // session's launcher is read, and never while that read is not granted: when
-// a PID is bound to a session that has no launcher yet, at most once per
-// session at daemon startup, and once per liveness sweep for each hosted root
-// whose launcher is a herdr or tmux pane (memoized per sweep by cwd and PID).
+// a PID is bound to a session that has no launcher yet, and at most once per
+// session at daemon startup — never on the periodic liveness sweep.
+//
+// What it cannot tell apart: a codex process of another user, or one whose
+// cwd cannot be read for any other reason, makes the scan fail
+// (processlifecycle.PIDsByCWDExcludingArgv), so every hosted root keeps the
+// daemon's launcher while such a process runs.
 func LauncherPID(cwd, transcriptPath string, pid int) int {
 	return launcherPID(cwd, pid, processlifecycle.ReadArgv, tuisIn)
 }

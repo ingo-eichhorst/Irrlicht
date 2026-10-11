@@ -484,12 +484,14 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 // sharedPIDOwners and releasedPIDs, and only while the launcher read it feeds
 // is granted.
 //
-// Its callers are the launcher reads that can concern a hosted root:
-// captureLauncher (under assignMu inside assignPIDLocked, as the launcher read
-// itself already is), backfillHostedLauncher and refreshMultiplexerHosts.
-// AdoptSelfReportedHerdrPane does not consult it: only pi's hooks send that
-// report, and pi declares no LauncherPID. Its cost is the adapter's to bound;
-// codex's is described on codex.LauncherPID.
+// Its callers are captureLauncher and backfillHostedLauncher, so it runs on
+// three paths, each where the launcher read it feeds already runs:
+// assignPIDLocked (under assignMu), the detector's applyPendingPID (on the
+// event loop, outside assignMu) and the startup seed (backfillLauncher). Its
+// cost is the adapter's to bound; codex's is described on codex.LauncherPID.
+// refreshMultiplexerHosts skips a hosted root rather than ask it on every
+// sweep, and AdoptSelfReportedHerdrPane does not consult it: only pi's hooks
+// send that report, and pi declares no LauncherPID.
 func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) int {
 	hook := pm.launcherPIDs[state.Adapter]
 	if hook == nil || !pm.observeAllowed(state.Adapter) {
@@ -519,19 +521,6 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 	return isHost(pm.hostReadArgv(state.PID))
 }
 
-// hostedRefreshSource is the PID a periodic refresh reads state's launcher
-// from, and false when it should read nothing (#2083). A root bound to its
-// adapter's session host reads from the process the hook names, and when the
-// hook cannot decide it keeps what is stored, as backfillHostedLauncher does at
-// startup. Every other session reads from pid.
-func (pm *PIDManager) hostedRefreshSource(state *session.SessionState, pid int) (int, bool) {
-	if !pm.boundToSessionHost(state) {
-		return pid, true
-	}
-	src := pm.launcherSourcePID(state, pid)
-	return src, src != pid
-}
-
 // launchersConflict reports whether a and b describe different terminals:
 // some field is set in both and differs. A field empty on either side is
 // unknown rather than different, so emptiness never decides it — darwin's tty
@@ -558,18 +547,23 @@ func launchersConflict(a, b *session.Launcher) bool {
 // A hook answer that names a process is applied: a read that conflicts with
 // the stored launcher (launchersConflict: a field set in both that differs)
 // is another terminal's and replaces it whole, since merging two processes'
-// fields would describe neither; a read that does not conflict is merged
-// field by field like any other backfill. hostKnown is ignored on a
-// replacement for captureLauncher's reason: the conflict shows the stored host
-// fields are another terminal's. An undecided hook keeps what is stored — the
-// last unique attribution, or the host's — and reads nothing, so an ambiguous
-// cwd never merges the host's fields back in.
+// fields would describe neither; a read that does not conflict fills every
+// field the stored launcher lacks (fillMissingLauncherFields) — wider than
+// the ordinary backfill's needs, because a launcher read from the host has no
+// pane, and the TUI's tmux or herdr address is exactly what it lacks. hostKnown
+// is ignored on both branches: a replacement for captureLauncher's reason (the
+// conflict shows the stored host fields are another terminal's), and a fill
+// never erases a field. So a herdr client that detached since the stored read
+// keeps its old host here; the periodic refresh, which honours hostKnown,
+// skips hosted roots (see refreshMultiplexerHosts). An undecided hook keeps
+// what is stored — the last unique attribution, or the host's — and reads
+// nothing, so an ambiguous cwd never merges the host's fields back in.
 func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 	src := pm.launcherSourcePID(state, state.PID)
 	if src == state.PID {
 		return
 	}
-	fresh, hostKnown := pm.launcherEnv(src)
+	fresh, _ := pm.launcherEnv(src)
 	if fresh == nil {
 		return
 	}
@@ -578,10 +572,25 @@ func (pm *PIDManager) backfillHostedLauncher(state *session.SessionState) {
 		pm.touchAndSave(state)
 		return
 	}
-	needs := launcherBackfillNeedsFor(state.Launcher)
-	if needs.any() && applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
+	if fillMissingLauncherFields(state.Launcher, fresh) {
 		pm.touchAndSave(state)
 	}
+}
+
+// fillMissingLauncherFields copies into dst every field that is empty there
+// and set in src, by reflection like launchersConflict, and reports whether
+// anything changed. It never erases a field.
+func fillMissingLauncherFields(dst, src *session.Launcher) bool {
+	vd, vs := reflect.ValueOf(dst).Elem(), reflect.ValueOf(*src)
+	changed := false
+	for i := range vd.NumField() {
+		fd, fs := vd.Field(i), vs.Field(i)
+		if fd.IsZero() && !fs.IsZero() {
+			fd.Set(fs)
+			changed = true
+		}
+	}
+	return changed
 }
 
 // captureRoute invokes the route reader if one is installed and the session
@@ -2493,31 +2502,21 @@ func (pm *PIDManager) refreshMultiplexerHosts(snaps []livenessSnapshot) {
 	// with five subagents in one pane would otherwise pay six identical reads,
 	// every one of them a `ps` shellout for the controlling tty.
 	read := memoizedLauncherEnv(pm.launcherEnv)
-	// A hosted root's pane is its TUI's, not the daemon's (#2083). Memoized
-	// per pass like read, since subagents share their parent's PID and cwd.
-	type sourceKey struct {
-		adapter, cwd string
-		pid          int
-	}
-	type source struct {
-		pid int
-		ok  bool
-	}
-	sources := map[sourceKey]source{}
 	for _, snap := range snaps {
 		if !snap.multiplexerPane || snap.pid <= 0 {
 			continue
 		}
-		key := sourceKey{snap.adapter, snap.cwd, snap.pid}
-		src, seen := sources[key]
-		if !seen {
-			src.pid, src.ok = pm.hostedRefreshSource(snap.state, snap.pid)
-			sources[key] = src
-		}
-		if !src.ok {
+		// A root bound to its adapter's session host is skipped (#2083): its
+		// PID is the host's, whose env carries whichever pane the client that
+		// spawned the host was in, and asking the LauncherPID hook for the
+		// right process costs a process scan with no bound on every sweep. A
+		// hosted pane root's client reattach is picked up at the next daemon
+		// startup instead (backfillHostedLauncher). The check is one argv
+		// read, and only for a pane launcher of an adapter declaring the hook.
+		if pm.boundToSessionHost(snap.state) {
 			continue
 		}
-		fresh, hostKnown := read(src.pid)
+		fresh, hostKnown := read(snap.pid)
 		if fresh == nil {
 			continue
 		}

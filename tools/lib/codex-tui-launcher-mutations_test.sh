@@ -51,8 +51,10 @@
 #      goes red.
 #  21. a field empty on one side counts as a conflict → the seed row for the
 #      same TUI read without a tty goes red: its stored tty is erased.
-#  22. the pane refresh reads the bound PID → the refresh test's lone-TUI row
-#      goes red: the daemon's pane never matches the TUI's.
+#  22. the pane refresh reads a hosted root → the skip test goes red: every
+#      sweep reads the daemon (and would pay the hook's scan to do better).
+#  23. the no-conflict branch merges only the ordinary backfill's needs → the
+#      seed row for a lone TUI in a tmux pane goes red: its pane is dropped.
 #
 # Not covered: the startup.go lines that pass agents.LauncherPIDs to
 # SetLauncherPIDs and the launcher grant to SetLauncherReadGate are reached by
@@ -363,15 +365,25 @@ assert_go_test_goes_red \
   "$SEED/^TUI_launcher,_same_TUI_read_without_a_tty\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/TUI_launcher,_same_TUI_read_without_a_tty"
 
-# ── 22. the pane refresh reads the bound PID ──
+# ── 22. the pane refresh reads a hosted root ──
 assert_go_test_goes_red \
   "the pane refresh reading a hosted root's daemon" \
   "$PM_FILE" \
-  'src.pid, src.ok = pm.hostedRefreshSource(snap.state, snap.pid)' \
-  'src.pid, src.ok = snap.pid, true' \
+  'if pm.boundToSessionHost(snap.state) {' \
+  'if false && pm.boundToSessionHost(snap.state) {' \
   "$SERVICES" \
-  '^TestCheckPIDLiveness_HostedCodexRootPaneRefreshReadsItsTUI$/^lone_TUI$' \
-  "--- FAIL: TestCheckPIDLiveness_HostedCodexRootPaneRefreshReadsItsTUI/lone_TUI"
+  '^TestCheckPIDLiveness_HostedCodexRootIsSkippedByThePaneRefresh$' \
+  "for a hosted root, want neither"
+
+# ── 23. the no-conflict branch merges only the backfill's needs ──
+assert_go_test_goes_red \
+  "the hosted re-evaluation filling only the ordinary backfill's needs" \
+  "$PM_FILE" \
+  $'\tif fillMissingLauncherFields(state.Launcher, fresh) {\n' \
+  $'\tif needs := launcherBackfillNeedsFor(state.Launcher); needs.any() && applyLauncherBackfill(state.Launcher, needs, fresh, true) {\n' \
+  "$SERVICES" \
+  "$SEED/^daemon_launcher,_lone_TUI_in_a_tmux_pane\$" \
+  "--- FAIL: TestSeedPIDs_HostedCodexRootLauncherReevaluation/daemon_launcher,_lone_TUI_in_a_tmux_pane"
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-tui-launcher-mutations: $fails FAILED"

@@ -64,6 +64,10 @@ func DiscoverPIDByCWDExcludingArgv(processName, cwd string, disambiguate func([]
 // what it does when it cannot look: a candidate whose cwd cannot be read is an
 // error rather than a silent skip, because a skipped match and a non-match
 // would otherwise produce the same count. The daemon's own PID is excluded.
+// FindByName lists every user's processes, so another user's same-name
+// process — whose cwd this user cannot read — makes the whole call fail too:
+// the error does not say why a read failed, and telling a permission refusal
+// from a probe that timed out is left undone.
 //
 // argv is read first (a sysctl on darwin) and cwd only for the PIDs it keeps
 // (an lsof on darwin), so a rejected process costs no cwd read.

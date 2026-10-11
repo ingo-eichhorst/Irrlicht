@@ -240,6 +240,10 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 	kittyPartial := session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013"}
 	kittyTUI := session.Launcher{TermProgram: "kitty", TTY: "/dev/ttys013", KittyPID: 4242}
 	kittyDaemon := session.Launcher{TermProgram: "kitty", KittyPID: 1111}
+	// The daemon spawned by a TUI in a plain ghostty tab, and a TUI in a
+	// tmux pane shown in ghostty.
+	ghosttyBare := session.Launcher{TermProgram: "ghostty"}
+	ghosttyTmux := session.Launcher{TermProgram: "ghostty", TTY: "/dev/ttys009", TmuxPane: "%3", TmuxSocket: "/private/tmp/tmux-501/default"}
 	for _, tc := range []struct {
 		name                string
 		stored              session.Launcher
@@ -280,6 +284,14 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 			name:   "TUI launcher, same TUI read without a tty",
 			stored: ghostty, daemonRead: zed, unique: true, want: ghostty,
 			tuiRead: session.Launcher{TermProgram: "ghostty"},
+		},
+		{
+			// A launcher read from the host has no pane; a lone TUI in a tmux
+			// pane of the same terminal program does not conflict with it,
+			// and its whole address is filled in, not only the fields the
+			// ordinary backfill asks for (second review of #2083).
+			name: "daemon launcher, lone TUI in a tmux pane", stored: ghosttyBare,
+			daemonRead: ghosttyBare, tuiRead: ghosttyTmux, unique: true, want: ghosttyTmux,
 		},
 		{
 			// Linux reads no controlling tty at all, so neither launcher has
@@ -338,43 +350,29 @@ func TestSeedPIDs_HostedCodexRootLauncherReevaluation(t *testing.T) {
 }
 
 // Review of #2083: the periodic multiplexer refresh (#1405) re-reads a pane
-// launcher on every sweep. For a hosted root that read must come from the
-// TUI the hook names — the daemon's env carries whichever pane the spawning
-// TUI was in — and an undecided hook reads nothing, as at startup.
-func TestCheckPIDLiveness_HostedCodexRootPaneRefreshReadsItsTUI(t *testing.T) {
+// launcher on every sweep. A hosted root's PID is the daemon's, whose env
+// carries whichever pane the spawning TUI was in, and asking the hook for the
+// right process would cost a process scan every sweep, so a hosted root is
+// skipped: what is stored stays, and nothing is read or scanned.
+func TestCheckPIDLiveness_HostedCodexRootIsSkippedByThePaneRefresh(t *testing.T) {
 	const sock = "/cfg/herdr/herdr.sock"
 	stored := session.Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: sock, TermProgram: "iTerm.app", TTY: "/dev/ttys012"}
-	reattached := session.Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: sock, TermProgram: "ghostty", TTY: "/dev/ttys077"}
-	for _, tc := range []struct {
-		name    string
-		unique  bool
-		want    session.Launcher
-		noReads bool
-	}{
-		{name: "lone TUI", unique: true, want: reattached},
-		{name: "ambiguous cwd", want: stored, noReads: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newCodexLauncherFixture(t)
-			// The daemon was spawned by a TUI in another herdr pane.
-			f.launchers[f.daemon] = &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: sock, TermProgram: "zed"}
-			f.launchers[f.tui] = &reattached
-			if tc.unique {
-				f.hookPID = f.tui
-			}
-			launcher := stored
-			f.boundRoot("codex-root", &launcher)
-			pm := f.pidManager()
+	f := newCodexLauncherFixture(t)
+	// The daemon was spawned by a TUI in another herdr pane.
+	f.launchers[f.daemon] = &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: sock, TermProgram: "zed"}
+	f.launchers[f.tui] = &session.Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: sock, TermProgram: "ghostty", TTY: "/dev/ttys077"}
+	f.hookPID = f.tui
+	launcher := stored
+	f.boundRoot("codex-root", &launcher)
+	pm := f.pidManager()
 
-			pm.CheckPIDLiveness()
+	pm.CheckPIDLiveness()
 
-			if got := launcherOf(f.state("codex-root")); got != tc.want {
-				t.Errorf("launcher = %+v, want %+v", got, tc.want)
-			}
-			if tc.noReads && len(f.reads) != 0 {
-				t.Errorf("launcher reader asked about pids %v, want no read", f.reads)
-			}
-			f.assertBoundToDaemon("codex-root")
-		})
+	if got := launcherOf(f.state("codex-root")); got != stored {
+		t.Errorf("launcher = %+v, want the stored %+v", got, stored)
 	}
+	if len(f.reads) != 0 || f.hookCalls != 0 {
+		t.Errorf("the sweep read pids %v and ran the hook %d times for a hosted root, want neither", f.reads, f.hookCalls)
+	}
+	f.assertBoundToDaemon("codex-root")
 }
