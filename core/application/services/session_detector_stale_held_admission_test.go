@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/dsh"
+	"irrlicht/core/adapters/inbound/agents/muse"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
@@ -35,10 +38,17 @@ const (
 	threadD = "01a126a0-82f9-7a13-8638-9dec848ecb6b"
 )
 
-// newStaleAdmissionDetector wires codex's probes as startup.go does, plus a
-// live-process lookup that reports a process of every adapter in cwd. So the
-// cwd rescue gets every chance to admit. When a test still sees a skip, a
-// heuristic made it: no process lookup was missing.
+// sharedPIDAgents are the adapters that declare a SharedPIDOwner. The detector
+// wires their ownership and release probes the way startup.go does, by
+// projecting each declaration.
+func sharedPIDAgents() []agent.Agent {
+	return []agent.Agent{codex.Agent(), dsh.Agent(), muse.Agent()}
+}
+
+// newStaleAdmissionDetector wires the shared-PID adapters' probes as
+// startup.go does, plus a live-process lookup that reports a process of every
+// adapter in cwd. So the cwd rescue gets every chance to admit. When a test
+// still sees a skip, a heuristic made it: no process lookup was missing.
 func newStaleAdmissionDetector(tw *mockAgentWatcher, repo *mockRepo, git outbound.GitResolver,
 	discovers map[string]agent.PIDDiscoverFunc, cwd string, log *mockLogger,
 ) *services.SessionDetector {
@@ -46,8 +56,8 @@ func newStaleAdmissionDetector(tw *mockAgentWatcher, repo *mockRepo, git outboun
 		PW: newMockProcessWatcher(), Repo: repo, Log: log, Git: git,
 		Metrics: &mockMetrics{}, Version: "test",
 		PIDDiscovers:    discovers,
-		SharedPIDOwners: codexSharedPIDOwners(),
-		ReleasedPIDs:    codexReleasedPIDs(),
+		SharedPIDOwners: agents.SharedPIDOwners(sharedPIDAgents()),
+		ReleasedPIDs:    agents.ReleasedPIDs(sharedPIDAgents()),
 		ProcessNames:    map[string]string{codex.AdapterName: codex.ProcessName, "claude-code": "claude"},
 		LiveCWDs:        liveCWDSet(cwd),
 	})
@@ -213,13 +223,14 @@ func TestSessionDetector_StaleUnheldCodexRootIsStillSkipped(t *testing.T) {
 	requireSkipped(t, repo, threadA, "no process holds its rollout open and it is not the newest in its directory")
 }
 
-// Lock (#2081): a held stale subagent rollout is not admitted, as a root or
-// otherwise. The managed daemon was seen holding a subagent rollout long after
-// its parent's rollout was released (see staleTranscriptHolder), so a held
-// subagent is no evidence of a live parent. The cwd is readable so that the
-// sentinel root is admitted by the cwd rescue as well, which keeps this a lock
-// on the unfixed code too. The subagent is not the newest, so that rescue
-// declines it.
+// Lock (#2081): the writer probe never admits a held stale subagent rollout.
+// The managed daemon was seen holding a subagent rollout long after its
+// parent's rollout was released (see staleTranscriptHolder), so a held
+// subagent is no evidence of a live parent. The #576 cwd rescue it falls
+// through to is unchanged and can still admit a codex subagent, as a child,
+// when it is the newest rollout in its directory. Here it is not, so the rescue
+// declines it. The cwd is readable so that the sentinel root is admitted by
+// that rescue as well, which keeps this a lock on the unfixed code too.
 func TestSessionDetector_StaleHeldCodexSubagentIsNotAdmitted(t *testing.T) {
 	cwd := rescueCWD(t)
 	day := filepath.Join(t.TempDir(), "sessions", "2026", "10", "10")
@@ -364,4 +375,42 @@ func (p *pathDiscovery) wasAsked(path string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Contains(p.asked, path)
+}
+
+// Lock (#2081): dsh and muse declare a SharedPIDOwner as well, and their writer
+// probe asks about the session's sibling lock file rather than the transcript
+// (dsh/pid.go, muse/pid.go). A stale session whose lock a live process holds is
+// admitted. The transcript yields no cwd, so the #576 rescue would decline it.
+// These cases pass by construction; mutation 5 of
+// tools/lib/codex-held-rollout-admission-mutations_test.sh, which stops asking
+// any adapter but codex, is their red evidence.
+func TestSessionDetector_StaleHeldLockSessionsAreAdmitted(t *testing.T) {
+	for _, tc := range []struct {
+		adapter          string
+		transcript, lock string
+	}{
+		{dsh.AdapterName, "session.v3.jsonl.zstd", "session.lock"},
+		{muse.AdapterName, "session.jsonl", ".session.lock"},
+	} {
+		t.Run(tc.adapter, func(t *testing.T) {
+			cwd := rescueCWD(t)
+			const id = "01a1181a-0000-7000-8000-000000000001"
+			dir := filepath.Join(t.TempDir(), "sessions", id)
+			transcript := filepath.Join(dir, tc.transcript)
+			lock := filepath.Join(dir, tc.lock)
+			writeRollout(t, transcript, time.Now())
+			writeRollout(t, lock, time.Now())
+			startRolloutHolder(t, lock)
+			stampAge(t, transcript, 10*time.Minute)
+
+			repo := newMockRepo()
+			tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: tc.adapter})
+			runDetector(t, newStaleAdmissionDetector(tw, repo, &mockGit{},
+				agents.PIDDiscoverers(sharedPIDAgents()), cwd, &mockLogger{}))
+
+			tw.ch <- agent.Event{Type: agent.EventNewSession, SessionID: id,
+				ProjectDir: filepath.Base(dir), TranscriptPath: transcript}
+			awaitAdmitted(t, repo, id)
+		})
+	}
 }

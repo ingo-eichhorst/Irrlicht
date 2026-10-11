@@ -17,7 +17,9 @@
 #   3. observe-consent gate dropped  → the probe runs for an adapter without
 #                                      consent and admits its stale rollout;
 #   4. a probe that found no writer names pid 1 → a stale rollout nobody holds
-#                                      is admitted.
+#                                      is admitted;
+#   5. only codex is asked           → a stale dsh or muse session whose lock a
+#                                      live process holds is not admitted.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -146,6 +148,20 @@ assert_go_test_goes_red \
   "$PKG" \
   "^TestSessionDetector_StaleUnheldCodexRootIsStillSkipped\$" \
   "no process holds its rollout open"
+
+# ── 5. only codex is asked; dsh and muse, which also declare a SharedPIDOwner, are not ──
+# One run per adapter, each -run anchored to a single subtest, so each has to go
+# red on its own.
+for adapter in dsh muse; do
+  assert_go_test_goes_red \
+    "StaleTranscriptWriter asking codex only ($adapter held lock)" \
+    "$PM_FILE" \
+    "$SCOPE_ANCHOR" \
+    $'\tif adapter != "codex" || pm.sharedPIDOwners[adapter] == nil || pm.pidDiscovers[adapter] == nil || !pm.observeAllowed(adapter) {' \
+    "$PKG" \
+    "^TestSessionDetector_StaleHeldLockSessionsAreAdmitted\$/^${adapter}\$" \
+    "was not admitted"
+done
 
 if [[ $fails -gt 0 ]]; then
   echo "codex-held-rollout-admission-mutations: $fails FAILED"
