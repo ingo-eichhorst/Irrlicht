@@ -135,4 +135,27 @@ final class QuotaAccountBucketTests: XCTestCase {
         let back = try JSONDecoder().decode(RateLimitInfo.self, from: JSONEncoder().encode(d))
         XCTAssertEqual(back.confirmedAccountRef, "acct-9")
     }
+
+    /// Auto mode (no provider picked) keeps its documented meaning: the
+    /// provider that reported most recently, NOT the most constrained provider.
+    func testAutoModePicksTheMostRecentlyReportingProviderNotTheMostConstrained() {
+        let reset = wall.addingTimeInterval(3600)
+        let anthropic = snap(used: 30, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: "acct-A")
+        let openai = snap(used: 70, sampledAt: wall.addingTimeInterval(-3600), resetsAt: reset, provider: "openai", ref: "acct-O")
+        let got = QuotaMenuBarRenderer.selectedSnapshot(
+            sessions: [session("o", adapter: "codex", openai), session("a", anthropic)], providerKey: nil, now: wall)
+        XCTAssertEqual(got?.windows.first?.usedPercent, 30)
+    }
+
+    /// Auto mode, then D1 inside the chosen provider: the two anthropic accounts
+    /// are the most recent, so the more constrained of them wins.
+    func testAutoModeAppliesD1WithinTheMostRecentProvider() {
+        let reset = wall.addingTimeInterval(3600)
+        let a = snap(used: 20, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: "acct-A")
+        let b = snap(used: 80, sampledAt: wall.addingTimeInterval(-50), resetsAt: reset, ref: "acct-B")
+        let openai = snap(used: 95, sampledAt: wall.addingTimeInterval(-3600), resetsAt: reset, provider: "openai", ref: "acct-O")
+        let got = QuotaMenuBarRenderer.selectedSnapshot(
+            sessions: [session("o", adapter: "codex", openai), session("a", a), session("b", b)], providerKey: nil, now: wall)
+        XCTAssertEqual(got?.windows.first?.usedPercent, 80)
+    }
 }

@@ -404,8 +404,8 @@ enum MenuBarQuotaProvider {
 
 /// Which subscription providers' quotas render in the Usage/Combined menu bar
 /// styles, in the order the user put them (issue #1955). One quota slot per
-/// entry; an empty list keeps #909's behaviour, where the freshest snapshot
-/// across every provider wins.
+/// entry; an empty list keeps #909's behaviour, where the provider that
+/// reported most recently wins, then its most constrained account (#2095).
 ///
 /// **Stored as a delimited `String`, not a `[String]`, and that is forced
 /// rather than chosen.** `[String]` is not an `@AppStorage` type, and

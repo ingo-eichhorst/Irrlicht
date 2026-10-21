@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"sync"
 	"time"
@@ -76,13 +77,21 @@ func NewCache(fs FS) *Cache { return &Cache{FS: fs, m: map[string]entry{}} }
 
 // Lookup returns the observation for path. parse turns file bytes into an
 // observation (Home and ModTime are filled in here) or reports ok=false for
-// bytes it cannot read. A stat, read or parse failure returns the last good
-// observation for path when there is one, else ok=false.
+// bytes it cannot read. A not-exist stat error drops the entry and reports ok
+// with an empty Ref and ModTime 0; any other stat, read or parse failure
+// returns the last good observation for path when there is one, else ok=false.
 func (c *Cache) Lookup(path string, parse func([]byte) (outbound.HomeAccountObservation, bool)) (outbound.HomeAccountObservation, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	last, haveLast := c.m[path]
 	mod, size, err := c.FS.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// The file is gone (e.g. a logout that deletes it): that is an
+		// answer — no account — not a transient failure to paper over with
+		// the last good observation.
+		delete(c.m, path)
+		return outbound.HomeAccountObservation{Home: path}, true
+	}
 	if err != nil {
 		return last.obs, haveLast
 	}

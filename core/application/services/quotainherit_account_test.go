@@ -96,7 +96,7 @@ func TestInheritRateLimits_RecipientReadIsGatedPerAdapter(t *testing.T) {
 			codex := stampedCodexDonor("/x/sessions/2026/01/02/rollout-x.jsonl", "acct-G")
 			pi := emptyWrapper("pi", "pi-1")
 			oc := emptyWrapper("opencode", "oc-1")
-			InheritRateLimits([]*session.SessionState{codex, pi, oc}, home, func(a string) bool { return a == tc.granted })
+			InheritRateLimits([]*session.SessionState{codex, pi, oc}, home, func(a string) bool { return a == "codex" || a == tc.granted })
 
 			authFileCache.mu.Lock()
 			defer authFileCache.mu.Unlock()
@@ -143,5 +143,22 @@ func TestAuthFileCache_DoesNotRetainTheOpenCodeAccessToken(t *testing.T) {
 	defer authFileCache.mu.Unlock()
 	if got := fmt.Sprintf("%+v", authFileCache.entries[filepath.Join(home, ".local/share/opencode/auth.json")]); strings.Contains(got, secret) || strings.Contains(got, jwt) {
 		t.Errorf("cache entry retains the access token: %s", got)
+	}
+}
+
+// A1-3 (red-first): a donor contributes only while ITS adapter's consent is
+// granted. On a codex observe revoke Stamp stops running for codex sessions,
+// so a persisted ref on the snapshot would otherwise keep donating.
+func TestInheritRateLimits_DonorWithoutItsOwnConsentDoesNotDonate(t *testing.T) {
+	home := stageAuth(t, map[string]any{
+		".pi/agent/auth.json": map[string]any{
+			"openai-codex": map[string]any{"type": "oauth", "accountId": "acct-D"},
+		},
+	})
+	codex := stampedCodexDonor("/x/sessions/2026/01/02/rollout-x.jsonl", "acct-D")
+	pi := emptyWrapper("pi", "pi-1")
+	InheritRateLimits([]*session.SessionState{codex, pi}, home, func(a string) bool { return a == "pi" })
+	if pi.Metrics.RateLimit != nil {
+		t.Error("pi inherited from a codex donor whose codex consent is not granted")
 	}
 }

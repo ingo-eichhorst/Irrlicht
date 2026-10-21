@@ -215,7 +215,7 @@ function formatClockTime(unixSec) {
   return new Date(unixSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-// Fold session snapshots into one bucket per provider. Rules mirror
+// Fold session snapshots into one bucket per account (per session while unconfirmed). Rules mirror
 // macOS mergeIntoBuckets: subscription beats usage; fresh beats stale;
 // among same-staleness snapshots, the highest sampled_at wins.
 // mergeChipIntoBucket folds one more session's snapshot into an existing

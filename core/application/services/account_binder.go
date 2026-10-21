@@ -93,9 +93,14 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 	}
 	obs, ok := r.ReadHomeAccount(state)
 	if !ok {
-		// Not allowed to look (or nothing to look at): relabel nothing and
-		// decide nothing, but never leave a confirmation we can no longer
-		// stand behind on the snapshot.
+		// Not allowed to look (or nothing to look at). The binding is
+		// serialized with the session, so a bound session becomes permanently
+		// unconfirmed (no ref kept anywhere, no re-bind after a re-grant: a
+		// switch made while we could not look is unobservable). An undecided
+		// binding stays undecided. The snapshot is scrubbed either way.
+		if state.AccountBinding != nil && state.AccountBinding.Ref != "" {
+			state.AccountBinding = &session.AccountBinding{Decided: true}
+		}
 		if rl := state.Metrics; rl != nil && rl.RateLimit != nil &&
 			(rl.RateLimit.ConfirmedAccountRef != "" || rl.RateLimit.Product != "") {
 			cp := *rl.RateLimit
@@ -118,9 +123,9 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 			b.stampSnapshot(state, session.AccountBinding{}, obs, home)
 			return
 		}
-		binding = binding.Advance(home, start)
+		binding = binding.Advance(home, start, b.now().Unix())
 	} else {
-		binding = binding.Advance(home, 0)
+		binding = binding.Advance(home, 0, b.now().Unix())
 	}
 	state.AccountBinding = &binding
 	b.stampSnapshot(state, binding, obs, home)

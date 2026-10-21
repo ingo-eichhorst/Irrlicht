@@ -94,9 +94,12 @@ func snapState(sampledAt int64, binding *session.AccountBinding) *session.Sessio
 
 func refOf(s *session.SessionState) string { return s.Metrics.RateLimit.ConfirmedAccountRef }
 
-// R1 (red-first against a stamper that writes the home's CURRENT ref): the
-// account changes mid-session; a reading from before the change keeps its
-// ref, readings at or after it do not, and switching back never re-binds.
+// R1 (red-first against a stamper that writes the home's CURRENT ref, and
+// again, as A2-1, against the upper-bound ClearedAt): the account changes
+// mid-session. The switch mtime (300) is only an UPPER bound on when it
+// happened, so a reading sampled after the binder's last confirmation (250)
+// is unattributable; a reading at or before it keeps its ref; switching back
+// never re-binds.
 func TestAccountBinder_MidSessionSwitchClearsStickily(t *testing.T) {
 	g := newBinderRig(90)
 	g.r.set("acct-A", 50)
@@ -110,24 +113,61 @@ func TestAccountBinder_MidSessionSwitchClearsStickily(t *testing.T) {
 		t.Errorf("product = %q, want claude_team alongside a ref", s.Metrics.RateLimit.Product)
 	}
 
+	g.now = 250 // last pass that still saw acct-A: the confirmation
+	s = snapState(240, s.AccountBinding)
+	g.b.Stamp(s)
+
 	g.r.set("acct-B", 300)
 	g.now = 310
-	older, newer := snapState(250, s.AccountBinding), snapState(300, s.AccountBinding)
-	g.b.Stamp(older)
-	g.b.Stamp(newer)
-	if got := refOf(older); got != "acct-A" {
-		t.Errorf("reading sampled before the switch: ref = %q, want acct-A kept", got)
+	atConfirm, afterConfirm, afterSwitch := snapState(250, s.AccountBinding), snapState(260, s.AccountBinding), snapState(300, s.AccountBinding)
+	g.b.Stamp(atConfirm)
+	g.b.Stamp(afterConfirm)
+	g.b.Stamp(afterSwitch)
+	if got := refOf(atConfirm); got != "acct-A" {
+		t.Errorf("reading at the last confirmation: ref = %q, want acct-A kept", got)
 	}
-	if got := refOf(newer); got != "" {
-		t.Errorf("reading sampled at the switch: ref = %q, want empty", got)
+	if got := refOf(afterConfirm); got != "" {
+		t.Errorf("reading after the last confirmation but before the switch mtime: ref = %q, want empty (the mtime is an upper bound)", got)
+	}
+	if got := refOf(afterSwitch); got != "" {
+		t.Errorf("reading at the switch mtime: ref = %q, want empty", got)
 	}
 
 	g.r.set("acct-A", 400)
 	g.now = 410
-	back := snapState(450, newer.AccountBinding)
+	back := snapState(450, afterSwitch.AccountBinding)
 	g.b.Stamp(back)
 	if got := refOf(back); got != "" {
 		t.Errorf("after switching back: ref = %q, want empty (never re-binds)", got)
+	}
+}
+
+// A2-1 (red-first, the reviewer's scenario): bound to acct-X; consent is
+// revoked; the user logs in as acct-Y inside the session, which ticks (a
+// scrubbed reading) at 250 and goes idle; another session rewrites the
+// identity file at 400; consent is re-granted. The reading sampled at 250 must
+// not land on acct-X.
+func TestAccountBinder_RevokeGapSwitchDoesNotLabelTheNewAccountsReading(t *testing.T) {
+	g := newBinderRig(90)
+	g.r.set("acct-X", 50)
+	g.now = 200
+	s := snapState(150, nil)
+	g.b.Stamp(s)
+	if refOf(s) != "acct-X" {
+		t.Fatalf("setup: not bound")
+	}
+
+	g.r.granted = false
+	g.now = 250
+	g.b.Stamp(snapState(250, s.AccountBinding))
+
+	g.r.set("acct-Y", 400)
+	g.r.granted = true
+	g.now = 410
+	y := snapState(250, s.AccountBinding)
+	g.b.Stamp(y)
+	if got := refOf(y); got != "" {
+		t.Errorf("reading sampled during the revoke gap: ref = %q, want empty", got)
 	}
 }
 
@@ -191,33 +231,55 @@ func TestAccountBinder_RestartSeesSwitchMadeWhileDown(t *testing.T) {
 	g.rebuild()
 	g.r.set("acct-B", 500)
 	g.now = 510
-	before, after := snapState(400, s.AccountBinding), snapState(600, s.AccountBinding)
+	before, after := snapState(200, s.AccountBinding), snapState(600, s.AccountBinding)
 	g.b.Stamp(before)
 	g.b.Stamp(after)
 	if got := refOf(before); got != "acct-A" {
-		t.Errorf("earlier reading relabelled: ref = %q, want acct-A", got)
+		t.Errorf("reading at the last confirmation relabelled: ref = %q, want acct-A", got)
 	}
 	if got := refOf(after); got != "" {
 		t.Errorf("reading after the switch: ref = %q, want empty (cleared, not re-bound)", got)
 	}
 
-	// A session that starts now was running under neither account's
-	// observation window: the new account was first seen at 500 > start.
-	fresh := snapState(600, nil)
-	g.b.Stamp(fresh)
-	if got := refOf(fresh); got != "" {
-		t.Errorf("session older than the new account's Since: ref = %q, want empty", got)
+	// This session's start is 90 (transcript) < the new account's Since 500:
+	// it began before acct-B was observed, so it never binds to it.
+	older := snapState(600, nil)
+	g.b.Stamp(older)
+	if got := refOf(older); got != "" {
+		t.Errorf("session that began before the new account's Since: ref = %q, want empty", got)
 	}
 }
 
-// Revoked consent decides and relabels nothing, and scrubs the stamped fields.
-func TestAccountBinder_NotGrantedFailsClosedWithoutTouchingBinding(t *testing.T) {
+// LOCK (passes by construction; written to pin the positive side): a session
+// that genuinely starts after the switch was observed binds to the new account.
+func TestAccountBinder_SessionStartedAfterSwitchBindsToNewAccount(t *testing.T) {
+	g := newBinderRig(0)
+	g.r.set("acct-B", 500)
+	g.now = 510
+	g.b.Stamp(snapState(520, nil)) // records the home: acct-B since 500
+	g.r.start = 600
+	s := snapState(650, nil)
+	s.FirstSeen = 610
+	g.now = 700
+	g.b.Stamp(s)
+	if got := refOf(s); got != "acct-B" {
+		t.Errorf("session started at 600 > Since 500: ref = %q, want acct-B", got)
+	}
+}
+
+// A2-2 (red-first): when consent is not granted, a bound session becomes
+// permanently unconfirmed — the binding is serialized with the session, so it
+// must not keep publishing the ref — and the snapshot is scrubbed. A re-grant
+// does not re-bind it. An undecided binding stays undecided.
+func TestAccountBinder_NotGrantedDropsTheRefAndStaysUnconfirmed(t *testing.T) {
 	g := newBinderRig(90)
 	g.r.set("acct-A", 50)
 	g.now = 200
 	s := snapState(150, nil)
 	g.b.Stamp(s)
-	bound := *s.AccountBinding
+	if s.AccountBinding == nil || s.AccountBinding.Ref != "acct-A" {
+		t.Fatalf("setup: not bound: %+v", s.AccountBinding)
+	}
 
 	g.r.granted = false
 	again := snapState(160, s.AccountBinding)
@@ -231,16 +293,26 @@ func TestAccountBinder_NotGrantedFailsClosedWithoutTouchingBinding(t *testing.T)
 	if shared.ConfirmedAccountRef != "acct-A" {
 		t.Errorf("Stamp mutated a possibly shared snapshot in place")
 	}
-	if *again.AccountBinding != bound {
-		t.Errorf("binding changed while not granted: %+v, want %+v", *again.AccountBinding, bound)
+	if want := (session.AccountBinding{Decided: true}); *again.AccountBinding != want {
+		t.Errorf("binding after a not-granted pass = %+v, want %+v (no ref on the wire)", *again.AccountBinding, want)
 	}
 
 	g.r.granted = true
 	g.now = 300
 	back := snapState(170, again.AccountBinding)
 	g.b.Stamp(back)
-	if refOf(back) != "acct-A" {
-		t.Errorf("after regrant: ref = %q, want acct-A (a revoke relabels nothing)", refOf(back))
+	if refOf(back) != "" {
+		t.Errorf("after regrant: ref = %q, want empty (a dropped binding never re-binds)", refOf(back))
+	}
+
+	// An undecided binding is left undecided by a not-granted pass.
+	g2 := newBinderRig(90)
+	g2.r.set("acct-A", 50)
+	g2.r.granted = false
+	u := snapState(150, nil)
+	g2.b.Stamp(u)
+	if u.AccountBinding != nil {
+		t.Errorf("not-granted pass decided an undecided session: %+v", u.AccountBinding)
 	}
 }
 

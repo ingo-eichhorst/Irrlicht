@@ -163,7 +163,7 @@ type AccountKey struct {
 // fails closed: no recipient file is read and nothing is inherited — the
 // Muse sweeper's convention, deliberately not the detector's nil-allows.
 func InheritRateLimits(sessions []*session.SessionState, userHome string, granted func(adapter string) bool) {
-	donors := buildDonorMap(sessions)
+	donors := buildDonorMap(sessions, granted)
 	if len(donors) == 0 {
 		return
 	}
@@ -238,10 +238,15 @@ type donorEntry struct {
 // account) pair across sessions that have one, grouped by provider. Prefer
 // the freshest snapshot per account when more than one session can donate
 // for it (multiple Codex sessions on the same account, for example).
-func buildDonorMap(sessions []*session.SessionState) map[string][]donorEntry {
+func buildDonorMap(sessions []*session.SessionState, granted func(adapter string) bool) map[string][]donorEntry {
 	freshest := map[AccountKey]*session.RateLimitSnapshot{}
 	for _, s := range sessions {
 		if !hasOwnRateLimit(s) {
+			continue
+		}
+		// A donor's stamped ref is only as current as its adapter's consent:
+		// a revoke stops the stamping pass, leaving the last ref in place.
+		if !adapterGranted(granted, s.Adapter) {
 			continue
 		}
 		key, ok := donorKey(s)

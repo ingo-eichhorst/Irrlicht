@@ -240,12 +240,13 @@ struct SettingsView: View {
                             // rather than #909's single Picker, so a user on
                             // two subscriptions can see both; an empty
                             // selection keeps #909's "Auto", where the
-                            // freshest snapshot across every provider wins.
+                            // most recently reporting provider wins, then its most
+                            // constrained account (#2095 D1).
                             HStack(spacing: 6) {
                                 Text("Quota providers")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                InfoIcon(text: "One quota slot per provider you pick, drawn left to right in the order you picked them. Pick none for Auto — a single slot showing whichever provider reported most recently.")
+                                InfoIcon(text: "One quota slot per provider you pick, drawn left to right in the order you picked them. Pick none for Auto — a single slot showing whichever provider reported most recently (its most constrained account if it has several).")
                                 Spacer()
                             }
                             if quotaProviderRows.isEmpty {

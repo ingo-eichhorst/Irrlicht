@@ -142,8 +142,9 @@ func TestAccountReader_NoAccountAndTransientFailure(t *testing.T) {
 		t.Errorf("unparseable first read ok: %+v", obs)
 	}
 	_, tr3 := rig(t, "")
-	if _, ok := NewAccountReader(always).ReadHomeAccount(sess(tr3)); ok {
-		t.Errorf("missing identity file ok with no prior observation")
+	// A missing identity file is an answer (no account), not a transient failure.
+	if obs, ok := NewAccountReader(always).ReadHomeAccount(sess(tr3)); !ok || obs.Ref != "" {
+		t.Errorf("missing identity file: obs=%+v ok=%v, want ok with empty ref", obs, ok)
 	}
 }
 

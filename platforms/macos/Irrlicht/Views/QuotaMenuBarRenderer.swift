@@ -22,9 +22,9 @@ enum QuotaMenuBarRenderer {
     /// dots — see `rowSVG`'s `compact` handling.
     static let compactBarWidthFactor: CGFloat = 0.65
 
-    /// Picks the freshest renderable rate-limit snapshot for `providerKey`
-    /// across `sessions` and renders it. `providerKey` nil means "whatever
-    /// provider is freshest" — used until the user picks one in Settings.
+    /// Renders the snapshot `selectedSnapshot` picks for `providerKey` across
+    /// `sessions`. `providerKey` nil is Auto — the provider that reported most
+    /// recently — used until the user picks one in Settings.
     /// `compact` requests the narrower, label-less bars layout used in
     /// Combined style (ignored by the Circle visual style, which has no
     /// label to drop and is already compact).
@@ -50,11 +50,14 @@ enum QuotaMenuBarRenderer {
         return buildImage(for: info, compact: compact, now: now)
     }
 
-    /// Picks the snapshot the menu-bar icon renders (#2095 D1). Candidates are
-    /// first bucketed by `RateLimitInfo.accountBucketKey` — the same key the
+    /// Picks the snapshot the menu-bar icon renders (#2095 D1). The provider
+    /// comes first: `providerKey`, or — when nil (Auto) — the provider of the
+    /// freshest renderable snapshot (ties by provider key ascending), the
+    /// documented "whichever provider reported most recently". D1 applies only
+    /// WITHIN that provider. Its candidates are bucketed by `RateLimitInfo.accountBucketKey` — the same key the
     /// popover uses — keeping, inside one account, the fresh-over-stale then
-    /// newest-`sampledAt` snapshot. ACROSS accounts the choice is: fresh before
-    /// stale, then the highest imminent `usedPercent` (nil imminent = 0), ties
+    /// newest-`sampledAt` snapshot. ACROSS that provider's accounts the choice is:
+    /// fresh before stale, then the highest imminent `usedPercent` (nil imminent = 0), ties
     /// by bucket key ascending. Freshest-`sampledAt` across accounts is the
     /// bug this replaces: two accounts ticking alternately made the icon flip.
     ///
@@ -71,11 +74,20 @@ enum QuotaMenuBarRenderer {
         now: Date
     ) -> RateLimitInfo? {
         struct Candidate { let key: String; let info: RateLimitInfo; let stale: Bool }
+        func providerOf(_ session: SessionState, _ snap: RateLimitInfo) -> String {
+            snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
+        }
+        let renderable = sessions.compactMap { s -> (provider: String, at: Date)? in
+            guard let snap = s.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
+            return (providerOf(s, snap), snap.sampledAt)
+        }
+        let chosenProvider = providerKey ?? renderable.min { l, r in
+            l.at != r.at ? l.at > r.at : l.provider < r.provider
+        }?.provider
         var byAccount: [String: Candidate] = [:]
         for session in sessions {
             guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
-            let provider = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
-            if let providerKey, provider != providerKey { continue }
+            if providerOf(session, snap) != chosenProvider { continue }
             let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
             let cand = Candidate(key: key, info: snap, stale: SessionListView.snapshotIsStale(snap, now: now))
             if let existing = byAccount[key] {

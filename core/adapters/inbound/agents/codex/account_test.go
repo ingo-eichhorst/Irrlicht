@@ -112,7 +112,7 @@ func TestAccountReader_AuthModes(t *testing.T) {
 		{"apikey", authJSON("apikey", "ignored"), "", true},
 		{"no mode", `{"tokens":{"account_id":"acct-1"}}`, "", true},
 		{"unparseable first read", `{"auth_mo`, "", false},
-		{"missing", "", "", false},
+		{"missing", "", "", true}, // not-exist is an answer: no account
 	} {
 		p := codexHomeRig(t, filepath.Join(tmp, strings.ReplaceAll(tc.name, " ", "_")), tc.auth, metaLine)
 		obs, ok := r.ReadHomeAccount(codexSess("s", p))

@@ -650,8 +650,8 @@ struct SessionListView: View {
     /// One chip's worth of data: render mode, a representative snapshot
     /// for icon + tooltip lookup, the session that carries it, the
     /// most-imminent window (subscription only), and the summed spend
-    /// (usage only). `id` is the providerKey so SwiftUI ForEach has a
-    /// stable identity.
+    /// (usage only). `id` is the account bucket key
+    /// (`RateLimitInfo.accountBucketKey`) so SwiftUI ForEach has a stable identity.
     ///
     /// Deliberately carries **no** `isStale` since #1675. It used to, and that
     /// made staleness a second spelling of a fact already implied by
@@ -676,7 +676,8 @@ struct SessionListView: View {
         let totalCostUSD: Double
     }
 
-    /// All chips to render, one per subscription/usage provider. See
+    /// All chips to render, one per confirmed account (one per session while
+    /// unconfirmed). See
     /// `mergeIntoBuckets` for the bucketing rules.
     ///
     /// `static` and pure since #1675: `now` is a required argument, so the
@@ -710,7 +711,7 @@ struct SessionListView: View {
         snap.windows.contains(where: { $0.resetsAt <= now })
     }
 
-    /// Mutable accumulator for one provider bucket while folding
+    /// Mutable accumulator for one account bucket while folding
     /// sessions into chips.
     struct ChipBucket {
         let providerKey: String
@@ -741,7 +742,7 @@ struct SessionListView: View {
         }
     }
 
-    /// Fold one session's snapshot into the provider buckets.
+    /// Fold one session's snapshot into the account buckets.
     ///
     /// Skips sessions without a snapshot and snapshots with any window
     /// past `resetsAt` — same rule as the daemon-side stale check, but

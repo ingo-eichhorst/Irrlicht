@@ -471,8 +471,9 @@ type SessionState struct {
 	Metrics     *SessionMetrics `json:"metrics,omitempty"`
 
 	// AccountBinding is which account this session's quota readings may be
-	// attributed to (#2095). Daemon-internal: clients read the outcome as
-	// metrics.rate_limit.confirmed_account_ref, never this object.
+	// attributed to (#2095). It is serialized with the session (persistence
+	// and the API) and only ever holds a ref the snapshot already published
+	// while consent was granted; the daemon drops it when consent is withdrawn.
 	AccountBinding *AccountBinding `json:"account_binding,omitempty"`
 
 	// PID of the Claude Code process that owns this session (set on SessionStart).
