@@ -34,11 +34,11 @@ const identityJSON = `{
 func countingFS(n *atomic.Int64) accountFS {
 	real := osAccountFS()
 	return accountFS{
-		stat: func(p string) (int64, int64, error) { n.Add(1); return real.stat(p) },
-		read: func(p string) ([]byte, error) { n.Add(1); return real.read(p) },
-		readHead: func(p string, k int) ([]byte, error) {
+		Stat: func(p string) (int64, int64, error) { n.Add(1); return real.Stat(p) },
+		Read: func(p string) ([]byte, error) { n.Add(1); return real.Read(p) },
+		ReadHead: func(p string, k int) ([]byte, error) {
 			n.Add(1)
-			return real.readHead(p, k)
+			return real.ReadHead(p, k)
 		},
 	}
 }

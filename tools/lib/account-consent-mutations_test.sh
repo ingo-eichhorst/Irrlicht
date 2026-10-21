@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# claude-account-consent-mutations_test.sh — the committed mutation fixture for
-# issue #2095's consent gate on the Claude Code account read
-# (core/adapters/inbound/agents/claudecode/account.go).
+# account-consent-mutations_test.sh — the committed mutation fixtures for
+# issue #2095's consent gates on account reads:
+#   1. the Claude Code account read
+#      (core/adapters/inbound/agents/claudecode/account.go),
+#   2. the Codex account read (core/adapters/inbound/agents/codex/account.go),
+#   3. the Pi/OpenCode recipient auth.json read of the rate-limit inheritance
+#      pass (core/application/services/quotainherit.go, adapterGranted).
+#
+# The rest of this header describes (1); (2) and (3) are the same shape —
+# one grant line each, deleted, with the named gate tests required to go red.
 #
 # WHY THIS FILE EXISTS. #2095 adds a permission ("claude-code-account" /
 # "account") whose only enforcement is one line, AccountReader.allowed():
@@ -29,12 +36,12 @@ MUTATE_SH="$REPO_ROOT/tools/mutate.sh"
 # A missing tool is a hard failure, not a skip — exiting 0 here would read as
 # a PASS to preflight's shell_lib_tests, so the gate would go green having
 # asserted nothing.
-need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: claude-account-consent-mutations — $1 not found" >&2; exit 1; }; }
+need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: account-consent-mutations — $1 not found" >&2; exit 1; }; }
 need go
 need git
 
 if [[ ! -x "$MUTATE_SH" ]]; then
-  echo "FAIL: claude-account-consent-mutations — $MUTATE_SH is missing or not executable" >&2
+  echo "FAIL: account-consent-mutations — $MUTATE_SH is missing or not executable" >&2
   exit 1
 fi
 
@@ -50,9 +57,9 @@ fi
 # developer's dirty worktree, where failing would only train people to delete
 # the fixture.
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
-  echo "claude-account-consent-mutations: CANNOT RUN — the worktree is dirty, and mutate.sh needs a" >&2
+  echo "account-consent-mutations: CANNOT RUN — the worktree is dirty, and mutate.sh needs a" >&2
   echo "  clean tree for its post-restore check to mean anything. Commit or clean up, then:" >&2
-  echo "    bash tools/lib/claude-account-consent-mutations_test.sh" >&2
+  echo "    bash tools/lib/account-consent-mutations_test.sh" >&2
   if [[ -n "${CI:-}" || -n "${MUTATION_FIXTURES_STRICT:-}" ]]; then
     echo "  (failing rather than skipping: CI/strict mode, where a skip is indistinguishable" >&2
     echo "   from a pass and this gate is the only thing re-running these mutations)" >&2
@@ -125,8 +132,33 @@ assert_go_test_goes_red \
   'TestAccountPermission_GateContract' \
   "call site is not consent-gated"
 
+# ── Codex: the same grant line, in its own reader ────────────────────────────
+assert_go_test_goes_red \
+  "deleting the codex grant check lets the reader touch auth.json while pending" \
+  "core/adapters/inbound/agents/codex/account.go" \
+  'return r != nil && r.granted != nil && r.granted()' \
+  'return r != nil' \
+  "./core/adapters/inbound/agents/codex/" \
+  'TestAccountReader_GateContract' \
+  "call site is not consent-gated"
+
+# ── Pi/OpenCode recipient read in the inheritance pass ───────────────────────
+#
+# adapterGranted is the single per-adapter check recipientKey makes before
+# opening a wrapper's auth.json. Deleting it makes every dashboard poll read
+# ~/.pi/agent/auth.json and ~/.local/share/opencode/auth.json whatever the
+# adapters' consent.
+assert_go_test_goes_red \
+  "deleting the recipient grant check lets the inheritance pass read wrapper auth.json without consent" \
+  "core/application/services/quotainherit.go" \
+  'return granted != nil && granted(adapter)' \
+  'return true' \
+  "./core/application/services/" \
+  'TestInheritRateLimits_ReadsNoAuthFileWithoutConsent|TestInheritRateLimits_RecipientReadIsGatedPerAdapter|TestInheritRateLimits_NilGrantedReadsNothing' \
+  "without consent"
+
 if [[ $fails -gt 0 ]]; then
-  echo "claude-account-consent-mutations: $fails FAILED"
+  echo "account-consent-mutations: $fails FAILED"
   exit 1
 fi
-echo "claude-account-consent-mutations: ALL PASS"
+echo "account-consent-mutations: ALL PASS"

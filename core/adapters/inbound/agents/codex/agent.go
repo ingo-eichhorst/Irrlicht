@@ -62,15 +62,21 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data, including codex process arguments to tell app-server processes from sessions and codex working directories to find the terminal a hosted session runs in; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children",
+				Touches:         "Reads session transcripts under ~/.codex/sessions/ and basic process data, including codex process arguments to tell app-server processes from sessions and codex working directories to find the terminal a hosted session runs in; with DSH consent, reads parent PIDs to identify DSH-owned one-shot children; reads auth_mode and tokens.account_id from <CODEX_HOME>/auth.json (default ~/.codex/auth.json), the file beside the sessions/ folder a session lives in",
 				Detail: "Tails *.jsonl session files under ~/.codex/sessions/YYYY/MM/DD/ " +
 					"to derive session state, cost, and token metrics. Scans Codex processes " +
 					"to show sessions before their first message, reading each one's arguments " +
 					"so app-server processes get no row, and reads their working " +
 					"directories to tie a session hosted by the shared app-server to " +
 					"the one terminal running codex in its directory. With DSH consent, checks " +
-					"process arguments and parent PIDs to avoid duplicate one-shot child rows. Read-only — " +
-					"no file is ever modified. Toggling off stops all reading " +
+					"process arguments and parent PIDs to avoid duplicate one-shot child rows. " +
+					"To attribute a session's quota to one account, it also reads two fields " +
+					"from the auth.json beside that session's sessions/ folder " +
+					"(<CODEX_HOME>/auth.json, default ~/.codex/auth.json): auth_mode and, " +
+					"when auth_mode is chatgpt, tokens.account_id. No token or API key in " +
+					"that file is decoded or kept, and the account id is also what lets a " +
+					"wrapper (Pi, OpenCode) on the SAME account share a Codex quota reading. " +
+					"Read-only — no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
 			},
 			{

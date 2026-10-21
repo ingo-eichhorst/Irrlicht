@@ -725,6 +725,10 @@ func runDaemon() {
 	// is started with the other background loops once the detector exists.
 	museAPI := museAccountAPIEffects(logger)
 
+	// The sessions route is registered before the PermissionService exists;
+	// it is bound to it right after setupDetectorAndPermissions below.
+	inheritConsent := &lateObserveConsent{}
+
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
 		CachedRepo:    cachedRepo,
@@ -738,7 +742,8 @@ func runDaemon() {
 		// Same live snapshot registerCoreRoutes hands the diagnostics bundle
 		// (#1801) — one source, two outlets, so the banner and hooks.json can
 		// never disagree about whether hooks are healthy.
-		HookHealth: liveHookHealth(hookLiveness, hookVerifier),
+		HookHealth:     liveHookHealth(hookLiveness, hookVerifier),
+		ObserveGranted: inheritConsent.granted,
 	})
 
 	home, _ := os.UserHomeDir()
@@ -769,6 +774,8 @@ func runDaemon() {
 		StartMuseAccountAPI: museAPI.Start,
 		StopMuseAccountAPI:  museAPI.Stop,
 	})
+
+	inheritConsent.bind(permService)
 
 	// The watchdog's second collaborator, available only now: "is this channel
 	// expected to deliver" is a consent question, and answering it before the

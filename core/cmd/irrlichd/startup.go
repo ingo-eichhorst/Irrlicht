@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -617,13 +618,17 @@ type registerSessionRoutesDeps struct {
 	// `--diagnose` tarball. nil is valid and means "report no daemon-wide
 	// faults", matching liveHookHealth's own nil-meaningful seam.
 	HookHealth func() services.HookHealthSnapshot
+	// ObserveGranted reports an adapter's observe consent, gating the auth.json
+	// reads of the rate-limit inheritance pass on /api/v1/sessions (#2095).
+	// nil fails closed: no wrapper file is read and nothing is inherited.
+	ObserveGranted func(adapter string) bool
 }
 
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
 // separate from registerCoreRoutes because it needs orchMonitor.
 func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(deps.CachedRepo, deps.OrchMonitor, deps.CostTracker,
-		deps.HookHealth))
+		deps.HookHealth, deps.ObserveGranted))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files. #373 adds
@@ -777,6 +782,21 @@ func (c *dshObserveConsent) granted() bool {
 		return false
 	}
 	return c.service.ObserveGranted(dsh.AdapterName)
+}
+
+// lateObserveConsent answers per-adapter observe consent for call sites that
+// are registered before the PermissionService exists (the sessions route): it
+// reads false until bind is called, then defers to the service. The pointer is
+// atomic because the route can be hit while main is still wiring.
+type lateObserveConsent struct {
+	service atomic.Pointer[services.PermissionService]
+}
+
+func (c *lateObserveConsent) bind(s *services.PermissionService) { c.service.Store(s) }
+
+func (c *lateObserveConsent) granted(adapter string) bool {
+	svc := c.service.Load()
+	return svc != nil && svc.ObserveGranted(adapter)
 }
 
 func setupDetectorAndPermissions(mux *http.ServeMux, detectorDeps buildDetectorDeps,
@@ -990,7 +1010,12 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 			return permService.Granted(claudecode.AccountName, claudecode.PermissionKeyAccount)
 		})
 		detector.SetAccountBinder(services.NewAccountBinder(
-			map[string]outbound.SessionAccountReader{claudecode.AdapterName: accountReader},
+			map[string]outbound.SessionAccountReader{
+				claudecode.AdapterName: accountReader,
+				// Codex is attributed to the auth.json beside the session's
+				// own sessions/ folder, gated on codex's observe consent.
+				codex.AdapterName: codex.NewAccountReader(func() bool { return permService.ObserveGranted(codex.AdapterName) }),
+			},
 			filesystem.NewAccountHomeStore(dataDir(deps.Home)), logger, nil))
 	}
 

@@ -9,23 +9,16 @@
 package claudecode
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
+	"irrlicht/core/adapters/inbound/agents/accountfile"
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
-
-// transcriptHeadBytes bounds the read TranscriptStart makes of a transcript.
-const transcriptHeadBytes = 64 << 10
 
 // identityFile is the allowlist. Anything not named here is never decoded
 // into memory this package holds.
@@ -36,52 +29,17 @@ type identityFile struct {
 	} `json:"oauthAccount"`
 }
 
-// accountFS is the file access seam; tests substitute it to count reads.
-type accountFS struct {
-	stat func(path string) (modUnix, size int64, err error)
-	read func(path string) ([]byte, error)
-	// readHead returns up to n leading bytes of path.
-	readHead func(path string, n int) ([]byte, error)
-}
+// accountFS is the file access seam (shared mechanics: accountfile); tests
+// substitute it to count reads.
+type accountFS = accountfile.FS
 
-func osAccountFS() accountFS {
-	return accountFS{
-		stat: func(p string) (int64, int64, error) {
-			fi, err := os.Stat(p)
-			if err != nil {
-				return 0, 0, err
-			}
-			return fi.ModTime().Unix(), fi.Size(), nil
-		},
-		read: os.ReadFile,
-		readHead: func(p string, n int) ([]byte, error) {
-			f, err := os.Open(p)
-			if err != nil {
-				return nil, err
-			}
-			defer f.Close()
-			buf := make([]byte, n)
-			m, err := io.ReadFull(f, buf)
-			if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-				return nil, err
-			}
-			return buf[:m], nil
-		},
-	}
-}
-
-type cachedAccount struct {
-	mod, size int64
-	obs       outbound.HomeAccountObservation
-}
+func osAccountFS() accountFS { return accountfile.OSFS() }
 
 // AccountReader implements outbound.SessionAccountReader for Claude Code.
 type AccountReader struct {
 	granted func() bool
 	fs      accountFS
-
-	mu    sync.Mutex
-	cache map[string]cachedAccount
+	cache   *accountfile.Cache
 }
 
 var _ outbound.SessionAccountReader = (*AccountReader)(nil)
@@ -93,7 +51,7 @@ func NewAccountReader(granted func() bool) *AccountReader {
 }
 
 func newAccountReader(granted func() bool, fs accountFS) *AccountReader {
-	return &AccountReader{granted: granted, fs: fs, cache: map[string]cachedAccount{}}
+	return &AccountReader{granted: granted, fs: fs, cache: accountfile.NewCache(fs)}
 }
 
 func (r *AccountReader) allowed() bool { return r != nil && r.granted != nil && r.granted() }
@@ -138,55 +96,30 @@ func (r *AccountReader) ReadHomeAccount(s *session.SessionState) (outbound.HomeA
 		return outbound.HomeAccountObservation{}, false
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	last, haveLast := r.cache[path]
-	mod, size, err := r.fs.stat(path)
-	if err != nil {
-		return last.obs, haveLast
-	}
-	if haveLast && last.mod == mod && last.size == size {
-		return last.obs, true
-	}
-	data, err := r.fs.read(path)
-	if err != nil {
-		return last.obs, haveLast
-	}
+	return r.cache.Lookup(path, parseIdentity)
+}
+
+// parseIdentity decodes the allowlisted fields of ~/.claude.json.
+func parseIdentity(data []byte) (outbound.HomeAccountObservation, bool) {
 	var f identityFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return last.obs, haveLast
+		return outbound.HomeAccountObservation{}, false
 	}
-	obs := outbound.HomeAccountObservation{Home: path, ModTime: mod}
+	obs := outbound.HomeAccountObservation{}
 	if f.OAuthAccount != nil {
 		obs.Ref = f.OAuthAccount.AccountUUID
 		if obs.Ref != "" {
 			obs.Product = f.OAuthAccount.OrganizationType
 		}
 	}
-	r.cache[path] = cachedAccount{mod: mod, size: size, obs: obs}
 	return obs, true
 }
 
 // TranscriptStart implements outbound.SessionAccountReader: the first
-// top-level "timestamp" in the first transcriptHeadBytes of the transcript.
+// top-level "timestamp" in the first accountfile.HeadBytes of the transcript.
 func (r *AccountReader) TranscriptStart(s *session.SessionState) int64 {
 	if !r.allowed() || s == nil || identityPathFor(s.TranscriptPath) == "" {
 		return 0
 	}
-	head, err := r.fs.readHead(s.TranscriptPath, transcriptHeadBytes)
-	if err != nil {
-		return 0
-	}
-	for _, line := range bytes.Split(head, []byte{'\n'}) {
-		var ev struct {
-			Timestamp string `json:"timestamp"`
-		}
-		if json.Unmarshal(line, &ev) != nil || ev.Timestamp == "" {
-			continue
-		}
-		if t, err := time.Parse(time.RFC3339Nano, ev.Timestamp); err == nil {
-			return t.Unix()
-		}
-	}
-	return 0
+	return accountfile.FirstTimestamp(r.fs, s.TranscriptPath)
 }

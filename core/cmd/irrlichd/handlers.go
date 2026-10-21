@@ -108,8 +108,9 @@ func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]ma
 // and nil in every context that has no live hook counters to report (the tests
 // below, and any process that is not the daemon that served the hooks) — the
 // same nil-meaningful seam liveHookHealth already documents for the
-// diagnostics bundle.
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, hookHealth func() services.HookHealthSnapshot) http.HandlerFunc {
+// diagnostics bundle. observeGranted gates the rate-limit inheritance pass's
+// wrapper auth.json reads per adapter; nil fails closed.
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, hookHealth func() services.HookHealthSnapshot, observeGranted func(adapter string) bool) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -122,8 +123,10 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		// snapshot from a first-party CLI authenticated to the same
 		// OAuth account. Mutates `sessions` in place — the dashboard
 		// builder then sees the inherited snapshots and the chip
-		// renders for the wrapper just like it does for the donor.
-		services.InheritRateLimits(sessions, "")
+		// renders for the wrapper just like it does for the donor. A
+		// wrapper's auth.json is read only when observeGranted(adapter) says
+		// that adapter's observe consent is granted (nil = never, #2095).
+		services.InheritRateLimits(sessions, "", observeGranted)
 		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		resp := sessionsResponse{Groups: groups}
 		if hookHealth != nil {

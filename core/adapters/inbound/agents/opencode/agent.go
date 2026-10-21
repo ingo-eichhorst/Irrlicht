@@ -58,11 +58,15 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session database",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads ~/.local/share/opencode/opencode.db (read-only polling)",
+				Touches:         "Reads ~/.local/share/opencode/opencode.db (read-only polling) and the type and account-id claim of the openai-oauth entry in ~/.local/share/opencode/auth.json",
 				Detail: "Polls OpenCode's SQLite database at " +
 					"~/.local/share/opencode/opencode.db in read-only mode to derive " +
 					"session state, cost, and token metrics. No row is ever written. " +
-					"Toggling off stops all polling immediately.",
+					"To share a Codex quota reading with an OpenCode session logged into " +
+					"the SAME ChatGPT account, it also reads the openai-oauth block of " +
+					"~/.local/share/opencode/auth.json: its type, and the account-id claim " +
+					"decoded from its access token. The token itself is not kept, and no " +
+					"other provider's entry is used. Toggling off stops all polling immediately.",
 			},
 			{
 				Key:             PermissionKeyHooks,
