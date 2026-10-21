@@ -241,7 +241,7 @@ for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
   command -v govulncheck >/dev/null 2>&1 || go_bin_on_path
   command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
   command -v govulncheck >/dev/null 2>&1 || {
-    fail "govulncheck: $mod — not on PATH or in the Go bin dir (${GO_BIN_DIR:-unresolved}), even after go install"
+    fail "govulncheck: $mod — not on PATH or in the Go bin dir (${GO_BIN_DIR:-unresolved}); go install did not produce it (any go error is above)"
     continue
   }
   echo "-- govulncheck: $mod --"

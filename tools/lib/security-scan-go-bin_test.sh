@@ -188,7 +188,7 @@ new_case install-leaves-nothing
 STUB_GOBIN="$CASE_DIR/gobin"; STUB_GOPATH="$CASE_DIR/gopath"; STUB_INSTALL_NOOP=1
 run_scan
 STUB_INSTALL_NOOP=0
-want="FAIL: govulncheck: core — not on PATH or in the Go bin dir ($STUB_GOBIN), even after go install"
+want="FAIL: govulncheck: core — not on PATH or in the Go bin dir ($STUB_GOBIN); go install did not produce it"
 case "$SCAN_OUT" in
   *"$want"*) pass "(c) install leaves nothing: the failure names $STUB_GOBIN" ;;
   *) fail "(c) install leaves nothing: failure line" "$want" "$(echo "$SCAN_OUT" | grep govulncheck | tr '\n' ' ')" ;;
@@ -215,6 +215,20 @@ if [[ -n "$other" ]]; then
 else
   pass "(d) tools on PATH: go is asked only for the module list"
 fi
+
+# (e) red-first: govulncheck is on PATH, so the govulncheck loop never
+# resolves the Go bin dir, and gosec sits only there. Only the gosec loop's
+# own go_bin_on_path call can find it, so this is the case that fails if that
+# call is dropped.
+new_case gosec-only-in-gobin
+STUB_GOBIN="$CASE_DIR/gobin"; STUB_GOPATH="$CASE_DIR/gopath"
+mkdir -p "$STUB_GOBIN"
+cp "$STUB_GOVULNCHECK_SRC" "$STUBBIN/govulncheck"
+cp "$STUB_GOSEC_SRC" "$STUB_GOBIN/gosec"
+run_scan
+rm -f "$STUBBIN/govulncheck"
+expect_ran "(e) gosec only in GOBIN" "$STUBBIN/govulncheck" "OK: govulncheck: core — clean"
+expect_ran "(e) gosec only in GOBIN" "$STUB_GOBIN/gosec" "OK: gosec: core"
 
 if [[ "$fails" -gt 0 ]]; then
   echo "security-scan-go-bin_test: $fails failure(s)"
