@@ -240,8 +240,8 @@ struct SettingsView: View {
                             // rather than #909's single Picker, so a user on
                             // two subscriptions can see both; an empty
                             // selection keeps #909's "Auto", where the
-                            // most recently reporting provider wins, then its most
-                            // constrained account (#2095 D1).
+                            // most recently reporting provider wins, then
+                            // its most constrained account (#2095 D1).
                             HStack(spacing: 6) {
                                 Text("Quota providers")
                                     .font(.caption)

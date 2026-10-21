@@ -843,12 +843,3 @@ func TestResolveUIDir(t *testing.T) {
 	t.Run("walk-up does not escape inner repo into outer", testResolveUIDirWalkUpDoesNotEscapeIntoOuterRepo)
 	t.Run("no source matches returns empty", testResolveUIDirNoSourceMatchesReturnsEmpty)
 }
-
-// The sessions route is registered before the PermissionService exists, so
-// its consent answer must fail closed until bound (#2095).
-func TestLateObserveConsent_FailsClosedUntilBound(t *testing.T) {
-	c := &lateObserveConsent{}
-	if c.granted("pi") {
-		t.Fatal("unbound consent granted pi")
-	}
-}

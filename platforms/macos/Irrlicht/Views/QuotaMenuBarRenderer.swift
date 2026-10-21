@@ -54,49 +54,55 @@ enum QuotaMenuBarRenderer {
     /// comes first: `providerKey`, or — when nil (Auto) — the provider of the
     /// freshest renderable snapshot (ties by provider key ascending), the
     /// documented "whichever provider reported most recently". D1 applies only
-    /// WITHIN that provider. Its candidates are bucketed by `RateLimitInfo.accountBucketKey` — the same key the
-    /// popover uses — keeping, inside one account, the fresh-over-stale then
-    /// newest-`sampledAt` snapshot. ACROSS that provider's accounts the choice is:
-    /// fresh before stale, then the highest imminent `usedPercent` (nil imminent = 0), ties
-    /// by bucket key ascending. Freshest-`sampledAt` across accounts is the
-    /// bug this replaces: two accounts ticking alternately made the icon flip.
+    /// WITHIN that provider. Its candidates are bucketed by
+    /// `RateLimitInfo.accountBucketKey` — the same key the popover uses —
+    /// keeping, inside one account, the fresh-over-stale then newest-
+    /// `sampledAt` snapshot. ACROSS that provider's accounts the choice is:
+    /// fresh before stale, then the highest imminent `usedPercent` (nil
+    /// imminent = 0), ties by bucket key ascending. Freshest-`sampledAt`
+    /// across accounts is the bug this replaces: two accounts ticking
+    /// alternately made the icon flip.
     ///
     /// `now` decides staleness (any window past `resetsAt`) and is required
     /// (#1675): the caller passes the one clock it renders against.
-    /// Unlike the popover bucketing this does **not** drop stale snapshots: the
-    /// icon has no room to dim, so with nothing fresh it keeps the last-known
-    /// reading (an active `.usage`-style icon must not look idle; see
-    /// MenuBarImageBuilder's fallback). A snapshot with no windows at all (the
-    /// credits/usage-only path) can never render and is skipped.
+    /// Unlike the popover bucketing this does **not** drop stale snapshots:
+    /// the icon has no room to dim, so with nothing fresh it keeps the
+    /// last-known reading (an active `.usage`-style icon must not look idle;
+    /// see MenuBarImageBuilder's fallback). A snapshot with no windows at all
+    /// (the credits/usage-only path) can never render and is skipped.
     static func selectedSnapshot(
         sessions: [SessionState],
         providerKey: String?,
         now: Date
     ) -> RateLimitInfo? {
-        struct Candidate { let key: String; let info: RateLimitInfo; let stale: Bool }
-        func providerOf(_ session: SessionState, _ snap: RateLimitInfo) -> String {
-            snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
+        struct Candidate {
+            let provider: String
+            let key: String
+            let info: RateLimitInfo
+            let stale: Bool
         }
-        let renderable = sessions.compactMap { s -> (provider: String, at: Date)? in
+        let candidates = sessions.compactMap { s -> Candidate? in
             guard let snap = s.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
-            return (providerOf(s, snap), snap.sampledAt)
+            return Candidate(
+                provider: snap.bucketProviderKey(adapter: s.adapter),
+                key: snap.accountBucketKey(adapter: s.adapter, sessionID: s.id),
+                info: snap,
+                stale: SessionListView.snapshotIsStale(snap, now: now))
         }
-        let chosenProvider = providerKey ?? renderable.min { l, r in
-            l.at != r.at ? l.at > r.at : l.provider < r.provider
+        let chosenProvider = providerKey ?? candidates.min { l, r in
+            l.info.sampledAt != r.info.sampledAt
+                ? l.info.sampledAt > r.info.sampledAt
+                : l.provider < r.provider
         }?.provider
         var byAccount: [String: Candidate] = [:]
-        for session in sessions {
-            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
-            if providerOf(session, snap) != chosenProvider { continue }
-            let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
-            let cand = Candidate(key: key, info: snap, stale: SessionListView.snapshotIsStale(snap, now: now))
-            if let existing = byAccount[key] {
+        for cand in candidates where cand.provider == chosenProvider {
+            if let existing = byAccount[cand.key] {
                 let better = existing.stale != cand.stale
                     ? !cand.stale
                     : cand.info.sampledAt > existing.info.sampledAt
                 if !better { continue }
             }
-            byAccount[key] = cand
+            byAccount[cand.key] = cand
         }
         let best = byAccount.values.min { l, r in
             if l.stale != r.stale { return !l.stale }

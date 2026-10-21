@@ -155,9 +155,10 @@ enum MenuBarImageBuilder {
     /// between its own groups — so a two-provider quota half reads as two
     /// groups rather than as one wider thing. An EMPTY list is #909's
     /// behaviour and stays it: one slot — the provider that reported most
-    /// recently, and within it the most constrained account (#2095 D1). A selected provider with no renderable snapshot contributes
-    /// no slot rather than a blank one, so the icon does not carry a gap
-    /// waiting for data that may never arrive.
+    /// recently, and within it the most constrained account (#2095 D1). A
+    /// selected provider with no renderable snapshot contributes no slot
+    /// rather than a blank one, so the icon does not carry a gap waiting for
+    /// data that may never arrive.
     static func quotaImage(
         appearance: MenuBarAppearance,
         sessions: [SessionState],

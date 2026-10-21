@@ -376,10 +376,17 @@ struct RateLimitInfo: Codable, Hashable {
         return provider
     }
 
+    /// The bucket's provider key: the confirmed provider, else
+    /// `"unknown:<adapter>"` (an inferred provider never names a bucket).
+    func bucketProviderKey(adapter: String?) -> String {
+        providerKey(adapter: adapter) ?? "unknown:\(adapter ?? "")"
+    }
+
     /// The confirmed account ref, or "" when the provider is unconfirmed or
-    /// the ref is absent/empty (contract: "Client bucketing").
-    func accountRef(adapter: String?) -> String {
-        guard providerKey(adapter: adapter) != nil else { return "" }
+    /// the ref is absent/empty. One quota bucket per confirmed account, one
+    /// per session while unconfirmed (#2095).
+    var accountRef: String {
+        guard providerKey(adapter: nil) != nil else { return "" }
         return confirmedAccountRef ?? ""
     }
 
@@ -389,8 +396,8 @@ struct RateLimitInfo: Codable, Hashable {
     /// unconfirmed — an unconfirmed snapshot never merges with another
     /// session's (#2095 D3).
     func accountBucketKey(adapter: String?, sessionID: String) -> String {
-        let key = providerKey(adapter: adapter) ?? "unknown:\(adapter ?? "")"
-        let ref = accountRef(adapter: adapter)
+        let key = bucketProviderKey(adapter: adapter)
+        let ref = accountRef
         return ref.isEmpty ? "\(key)|session:\(sessionID)" : "\(key)|\(ref)"
     }
 

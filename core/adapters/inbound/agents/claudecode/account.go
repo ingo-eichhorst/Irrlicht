@@ -10,7 +10,6 @@ package claudecode
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,16 +28,9 @@ type identityFile struct {
 	} `json:"oauthAccount"`
 }
 
-// accountFS is the file access seam (shared mechanics: accountfile); tests
-// substitute it to count reads.
-type accountFS = accountfile.FS
-
-func osAccountFS() accountFS { return accountfile.OSFS() }
-
 // AccountReader implements outbound.SessionAccountReader for Claude Code.
 type AccountReader struct {
 	granted func() bool
-	fs      accountFS
 	cache   *accountfile.Cache
 }
 
@@ -47,11 +39,11 @@ var _ outbound.SessionAccountReader = (*AccountReader)(nil)
 // NewAccountReader builds the production reader. granted is consulted before
 // every read; nil means never granted.
 func NewAccountReader(granted func() bool) *AccountReader {
-	return newAccountReader(granted, osAccountFS())
+	return newAccountReader(granted, accountfile.OSFS())
 }
 
-func newAccountReader(granted func() bool, fs accountFS) *AccountReader {
-	return &AccountReader{granted: granted, fs: fs, cache: accountfile.NewCache(fs)}
+func newAccountReader(granted func() bool, fs accountfile.FS) *AccountReader {
+	return &AccountReader{granted: granted, cache: accountfile.NewCache(fs)}
 }
 
 func (r *AccountReader) allowed() bool { return r != nil && r.granted != nil && r.granted() }
@@ -74,16 +66,12 @@ func identityPathFor(transcriptPath string) string {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
-	if v := os.Getenv(configDirEnvVar); v != "" {
-		if cleaned := filepath.Clean(v); filepath.IsAbs(cleaned) {
-			return filepath.Join(cleaned, ".claude.json")
-		}
-	}
-	home, err := os.UserHomeDir()
+	identity, err := agentpaths.AbsRoot(agentpaths.FromEnv(
+		"claudecode", configDirEnvVar, ".claude.json", ".claude.json"))
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".claude.json")
+	return identity
 }
 
 // ReadHomeAccount implements outbound.SessionAccountReader.
@@ -121,5 +109,5 @@ func (r *AccountReader) TranscriptStart(s *session.SessionState) int64 {
 	if !r.allowed() || s == nil || identityPathFor(s.TranscriptPath) == "" {
 		return 0
 	}
-	return accountfile.FirstTimestamp(r.fs, s.TranscriptPath)
+	return accountfile.FirstTimestamp(r.cache.FS, s.TranscriptPath)
 }

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/accountfile"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
@@ -31,9 +32,9 @@ const identityJSON = `{
 
 // countingFS wraps the real filesystem and counts every touch, the Observe
 // side of the consent contract.
-func countingFS(n *atomic.Int64) accountFS {
-	real := osAccountFS()
-	return accountFS{
+func countingFS(n *atomic.Int64) accountfile.FS {
+	real := accountfile.OSFS()
+	return accountfile.FS{
 		Stat: func(p string) (int64, int64, error) { n.Add(1); return real.Stat(p) },
 		Read: func(p string) ([]byte, error) { n.Add(1); return real.Read(p) },
 		ReadHead: func(p string, k int) ([]byte, error) {

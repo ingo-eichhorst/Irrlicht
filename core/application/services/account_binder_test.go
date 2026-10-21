@@ -81,7 +81,7 @@ func newBinderRig(start int64) *binderRig {
 
 // rebuild models a daemon restart: a fresh binder over the same store.
 func (g *binderRig) rebuild() {
-	g.b = NewAccountBinder(map[string]outbound.SessionAccountReader{"claude-code": g.r}, g.store, binderLog{},
+	g.b = NewAccountBinder(map[string]outbound.SessionAccountReader{"claude-code": g.r}, g.store, &gateLogger{},
 		func() time.Time { return time.Unix(g.now, 0) })
 }
 
@@ -343,10 +343,3 @@ func TestAccountBinder_SameRefNewerMtimeKeepsSince(t *testing.T) {
 		t.Errorf("Since = %d, want 50 (same account, newer mtime)", got.Since)
 	}
 }
-
-type binderLog struct{}
-
-func (binderLog) LogInfo(_, _, _ string)                                  {}
-func (binderLog) LogError(_, _, _ string)                                 {}
-func (binderLog) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (binderLog) Close() error                                            { return nil }

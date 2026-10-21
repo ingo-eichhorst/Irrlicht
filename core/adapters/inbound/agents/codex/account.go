@@ -30,7 +30,6 @@ type authFile struct {
 // AccountReader implements outbound.SessionAccountReader for Codex.
 type AccountReader struct {
 	granted func() bool
-	fs      accountfile.FS
 	cache   *accountfile.Cache
 }
 
@@ -43,7 +42,7 @@ func NewAccountReader(granted func() bool) *AccountReader {
 }
 
 func newAccountReader(granted func() bool, fs accountfile.FS) *AccountReader {
-	return &AccountReader{granted: granted, fs: fs, cache: accountfile.NewCache(fs)}
+	return &AccountReader{granted: granted, cache: accountfile.NewCache(fs)}
 }
 
 func (r *AccountReader) allowed() bool { return r != nil && r.granted != nil && r.granted() }
@@ -105,5 +104,5 @@ func (r *AccountReader) TranscriptStart(s *session.SessionState) int64 {
 	if !r.allowed() || s == nil || authPathFor(s.TranscriptPath) == "" {
 		return 0
 	}
-	return accountfile.FirstTimestamp(r.fs, s.TranscriptPath)
+	return accountfile.FirstTimestamp(r.cache.FS, s.TranscriptPath)
 }

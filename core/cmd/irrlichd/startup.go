@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -784,21 +783,6 @@ func (c *dshObserveConsent) granted() bool {
 	return c.service.ObserveGranted(dsh.AdapterName)
 }
 
-// lateObserveConsent answers per-adapter observe consent for call sites that
-// are registered before the PermissionService exists (the sessions route): it
-// reads false until bind is called, then defers to the service. The pointer is
-// atomic because the route can be hit while main is still wiring.
-type lateObserveConsent struct {
-	service atomic.Pointer[services.PermissionService]
-}
-
-func (c *lateObserveConsent) bind(s *services.PermissionService) { c.service.Store(s) }
-
-func (c *lateObserveConsent) granted(adapter string) bool {
-	svc := c.service.Load()
-	return svc != nil && svc.ObserveGranted(adapter)
-}
-
 func setupDetectorAndPermissions(mux *http.ServeMux, detectorDeps buildDetectorDeps,
 	permissionDeps setupPermissionServiceDeps) (*services.SessionDetector, *services.PermissionService) {
 	dshConsent := &dshObserveConsent{}
@@ -921,13 +905,15 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
 	// Claude Code's account-identity read is relevant exactly when Claude Code
 	// itself is running, so it is detected by that agent's live-process matcher.
-	permService.SetDetectionProbe(claudecode.AccountName, func() bool {
-		for _, a := range allAgents {
-			if a.Identity.Name == claudecode.AdapterName {
-				return processlifecycle.HasLiveProcess(a.Process.Match)
-			}
+	var claudeMatch agent.ProcessMatcher
+	for _, a := range allAgents {
+		if a.Identity.Name == claudecode.AdapterName {
+			claudeMatch = a.Process.Match
+			break
 		}
-		return false
+	}
+	permService.SetDetectionProbe(claudecode.AccountName, func() bool {
+		return claudeMatch != nil && processlifecycle.HasLiveProcess(claudeMatch)
 	})
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar

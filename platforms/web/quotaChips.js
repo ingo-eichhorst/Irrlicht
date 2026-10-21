@@ -215,11 +215,8 @@ function formatClockTime(unixSec) {
   return new Date(unixSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-// Fold session snapshots into one bucket per account (per session while unconfirmed). Rules mirror
-// macOS mergeIntoBuckets: subscription beats usage; fresh beats stale;
-// among same-staleness snapshots, the highest sampled_at wins.
 // mergeChipIntoBucket folds one more session's snapshot into an existing
-// provider bucket, applying the subscription-beats-usage / fresh-beats-
+// account bucket, applying the subscription-beats-usage / fresh-beats-
 // stale / newest-sampled_at-wins precedence (mirrors Swift's mergeIntoBuckets).
 function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
   // Subscription wins over usage when both are seen (rare — one OAuth
@@ -244,7 +241,10 @@ function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
   }
 }
 
-// Exported for quotaChips.test.js.
+// Fold session snapshots into one bucket per account (per session while
+// unconfirmed). Rules mirror macOS mergeIntoBuckets: subscription beats usage;
+// fresh beats stale; among same-staleness snapshots, the highest sampled_at
+// wins. Exported for quotaChips.test.js.
 export function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
@@ -256,12 +256,12 @@ export function bucketChips(sessions, nowMs) {
     // on resets_at let resets_at=0 windows slip through as "fresh"
     // here while macOS marked them stale.
     const stale = Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
-    const providerKey = providerKeyFor(snap, s.adapter) || ('unknown:' + (s.adapter || ''));
+    const confirmedProvider = providerKeyFor(snap, s.adapter);
+    const providerKey = confirmedProvider || ('unknown:' + (s.adapter || ''));
     // An account ref only counts when the provider is confirmed (the ref is
     // meaningless against an inferred provider). Unconfirmed snapshots get a
     // per-session bucket so they never merge with another session's (#2095).
-    const confirmed = !!providerKeyFor(snap, s.adapter);
-    const accountRef = (confirmed && snap.confirmed_account_ref) ? snap.confirmed_account_ref : '';
+    const accountRef = (confirmedProvider && snap.confirmed_account_ref) || '';
     const key = providerKey + '|' + (accountRef || ('session:' + s.session_id));
     const mode = chipModeFor(snap, providerKey);
     const hasWindows = Array.isArray(snap.windows) && snap.windows.length > 0;

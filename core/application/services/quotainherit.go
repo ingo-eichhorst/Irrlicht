@@ -46,7 +46,7 @@ import (
 )
 
 // authFileCache memoizes parsed auth-file lookups by path so the
-// inheritance pass doesn't reparse three small JSON files on every
+// inheritance pass doesn't reparse two small JSON files on every
 // `/api/v1/sessions` hit. Validated by mtime: a stale entry is dropped
 // when the file's modification time changes. Concurrent readers are
 // fine — the cache is keyed by path and writes are coordinated by mu.
@@ -241,9 +241,6 @@ type donorEntry struct {
 func buildDonorMap(sessions []*session.SessionState, granted func(adapter string) bool) map[string][]donorEntry {
 	freshest := map[AccountKey]*session.RateLimitSnapshot{}
 	for _, s := range sessions {
-		if !hasOwnRateLimit(s) {
-			continue
-		}
 		// A donor's stamped ref is only as current as its adapter's consent:
 		// a revoke stops the stamping pass, leaving the last ref in place.
 		if !adapterGranted(granted, s.Adapter) {
@@ -296,32 +293,21 @@ func applyDonors(sessions []*session.SessionState, home string, donors map[strin
 }
 
 // donorKey returns the AccountKey under which this session's snapshot can be
-// donated to wrappers: its own stamped ConfirmedAccountRef (#2095), with the
-// provider the snapshot was confirmed for. It reads no file. Returns
-// (_, false) when the adapter has no usable donor mapping (e.g. aider,
-// bedrock, vertex paths), when the snapshot carries no ref, or when its
-// Provider/AttributionQuality do not confirm the provider the ref belongs to.
+// donated to wrappers: its own stamped ConfirmedAccountRef (#2095), under the
+// provider the snapshot itself confirms (ProviderForSession). It reads no
+// file. Returns (_, false) when the session has no own snapshot, when the
+// snapshot carries no ref, or when its Provider/AttributionQuality do not
+// confirm a provider (e.g. aider, bedrock, vertex paths).
 func donorKey(s *session.SessionState) (AccountKey, bool) {
 	if !hasOwnRateLimit(s) {
 		return AccountKey{}, false
 	}
-	rl := s.Metrics.RateLimit
-	if rl.ConfirmedAccountRef == "" || rl.AttributionQuality != session.AttributionQualityConfirmed {
+	p := ProviderForSession(s)
+	ref := s.Metrics.RateLimit.ConfirmedAccountRef
+	if p == "" || ref == "" {
 		return AccountKey{}, false
 	}
-	var want string
-	switch s.Adapter {
-	case "claude-code":
-		want = ProviderAnthropic
-	case "codex":
-		want = ProviderOpenAI
-	default:
-		return AccountKey{}, false
-	}
-	if rl.Provider != want {
-		return AccountKey{}, false
-	}
-	return AccountKey{Provider: want, AccountID: rl.ConfirmedAccountRef}, true
+	return AccountKey{Provider: p, AccountID: ref}, true
 }
 
 // adapterGranted reports whether the adapter's observe consent is granted; a
@@ -344,16 +330,13 @@ func adapterGranted(granted func(adapter string) bool, adapter string) bool {
 // establishes what a wrapper *could* be authenticated to, not which provider
 // a specific session's spend actually belongs to.
 func recipientKey(s *session.SessionState, home string, granted func(adapter string) bool) (AccountKey, bool) {
+	if !adapterGranted(granted, s.Adapter) {
+		return AccountKey{}, false
+	}
 	switch s.Adapter {
 	case "pi":
-		if !adapterGranted(granted, s.Adapter) {
-			return AccountKey{}, false
-		}
 		return readPiInheritKey(home)
 	case "opencode":
-		if !adapterGranted(granted, s.Adapter) {
-			return AccountKey{}, false
-		}
 		return readOpenCodeInheritKey(home)
 	}
 	return AccountKey{}, false
@@ -402,12 +385,13 @@ func ProviderForSession(s *session.SessionState) string {
 }
 
 // readPiInheritKey parses ~/.pi/agent/auth.json (the caller has checked pi's
-// observe consent). Pi keys each provider block
-// by name (e.g. "openai-codex", "anthropic") and tags OAuth entries with
-// `type: "oauth"` plus an `accountId` (camelCase).
+// observe consent). Pi keys each provider block by name (e.g.
+// "openai-codex", "anthropic") and tags OAuth entries with `type: "oauth"`
+// plus an `accountId` (camelCase).
 //
 // Only "openai-codex" is checked: an "anthropic" block has no account id to
-// confirm against (#1994 / epic #1977 §3.2), so it could never match a donor and is not read here.
+// confirm against (#1994 / epic #1977 §3.2), so it could never match a donor
+// and is not read here.
 func readPiInheritKey(home string) (AccountKey, bool) {
 	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", authFileName), parsePiAuth)
 	if !ok {
@@ -433,7 +417,8 @@ func parsePiAuth(data []byte) (authCacheEntry, bool) {
 // openCodeJWTAccountID.
 //
 // OpenCode's `anthropic-oauth` block is not read: it carries no account id
-// to confirm against (#1994 / epic #1977 §3.2), so it could never match a donor.
+// to confirm against (#1994 / epic #1977 §3.2), so it could never match a
+// donor.
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
 	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", authFileName), parseOpenCodeAuth)
 	if !ok {

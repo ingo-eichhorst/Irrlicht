@@ -677,8 +677,7 @@ struct SessionListView: View {
     }
 
     /// All chips to render, one per confirmed account (one per session while
-    /// unconfirmed). See
-    /// `mergeIntoBuckets` for the bucketing rules.
+    /// unconfirmed). See `mergeIntoBuckets` for the bucketing rules.
     ///
     /// `static` and pure since #1675: `now` is a required argument, so the
     /// staleness branch below is decided by an input rather than by the
@@ -775,8 +774,7 @@ struct SessionListView: View {
                                  now: Date) {
         guard let snap = session.metrics?.rateLimit else { return }
         let snapIsStale = snapshotIsStale(snap, now: now)
-        let providerKey = snap.providerKey(adapter: session.adapter)
-            ?? "unknown:\(session.adapter ?? "")"
+        let providerKey = snap.bucketProviderKey(adapter: session.adapter)
         let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
         let mode = resolveChipMode(snap: snap, providerKey: providerKey)
         let imminent = snap.imminentWindow
@@ -815,7 +813,7 @@ struct SessionListView: View {
         } else {
             buckets[key] = ChipBucket(
                 providerKey: providerKey,
-                accountRef: snap.accountRef(adapter: session.adapter),
+                accountRef: snap.accountRef,
                 snapshot: snap,
                 session: session,
                 imminent: imminent,
@@ -958,8 +956,8 @@ struct SessionListView: View {
     ///
     /// Sourced from the daemon's per-provider cost rollup (`provider_costs`),
     /// keyed by the chip's bare providerKey (`d.providerKey`, not the account
-    /// bucket id). A project can mix providers, so this can't be re-derived from group costs client-side. When a
-    /// provider has no spend in the window we render `$0 / <frame>` — a
+    /// bucket id). A project can mix providers, so this can't be re-derived
+    /// from group costs client-side. When a provider has no spend in the window we render `$0 / <frame>` — a
     /// windowed zero is honest (matches the project cost display), so there's
     /// no separate em-dash zero-state.
     ///

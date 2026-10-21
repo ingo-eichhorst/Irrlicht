@@ -138,10 +138,11 @@ type RateLimitSnapshot struct {
 	QuotaScope string `json:"quota_scope,omitempty"`
 
 	// AttributionEvidence names what established Provider (and
-	// ConfirmedAccountRef, which the AccountBinder stamps later) for this snapshot —
-	// today "claude_code_statusline" or "codex_transcript_rate_limits". An
-	// adapter name alone is never valid evidence — see ProviderForSession's
-	// doc comment in core/application/services/quotainherit.go.
+	// ConfirmedAccountRef, which the AccountBinder stamps later) for this
+	// snapshot — today "claude_code_statusline" or
+	// "codex_transcript_rate_limits". An adapter name alone is never valid
+	// evidence — see ProviderForSession's doc comment in
+	// core/application/services/quotainherit.go.
 	AttributionEvidence string `json:"attribution_evidence,omitempty"`
 
 	// QuotaID is a stable provider-issued identifier for the specific quota

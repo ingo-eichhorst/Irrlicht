@@ -86,7 +86,7 @@ func TestAccountReader_EachCodexHomeRootUsesItsOwnAuthFile(t *testing.T) {
 
 	// Through the binder: each session's own snapshot is stamped with its
 	// own root's account.
-	binder := services.NewAccountBinder(map[string]outbound.SessionAccountReader{AdapterName: r}, nil, nopLogger{}, nil)
+	binder := services.NewAccountBinder(map[string]outbound.SessionAccountReader{AdapterName: r}, nil, mockLogger{}, nil)
 	for _, tc := range []struct{ path, want string }{{a, "acct-A"}, {b, "acct-B"}} {
 		s := codexSess("s-"+tc.want, tc.path)
 		s.Metrics = &session.SessionMetrics{RateLimit: &session.RateLimitSnapshot{SampledAt: 1800000000}}
@@ -96,10 +96,6 @@ func TestAccountReader_EachCodexHomeRootUsesItsOwnAuthFile(t *testing.T) {
 		}
 	}
 }
-
-// nopLogger satisfies outbound.Logger; the binder calls it only on a store
-// failure and these tests pass no store.
-type nopLogger struct{ outbound.Logger }
 
 func TestAccountReader_AuthModes(t *testing.T) {
 	tmp := t.TempDir()

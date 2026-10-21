@@ -16,12 +16,13 @@ type AccountBinder struct {
 	log     outbound.Logger
 	now     func() time.Time
 
-	mu     sync.Mutex
-	homes  map[string]session.HomeAccount
-	loaded bool
+	mu sync.Mutex
+	// homes is nil until the first homeFor loads it from the store.
+	homes map[string]session.HomeAccount
 }
 
-// NewAccountBinder builds a binder. readers is keyed by adapter name; now may be nil.
+// NewAccountBinder builds a binder. readers is keyed by adapter name; now may
+// be nil.
 func NewAccountBinder(readers map[string]outbound.SessionAccountReader, store outbound.HomeAccountStore, log outbound.Logger, now func() time.Time) *AccountBinder {
 	if now == nil {
 		now = time.Now
@@ -36,8 +37,7 @@ func NewAccountBinder(readers map[string]outbound.SessionAccountReader, store ou
 func (b *AccountBinder) homeFor(obs outbound.HomeAccountObservation) session.HomeAccount {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.loaded {
-		b.loaded = true
+	if b.homes == nil {
 		b.homes = map[string]session.HomeAccount{}
 		if b.store != nil {
 			if loaded, err := b.store.Load(); err != nil {
@@ -101,12 +101,7 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 		if state.AccountBinding != nil && state.AccountBinding.Ref != "" {
 			state.AccountBinding = &session.AccountBinding{Decided: true}
 		}
-		if rl := state.Metrics; rl != nil && rl.RateLimit != nil &&
-			(rl.RateLimit.ConfirmedAccountRef != "" || rl.RateLimit.Product != "") {
-			cp := *rl.RateLimit
-			cp.ConfirmedAccountRef, cp.Product = "", ""
-			rl.RateLimit = &cp
-		}
+		stampSnapshot(state, session.AccountBinding{}, obs)
 		return
 	}
 	home := b.homeFor(obs)
@@ -115,23 +110,25 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 	if state.AccountBinding != nil {
 		binding = *state.AccountBinding
 	}
+	var start int64
 	if !binding.Decided {
-		start := sessionStart(state, r)
+		start = sessionStart(state, r)
 		if start == 0 {
 			// Transcript start unreadable: stay undecided and retry, rather
 			// than guessing from FirstSeen alone.
-			b.stampSnapshot(state, session.AccountBinding{}, obs, home)
+			stampSnapshot(state, session.AccountBinding{}, obs)
 			return
 		}
-		binding = binding.Advance(home, start, b.now().Unix())
-	} else {
-		binding = binding.Advance(home, 0, b.now().Unix())
 	}
+	// Advance ignores start once the binding is decided.
+	binding = binding.Advance(home, start, b.now().Unix())
 	state.AccountBinding = &binding
-	b.stampSnapshot(state, binding, obs, home)
+	stampSnapshot(state, binding, obs)
 }
 
-func (b *AccountBinder) stampSnapshot(state *session.SessionState, binding session.AccountBinding, obs outbound.HomeAccountObservation, home session.HomeAccount) {
+// stampSnapshot replaces the session's rate-limit snapshot with a copy carrying
+// the account binding confirms for the reading's sample time.
+func stampSnapshot(state *session.SessionState, binding session.AccountBinding, obs outbound.HomeAccountObservation) {
 	if state.Metrics == nil || state.Metrics.RateLimit == nil {
 		return
 	}
@@ -142,7 +139,7 @@ func (b *AccountBinder) stampSnapshot(state *session.SessionState, binding sessi
 	// claudecode/statusline.go: no match), so clearing it here only drops a
 	// value this binder stamped on a snapshot MergeMetrics carried forward.
 	cp.Product = ""
-	if cp.ConfirmedAccountRef != "" && cp.ConfirmedAccountRef == home.Ref {
+	if cp.ConfirmedAccountRef != "" && cp.ConfirmedAccountRef == obs.Ref {
 		cp.Product = obs.Product
 	}
 	state.Metrics.RateLimit = &cp
