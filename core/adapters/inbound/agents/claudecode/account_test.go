@@ -117,36 +117,38 @@ func TestAccountReader_OutsideTheWatchedRootIsNotAttributed(t *testing.T) {
 	}
 }
 
+// expectRead asserts one ReadHomeAccount outcome: ok and, when ok, the ref.
+func expectRead(t *testing.T, what string, r *AccountReader, tr string, wantOK bool, wantRef string) {
+	t.Helper()
+	obs, ok := r.ReadHomeAccount(sess(tr))
+	if ok != wantOK || (wantOK && obs.Ref != wantRef) {
+		t.Errorf("%s: obs=%+v ok=%v, want ok=%v ref %q", what, obs, ok, wantOK, wantRef)
+	}
+}
+
+// writeIdentity overwrites the identity file at path.
+func writeIdentity(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAccountReader_NoAccountAndTransientFailure(t *testing.T) {
 	idPath, tr := rig(t, `{"numStartups":1}`)
 	r := NewAccountReader(always)
-	obs, ok := r.ReadHomeAccount(sess(tr))
-	if !ok || obs.Ref != "" {
-		t.Fatalf("no account: obs=%+v ok=%v, want ok with empty ref", obs, ok)
-	}
+	expectRead(t, "no account, want ok with empty ref", r, tr, true, "")
 	// Valid account, cached; then a torn write must return the last good.
-	if err := os.WriteFile(idPath, []byte(identityJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if obs, _ = r.ReadHomeAccount(sess(tr)); obs.Ref != "11111111-aaaa" {
-		t.Fatalf("after rewrite: %+v", obs)
-	}
-	if err := os.WriteFile(idPath, []byte(`{"oauthAcc`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if obs, ok = r.ReadHomeAccount(sess(tr)); !ok || obs.Ref != "11111111-aaaa" {
-		t.Errorf("torn write: obs=%+v ok=%v, want the last good observation", obs, ok)
-	}
+	writeIdentity(t, idPath, identityJSON)
+	expectRead(t, "after rewrite", r, tr, true, "11111111-aaaa")
+	writeIdentity(t, idPath, `{"oauthAcc`)
+	expectRead(t, "torn write, want the last good observation", r, tr, true, "11111111-aaaa")
 	// A reader that never saw a good file fails closed.
 	_, tr2 := rig(t, `{"oauthAcc`)
-	if obs, ok := NewAccountReader(always).ReadHomeAccount(sess(tr2)); ok {
-		t.Errorf("unparseable first read ok: %+v", obs)
-	}
-	_, tr3 := rig(t, "")
+	expectRead(t, "unparseable first read", NewAccountReader(always), tr2, false, "")
 	// A missing identity file is an answer (no account), not a transient failure.
-	if obs, ok := NewAccountReader(always).ReadHomeAccount(sess(tr3)); !ok || obs.Ref != "" {
-		t.Errorf("missing identity file: obs=%+v ok=%v, want ok with empty ref", obs, ok)
-	}
+	_, tr3 := rig(t, "")
+	expectRead(t, "missing identity file, want ok with empty ref", NewAccountReader(always), tr3, true, "")
 }
 
 func TestAccountReader_CachesByMtimeAndSize(t *testing.T) {

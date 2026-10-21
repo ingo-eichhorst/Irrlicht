@@ -101,7 +101,13 @@ func parseAuth(data []byte) (outbound.HomeAccountObservation, bool) {
 // top-level "timestamp" in the first accountfile.HeadBytes of the rollout
 // (the session_meta line carries one).
 func (r *AccountReader) TranscriptStart(s *session.SessionState) int64 {
-	if !r.allowed() || s == nil || authPathFor(s.TranscriptPath) == "" {
+	if !r.allowed() {
+		return 0
+	}
+	if s == nil {
+		return 0
+	}
+	if authPathFor(s.TranscriptPath) == "" {
 		return 0
 	}
 	return accountfile.FirstTimestamp(r.cache.FS, s.TranscriptPath)

@@ -163,7 +163,7 @@ describe('applyStripDensity', () => {
 describe('bucketChips per account (#2095)', () => {
   const nowMs = Date.UTC(2026, 0, 1);
   const future = nowMs / 1000 + 3600;
-  const mk = (id, adapter, extra, sampledAt, pct) => ({
+  const mk = ({ id, adapter, extra, sampledAt, pct }) => ({
     session_id: id, adapter,
     metrics: { rate_limit: {
       attribution_quality: 'confirmed', provider: 'anthropic',
@@ -176,8 +176,8 @@ describe('bucketChips per account (#2095)', () => {
   test('C1: two confirmed accounts of one provider stay two chips across interleaved ticks', () => {
     for (const [aT, bT] of [[2, 1], [3, 4], [6, 5], [7, 8]]) {
       const chips = bucketChips([
-        mk('s1', 'claude-code', { confirmed_account_ref: 'acct-A' }, aT, 10),
-        mk('s2', 'claude-code', { confirmed_account_ref: 'acct-B' }, bT, 20),
+        mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-A' }, sampledAt: aT, pct: 10 }),
+        mk({ id: 's2', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-B' }, sampledAt: bT, pct: 20 }),
       ], nowMs);
       expect(chips).toHaveLength(2);
       expect(pctOf(chips.find((c) => c.accountRef === 'acct-A'))).toBe(10);
@@ -189,8 +189,8 @@ describe('bucketChips per account (#2095)', () => {
   test('C2: confirmed provider with empty or missing ref never merges across sessions', () => {
     for (const [aT, bT] of [[2, 1], [3, 4], [6, 5]]) {
       const chips = bucketChips([
-        mk('s1', 'claude-code', { confirmed_account_ref: '' }, aT, 10),
-        mk('s2', 'claude-code', {}, bT, 20),
+        mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: '' }, sampledAt: aT, pct: 10 }),
+        mk({ id: 's2', adapter: 'claude-code', extra: {}, sampledAt: bT, pct: 20 }),
       ], nowMs);
       expect(chips).toHaveLength(2);
       expect(chips.map(pctOf).sort()).toEqual([10, 20]);
@@ -213,8 +213,8 @@ describe('bucketChips per account (#2095)', () => {
 
   test('same account on two sessions still folds to one chip (newest wins)', () => {
     const chips = bucketChips([
-      mk('s1', 'claude-code', { confirmed_account_ref: 'acct-A' }, 1, 10),
-      mk('s2', 'claude-code', { confirmed_account_ref: 'acct-A' }, 2, 30),
+      mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-A' }, sampledAt: 1, pct: 10 }),
+      mk({ id: 's2', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-A' }, sampledAt: 2, pct: 30 }),
     ], nowMs);
     expect(chips).toHaveLength(1);
     expect(pctOf(chips[0])).toBe(30);
@@ -225,7 +225,7 @@ describe('bucketChips per account (#2095)', () => {
     localStorage.setItem('providerMode_anthropic', 'usage');
     try {
       const chips = bucketChips([
-        mk('s1', 'claude-code', { confirmed_account_ref: 'acct-A', credits: { has_credits: true } }, 1, 10),
+        mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-A', credits: { has_credits: true } }, sampledAt: 1, pct: 10 }),
       ], nowMs);
       expect(chips).toHaveLength(1);
       expect(chips[0].mode).toBe('usage');
@@ -234,8 +234,8 @@ describe('bucketChips per account (#2095)', () => {
 
   test('C3 lock: settings rows stay one per provider with two account buckets', () => {
     const chips = bucketChips([
-      mk('s1', 'claude-code', { confirmed_account_ref: 'acct-A' }, 1, 10),
-      mk('s2', 'claude-code', { confirmed_account_ref: 'acct-B' }, 2, 20),
+      mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-A' }, sampledAt: 1, pct: 10 }),
+      mk({ id: 's2', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-B' }, sampledAt: 2, pct: 20 }),
     ], nowMs);
     expect(providerRowChips(chips)).toHaveLength(1);
   });
@@ -243,9 +243,9 @@ describe('bucketChips per account (#2095)', () => {
   test('C4: tooltip and overflow name the account; productLabel maps known products', () => {
     expect(productLabel('claude_team')).toBe('Claude Team');
     expect(productLabel('some_new_tier')).toBe('Some New Tier');
-    const [a] = bucketChips([mk('s1', 'claude-code', { confirmed_account_ref: 'acct-ABCD', product: 'claude_team' }, 1, 10)], nowMs);
+    const [a] = bucketChips([mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: 'acct-ABCD', product: 'claude_team' }, sampledAt: 1, pct: 10 })], nowMs);
     expect(quotaTooltip(a, nowMs).split('\n').slice(0, 2)).toEqual(['Claude Team', 'Account …ABCD']);
-    const [u] = bucketChips([mk('s2', 'claude-code', {}, 1, 10)], nowMs);
+    const [u] = bucketChips([mk({ id: 's2', adapter: 'claude-code', extra: {}, sampledAt: 1, pct: 10 })], nowMs);
     expect(quotaTooltip(u, nowMs)).toContain('Account unconfirmed');
     expect(buildOverflowChipDOM([a, u]).title).toBe('Claude Team · Account …ABCD: 10%\nAnthropic · Account unconfirmed: 10%');
   });

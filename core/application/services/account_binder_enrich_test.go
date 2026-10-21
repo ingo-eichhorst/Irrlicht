@@ -29,6 +29,15 @@ func (f *freshSnapshotMetrics) ComputeMetrics(_, _ string) (*session.SessionMetr
 	return m, nil
 }
 
+// snapshotRef is the session's confirmed account ref, "" when it has no
+// rate-limit snapshot at all.
+func snapshotRef(st *session.SessionState) string {
+	if st.Metrics == nil || st.Metrics.RateLimit == nil {
+		return ""
+	}
+	return st.Metrics.RateLimit.ConfirmedAccountRef
+}
+
 // R3 (red-first: with the binder field present but not called from the
 // enricher the ref is ""): a statusline tick ingested, then the activity
 // refresh, must leave the ref on the session's snapshot — on EVERY pass.
@@ -43,7 +52,7 @@ func TestEnricher_StampsAccountRefAfterEveryMetricsPass(t *testing.T) {
 	st := &session.SessionState{SessionID: "s1", Adapter: "claude-code", FirstSeen: 100, TranscriptPath: "/t.jsonl"}
 	fm.IngestRateLimit("/t.jsonl", &session.RateLimitSnapshot{SampledAt: 150})
 	e.RefreshOnActivity(st, "/t.jsonl")
-	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.ConfirmedAccountRef != "acct-A" {
+	if snapshotRef(st) != "acct-A" {
 		t.Fatalf("after RefreshOnActivity: snapshot = %+v, want ConfirmedAccountRef acct-A", st.Metrics)
 	}
 	e.RefreshMetrics(st)
@@ -54,7 +63,7 @@ func TestEnricher_StampsAccountRefAfterEveryMetricsPass(t *testing.T) {
 	// A second session created through EnrichNewSession is stamped too.
 	st2 := &session.SessionState{SessionID: "s2", Adapter: "claude-code", FirstSeen: 100}
 	e.EnrichNewSession(st2, agent.Event{SessionID: "s2", TranscriptPath: "/t.jsonl"})
-	if st2.Metrics == nil || st2.Metrics.RateLimit == nil || st2.Metrics.RateLimit.ConfirmedAccountRef != "acct-A" {
+	if snapshotRef(st2) != "acct-A" {
 		t.Errorf("after EnrichNewSession: snapshot = %+v, want ConfirmedAccountRef acct-A", st2.Metrics)
 	}
 }

@@ -49,7 +49,10 @@ func OSFS() FS {
 			defer f.Close()
 			buf := make([]byte, n)
 			m, err := io.ReadFull(f, buf)
-			if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				err = nil
+			}
+			if err != nil {
 				return nil, err
 			}
 			return buf[:m], nil

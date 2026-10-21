@@ -37,16 +37,7 @@ func NewAccountBinder(readers map[string]outbound.SessionAccountReader, store ou
 func (b *AccountBinder) homeFor(obs outbound.HomeAccountObservation) session.HomeAccount {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.homes == nil {
-		b.homes = map[string]session.HomeAccount{}
-		if b.store != nil {
-			if loaded, err := b.store.Load(); err != nil {
-				b.log.LogError("account-binder", "", "load account-homes: "+err.Error())
-			} else if loaded != nil {
-				b.homes = loaded
-			}
-		}
-	}
+	b.loadHomes()
 	known, seen := b.homes[obs.Home]
 	if seen && known.Ref == obs.Ref {
 		return known
@@ -57,12 +48,38 @@ func (b *AccountBinder) homeFor(obs outbound.HomeAccountObservation) session.Hom
 	}
 	cur := session.HomeAccount{Ref: obs.Ref, Since: since}
 	b.homes[obs.Home] = cur
-	if b.store != nil {
-		if err := b.store.Save(b.homes); err != nil {
-			b.log.LogError("account-binder", "", "save account-homes: "+err.Error())
-		}
-	}
+	b.saveHomes()
 	return cur
+}
+
+// loadHomes lazily loads the persisted homes on first use. The caller holds
+// b.mu.
+func (b *AccountBinder) loadHomes() {
+	if b.homes != nil {
+		return
+	}
+	b.homes = map[string]session.HomeAccount{}
+	if b.store == nil {
+		return
+	}
+	loaded, err := b.store.Load()
+	if err != nil {
+		b.log.LogError("account-binder", "", "load account-homes: "+err.Error())
+		return
+	}
+	if loaded != nil {
+		b.homes = loaded
+	}
+}
+
+// saveHomes persists the homes. The caller holds b.mu.
+func (b *AccountBinder) saveHomes() {
+	if b.store == nil {
+		return
+	}
+	if err := b.store.Save(b.homes); err != nil {
+		b.log.LogError("account-binder", "", "save account-homes: "+err.Error())
+	}
 }
 
 // sessionStart is the earliest time the session is known to have existed, 0

@@ -77,23 +77,36 @@ func TestAccountReader_EachCodexHomeRootUsesItsOwnAuthFile(t *testing.T) {
 	b := codexHomeRig(t, filepath.Join(tmp, "homeB"), authJSON("chatgpt", "acct-B"), metaLine)
 
 	r := NewAccountReader(always)
-	for _, tc := range []struct{ path, want string }{{a, "acct-A"}, {b, "acct-B"}} {
-		obs, ok := r.ReadHomeAccount(codexSess("s", tc.path))
-		if !ok || obs.Ref != tc.want || obs.Product != "" {
-			t.Errorf("%s: obs=%+v ok=%v, want ref %q", tc.path, obs, ok, tc.want)
-		}
+	roots := []struct{ path, want string }{{a, "acct-A"}, {b, "acct-B"}}
+	for _, tc := range roots {
+		expectRootRef(t, r, tc.path, tc.want)
 	}
 
 	// Through the binder: each session's own snapshot is stamped with its
 	// own root's account.
 	binder := services.NewAccountBinder(map[string]outbound.SessionAccountReader{AdapterName: r}, nil, mockLogger{}, nil)
-	for _, tc := range []struct{ path, want string }{{a, "acct-A"}, {b, "acct-B"}} {
-		s := codexSess("s-"+tc.want, tc.path)
-		s.Metrics = &session.SessionMetrics{RateLimit: &session.RateLimitSnapshot{SampledAt: 1800000000}}
-		binder.Stamp(s)
-		if got := s.Metrics.RateLimit.ConfirmedAccountRef; got != tc.want {
-			t.Errorf("binder stamped %q, want %q (path %s)", got, tc.want, tc.path)
-		}
+	for _, tc := range roots {
+		expectBinderStamp(t, binder, tc.path, tc.want)
+	}
+}
+
+// expectRootRef asserts the reader attributes the rollout at path to want.
+func expectRootRef(t *testing.T, r *AccountReader, path, want string) {
+	t.Helper()
+	obs, ok := r.ReadHomeAccount(codexSess("s", path))
+	if !ok || obs.Ref != want || obs.Product != "" {
+		t.Errorf("%s: obs=%+v ok=%v, want ref %q", path, obs, ok, want)
+	}
+}
+
+// expectBinderStamp asserts the binder stamps the session at path with want.
+func expectBinderStamp(t *testing.T, binder *services.AccountBinder, path, want string) {
+	t.Helper()
+	s := codexSess("s-"+want, path)
+	s.Metrics = &session.SessionMetrics{RateLimit: &session.RateLimitSnapshot{SampledAt: 1800000000}}
+	binder.Stamp(s)
+	if got := s.Metrics.RateLimit.ConfirmedAccountRef; got != want {
+		t.Errorf("binder stamped %q, want %q (path %s)", got, want, path)
 	}
 }
 

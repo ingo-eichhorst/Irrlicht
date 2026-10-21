@@ -63,7 +63,13 @@ func identityPathFor(transcriptPath string) string {
 		return ""
 	}
 	rel, err := filepath.Rel(root, filepath.Clean(transcriptPath))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil {
+		return ""
+	}
+	if rel == "." || rel == ".." {
+		return ""
+	}
+	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
 	identity, err := agentpaths.AbsRoot(agentpaths.FromEnv(

@@ -94,6 +94,23 @@ func snapState(sampledAt int64, binding *session.AccountBinding) *session.Sessio
 
 func refOf(s *session.SessionState) string { return s.Metrics.RateLimit.ConfirmedAccountRef }
 
+// expectRef reports (non-fatally) when s's confirmed ref is not want; format
+// takes the actual ref as its one %q.
+func expectRef(t *testing.T, s *session.SessionState, want, format string) {
+	t.Helper()
+	if got := refOf(s); got != want {
+		t.Errorf(format, got)
+	}
+}
+
+// requireRef is expectRef that stops the test.
+func requireRef(t *testing.T, s *session.SessionState, want, format string) {
+	t.Helper()
+	if got := refOf(s); got != want {
+		t.Fatalf(format, got)
+	}
+}
+
 // R1 (red-first against a stamper that writes the home's CURRENT ref, and
 // again, as A2-1, against the upper-bound ClearedAt): the account changes
 // mid-session. The switch mtime (300) is only an UPPER bound on when it
@@ -106,9 +123,7 @@ func TestAccountBinder_MidSessionSwitchClearsStickily(t *testing.T) {
 	g.now = 200
 	s := snapState(150, nil)
 	g.b.Stamp(s)
-	if got := refOf(s); got != "acct-A" {
-		t.Fatalf("before any switch: ref = %q, want acct-A", got)
-	}
+	requireRef(t, s, "acct-A", "before any switch: ref = %q, want acct-A")
 	if s.Metrics.RateLimit.Product != "claude_team" {
 		t.Errorf("product = %q, want claude_team alongside a ref", s.Metrics.RateLimit.Product)
 	}
@@ -123,23 +138,15 @@ func TestAccountBinder_MidSessionSwitchClearsStickily(t *testing.T) {
 	g.b.Stamp(atConfirm)
 	g.b.Stamp(afterConfirm)
 	g.b.Stamp(afterSwitch)
-	if got := refOf(atConfirm); got != "acct-A" {
-		t.Errorf("reading at the last confirmation: ref = %q, want acct-A kept", got)
-	}
-	if got := refOf(afterConfirm); got != "" {
-		t.Errorf("reading after the last confirmation but before the switch mtime: ref = %q, want empty (the mtime is an upper bound)", got)
-	}
-	if got := refOf(afterSwitch); got != "" {
-		t.Errorf("reading at the switch mtime: ref = %q, want empty", got)
-	}
+	expectRef(t, atConfirm, "acct-A", "reading at the last confirmation: ref = %q, want acct-A kept")
+	expectRef(t, afterConfirm, "", "reading after the last confirmation but before the switch mtime: ref = %q, want empty (the mtime is an upper bound)")
+	expectRef(t, afterSwitch, "", "reading at the switch mtime: ref = %q, want empty")
 
 	g.r.set("acct-A", 400)
 	g.now = 410
 	back := snapState(450, afterSwitch.AccountBinding)
 	g.b.Stamp(back)
-	if got := refOf(back); got != "" {
-		t.Errorf("after switching back: ref = %q, want empty (never re-binds)", got)
-	}
+	expectRef(t, back, "", "after switching back: ref = %q, want empty (never re-binds)")
 }
 
 // A2-1 (red-first, the reviewer's scenario): bound to acct-X; consent is
@@ -166,9 +173,7 @@ func TestAccountBinder_RevokeGapSwitchDoesNotLabelTheNewAccountsReading(t *testi
 	g.now = 410
 	y := snapState(250, s.AccountBinding)
 	g.b.Stamp(y)
-	if got := refOf(y); got != "" {
-		t.Errorf("reading sampled during the revoke gap: ref = %q, want empty", got)
-	}
+	expectRef(t, y, "", "reading sampled during the revoke gap: ref = %q, want empty")
 }
 
 // R2 (red-first against the same naive stamper): a session that began before
@@ -181,19 +186,13 @@ func TestAccountBinder_SessionOlderThanObservationNeverBinds(t *testing.T) {
 		g.now = 200
 		s := snapState(180, nil)
 		g.b.Stamp(s)
-		if got := refOf(s); got != "" {
-			t.Fatalf("undecided (no transcript start): ref = %q, want empty", got)
-		}
+		requireRef(t, s, "", "undecided (no transcript start): ref = %q, want empty")
 		g.r.start = 120
 		g.b.Stamp(s)
-		if got := refOf(s); got != "" {
-			t.Fatalf("home Since 150 > session start 100: ref = %q, want empty", got)
-		}
+		requireRef(t, s, "", "home Since 150 > session start 100: ref = %q, want empty")
 		g.now = 900
 		g.b.Stamp(s)
-		if got := refOf(s); got != "" {
-			t.Fatalf("later pass re-bound a session decided unconfirmed: ref = %q", got)
-		}
+		requireRef(t, s, "", "later pass re-bound a session decided unconfirmed: ref = %q")
 	})
 	t.Run("transcript first event predates FirstSeen and Since", func(t *testing.T) {
 		g := newBinderRig(60)
@@ -201,9 +200,7 @@ func TestAccountBinder_SessionOlderThanObservationNeverBinds(t *testing.T) {
 		g.now = 200
 		s := snapState(180, nil)
 		g.b.Stamp(s)
-		if got := refOf(s); got != "" {
-			t.Fatalf("ref = %q, want empty: the transcript began before the account was observed", got)
-		}
+		requireRef(t, s, "", "ref = %q, want empty: the transcript began before the account was observed")
 	})
 	t.Run("home observed before both binds", func(t *testing.T) {
 		g := newBinderRig(90)
@@ -211,9 +208,7 @@ func TestAccountBinder_SessionOlderThanObservationNeverBinds(t *testing.T) {
 		g.now = 200
 		s := snapState(180, nil)
 		g.b.Stamp(s)
-		if got := refOf(s); got != "acct-A" {
-			t.Fatalf("ref = %q, want acct-A", got)
-		}
+		requireRef(t, s, "acct-A", "ref = %q, want acct-A")
 	})
 }
 
@@ -234,20 +229,14 @@ func TestAccountBinder_RestartSeesSwitchMadeWhileDown(t *testing.T) {
 	before, after := snapState(200, s.AccountBinding), snapState(600, s.AccountBinding)
 	g.b.Stamp(before)
 	g.b.Stamp(after)
-	if got := refOf(before); got != "acct-A" {
-		t.Errorf("reading at the last confirmation relabelled: ref = %q, want acct-A", got)
-	}
-	if got := refOf(after); got != "" {
-		t.Errorf("reading after the switch: ref = %q, want empty (cleared, not re-bound)", got)
-	}
+	expectRef(t, before, "acct-A", "reading at the last confirmation relabelled: ref = %q, want acct-A")
+	expectRef(t, after, "", "reading after the switch: ref = %q, want empty (cleared, not re-bound)")
 
 	// This session's start is 90 (transcript) < the new account's Since 500:
 	// it began before acct-B was observed, so it never binds to it.
 	older := snapState(600, nil)
 	g.b.Stamp(older)
-	if got := refOf(older); got != "" {
-		t.Errorf("session that began before the new account's Since: ref = %q, want empty", got)
-	}
+	expectRef(t, older, "", "session that began before the new account's Since: ref = %q, want empty")
 }
 
 // LOCK (passes by construction; written to pin the positive side): a session
@@ -262,9 +251,7 @@ func TestAccountBinder_SessionStartedAfterSwitchBindsToNewAccount(t *testing.T) 
 	s.FirstSeen = 610
 	g.now = 700
 	g.b.Stamp(s)
-	if got := refOf(s); got != "acct-B" {
-		t.Errorf("session started at 600 > Since 500: ref = %q, want acct-B", got)
-	}
+	expectRef(t, s, "acct-B", "session started at 600 > Since 500: ref = %q, want acct-B")
 }
 
 // A2-2 (red-first): when consent is not granted, a bound session becomes

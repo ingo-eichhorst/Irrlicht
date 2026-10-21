@@ -18,11 +18,17 @@ func parseRef(b []byte) (outbound.HomeAccountObservation, bool) {
 
 // A2-4 (red-first): a removed identity file (a logout that deletes it) is an
 // answer — no account — not a transient failure that keeps the old account.
-func TestCache_RemovedFileReportsNoAccount(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "auth.json")
-	if err := os.WriteFile(p, []byte("acct-X"), 0o600); err != nil {
+// writeAcct writes body to the auth file at p.
+func writeAcct(t *testing.T, p, body string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestCache_RemovedFileReportsNoAccount(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "auth.json")
+	writeAcct(t, p, "acct-X")
 	c := NewCache(OSFS())
 	if obs, ok := c.Lookup(p, parseRef); !ok || obs.Ref != "acct-X" {
 		t.Fatalf("setup: obs=%+v ok=%v", obs, ok)
@@ -31,13 +37,14 @@ func TestCache_RemovedFileReportsNoAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	obs, ok := c.Lookup(p, parseRef)
-	if !ok || obs.Ref != "" || obs.Home != p || obs.ModTime != 0 {
+	if !ok {
+		t.Errorf("after removal: ok=false, want ok with empty ref")
+	}
+	if obs.Ref != "" || obs.Home != p || obs.ModTime != 0 {
 		t.Errorf("after removal: obs=%+v ok=%v, want ok with empty ref, Home set, ModTime 0", obs, ok)
 	}
 	// The entry is gone: a recreated file is read afresh.
-	if err := os.WriteFile(p, []byte("acct-Y"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAcct(t, p, "acct-Y")
 	if obs, _ := c.Lookup(p, parseRef); obs.Ref != "acct-Y" {
 		t.Errorf("after recreate: ref = %q, want acct-Y", obs.Ref)
 	}
