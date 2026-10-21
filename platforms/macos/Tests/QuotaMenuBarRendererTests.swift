@@ -343,17 +343,23 @@ final class QuotaMenuBarRendererTests: XCTestCase {
 
     // MARK: - selectedSnapshot
 
-    func testSelectedSnapshotPicksFreshestAcrossSessions() {
+    /// Renamed from `...PicksFreshestAcrossSessions` (#2095 D1): across
+    /// accounts the icon no longer follows freshest-`sampledAt`, it follows the
+    /// most constrained account. This fixture's sessions are confirmed but ref-less (one
+    /// bucket each) and the newer one is also the more used, so it passes under
+    /// both rules — the rule itself is locked red-first by
+    /// `QuotaAccountBucketTests.testSelectedSnapshotIsDeterministicAcrossInterleavedTicks`.
+    func testSelectedSnapshotPicksMostConstrainedAcrossSessions() {
         let older = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 120)
         let newer = makeSession(id: "2", adapter: "claude-code", usedPercent: 90, sampledSecondsAgo: 5)
-        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [older, newer], providerKey: nil)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [older, newer], providerKey: nil, now: now)
         XCTAssertEqual(got?.windows.first?.usedPercent, 90)
     }
 
     func testSelectedSnapshotFiltersByProviderKey() {
         let claude = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 5)
         let codex = makeSession(id: "2", adapter: "codex", usedPercent: 90, sampledSecondsAgo: 5)
-        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [claude, codex], providerKey: "anthropic")
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [claude, codex], providerKey: "anthropic", now: now)
         XCTAssertEqual(got?.windows.first?.usedPercent, 10)
     }
 
@@ -370,7 +376,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             sampledAt: now.addingTimeInterval(-5)
         )
         let stale = sessionState(id: "1", adapter: "claude-code", rateLimit: staleRateLimit)
-        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [stale], providerKey: nil)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [stale], providerKey: nil, now: now)
         XCTAssertEqual(got?.windows.first?.usedPercent, 10)
     }
 
@@ -383,7 +389,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             rateLimit: RateLimitInfo(windows: [], sampledAt: now) // freshest, but empty
         )
         let renderable = makeSession(id: "2", adapter: "claude-code", usedPercent: 42, sampledSecondsAgo: 120)
-        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [unrenderable, renderable], providerKey: nil)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [unrenderable, renderable], providerKey: nil, now: now)
         XCTAssertEqual(got?.windows.first?.usedPercent, 42)
     }
 
@@ -392,7 +398,7 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             id: "sess_1", state: .working, model: "claude-sonnet", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             firstSeen: now, updatedAt: now
         )
-        XCTAssertNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [plain], providerKey: nil))
+        XCTAssertNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [plain], providerKey: nil, now: now))
     }
 
     // MARK: - helpers

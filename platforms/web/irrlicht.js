@@ -694,7 +694,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // no provider_costs entry for that provider/window. Exported for
     // quotaChips.js.
     export function usageSpendForChip(chip) {
-      const byTf = dashboardProviderCosts[chip.key];
+      const byTf = dashboardProviderCosts[chip.providerKey];
       const v = byTf?.[currentUsageTimeframe];
       return typeof v === 'number' ? v : 0;
     }

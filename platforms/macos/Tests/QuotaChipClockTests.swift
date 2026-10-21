@@ -77,13 +77,20 @@ final class QuotaChipClockTests: XCTestCase {
         info(resetsAt: Date(timeIntervalSince1970: 0), usedPercent: 42)
     }
 
+    /// #2095: the fixtures are stamped provider + confirmed + ONE shared
+    /// account ref. Unstamped sessions now bucket per session, so without this
+    /// the two-session cases below would stop colliding in one bucket and
+    /// would no longer test the in-bucket staleness precedence they exist for.
     private func info(resetsAt: Date, usedPercent: Double, windowMinutes: Int = 300) -> RateLimitInfo {
         RateLimitInfo(
             windows: [RateLimitWindowInfo(usedPercent: usedPercent,
                                           windowMinutes: windowMinutes,
                                           resetsAt: resetsAt)],
             planType: "max",
-            sampledAt: early
+            sampledAt: early,
+            provider: "anthropic",
+            attributionQuality: RateLimitInfo.attributionQualityConfirmed,
+            confirmedAccountRef: "acct-shared"
         )
     }
 
@@ -197,7 +204,10 @@ final class QuotaChipClockTests: XCTestCase {
             ("two stale, second sampled later", [
                 session(id: "1", rateLimit: stale),
                 session(id: "2", rateLimit: RateLimitInfo(windows: stale.windows, planType: "max",
-                                                          sampledAt: early.addingTimeInterval(60))),
+                                                          sampledAt: early.addingTimeInterval(60),
+                                                          provider: "anthropic",
+                                                          attributionQuality: RateLimitInfo.attributionQualityConfirmed,
+                                                          confirmedAccountRef: "acct-shared")),
             ]),
         ]
         var bucketsSeen = 0
@@ -232,7 +242,10 @@ final class QuotaChipClockTests: XCTestCase {
     func testTheMergePrefersAFreshSnapshotOverAStaleOneEvenWhenTheStaleOneIsNewer() {
         // The stale snapshot is sampled LATER, so a sampledAt-only rule picks it.
         let newerButStale = RateLimitInfo(windows: alreadyStale.windows, planType: "max",
-                                          sampledAt: early.addingTimeInterval(600))
+                                          sampledAt: early.addingTimeInterval(600),
+                                          provider: "anthropic",
+                                          attributionQuality: RateLimitInfo.attributionQualityConfirmed,
+                                          confirmedAccountRef: "acct-shared")
         var buckets: [String: SessionListView.ChipBucket] = [:]
         for s in [session(id: "1", rateLimit: newerButStale), session(id: "2", rateLimit: flipping)] {
             SessionListView.mergeIntoBuckets(session: s, into: &buckets, now: early)

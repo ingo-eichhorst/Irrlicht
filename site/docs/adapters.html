@@ -106,6 +106,7 @@
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/claudecode/</code></li>
         <li><strong>Watches:</strong> <code>~/.claude/projects/**/*.jsonl</code></li>
         <li>Uses the shared fswatcher with recursive directory watching (two-level tree: <code>root/&lt;project&gt;/&lt;id&gt;.jsonl</code>)</li>
+        <li><strong>Account identity (separate consent row, &ldquo;Claude Code account&rdquo;):</strong> so each account gets its own quota chip, the daemon reads two fields, <code>oauthAccount.accountUuid</code> and <code>oauthAccount.organizationType</code>, from Claude Code&rsquo;s identity file (<code>~/.claude.json</code>, or <code>$CLAUDE_CONFIG_DIR/.claude.json</code> when that is set), plus the first timestamp of a session&rsquo;s transcript. It never reads or keeps the email address, names, or any token. It is declared on its own <code>claude-code-account</code> pseudo-adapter under the <code>account</code> permission, not as a second permission on <code>claude-code</code>. A session is attributed to an account only if that account was already logged in when the session began and has not changed since; otherwise its quota stays unattributed</li>
         <li><strong>Adapter name in session state:</strong> <code>"claude-code"</code></li>
       </ul>
 

@@ -44,35 +44,56 @@ enum QuotaMenuBarRenderer {
         compact: Bool = false,
         now: Date
     ) -> NSImage? {
-        guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey) else {
+        guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey, now: now) else {
             return nil
         }
         return buildImage(for: info, compact: compact, now: now)
     }
 
-    /// Freshest-`sampledAt`-wins across `sessions`, matching
-    /// SessionListView.mergeIntoBuckets' choice of representative snapshot
-    /// per provider. Unlike that bucketing, this does **not** drop stale
-    /// snapshots (any window past `resetsAt`): the popover keeps a stale
-    /// snapshot and dims the chip rather than blanking it, and the compact
-    /// icon has no room to dim — so it keeps showing the last-known reading
-    /// until the next statusline tick refreshes it, instead of disappearing
-    /// (which would otherwise make an active `.usage`-style icon look idle;
-    /// see MenuBarImageBuilder's fallback for the session-count side of that
-    /// same problem). What *is* filtered out is a snapshot with no windows
-    /// at all (the credits/usage-only path) — that can never render, so it
-    /// must not win over an older snapshot that actually has data.
+    /// Picks the snapshot the menu-bar icon renders (#2095 D1). Candidates are
+    /// first bucketed by `RateLimitInfo.accountBucketKey` — the same key the
+    /// popover uses — keeping, inside one account, the fresh-over-stale then
+    /// newest-`sampledAt` snapshot. ACROSS accounts the choice is: fresh before
+    /// stale, then the highest imminent `usedPercent` (nil imminent = 0), ties
+    /// by bucket key ascending. Freshest-`sampledAt` across accounts is the
+    /// bug this replaces: two accounts ticking alternately made the icon flip.
+    ///
+    /// `now` decides staleness (any window past `resetsAt`) and is required
+    /// (#1675): the caller passes the one clock it renders against.
+    /// Unlike the popover bucketing this does **not** drop stale snapshots: the
+    /// icon has no room to dim, so with nothing fresh it keeps the last-known
+    /// reading (an active `.usage`-style icon must not look idle; see
+    /// MenuBarImageBuilder's fallback). A snapshot with no windows at all (the
+    /// credits/usage-only path) can never render and is skipped.
     static func selectedSnapshot(
         sessions: [SessionState],
-        providerKey: String?
+        providerKey: String?,
+        now: Date
     ) -> RateLimitInfo? {
-        let candidates: [(key: String, info: RateLimitInfo)] = sessions.compactMap { session in
-            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
-            let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
-            return (key, snap)
+        struct Candidate { let key: String; let info: RateLimitInfo; let stale: Bool }
+        var byAccount: [String: Candidate] = [:]
+        for session in sessions {
+            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
+            let provider = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
+            if let providerKey, provider != providerKey { continue }
+            let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
+            let cand = Candidate(key: key, info: snap, stale: SessionListView.snapshotIsStale(snap, now: now))
+            if let existing = byAccount[key] {
+                let better = existing.stale != cand.stale
+                    ? !cand.stale
+                    : cand.info.sampledAt > existing.info.sampledAt
+                if !better { continue }
+            }
+            byAccount[key] = cand
         }
-        let filtered = providerKey.map { key in candidates.filter { $0.key == key } } ?? candidates
-        return filtered.max { $0.info.sampledAt < $1.info.sampledAt }?.info
+        let best = byAccount.values.min { l, r in
+            if l.stale != r.stale { return !l.stale }
+            let lp = l.info.imminentWindow?.usedPercent ?? 0
+            let rp = r.info.imminentWindow?.usedPercent ?? 0
+            if lp != rp { return lp > rp }
+            return l.key < r.key
+        }
+        return best?.info
     }
 
     static func buildImage(for info: RateLimitInfo, compact: Bool = false, now: Date) -> NSImage? {

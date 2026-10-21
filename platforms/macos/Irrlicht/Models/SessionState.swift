@@ -242,6 +242,16 @@ struct RateLimitInfo: Codable, Hashable {
     /// Provider-defined vocabulary, not an enum — see the Go field's doc.
     let retrievalFailure: String?
 
+    /// Provider-issued account id this snapshot was observed against (#2095);
+    /// nil/"" = unconfirmed. Wire: `confirmed_account_ref`. Only meaningful
+    /// alongside a confirmed `provider` — `accountRef(adapter:)` is the one
+    /// reader that enforces that.
+    let confirmedAccountRef: String?
+
+    /// Product/tier the account is on (Claude Code: `organizationType`, e.g.
+    /// "claude_team"). Wire: `product`; only ever set with a non-empty ref.
+    let product: String?
+
     enum CodingKeys: String, CodingKey {
         case windows
         case planType = "plan_type"
@@ -253,6 +263,8 @@ struct RateLimitInfo: Codable, Hashable {
         case attributionEvidence = "attribution_evidence"
         case observationSource = "observation_source"
         case retrievalFailure = "retrieval_failure"
+        case confirmedAccountRef = "confirmed_account_ref"
+        case product
     }
 
     /// The only value `attributionQuality` treats as resolvable evidence —
@@ -270,7 +282,8 @@ struct RateLimitInfo: Codable, Hashable {
         reachedType: String? = nil, sampledAt: Date,
         provider: String? = nil, attributionQuality: String? = nil,
         attributionEvidence: String? = nil, observationSource: String? = nil,
-        retrievalFailure: String? = nil
+        retrievalFailure: String? = nil,
+        confirmedAccountRef: String? = nil, product: String? = nil
     ) {
         self.windows = windows
         self.planType = planType
@@ -282,6 +295,8 @@ struct RateLimitInfo: Codable, Hashable {
         self.attributionEvidence = attributionEvidence
         self.observationSource = observationSource
         self.retrievalFailure = retrievalFailure
+        self.confirmedAccountRef = confirmedAccountRef
+        self.product = product
     }
 
     init(from decoder: Decoder) throws {
@@ -297,6 +312,8 @@ struct RateLimitInfo: Codable, Hashable {
         attributionEvidence = try c.decodeIfPresent(String.self, forKey: .attributionEvidence)
         observationSource = try c.decodeIfPresent(String.self, forKey: .observationSource)
         retrievalFailure = try c.decodeIfPresent(String.self, forKey: .retrievalFailure)
+        confirmedAccountRef = try c.decodeIfPresent(String.self, forKey: .confirmedAccountRef)
+        product = try c.decodeIfPresent(String.self, forKey: .product)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -311,6 +328,8 @@ struct RateLimitInfo: Codable, Hashable {
         try c.encodeIfPresent(attributionEvidence, forKey: .attributionEvidence)
         try c.encodeIfPresent(observationSource, forKey: .observationSource)
         try c.encodeIfPresent(retrievalFailure, forKey: .retrievalFailure)
+        try c.encodeIfPresent(confirmedAccountRef, forKey: .confirmedAccountRef)
+        try c.encodeIfPresent(product, forKey: .product)
     }
 
     /// The window with the highest UsedPercent — the natural "next to hit
@@ -355,6 +374,44 @@ struct RateLimitInfo: Codable, Hashable {
             return nil
         }
         return provider
+    }
+
+    /// The confirmed account ref, or "" when the provider is unconfirmed or
+    /// the ref is absent/empty (contract: "Client bucketing").
+    func accountRef(adapter: String?) -> String {
+        guard providerKey(adapter: adapter) != nil else { return "" }
+        return confirmedAccountRef ?? ""
+    }
+
+    /// The quota-chip bucket key shared by the popover (`mergeIntoBuckets`)
+    /// and the menu bar (`QuotaMenuBarRenderer.selectedSnapshot`): one bucket
+    /// per confirmed account, and one per SESSION when the account is
+    /// unconfirmed — an unconfirmed snapshot never merges with another
+    /// session's (#2095 D3).
+    func accountBucketKey(adapter: String?, sessionID: String) -> String {
+        let key = providerKey(adapter: adapter) ?? "unknown:\(adapter ?? "")"
+        let ref = accountRef(adapter: adapter)
+        return ref.isEmpty ? "\(key)|session:\(sessionID)" : "\(key)|\(ref)"
+    }
+
+    /// Friendly label for `product`, mirroring the web's `productLabel`.
+    var productLabel: String? {
+        guard let p = product, !p.isEmpty else { return nil }
+        switch p {
+        case "claude_team": return "Claude Team"
+        case "claude_max": return "Claude Max"
+        case "claude_pro": return "Claude Pro"
+        case "claude_enterprise": return "Claude Enterprise"
+        default: return p.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    /// Tier label for chips/tooltips: plan type first, then product.
+    var tierLabel: String? { planTypeLabel ?? productLabel }
+
+    /// Tooltip line: "Account …<last4>" for a set ref, else "Account unconfirmed".
+    static func accountLine(ref: String) -> String {
+        ref.isEmpty ? "Account unconfirmed" : "Account …" + String(ref.suffix(4))
     }
 }
 

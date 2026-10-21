@@ -626,7 +626,7 @@ struct SessionListView: View {
     /// Subscription chips show the imminent window's percent; usage chips
     /// show the cumulative spend headline.
     private func quotaOverflowSummary(_ d: QuotaWidgetData) -> String {
-        let label = d.snapshot.planTypeLabel ?? d.id.capitalized
+        let label = d.snapshot.tierLabel ?? d.providerKey.capitalized
         switch d.mode {
         case .subscription:
             if let imm = d.imminent {
@@ -663,7 +663,12 @@ struct SessionListView: View {
     /// inside `QuotaStaleDimmed`, from that subtree's `\.formatNow`, which a
     /// snapshot host can pin and a test can rasterise twice.
     struct QuotaWidgetData: Identifiable {
+        /// The account bucket key (`RateLimitInfo.accountBucketKey`), NOT a
+        /// provider key — use `providerKey` for mode preference, cost and icon
+        /// lookups (#2095).
         let id: String
+        let providerKey: String
+        let accountRef: String
         let mode: QuotaMode
         let snapshot: RateLimitInfo
         let session: SessionState
@@ -708,6 +713,8 @@ struct SessionListView: View {
     /// Mutable accumulator for one provider bucket while folding
     /// sessions into chips.
     struct ChipBucket {
+        let providerKey: String
+        let accountRef: String
         var snapshot: RateLimitInfo
         var session: SessionState
         var imminent: RateLimitWindowInfo?
@@ -723,6 +730,8 @@ struct SessionListView: View {
         func toWidgetData(id: String) -> QuotaWidgetData {
             QuotaWidgetData(
                 id: id,
+                providerKey: providerKey,
+                accountRef: accountRef,
                 mode: mode,
                 snapshot: snapshot,
                 session: session,
@@ -765,9 +774,10 @@ struct SessionListView: View {
                                  now: Date) {
         guard let snap = session.metrics?.rateLimit else { return }
         let snapIsStale = snapshotIsStale(snap, now: now)
-        let key = snap.providerKey(adapter: session.adapter)
+        let providerKey = snap.providerKey(adapter: session.adapter)
             ?? "unknown:\(session.adapter ?? "")"
-        let mode = resolveChipMode(snap: snap, providerKey: key)
+        let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
+        let mode = resolveChipMode(snap: snap, providerKey: providerKey)
         let imminent = snap.imminentWindow
         let sessionCost = session.metrics?.estimatedCostUSD ?? 0
         if var existing = buckets[key] {
@@ -803,6 +813,8 @@ struct SessionListView: View {
             buckets[key] = existing
         } else {
             buckets[key] = ChipBucket(
+                providerKey: providerKey,
+                accountRef: snap.accountRef(adapter: session.adapter),
                 snapshot: snap,
                 session: session,
                 imminent: imminent,
@@ -944,18 +956,19 @@ struct SessionListView: View {
     /// render cleanly side-by-side in the header.
     ///
     /// Sourced from the daemon's per-provider cost rollup (`provider_costs`),
-    /// keyed by the chip's providerKey (`d.id`). A project can mix providers,
-    /// so this can't be re-derived from group costs client-side. When a
+    /// keyed by the chip's bare providerKey (`d.providerKey`, not the account
+    /// bucket id). A project can mix providers, so this can't be re-derived from group costs client-side. When a
     /// provider has no spend in the window we render `$0 / <frame>` — a
     /// windowed zero is honest (matches the project cost display), so there's
     /// no separate em-dash zero-state.
     ///
     /// `provider_costs` can now carry a reserved `"unattributed"` key (issue
     /// #1996) for cost rows with no confirmed billing attribution. This
-    /// lookup is a plain dictionary read (`sessionManager.providerCosts[d.id]`)
-    /// with no filtering, so it would resolve that key fine — but `d.id`
-    /// only ever takes values `quotaChipData` buckets sessions under
-    /// (real provider keys, or its own no-evidence fallback), never
+    /// lookup is a plain dictionary read
+    /// (`sessionManager.providerCosts[d.providerKey]`) with no filtering, so
+    /// it would resolve that key fine — but `d.providerKey` only ever takes
+    /// values `quotaChipData` derives (a confirmed provider, or its own
+    /// `unknown:<adapter>` no-evidence fallback), never
     /// `"unattributed"` (that bucket has no session-level identity to key a
     /// chip on). So no code changed here: this function was already generic
     /// over the key, and nothing today builds a chip that would ask it for
@@ -972,7 +985,7 @@ struct SessionListView: View {
     /// "spend" line too.
     @ViewBuilder
     private func quotaUsageBody(_ d: QuotaWidgetData, density: QuotaChipDensity) -> some View {
-        let spend = sessionManager.providerCosts[d.id]?[usageCostTimeframe.rawValue] ?? 0
+        let spend = sessionManager.providerCosts[d.providerKey]?[usageCostTimeframe.rawValue] ?? 0
         Button(action: cycleUsageTimeframe) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(formatUsageCost(spend) + usageCostTimeframe.suffix)
@@ -1046,9 +1059,10 @@ struct SessionListView: View {
     /// cannot describe three different instants.
     private func quotaTooltip(_ d: QuotaWidgetData, now: Date) -> String {
         var lines: [String] = []
-        if let plan = d.snapshot.planTypeLabel {
+        if let plan = d.snapshot.tierLabel {
             lines.append(plan)
         }
+        lines.append(RateLimitInfo.accountLine(ref: d.accountRef))
         if Self.snapshotIsStale(d.snapshot, now: now) {
             lines.append("⚠️ snapshot pre-dates current window — waiting for next statusline tick")
         }

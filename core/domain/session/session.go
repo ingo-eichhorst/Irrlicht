@@ -470,6 +470,11 @@ type SessionState struct {
 	LastMatcher string          `json:"last_matcher,omitempty"`
 	Metrics     *SessionMetrics `json:"metrics,omitempty"`
 
+	// AccountBinding is which account this session's quota readings may be
+	// attributed to (#2095). Daemon-internal: clients read the outcome as
+	// metrics.rate_limit.confirmed_account_ref, never this object.
+	AccountBinding *AccountBinding `json:"account_binding,omitempty"`
+
 	// PID of the Claude Code process that owns this session (set on SessionStart).
 	PID int `json:"pid,omitempty"`
 

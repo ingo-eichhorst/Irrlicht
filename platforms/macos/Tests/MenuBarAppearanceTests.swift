@@ -1603,7 +1603,7 @@ final class MenuBarAppearanceTests: XCTestCase {
 
         let confirmedSession = MenuBarFixtures.sessionWithQuota()
         let selected = QuotaMenuBarRenderer.selectedSnapshot(
-            sessions: [confirmedSession], providerKey: migratedKey
+            sessions: [confirmedSession], providerKey: migratedKey, now: now
         )
         XCTAssertEqual(selected?.windows.first?.usedPercent,
                        confirmedSession.metrics?.rateLimit?.windows.first?.usedPercent,
@@ -1647,7 +1647,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             adapter: "claude-code"
         )
         XCTAssertNil(
-            QuotaMenuBarRenderer.selectedSnapshot(sessions: [unconfirmedSession], providerKey: migratedKey),
+            QuotaMenuBarRenderer.selectedSnapshot(sessions: [unconfirmedSession], providerKey: migratedKey, now: now),
             "a session with an unconfirmed provider must not be selected as though it were confirmed"
         )
     }
@@ -1677,7 +1677,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         let key = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
 
         let codex = MenuBarFixtures.sessionWithQuota(adapter: "codex")
-        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key),
+        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key, now: now),
                         "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
     }
 

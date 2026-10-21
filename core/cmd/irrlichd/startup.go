@@ -899,6 +899,16 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// kitty is a host integration, not an agent: detected by a live kitty
 	// process or an existing kitty config directory.
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
+	// Claude Code's account-identity read is relevant exactly when Claude Code
+	// itself is running, so it is detected by that agent's live-process matcher.
+	permService.SetDetectionProbe(claudecode.AccountName, func() bool {
+		for _, a := range allAgents {
+			if a.Identity.Name == claudecode.AdapterName {
+				return processlifecycle.HasLiveProcess(a.Process.Match)
+			}
+		}
+		return false
+	})
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.
@@ -972,6 +982,16 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		// Demo mode keeps the gate open: it serves synthetic seeded sessions
 		// and never reads live agent files in the first place.
 		detector.SetConsentGate(permService.ObserveGranted)
+		// Attribute Claude Code quota snapshots to the account their home is
+		// logged into (#2095), gated on the account permission's own consent.
+		// Demo mode serves synthetic sessions with no real identity file, so
+		// it is left unwired there.
+		accountReader := claudecode.NewAccountReader(func() bool {
+			return permService.Granted(claudecode.AccountName, claudecode.PermissionKeyAccount)
+		})
+		detector.SetAccountBinder(services.NewAccountBinder(
+			map[string]outbound.SessionAccountReader{claudecode.AdapterName: accountReader},
+			filesystem.NewAccountHomeStore(dataDir(deps.Home)), logger, nil))
 	}
 
 	mux.HandleFunc("GET /api/v1/permissions",
