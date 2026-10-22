@@ -78,11 +78,8 @@ const maxLoggedWatchFailures = 10
 //   - with no repair, 8 of 28,800 transcripts were lost;
 //   - with this settle, 0 of 28,800 were lost.
 //
-// A one-off raw-fsnotify loop (Add on Create, then write a file; not
-// committed) run as 14 concurrent processes lost 0 of 5,600 rounds at each of
-// 20 ms and 100 ms of settle, against 5 of 11,200 with none. A file written
-// during the blind window is still reported, because the re-arm reconciles
-// the directory's files.
+// A file written during the blind window is still reported, because the
+// re-arm reconciles the directory's files.
 const rearmSettle = 100 * time.Millisecond
 
 // Watcher watches a directory tree for transcript file events. The default
@@ -397,6 +394,10 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return err
 	}
 	defer watcher.Close()
+	// The rearm queue names directories armed through this watcher, so it
+	// lives exactly as long. drainPendingEvents can queue entries during the
+	// startup scan below, before the select loop exists.
+	defer w.stopRearm()
 
 	// Watch the root itself first — before scanning any pre-existing
 	// subdirectories below — so the kernel starts queuing Create events for
@@ -439,7 +440,6 @@ func (w *Watcher) Watch(ctx context.Context) error {
 
 	reconcileC, stopReconcile := w.reconcileTicker()
 	defer stopReconcile()
-	defer w.stopRearm()
 
 	for {
 		select {

@@ -399,11 +399,7 @@ func TestWatch_StartupScanEmitsFlatLayoutBacklog(t *testing.T) {
 	t.Cleanup(cancel)
 	go func() { _ = w.Watch(ctx) }()
 
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not signal Ready")
-	}
+	awaitReady(t, w)
 	expectEvent(t, ch, agent.EventNewSession, "pre-existing")
 }
 
@@ -548,11 +544,7 @@ func TestWatch_ReconcileRecoversFileUnderAnUnwatchableDir(t *testing.T) {
 		t.Cleanup(cancel)
 		go func() { _ = w.Watch(ctx) }()
 
-		select {
-		case <-w.Ready():
-		case <-time.After(2 * time.Second):
-			t.Fatal("watcher did not signal Ready")
-		}
+		awaitReady(t, w)
 
 		// Now make it readable and drop a transcript in. The root watch cannot
 		// see this: creating a file inside blind/ does not change root's own

@@ -44,39 +44,19 @@ func awaitReady(t *testing.T, w *Watcher) {
 	}
 }
 
-// dirSeam returns a callback for one of Watch's per-directory test seams and
-// the channel it reports directories on, in order. The send never blocks: a
-// test that stops reading must not wedge Watch's goroutine.
-func dirSeam() (func(dir string), <-chan string) {
+// seamDirs installs one of Watch's per-directory test seams (onDirArmed,
+// onRearmed) and returns the directories it reports, in order. It must be
+// called before Watch starts. The send never blocks: a test that stops
+// reading must not wedge Watch's goroutine.
+func seamDirs(seam *func(dir string)) <-chan string {
 	seen := make(chan string, 64)
-	return func(dir string) {
+	*seam = func(dir string) {
 		select {
 		case seen <- dir:
 		default:
 		}
-	}, seen
-}
-
-// armedDirs installs the onDirArmed seam and returns the directories it
-// reports. It must be called before Watch starts.
-func armedDirs(w *Watcher) <-chan string {
-	report, armed := dirSeam()
-	w.onDirArmed = report
-	return armed
-}
-
-// rearmedDirs installs the onRearmed seam and returns the directories it
-// reports. It must be called before Watch starts.
-func rearmedDirs(w *Watcher) <-chan string {
-	report, rearmed := dirSeam()
-	w.onRearmed = report
-	return rearmed
-}
-
-// awaitArmed waits until armed reports dir, skipping any other directory.
-func awaitArmed(t *testing.T, armed <-chan string, dir string, timeout time.Duration) {
-	t.Helper()
-	awaitDir(t, armed, dir, "was not armed", timeout)
+	}
+	return seen
 }
 
 // awaitDir waits until seen reports dir, skipping any other directory. If it
@@ -177,11 +157,7 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 
 	// Wait for the watch to attach before mutating files — closes the
 	// attach race without a guessed sleep.
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not signal Ready")
-	}
+	awaitReady(t, w)
 
 	// Create a new transcript file.
 	transcriptPath := filepath.Join(root, "-Users-test-myproject", "abc-123.jsonl")
@@ -247,11 +223,7 @@ func TestWatch_MetadataParentIsPresentOnFirstNewEvent(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- w.Watch(ctx) }()
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not signal Ready")
-	}
+	awaitReady(t, w)
 
 	path := filepath.Join(root, "-Users-test-myproject", "child.jsonl")
 	if err := os.WriteFile(path, []byte("parent-thread\n"), 0644); err != nil {
@@ -445,7 +417,7 @@ func TestHandleEvent_RemovedPendingHeaderLinkedTranscriptClearsPendingState(t *t
 func TestWatch_NewProjectDir(t *testing.T) {
 	root := setupFakeProjects(t)
 	w := NewWithRoot(root, testAdapter, 0)
-	armed := armedDirs(w)
+	armed := seamDirs(&w.onDirArmed)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -461,7 +433,7 @@ func TestWatch_NewProjectDir(t *testing.T) {
 	if err := os.MkdirAll(newProjDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	awaitArmed(t, armed, newProjDir, 2*time.Second)
+	awaitDir(t, armed, newProjDir, "was not armed", 2*time.Second)
 
 	transcriptPath := filepath.Join(newProjDir, "new-sess.jsonl")
 	if err := os.WriteFile(transcriptPath, []byte(`{"type":"start"}`+"\n"), 0644); err != nil {
@@ -499,8 +471,8 @@ func TestWatch_NewProjectDir(t *testing.T) {
 func TestWatch_RunsTheQueuedRearm(t *testing.T) {
 	root := setupFakeProjects(t)
 	w := NewWithRoot(root, testAdapter, 0)
-	armed := armedDirs(w)
-	rearmed := rearmedDirs(w)
+	armed := seamDirs(&w.onDirArmed)
+	rearmed := seamDirs(&w.onRearmed)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -511,7 +483,7 @@ func TestWatch_RunsTheQueuedRearm(t *testing.T) {
 	awaitReady(t, w)
 
 	dir := mkdir(t, filepath.Join(root, "-Users-test-rearmed"))
-	awaitArmed(t, armed, dir, 2*time.Second)
+	awaitDir(t, armed, dir, "was not armed", 2*time.Second)
 	awaitDir(t, rearmed, dir, "was never re-armed by Watch's loop", 2*time.Second)
 
 	cancel()
@@ -540,7 +512,7 @@ func TestWatch_RuntimeDirStress(t *testing.T) {
 			t.Parallel()
 			root := setupFakeProjects(t)
 			w := NewWithRoot(root, testAdapter, 0).WithReconcileInterval(-1)
-			armed := armedDirs(w)
+			armed := seamDirs(&w.onDirArmed)
 			ch := w.Subscribe()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -550,14 +522,10 @@ func TestWatch_RuntimeDirStress(t *testing.T) {
 			lost := 0
 			for r := range rounds {
 				dir := filepath.Join(root, fmt.Sprintf("-proj-%d", r))
-				if err := os.Mkdir(dir, 0755); err != nil {
-					t.Fatal(err)
-				}
-				awaitArmed(t, armed, dir, 5*time.Second)
+				mkdir(t, dir)
+				awaitDir(t, armed, dir, "was not armed", 5*time.Second)
 				sessionID := fmt.Sprintf("sess-%d", r)
-				if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte("{}\n"), 0644); err != nil {
-					t.Fatal(err)
-				}
+				writeTranscript(t, filepath.Join(dir, sessionID+".jsonl"), "{}\n")
 				if !sawNewSession(ch, sessionID, time.Second) {
 					lost++
 					t.Logf("round %d: %s was never reported", r, sessionID)
