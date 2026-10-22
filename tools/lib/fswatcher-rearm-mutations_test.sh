@@ -5,8 +5,8 @@
 # second time after rearmSettle. That repairs a registration that fsnotify's
 # kqueue reader downgraded (fsnotify/fsnotify#783). The repair is new, so it
 # has no "before the fix" to run red. Each mutation below removes one link of
-# the chain and requires TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded
-# to go red with that link's own message. tools/mutate.sh owns the mechanics
+# the chain and requires the test that guards that link to go red with the
+# link's own message. tools/mutate.sh owns the mechanics
 # (exact-once anchor, byte-for-byte restore) and this file must not
 # re-improvise them.
 
@@ -108,6 +108,26 @@ assert_go_test_goes_red \
   $'\t\t\t// mutation: no forced re-registration\n' \
   "$PKG" "$RUN" \
   "its NOTE_WRITE registration was not restored"
+
+# 3. Watch's loop stops running the re-arm when its timer fires, so nothing
+# in the daemon calls rearmDue (review finding on PR #2101).
+assert_go_test_goes_red \
+  "Watch's select no longer runs rearmDue" \
+  "$FILE" \
+  $'\t\tcase <-w.rearmC():\n\t\t\tw.rearmDue(watcher)\n' \
+  $'\t\t// mutation: re-arm timer case dropped\n' \
+  "$PKG" '^TestWatch_RunsTheQueuedRearm$' \
+  "was never re-armed by Watch's loop"
+
+# 4. rearmDue drains the due head but starts no timer for the entry still
+# queued (review finding on PR #2101).
+assert_go_test_goes_red \
+  "rearmDue no longer reschedules for an entry not yet due" \
+  "$FILE" \
+  $'\tw.rearmTimer = time.NewTimer(time.Until(w.rearmQueue[0].due))\n' \
+  $'\t// mutation: no reschedule\n' \
+  "$PKG" '^TestRearmDue_ReschedulesForAnEntryNotYetDue$' \
+  "rearmDue left no timer for the directory still queued"
 
 if [[ $fails -gt 0 ]]; then
   echo "$NAME: $fails FAILED"

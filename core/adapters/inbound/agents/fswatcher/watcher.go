@@ -195,6 +195,12 @@ type Watcher struct {
 	// after its watch exists, which is the case a guessed sleep only made
 	// likely (#2098).
 	onDirArmed func(dir string)
+
+	// onRearmed, when non-nil, is invoked on Watch's own goroutine after
+	// rearmDue has re-registered a queued subtree. It is a test seam, unset in
+	// the daemon. It lets a Watch-driven test observe that Watch's select
+	// really runs the re-arm (TestWatch_RunsTheQueuedRearm, #2098).
+	onRearmed func(dir string)
 }
 
 // Ready returns a channel that is closed once Watch has attached the
@@ -506,6 +512,9 @@ func (w *Watcher) rearmDue(watcher *fsnotify.Watcher) {
 		dir := w.rearmQueue[0].dir
 		w.rearmQueue = w.rearmQueue[1:]
 		w.reconcileSubtree(watcher, dir, true)
+		if w.onRearmed != nil {
+			w.onRearmed(dir)
+		}
 	}
 	if len(w.rearmQueue) == 0 {
 		w.rearmQueue = nil // release the drained backing array

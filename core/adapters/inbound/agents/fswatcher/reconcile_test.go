@@ -682,10 +682,14 @@ func TestWatch_ReconcileRecoversNewSessionEventBroadcastDropped(t *testing.T) {
 // TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded pins the #2098 repair
 // without depending on the fsnotify race itself (fsnotify/fsnotify#783), which
 // TestWatch_RuntimeDirStress needs thousands of rounds to hit. It drives the
-// whole chain:
+// chain up to Watch's loop:
 //  1. handleDirCreate arms a runtime-created directory and queues its re-arm;
-//  2. the queued timer fires;
-//  3. rearmDue re-registers the directory and reports what it missed.
+//  2. the queued timer fires, and the test receives it;
+//  3. the test calls rearmDue, which re-registers the directory and reports
+//     what it missed.
+//
+// Watch's own select case that calls rearmDue when the timer fires is
+// covered by TestWatch_RunsTheQueuedRearm.
 //
 // The downgraded state is built on purpose. A second fsnotify watcher
 // watches only root, so the directory is registered there exactly as the
@@ -727,6 +731,49 @@ func TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded(t *testing.T) {
 	writeTranscript(t, after, "{}\n")
 	if !awaitFsnotifyCreate(downgraded, after, 2*time.Second) {
 		t.Fatal("after rearmDue, fsnotify still reports no Create for a new file in the directory: its NOTE_WRITE registration was not restored")
+	}
+}
+
+// TestRearmDue_ReschedulesForAnEntryNotYetDue checks that rearmDue starts a
+// new timer when it drains the due head of the queue and leaves a later entry
+// behind (#2098). Claude Code creates <session>/ and then
+// <session>/subagents/ tens of milliseconds apart, so the second directory is
+// often still settling when the first one's timer fires. Without a new timer
+// Watch's select has nothing to wait on for it, and it would be re-armed only
+// if a later directory create happened to start one.
+//
+// The due times are set by hand. Two Creates handled back to back fall due
+// together and drain in one pass. An entry due an hour out cannot fall due
+// during any scheduling stall before rearmDue runs.
+func TestRearmDue_ReschedulesForAnEntryNotYetDue(t *testing.T) {
+	root := setupFakeProjects(t)
+	first := mkdir(t, filepath.Join(root, "-Users-test-first"))
+	second := mkdir(t, filepath.Join(root, "-Users-test-second"))
+	w := NewWithRoot(root, testAdapter, 0)
+	fsw := newFsnotify(t)
+	t.Cleanup(w.stopRearm)
+
+	w.handleEvent(fsw, fsnotify.Event{Name: first, Op: fsnotify.Create})
+	w.handleEvent(fsw, fsnotify.Event{Name: second, Op: fsnotify.Create})
+	if len(w.rearmQueue) != 2 {
+		t.Fatalf("queued %d re-arms for two runtime-created directories, want 2", len(w.rearmQueue))
+	}
+	now := time.Now()
+	w.rearmQueue[0].due = now
+	w.rearmQueue[1].due = now.Add(time.Hour)
+
+	w.rearmDue(fsw)
+	if len(w.rearmQueue) != 1 || w.rearmQueue[0].dir != second {
+		t.Fatalf("after the first re-arm the queue holds %v, want only %s", w.rearmQueue, second)
+	}
+	if w.rearmC() == nil {
+		t.Fatal("rearmDue left no timer for the directory still queued, so Watch would never re-arm it")
+	}
+
+	w.rearmQueue[0].due = time.Now()
+	w.rearmDue(fsw)
+	if len(w.rearmQueue) != 0 || w.rearmC() != nil {
+		t.Fatalf("after the last re-arm the queue holds %v and the timer is set: %v", w.rearmQueue, w.rearmC() != nil)
 	}
 }
 

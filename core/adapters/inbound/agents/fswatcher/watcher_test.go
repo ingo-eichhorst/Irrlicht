@@ -44,33 +44,56 @@ func awaitReady(t *testing.T, w *Watcher) {
 	}
 }
 
-// armedDirs installs the onDirArmed seam and returns the directories it
-// reports, in order. It must be called before Watch starts. The send never
-// blocks: a test that stops reading must not wedge Watch's goroutine.
-func armedDirs(w *Watcher) <-chan string {
-	armed := make(chan string, 64)
-	w.onDirArmed = func(dir string) {
+// dirSeam returns a callback for one of Watch's per-directory test seams and
+// the channel it reports directories on, in order. The send never blocks: a
+// test that stops reading must not wedge Watch's goroutine.
+func dirSeam() (func(dir string), <-chan string) {
+	seen := make(chan string, 64)
+	return func(dir string) {
 		select {
-		case armed <- dir:
+		case seen <- dir:
 		default:
 		}
-	}
+	}, seen
+}
+
+// armedDirs installs the onDirArmed seam and returns the directories it
+// reports. It must be called before Watch starts.
+func armedDirs(w *Watcher) <-chan string {
+	report, armed := dirSeam()
+	w.onDirArmed = report
 	return armed
+}
+
+// rearmedDirs installs the onRearmed seam and returns the directories it
+// reports. It must be called before Watch starts.
+func rearmedDirs(w *Watcher) <-chan string {
+	report, rearmed := dirSeam()
+	w.onRearmed = report
+	return rearmed
 }
 
 // awaitArmed waits until armed reports dir, skipping any other directory.
 func awaitArmed(t *testing.T, armed <-chan string, dir string, timeout time.Duration) {
 	t.Helper()
+	awaitDir(t, armed, dir, "was not armed", timeout)
+}
+
+// awaitDir waits until seen reports dir, skipping any other directory. If it
+// does not within timeout, the test fails with dir, failure and the elapsed
+// time.
+func awaitDir(t *testing.T, seen <-chan string, dir, failure string, timeout time.Duration) {
+	t.Helper()
 	start := time.Now()
 	deadline := time.After(timeout)
 	for {
 		select {
-		case got := <-armed:
+		case got := <-seen:
 			if got == dir {
 				return
 			}
 		case <-deadline:
-			t.Fatalf("%s was not armed within %s", dir, time.Since(start))
+			t.Fatalf("%s %s within %s", dir, failure, time.Since(start))
 		}
 	}
 }
@@ -459,6 +482,37 @@ func TestWatch_NewProjectDir(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event from new project dir")
 	}
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// TestWatch_RunsTheQueuedRearm checks that Watch's own loop runs the re-arm
+// handleDirCreate queues for a directory created at runtime (#2098).
+// TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded calls rearmDue
+// itself, so without this test the select case that runs it in the daemon
+// could be dropped with every other test green. The test does not need the
+// fsnotify race: every runtime-created directory is queued, downgraded or
+// not.
+func TestWatch_RunsTheQueuedRearm(t *testing.T) {
+	root := setupFakeProjects(t)
+	w := NewWithRoot(root, testAdapter, 0)
+	armed := armedDirs(w)
+	rearmed := rearmedDirs(w)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	awaitReady(t, w)
+
+	dir := mkdir(t, filepath.Join(root, "-Users-test-rearmed"))
+	awaitArmed(t, armed, dir, 2*time.Second)
+	awaitDir(t, rearmed, dir, "was never re-armed by Watch's loop", 2*time.Second)
 
 	cancel()
 	if err := <-watchErr; err != nil && err != context.Canceled {
