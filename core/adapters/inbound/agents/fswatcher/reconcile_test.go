@@ -678,3 +678,70 @@ func TestWatch_ReconcileRecoversNewSessionEventBroadcastDropped(t *testing.T) {
 		}
 	})
 }
+
+// TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded pins the #2098 repair
+// without depending on the fsnotify race itself (fsnotify/fsnotify#783), which
+// TestWatch_RuntimeDirStress needs thousands of rounds to hit. It drives the
+// whole chain:
+//  1. handleDirCreate arms a runtime-created directory and queues its re-arm;
+//  2. the queued timer fires;
+//  3. rearmDue re-registers the directory and reports what it missed.
+//
+// The downgraded state is built on purpose. A second fsnotify watcher
+// watches only root, so the directory is registered there exactly as the
+// race leaves it: on kqueue by fsnotify's own reader-side registration,
+// NOTE_DELETE|NOTE_RENAME with no NOTE_WRITE; on inotify not at all. watched
+// still records the directory as armed. Files written into it are then
+// reported by nothing at all, which the precondition below checks rather
+// than assumes.
+func TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded(t *testing.T) {
+	root := setupFakeProjects(t)
+	dir := mkdir(t, filepath.Join(root, "-Users-test-newproject"))
+	w := NewWithRoot(root, testAdapter, 0)
+	ch := w.Subscribe()
+
+	w.handleEvent(newFsnotify(t), fsnotify.Event{Name: dir, Op: fsnotify.Create})
+	if _, armed := w.watched[dir]; !armed {
+		t.Fatalf("handleDirCreate did not arm %s", dir)
+	}
+	select {
+	case <-w.rearmC():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no re-arm was scheduled for a directory created at runtime")
+	}
+
+	downgraded := newFsnotify(t)
+	if err := downgraded.Add(root); err != nil {
+		t.Fatal(err)
+	}
+	blind := filepath.Join(dir, "blind-sess.jsonl")
+	writeTranscript(t, blind, "{}\n")
+	if awaitFsnotifyCreate(downgraded, blind, 300*time.Millisecond) {
+		t.Fatal("precondition: fsnotify reported a file in the downgraded directory, so it was never blind and this test proves nothing")
+	}
+
+	w.rearmDue(downgraded)
+
+	expectEvent(t, ch, agent.EventNewSession, "blind-sess")
+	after := filepath.Join(dir, "after-sess.jsonl")
+	writeTranscript(t, after, "{}\n")
+	if !awaitFsnotifyCreate(downgraded, after, 2*time.Second) {
+		t.Fatal("after rearmDue, fsnotify still reports no Create for a new file in the directory: its NOTE_WRITE registration was not restored")
+	}
+}
+
+// awaitFsnotifyCreate reports whether fsw delivers a Create for path within
+// d, discarding any other event.
+func awaitFsnotifyCreate(fsw *fsnotify.Watcher, path string, d time.Duration) bool {
+	deadline := time.After(d)
+	for {
+		select {
+		case ev := <-fsw.Events:
+			if ev.Name == path && ev.Has(fsnotify.Create) {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
