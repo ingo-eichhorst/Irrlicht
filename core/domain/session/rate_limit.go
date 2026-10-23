@@ -77,11 +77,15 @@ type RateLimitSnapshot struct {
 	// Provider, ObservationSource, AttributionEvidence, and AttributionQuality
 	// are stamped at creation by the two adapters that observe native quota
 	// evidence today: claudecode/statusline.go (Claude Code's statusline
-	// hook) and codex/parser.go (Codex's transcript rate_limits). Product,
-	// ConfirmedAccountRef, QuotaScope, QuotaID, LastSuccessAt, LastAttemptAt,
-	// and RetrievalFailure are NOT populated by any adapter yet — no
-	// observation source exists for them until the route ticket and the
-	// account-API ticket land (epic #1977 §10's later work packages). Every
+	// hook) and codex/parser.go (Codex's transcript rate_limits). Product and
+	// ConfirmedAccountRef are stamped afterwards, not by those adapters, by
+	// the AccountBinder (core/application/services/account_binder.go,
+	// stampSnapshot) from the account the session's own agent home is logged
+	// into (#2095; readers: claudecode/account.go, codex/account.go).
+	// QuotaScope, QuotaID, LastSuccessAt, LastAttemptAt, and RetrievalFailure
+	// are NOT populated by any adapter yet — no observation source exists for
+	// them until the route ticket and the account-API ticket land (epic
+	// #1977 §10's later work packages). Every
 	// field here is additive and omitempty, so a legacy row (or one written
 	// before the corresponding stamp existed) decodes with the unpopulated
 	// ones at their zero value — which means "not recorded", never
@@ -112,8 +116,11 @@ type RateLimitSnapshot struct {
 	Product string `json:"product,omitempty"`
 
 	// ConfirmedAccountRef is the provider account identifier this snapshot
-	// was actually observed against (e.g. an OAuth account id). Empty means
-	// no account identity could be confirmed for this snapshot specifically.
+	// was actually observed against (e.g. an OAuth account id), stamped by the
+	// AccountBinder only for a session bound to its home's account (#2095).
+	// Empty means no account identity could be confirmed for this snapshot
+	// specifically (no consent, no readable identity file, or the session
+	// began before the account was current).
 	// Cross-session sharing must never bridge two snapshots whose
 	// ConfirmedAccountRef differ, and must never bridge when either is
 	// empty — see AccountKey and applyDonors in
@@ -131,10 +138,11 @@ type RateLimitSnapshot struct {
 	QuotaScope string `json:"quota_scope,omitempty"`
 
 	// AttributionEvidence names what established Provider (and
-	// ConfirmedAccountRef, once something populates it) for this snapshot —
-	// today "claude_code_statusline" or "codex_transcript_rate_limits". An
-	// adapter name alone is never valid evidence — see ProviderForSession's
-	// doc comment in core/application/services/quotainherit.go.
+	// ConfirmedAccountRef, which the AccountBinder stamps later) for this
+	// snapshot — today "claude_code_statusline" or
+	// "codex_transcript_rate_limits". An adapter name alone is never valid
+	// evidence — see ProviderForSession's doc comment in
+	// core/application/services/quotainherit.go.
 	AttributionEvidence string `json:"attribution_evidence,omitempty"`
 
 	// QuotaID is a stable provider-issued identifier for the specific quota

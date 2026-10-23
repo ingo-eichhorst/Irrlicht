@@ -60,11 +60,14 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads session transcripts under ~/.pi/agent/sessions/",
+				Touches:         "Reads session transcripts under ~/.pi/agent/sessions/ and the type and accountId of the openai-codex entry in ~/.pi/agent/auth.json",
 				Detail: "Tails *.jsonl session files under ~/.pi/agent/sessions/ to " +
 					"derive session state, cost, and token metrics. Read-only — no " +
-					"file is ever modified. Toggling off stops all reading " +
-					"immediately.",
+					"file is ever modified. To share a Codex quota reading with a Pi " +
+					"session logged into the SAME ChatGPT account, it also reads two " +
+					"fields of the openai-codex block in ~/.pi/agent/auth.json: type and " +
+					"accountId. No token or other provider's entry is decoded or kept. " +
+					"Toggling off stops all reading immediately.",
 			},
 			{
 				Key:             PermissionKeyHooks,

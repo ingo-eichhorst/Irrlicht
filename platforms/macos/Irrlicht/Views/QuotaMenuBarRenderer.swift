@@ -22,9 +22,9 @@ enum QuotaMenuBarRenderer {
     /// dots — see `rowSVG`'s `compact` handling.
     static let compactBarWidthFactor: CGFloat = 0.65
 
-    /// Picks the freshest renderable rate-limit snapshot for `providerKey`
-    /// across `sessions` and renders it. `providerKey` nil means "whatever
-    /// provider is freshest" — used until the user picks one in Settings.
+    /// Renders the snapshot `selectedSnapshot` picks for `providerKey` across
+    /// `sessions`. `providerKey` nil is Auto — the provider that reported most
+    /// recently — used until the user picks one in Settings.
     /// `compact` requests the narrower, label-less bars layout used in
     /// Combined style (ignored by the Circle visual style, which has no
     /// label to drop and is already compact).
@@ -44,35 +44,74 @@ enum QuotaMenuBarRenderer {
         compact: Bool = false,
         now: Date
     ) -> NSImage? {
-        guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey) else {
+        guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey, now: now) else {
             return nil
         }
         return buildImage(for: info, compact: compact, now: now)
     }
 
-    /// Freshest-`sampledAt`-wins across `sessions`, matching
-    /// SessionListView.mergeIntoBuckets' choice of representative snapshot
-    /// per provider. Unlike that bucketing, this does **not** drop stale
-    /// snapshots (any window past `resetsAt`): the popover keeps a stale
-    /// snapshot and dims the chip rather than blanking it, and the compact
-    /// icon has no room to dim — so it keeps showing the last-known reading
-    /// until the next statusline tick refreshes it, instead of disappearing
-    /// (which would otherwise make an active `.usage`-style icon look idle;
-    /// see MenuBarImageBuilder's fallback for the session-count side of that
-    /// same problem). What *is* filtered out is a snapshot with no windows
-    /// at all (the credits/usage-only path) — that can never render, so it
-    /// must not win over an older snapshot that actually has data.
+    /// Picks the snapshot the menu-bar icon renders (#2095 D1). The provider
+    /// comes first: `providerKey`, or — when nil (Auto) — the provider of the
+    /// freshest renderable snapshot (ties by provider key ascending), the
+    /// documented "whichever provider reported most recently". D1 applies only
+    /// WITHIN that provider. Its candidates are bucketed by
+    /// `RateLimitInfo.accountBucketKey` — the same key the popover uses —
+    /// keeping, inside one account, the fresh-over-stale then newest-
+    /// `sampledAt` snapshot. ACROSS that provider's accounts the choice is:
+    /// fresh before stale, then the highest imminent `usedPercent` (nil
+    /// imminent = 0), ties by bucket key ascending. Freshest-`sampledAt`
+    /// across accounts is the bug this replaces: two accounts ticking
+    /// alternately made the icon flip.
+    ///
+    /// `now` decides staleness (any window past `resetsAt`) and is required
+    /// (#1675): the caller passes the one clock it renders against.
+    /// Unlike the popover bucketing this does **not** drop stale snapshots:
+    /// the icon has no room to dim, so with nothing fresh it keeps the
+    /// last-known reading (an active `.usage`-style icon must not look idle;
+    /// see MenuBarImageBuilder's fallback). A snapshot with no windows at all
+    /// (the credits/usage-only path) can never render and is skipped.
     static func selectedSnapshot(
         sessions: [SessionState],
-        providerKey: String?
+        providerKey: String?,
+        now: Date
     ) -> RateLimitInfo? {
-        let candidates: [(key: String, info: RateLimitInfo)] = sessions.compactMap { session in
-            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
-            let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
-            return (key, snap)
+        struct Candidate {
+            let provider: String
+            let key: String
+            let info: RateLimitInfo
+            let stale: Bool
         }
-        let filtered = providerKey.map { key in candidates.filter { $0.key == key } } ?? candidates
-        return filtered.max { $0.info.sampledAt < $1.info.sampledAt }?.info
+        let candidates = sessions.compactMap { s -> Candidate? in
+            guard let snap = s.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
+            return Candidate(
+                provider: snap.bucketProviderKey(adapter: s.adapter),
+                key: snap.accountBucketKey(adapter: s.adapter, sessionID: s.id),
+                info: snap,
+                stale: SessionListView.snapshotIsStale(snap, now: now))
+        }
+        let chosenProvider = providerKey ?? candidates.min { l, r in
+            l.info.sampledAt != r.info.sampledAt
+                ? l.info.sampledAt > r.info.sampledAt
+                : l.provider < r.provider
+        }?.provider
+        var byAccount: [String: Candidate] = [:]
+        for cand in candidates where cand.provider == chosenProvider {
+            if let existing = byAccount[cand.key] {
+                let better = existing.stale != cand.stale
+                    ? !cand.stale
+                    : cand.info.sampledAt > existing.info.sampledAt
+                if !better { continue }
+            }
+            byAccount[cand.key] = cand
+        }
+        let best = byAccount.values.min { l, r in
+            if l.stale != r.stale { return !l.stale }
+            let lp = l.info.imminentWindow?.usedPercent ?? 0
+            let rp = r.info.imminentWindow?.usedPercent ?? 0
+            if lp != rp { return lp > rp }
+            return l.key < r.key
+        }
+        return best?.info
     }
 
     static func buildImage(for info: RateLimitInfo, compact: Bool = false, now: Date) -> NSImage? {

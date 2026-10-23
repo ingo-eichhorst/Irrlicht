@@ -84,6 +84,33 @@ function planTypeLabel(planType) {
   }
 }
 
+const PRODUCT_LABELS = {
+  claude_team: 'Claude Team',
+  claude_max: 'Claude Max',
+  claude_pro: 'Claude Pro',
+  claude_enterprise: 'Claude Enterprise',
+};
+// Exported for quotaChips.test.js.
+export function productLabel(product) {
+  if (!product) return null;
+  if (PRODUCT_LABELS[product]) return PRODUCT_LABELS[product];
+  return product.split('_').filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// Tier label for a chip: plan_type, then product, then the capitalised
+// provider key (today's overflow/settings fallback). Callers that had no
+// fallback before pass `fallback = false`.
+function chipTierLabel(chip, fallback) {
+  return planTypeLabel(chip.snapshot.plan_type)
+      || productLabel(chip.snapshot.product)
+      || (fallback ? chip.providerKey.charAt(0).toUpperCase() + chip.providerKey.slice(1) : null);
+}
+// "Account …<last 4 of ref>", or "Account unconfirmed" (#2095 D2).
+function accountSuffix(chip) {
+  return chip.accountRef ? 'Account …' + chip.accountRef.slice(-4) : 'Account unconfirmed';
+}
+
 function providerModeStorageKey(providerKey) {
   // Mirrors ProviderModePreference.storageKey(providerKey:) in Swift.
   return 'providerMode_' + providerKey;
@@ -188,11 +215,8 @@ function formatClockTime(unixSec) {
   return new Date(unixSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-// Fold session snapshots into one bucket per provider. Rules mirror
-// macOS mergeIntoBuckets: subscription beats usage; fresh beats stale;
-// among same-staleness snapshots, the highest sampled_at wins.
 // mergeChipIntoBucket folds one more session's snapshot into an existing
-// provider bucket, applying the subscription-beats-usage / fresh-beats-
+// account bucket, applying the subscription-beats-usage / fresh-beats-
 // stale / newest-sampled_at-wins precedence (mirrors Swift's mergeIntoBuckets).
 function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
   // Subscription wins over usage when both are seen (rare — one OAuth
@@ -217,7 +241,11 @@ function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
   }
 }
 
-function bucketChips(sessions, nowMs) {
+// Fold session snapshots into one bucket per account (per session while
+// unconfirmed). Rules mirror macOS mergeIntoBuckets: subscription beats usage;
+// fresh beats stale; among same-staleness snapshots, the highest sampled_at
+// wins. Exported for quotaChips.test.js.
+export function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
     const snap = s?.metrics?.rate_limit;
@@ -228,8 +256,14 @@ function bucketChips(sessions, nowMs) {
     // on resets_at let resets_at=0 windows slip through as "fresh"
     // here while macOS marked them stale.
     const stale = Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
-    const key = providerKeyFor(snap, s.adapter) || ('unknown:' + (s.adapter || ''));
-    const mode = chipModeFor(snap, key);
+    const confirmedProvider = providerKeyFor(snap, s.adapter);
+    const providerKey = confirmedProvider || ('unknown:' + (s.adapter || ''));
+    // An account ref only counts when the provider is confirmed (the ref is
+    // meaningless against an inferred provider). Unconfirmed snapshots get a
+    // per-session bucket so they never merge with another session's (#2095).
+    const accountRef = (confirmedProvider && snap.confirmed_account_ref) || '';
+    const key = providerKey + '|' + (accountRef || ('session:' + s.session_id));
+    const mode = chipModeFor(snap, providerKey);
     const hasWindows = Array.isArray(snap.windows) && snap.windows.length > 0;
     // A subscription-mode snapshot with nothing to show — no windows, no
     // credits, and no retrieval failure to report — would render as an
@@ -245,6 +279,8 @@ function bucketChips(sessions, nowMs) {
     if (!existing) {
       buckets.set(key, {
         key: key,
+        providerKey: providerKey,
+        accountRef: accountRef,
         snapshot: snap,
         session: s,
         imminent: imm,
@@ -334,15 +370,17 @@ function retrievalFailureLine(failure) {
   return '⚠️ retrieval failed (' + failure + ') — showing the last known reading';
 }
 
-function quotaTooltip(chip, nowMs) {
+// Exported for quotaChips.test.js.
+export function quotaTooltip(chip, nowMs) {
   const lines = [];
-  const plan = planTypeLabel(chip.snapshot.plan_type);
-  if (plan) lines.push(plan);
+  const tier = chipTierLabel(chip, false);
+  if (tier) lines.push(tier);
+  lines.push(accountSuffix(chip));
   // Same idiom as the stale line below (a one-line ⚠️ note rather than a
   // new visual language, per #1995's "extend the one idiom" design): an
   // unconfirmed identity is shown explicitly instead of silently branding
   // or silently going blank.
-  if (chip.key.startsWith('unknown:')) {
+  if (chip.providerKey.startsWith('unknown:')) {
     lines.push('⚠️ billing identity not confirmed for this session');
   }
   if (chip.isStale) lines.push('⚠️ snapshot pre-dates current window — waiting for next statusline tick');
@@ -369,7 +407,7 @@ function quotaTooltip(chip, nowMs) {
 // (irrlicht.css), rather than inventing a second visual language for the
 // four additional observation-quality results (#1995 §1.3).
 function needsAttention(chip) {
-  return chip.key.startsWith('unknown:') || !!chip.snapshot.retrieval_failure;
+  return chip.providerKey.startsWith('unknown:') || !!chip.snapshot.retrieval_failure;
 }
 
 // Up to this many providers render inline with no overflow pill (#2063).
@@ -481,7 +519,7 @@ function buildQuotaChipDOM(chip, density, nowMs) {
 
   const icon = document.createElement('span');
   icon.className = 'quota-chip-icon';
-  const svg = providerIconHTML(chip.key)
+  const svg = providerIconHTML(chip.providerKey)
             || adapterIconHTML(chip.session?.adapter)
             || GENERIC_PROVIDER_ICON_SVG;
   icon.innerHTML = svg;
@@ -525,8 +563,7 @@ export function buildOverflowChipDOM(hidden) {
   pill.textContent = '+' + hidden.length + ' more';
   const usageTf = COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe) || COST_TIMEFRAMES[0];
   pill.title = hidden.map(h => {
-    const label = planTypeLabel(h.snapshot.plan_type)
-               || (h.key.charAt(0).toUpperCase() + h.key.slice(1));
+    const label = chipTierLabel(h, true) + ' · ' + accountSuffix(h);
     if (h.mode === 'subscription') {
       const imm = h.imminent;
       return imm ? (label + ': ' + Math.round(imm.used_percent || 0) + '%') : label;
@@ -583,6 +620,15 @@ export function renderHeaderTitle() {
   }
 }
 
+// One settings row per provider: the mode preference is keyed by the bare
+// provider, so account buckets of one provider share a row. Chips arrive
+// sorted by bucket key, so the first chip per provider is deterministic.
+// Exported for quotaChips.test.js.
+export function providerRowChips(chips) {
+  const seen = new Set();
+  return chips.filter(c => !seen.has(c.providerKey) && seen.add(c.providerKey));
+}
+
 // Per-provider mode selectors in the settings modal. Populated whenever
 // settings opens with the providers we've actually observed in the
 // current session list — same set the chip strip would render. If
@@ -599,19 +645,18 @@ export function refreshProviderSettings() {
     host.appendChild(empty);
     return;
   }
-  for (const c of chips) {
+  for (const c of providerRowChips(chips)) {
     const row = document.createElement('div');
     row.className = 'provider-row';
 
     const name = document.createElement('span');
     name.className = 'provider-name';
-    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session?.adapter) || GENERIC_PROVIDER_ICON_SVG;
+    const iconSvg = providerIconHTML(c.providerKey) || adapterIconHTML(c.session?.adapter) || GENERIC_PROVIDER_ICON_SVG;
     const iconSpan = document.createElement('span');
     iconSpan.innerHTML = iconSvg;
     name.appendChild(iconSpan);
     const labelText = document.createElement('span');
-    labelText.textContent = planTypeLabel(c.snapshot.plan_type)
-                         || (c.key.charAt(0).toUpperCase() + c.key.slice(1));
+    labelText.textContent = chipTierLabel(c, true);
     name.appendChild(labelText);
     row.appendChild(name);
 
@@ -622,9 +667,9 @@ export function refreshProviderSettings() {
       o.textContent = opt[1];
       sel.appendChild(o);
     }
-    sel.value = providerModePreference(c.key);
+    sel.value = providerModePreference(c.providerKey);
     sel.addEventListener('change', function() {
-      setProviderModePreference(c.key, this.value);
+      setProviderModePreference(c.providerKey, this.value);
       renderHeaderTitle();
     });
     row.appendChild(sel);

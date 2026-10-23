@@ -620,8 +620,9 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 // reads). This holds regardless of ChatGPT-subscription vs. API-key auth:
 // both talk to the same OpenAI API, so both are confirmed OpenAI evidence
 // for THIS session's own cost attribution — auth mode only gates whether a
-// session may DONATE its snapshot to a wrapper (donorKey's readCodexAccountID
-// check), a separate concern.
+// session may DONATE its snapshot to a wrapper: that needs a
+// ConfirmedAccountRef the AccountBinder stamps from AccountReader (account.go),
+// which yields none for a non-chatgpt auth.json — a separate concern.
 func extractCodexRateLimits(payload map[string]interface{}, sampledAt time.Time) *tailer.RateLimitSnapshot {
 	rl, ok := payload["rate_limits"].(map[string]interface{})
 	if !ok {

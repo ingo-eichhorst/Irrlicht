@@ -557,6 +557,13 @@ func (d *SessionDetector) SetRouteReader(fn RouteReader) {
 	d.pidMgr.SetRouteReader(fn)
 }
 
+// SetAccountBinder installs the binder that attributes each session's quota
+// snapshot to the account it was observed against (#2095). nil (the default)
+// leaves snapshots unconfirmed. Call before Run.
+func (d *SessionDetector) SetAccountBinder(b *AccountBinder) {
+	d.enricher.binder = b
+}
+
 // SetHerdrPaneRecorder installs the seam that hands a session's own report of
 // its herdr pane to the launcher reader (#1936). Production wires
 // processlifecycle.RememberHerdrPane behind the launcher consent; nil (the

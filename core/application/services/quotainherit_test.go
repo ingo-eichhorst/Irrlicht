@@ -59,8 +59,8 @@ func donorClaudeCode(sampledAt int64, percent float64) *session.SessionState {
 
 // donorCodex builds a codex session carrying a rate_limit snapshot stamped
 // exactly as codex/parser.go's extractCodexRateLimits stamps a real one —
-// same rationale as donorClaudeCode above.
-func donorCodex(sampledAt int64, percent float64) *session.SessionState {
+// same rationale as donorClaudeCode above, plus the ref the binder stamps.
+func donorCodex(sampledAt int64, percent float64, ref string) *session.SessionState {
 	return &session.SessionState{
 		SessionID: "codex-donor",
 		Adapter:   "codex",
@@ -75,10 +75,17 @@ func donorCodex(sampledAt int64, percent float64) *session.SessionState {
 				ObservationSource:   "transcript",
 				AttributionEvidence: "codex_transcript_rate_limits",
 				AttributionQuality:  session.AttributionQualityConfirmed,
+				// What the AccountBinder stamps from the session's own
+				// <CODEX_HOME>/auth.json (#2095); "" is an unconfirmed
+				// (e.g. API-key) session, which never donates.
+				ConfirmedAccountRef: ref,
 			},
 		},
 	}
 }
+
+// allowAll is a granted func with every adapter's observe consent granted.
+func allowAll(string) bool { return true }
 
 func emptyWrapper(adapter, id string) *session.SessionState {
 	return &session.SessionState{
@@ -90,10 +97,6 @@ func emptyWrapper(adapter, id string) *session.SessionState {
 
 func TestInheritRateLimits_PiOpenAIInheritsFromCodex(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-shared"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{
 				"type":      "oauth",
@@ -102,9 +105,9 @@ func TestInheritRateLimits_PiOpenAIInheritsFromCodex(t *testing.T) {
 		},
 	})
 
-	codex := donorCodex(1000, 22)
+	codex := donorCodex(1000, 22, "acct-shared")
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{codex, pi}, home)
+	InheritRateLimits([]*session.SessionState{codex, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit == nil {
 		t.Fatal("expected pi session to inherit codex snapshot")
@@ -116,10 +119,6 @@ func TestInheritRateLimits_PiOpenAIInheritsFromCodex(t *testing.T) {
 
 func TestInheritRateLimits_PiNotInheritsOnAccountMismatch(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-codex"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{
 				"type":      "oauth",
@@ -128,9 +127,9 @@ func TestInheritRateLimits_PiNotInheritsOnAccountMismatch(t *testing.T) {
 		},
 	})
 
-	codex := donorCodex(1000, 22)
+	codex := donorCodex(1000, 22, "acct-codex")
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{codex, pi}, home)
+	InheritRateLimits([]*session.SessionState{codex, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit != nil {
 		t.Fatal("expected no inheritance when account ids don't match")
@@ -156,7 +155,7 @@ func TestInheritRateLimits_PiDoesNotInheritFromClaudeCode(t *testing.T) {
 
 	cc := donorClaudeCode(2000, 47)
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{cc, pi}, home)
+	InheritRateLimits([]*session.SessionState{cc, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit != nil {
 		t.Fatalf("expected pi(anthropic) NOT to inherit from claude code (no confirmed account anchor exists for Anthropic), got %+v", pi.Metrics.RateLimit)
@@ -175,20 +174,16 @@ func TestInheritRateLimits_PiDoesNotInheritFromClaudeCode(t *testing.T) {
 // regardless of whether anthropic is ALSO configured alongside it.
 func TestInheritRateLimits_PiInheritsFromCodexRegardlessOfAnthropicConfig(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-x"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{"type": "oauth", "accountId": "acct-x"},
 			"anthropic":    map[string]any{"type": "oauth"},
 		},
 	})
 
-	codex := donorCodex(1000, 22)
+	codex := donorCodex(1000, 22, "acct-x")
 	cc := donorClaudeCode(2000, 47)
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{codex, cc, pi}, home)
+	InheritRateLimits([]*session.SessionState{codex, cc, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit == nil {
 		t.Fatal("expected inheritance")
@@ -206,10 +201,6 @@ func TestInheritRateLimits_PiInheritsFromCodexRegardlessOfAnthropicConfig(t *tes
 // or last one seen.
 func TestInheritRateLimits_FreshestDonorWinsOnTies(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-shared"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{
 				"type":      "oauth",
@@ -218,10 +209,10 @@ func TestInheritRateLimits_FreshestDonorWinsOnTies(t *testing.T) {
 		},
 	})
 
-	stale := donorCodex(1000, 80)
-	fresh := donorCodex(5000, 20)
+	stale := donorCodex(1000, 80, "acct-shared")
+	fresh := donorCodex(5000, 20, "acct-shared")
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{stale, fresh, pi}, home)
+	InheritRateLimits([]*session.SessionState{stale, fresh, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit == nil {
 		t.Fatal("expected pi to inherit a snapshot")
@@ -246,7 +237,7 @@ func TestInheritRateLimits_DoesNotOverwriteOwnSnapshot(t *testing.T) {
 			RateLimit: &session.RateLimitSnapshot{SampledAt: 9999, PlanType: "self"},
 		},
 	}
-	InheritRateLimits([]*session.SessionState{cc, pi}, home)
+	InheritRateLimits([]*session.SessionState{cc, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit.SampledAt != 9999 || pi.Metrics.RateLimit.PlanType != "self" {
 		t.Errorf("inheritance overwrote a session's own snapshot: %+v", pi.Metrics.RateLimit)
@@ -261,84 +252,10 @@ func TestInheritRateLimits_NoDonorIsNoOp(t *testing.T) {
 	})
 
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{pi}, home)
+	InheritRateLimits([]*session.SessionState{pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit != nil {
 		t.Fatal("expected no inheritance when no donor exists")
-	}
-}
-
-// writeCodexAuth stages a synthetic ~/.codex/auth.json under home.
-// Raw bytes (`raw`) trump structured body when both are set, so we
-// can exercise malformed-JSON cases.
-func writeCodexAuth(t *testing.T, home string, body any, raw string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".codex", "auth.json")
-	var data []byte
-	if raw != "" {
-		data = []byte(raw)
-	} else {
-		var err error
-		data, err = json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestReadCodexAccountID_ErrorPaths(t *testing.T) {
-	cases := []struct {
-		name string
-		body any
-		raw  string
-		want string
-	}{
-		{
-			name: "valid chatgpt mode",
-			body: map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{"account_id": "acct-x"}},
-			want: "acct-x",
-		},
-		{
-			name: "api-key mode returns empty",
-			body: map[string]any{"auth_mode": "apikey", "tokens": map[string]any{"account_id": "ignored"}},
-			want: "",
-		},
-		{
-			name: "missing auth_mode returns empty",
-			body: map[string]any{"tokens": map[string]any{"account_id": "ignored"}},
-			want: "",
-		},
-		{
-			name: "missing tokens field returns empty",
-			body: map[string]any{"auth_mode": "chatgpt"},
-			want: "",
-		},
-		{
-			name: "malformed JSON returns empty",
-			raw:  "{not json",
-			want: "",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			writeCodexAuth(t, home, tc.body, tc.raw)
-			if got := readCodexAccountID(home); got != tc.want {
-				t.Errorf("readCodexAccountID = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestReadCodexAccountID_MissingFileReturnsEmpty(t *testing.T) {
-	if got := readCodexAccountID(t.TempDir()); got != "" {
-		t.Errorf("expected empty for missing file, got %q", got)
 	}
 }
 
@@ -403,10 +320,6 @@ func TestInheritRateLimits_OpenCodeOpenAIInheritsFromCodex(t *testing.T) {
 	jwt := makeJWT(fmt.Sprintf(`{%q:%q}`, claimKey, accountID))
 
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": accountID},
-		},
 		".local/share/opencode/auth.json": map[string]any{
 			"openai-oauth": map[string]any{
 				"type":         "oauth",
@@ -415,9 +328,9 @@ func TestInheritRateLimits_OpenCodeOpenAIInheritsFromCodex(t *testing.T) {
 		},
 	})
 
-	codex := donorCodex(1000, 35)
+	codex := donorCodex(1000, 35, accountID)
 	opencode := emptyWrapper("opencode", "opencode-1")
-	InheritRateLimits([]*session.SessionState{codex, opencode}, home)
+	InheritRateLimits([]*session.SessionState{codex, opencode}, home, allowAll)
 
 	if opencode.Metrics.RateLimit == nil {
 		t.Fatal("expected opencode session to inherit codex snapshot via JWT account_id")
@@ -429,10 +342,6 @@ func TestInheritRateLimits_OpenCodeOpenAIInheritsFromCodex(t *testing.T) {
 
 func TestInheritRateLimits_OpenCodeOpenAINoInheritWhenJWTMissing(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-xyz"},
-		},
 		".local/share/opencode/auth.json": map[string]any{
 			"openai-oauth": map[string]any{
 				"type": "oauth",
@@ -441,9 +350,9 @@ func TestInheritRateLimits_OpenCodeOpenAINoInheritWhenJWTMissing(t *testing.T) {
 		},
 	})
 
-	codex := donorCodex(1000, 35)
+	codex := donorCodex(1000, 35, "acct-xyz")
 	opencode := emptyWrapper("opencode", "opencode-1")
-	InheritRateLimits([]*session.SessionState{codex, opencode}, home)
+	InheritRateLimits([]*session.SessionState{codex, opencode}, home, allowAll)
 
 	if opencode.Metrics.RateLimit != nil {
 		t.Fatal("expected no inheritance when access_token is absent")
@@ -451,25 +360,44 @@ func TestInheritRateLimits_OpenCodeOpenAINoInheritWhenJWTMissing(t *testing.T) {
 }
 
 func TestInheritRateLimits_CodexAPIKeyDoesNotDonate(t *testing.T) {
-	// Codex on API-key auth (auth_mode != "chatgpt") shouldn't be
-	// treated as a subscription donor — its rate_limit reflects the
-	// API-key bucket, not the user's ChatGPT subscription.
+	// Codex on API-key auth (auth_mode != "chatgpt") shouldn't be treated as
+	// a subscription donor — its rate_limit reflects the API-key bucket, not
+	// the user's ChatGPT subscription. The codex AccountReader yields no ref
+	// for a non-chatgpt auth.json (codex TestAccountReader_AuthModes), so the
+	// binder stamps none and the snapshot stays unconfirmed ("").
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "apikey",
-			"tokens":    map[string]any{"account_id": "ignored"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{"type": "oauth", "accountId": "acct-x"},
 		},
 	})
 
-	codex := donorCodex(1000, 22)
+	codex := donorCodex(1000, 22, "")
 	pi := emptyWrapper("pi", "pi-1")
-	InheritRateLimits([]*session.SessionState{codex, pi}, home)
+	InheritRateLimits([]*session.SessionState{codex, pi}, home, allowAll)
 
 	if pi.Metrics.RateLimit != nil {
 		t.Fatal("api-key codex should not donate to pi")
+	}
+}
+
+// A claude-code snapshot carrying a confirmed ref IS a donor under
+// (anthropic, ref), but no recipient can match it: pi's anthropic block and
+// opencode's anthropic-oauth block carry no Anthropic account id.
+func TestInheritRateLimits_ClaudeCodeDonorWithRefMatchesNoRecipient(t *testing.T) {
+	home := stageAuth(t, map[string]any{
+		".pi/agent/auth.json": map[string]any{
+			"anthropic": map[string]any{"type": "oauth", "accountId": "acct-claude"},
+		},
+	})
+	cc := donorClaudeCode(2000, 47)
+	cc.Metrics.RateLimit.ConfirmedAccountRef = "acct-claude"
+	if _, ok := donorKey(cc); !ok {
+		t.Fatal("a claude-code snapshot with a confirmed ref should be a donor")
+	}
+	pi := emptyWrapper("pi", "pi-1")
+	InheritRateLimits([]*session.SessionState{cc, pi}, home, allowAll)
+	if pi.Metrics.RateLimit != nil {
+		t.Fatalf("pi inherited an Anthropic snapshot: %+v", pi.Metrics.RateLimit)
 	}
 }
 
@@ -511,7 +439,7 @@ func TestProviderForSession(t *testing.T) {
 	if got := ProviderForSession(ccWithSnapshot); got != ProviderAnthropic {
 		t.Errorf("claude-code (has quota evidence): got %q, want %q", got, ProviderAnthropic)
 	}
-	codexWithSnapshot := donorCodex(1000, 10)
+	codexWithSnapshot := donorCodex(1000, 10, "")
 	if got := ProviderForSession(codexWithSnapshot); got != ProviderOpenAI {
 		t.Errorf("codex (has quota evidence): got %q, want %q", got, ProviderOpenAI)
 	}
@@ -546,10 +474,6 @@ func TestProviderForSession(t *testing.T) {
 // applyPiModelChangeProvider produces.
 func TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation(t *testing.T) {
 	home := stageAuth(t, map[string]any{
-		".codex/auth.json": map[string]any{
-			"auth_mode": "chatgpt",
-			"tokens":    map[string]any{"account_id": "acct-shared"},
-		},
 		".pi/agent/auth.json": map[string]any{
 			"openai-codex": map[string]any{
 				"type":      "oauth",
@@ -558,7 +482,7 @@ func TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation(t *testing.T
 		},
 	})
 
-	codex := donorCodex(1000, 22)
+	codex := donorCodex(1000, 22, "acct-shared")
 	pi := &session.SessionState{
 		SessionID: "pi-1",
 		Adapter:   "pi",
@@ -571,7 +495,7 @@ func TestInheritRateLimits_PiIdentityStampDoesNotBlockQuotaDonation(t *testing.T
 			},
 		},
 	}
-	InheritRateLimits([]*session.SessionState{codex, pi}, home)
+	InheritRateLimits([]*session.SessionState{codex, pi}, home, allowAll)
 
 	if len(pi.Metrics.RateLimit.Windows) == 0 {
 		t.Fatal("expected pi's identity-only stamp to be superseded by the matched codex donor's real quota windows")

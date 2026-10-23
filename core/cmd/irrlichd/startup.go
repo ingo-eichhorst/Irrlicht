@@ -617,13 +617,17 @@ type registerSessionRoutesDeps struct {
 	// `--diagnose` tarball. nil is valid and means "report no daemon-wide
 	// faults", matching liveHookHealth's own nil-meaningful seam.
 	HookHealth func() services.HookHealthSnapshot
+	// ObserveGranted reports an adapter's observe consent, gating the auth.json
+	// reads of the rate-limit inheritance pass on /api/v1/sessions (#2095).
+	// nil fails closed: no wrapper file is read and nothing is inherited.
+	ObserveGranted func(adapter string) bool
 }
 
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
 // separate from registerCoreRoutes because it needs orchMonitor.
 func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(deps.CachedRepo, deps.OrchMonitor, deps.CostTracker,
-		deps.HookHealth))
+		deps.HookHealth, deps.ObserveGranted))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files. #373 adds
@@ -840,6 +844,39 @@ func herdrPaneRecorder(permService *services.PermissionService) services.HerdrPa
 	}
 }
 
+// claudeAccountProbe returns the detection probe for Claude Code's
+// account-identity read, which is relevant exactly when Claude Code itself is
+// running, so it is detected by that agent's live-process matcher.
+func claudeAccountProbe(allAgents []agent.Agent) func() bool {
+	var claudeMatch agent.ProcessMatcher
+	for _, a := range allAgents {
+		if a.Identity.Name == claudecode.AdapterName {
+			claudeMatch = a.Process.Match
+			break
+		}
+	}
+	return func() bool {
+		return claudeMatch != nil && processlifecycle.HasLiveProcess(claudeMatch)
+	}
+}
+
+// accountBinderFor builds the AccountBinder that attributes Claude Code and
+// Codex quota snapshots to the account their home is logged into (#2095),
+// each gated on its own consent.
+func accountBinderFor(permService *services.PermissionService, home string, logger outbound.Logger) *services.AccountBinder {
+	accountReader := claudecode.NewAccountReader(func() bool {
+		return permService.Granted(claudecode.AccountName, claudecode.PermissionKeyAccount)
+	})
+	return services.NewAccountBinder(
+		map[string]outbound.SessionAccountReader{
+			claudecode.AdapterName: accountReader,
+			// Codex is attributed to the auth.json beside the session's
+			// own sessions/ folder, gated on codex's observe consent.
+			codex.AdapterName: codex.NewAccountReader(func() bool { return permService.ObserveGranted(codex.AdapterName) }),
+		},
+		filesystem.NewAccountHomeStore(dataDir(home)), logger, nil)
+}
+
 func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps) *services.PermissionService {
 	detector := deps.Detector
 	logger := deps.Logger
@@ -899,6 +936,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// kitty is a host integration, not an agent: detected by a live kitty
 	// process or an existing kitty config directory.
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
+	permService.SetDetectionProbe(claudecode.AccountName, claudeAccountProbe(allAgents))
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.
@@ -972,6 +1010,11 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		// Demo mode keeps the gate open: it serves synthetic seeded sessions
 		// and never reads live agent files in the first place.
 		detector.SetConsentGate(permService.ObserveGranted)
+		// Attribute Claude Code quota snapshots to the account their home is
+		// logged into (#2095), gated on the account permission's own consent.
+		// Demo mode serves synthetic sessions with no real identity file, so
+		// it is left unwired there.
+		detector.SetAccountBinder(accountBinderFor(permService, deps.Home, logger))
 	}
 
 	mux.HandleFunc("GET /api/v1/permissions",

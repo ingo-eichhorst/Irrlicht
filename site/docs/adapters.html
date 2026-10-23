@@ -106,6 +106,7 @@
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/claudecode/</code></li>
         <li><strong>Watches:</strong> <code>~/.claude/projects/**/*.jsonl</code></li>
         <li>Uses the shared fswatcher with recursive directory watching (two-level tree: <code>root/&lt;project&gt;/&lt;id&gt;.jsonl</code>)</li>
+        <li><strong>Account identity (separate consent row, &ldquo;Claude Code account&rdquo;):</strong> so each account gets its own quota chip, the daemon reads two fields, <code>oauthAccount.accountUuid</code> and <code>oauthAccount.organizationType</code>, from Claude Code&rsquo;s identity file (<code>~/.claude.json</code>, or <code>$CLAUDE_CONFIG_DIR/.claude.json</code> when that is set), plus the first timestamp of a session&rsquo;s transcript. It never reads or keeps the email address, names, or any token. It is declared on its own <code>claude-code-account</code> pseudo-adapter under the <code>account</code> permission, not as a second permission on <code>claude-code</code>. A session is attributed to an account only if that account was already logged in when the session began and has not changed since; otherwise its quota stays unattributed</li>
         <li><strong>Adapter name in session state:</strong> <code>"claude-code"</code></li>
       </ul>
 
@@ -117,6 +118,7 @@
         <li>Uses the shared fswatcher with recursive directory watching</li>
         <li><strong>Adapter name:</strong> <code>"codex"</code></li>
         <li>Model detection from <code>~/.codex/config.toml</code></li>
+        <li><strong>Account (consent: the adapter's observe permission):</strong> reads <code>auth_mode</code> and <code>tokens.account_id</code> from <code>&lt;CODEX_HOME&gt;/auth.json</code> (the file beside a session's own <code>sessions/</code> folder; default <code>~/.codex/auth.json</code>) to attribute quota to one account. No token or API key in the file is decoded or kept.</li>
       </ul>
 
       <h3>Pi Adapter</h3>
@@ -127,6 +129,7 @@
         <li>Uses the shared fswatcher with recursive directory watching</li>
         <li><strong>Adapter name:</strong> <code>"pi"</code></li>
         <li>Model detection from <code>~/.pi/agent/settings.json</code></li>
+        <li><strong>Account (consent: the adapter's observe permission):</strong> reads <code>type</code> and <code>accountId</code> of the <code>openai-codex</code> block in <code>~/.pi/agent/auth.json</code>, only to share a Codex quota reading with a Pi session on the same account. Nothing else in the file is decoded or kept.</li>
         <li>JSONL v3 format with session header, tree-structured entries, and multi-provider support</li>
       </ul>
 
@@ -152,6 +155,7 @@
         <li>CWD-based PID discovery via <code>pgrep -x opencode</code></li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
         <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>, <code>content-filter</code>) all map to <code>turn_done</code></li>
+        <li><strong>Account (consent: the adapter's observe permission):</strong> reads the <code>type</code> and the account-id claim (decoded from the access token) of the <code>openai-oauth</code> block in <code>~/.local/share/opencode/auth.json</code>, only to share a Codex quota reading with an OpenCode session on the same account. The token is not kept.</li>
         <li><strong>Adapter name:</strong> <code>"opencode"</code></li>
         <li>Stage: <strong>alpha</strong> &mdash; closes #100</li>
       </ul>

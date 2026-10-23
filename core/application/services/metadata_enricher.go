@@ -17,6 +17,10 @@ import (
 type metadataEnricher struct {
 	git     outbound.GitResolver
 	metrics outbound.MetricsCollector
+	// binder, when set, stamps the account a session's quota snapshot is
+	// confirmed against (#2095). It runs AFTER every ComputeMetrics because
+	// the metrics adapter rebuilds the snapshot without the ref on each pass.
+	binder *AccountBinder
 }
 
 // baseNameOf is the non-git project-name fallback: the directory's own name,
@@ -111,6 +115,7 @@ func (e *metadataEnricher) PruneMetrics(transcriptPath string) {
 // newly created session. It prefers CWD from the event (set by process
 // scanner), falling back to transcript inspection for file-based sessions.
 func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agent.Event) {
+	defer e.binder.Stamp(state)
 	// Resolve git metadata.
 	if ev.CWD != "" {
 		state.CWD = ev.CWD
@@ -164,6 +169,7 @@ func (e *metadataEnricher) adoptGitMetadata(state *session.SessionState, cwd str
 // Up to three git calls, and deliberately no aggregate deadline over them —
 // see noGitBudget.
 func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
+	defer e.binder.Stamp(state)
 	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
 	// so we get CWD for free without a separate file read.
 	var metricsCWD string
@@ -241,6 +247,7 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 // RefreshMetrics recomputes metrics from the transcript without touching
 // CWD/branch/project. Used during startup re-evaluation of persisted states.
 func (e *metadataEnricher) RefreshMetrics(state *session.SessionState) {
+	defer e.binder.Stamp(state)
 	if state.TranscriptPath == "" {
 		return
 	}
