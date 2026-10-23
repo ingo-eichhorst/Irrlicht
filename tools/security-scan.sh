@@ -215,9 +215,35 @@ fi
 # no module in scope it must not run at all, or a push touching no Go file pays
 # a network install (and fails outright when `go` isn't on PATH) for a scan
 # with nothing to scan — #1213's shape exactly.
+#
+# `go install` writes to `go env GOBIN`, or else to the first `go env GOPATH`
+# entry's bin/. Nothing guarantees that directory is on PATH: actions/setup-go
+# adds it in CI. Until #2099, a shell that lacked it reported every module's
+# scan as failed with `govulncheck: command not found`, straight after
+# installing it, and re-ran the install once per module. go_bin_on_path appends
+# the directory once, so a tool already on PATH keeps precedence. It is called
+# only from inside the two Go loops and only for a missing tool, for the reason
+# the paragraph above gives. tools/ars-gate.sh resolves ars the same way.
+GO_BIN_DIR=""
+go_bin_on_path() {
+  [[ -n "$GO_BIN_DIR" ]] && return 0
+  local dir gopath_list
+  dir=$(go env GOBIN) || return 1
+  if [[ -z "$dir" ]]; then
+    gopath_list=$(go env GOPATH) || return 1
+    dir="${gopath_list%%:*}/bin"
+  fi
+  GO_BIN_DIR=$dir
+  PATH="$PATH:$GO_BIN_DIR"
+}
 
 for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
+  command -v govulncheck >/dev/null 2>&1 || go_bin_on_path
   command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
+  command -v govulncheck >/dev/null 2>&1 || {
+    fail "govulncheck: $mod — not on PATH or in the Go bin dir (${GO_BIN_DIR:-unresolved}); go install did not produce it (any go error is above)"
+    continue
+  }
   echo "-- govulncheck: $mod --"
   gv_json=$(mktemp)
   gv_err=$(mktemp)
@@ -265,6 +291,7 @@ done
 # is scanned less: still `./...`, still unfiltered.
 
 for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
+  command -v gosec >/dev/null 2>&1 || go_bin_on_path
   command -v gosec >/dev/null 2>&1 || { fail "gosec not found — install: go install github.com/securego/gosec/v2/cmd/gosec@latest"; continue; }
   echo "-- gosec: $mod (one pass; informational listing + High/High gate) --"
   gs_json=$(mktemp)
