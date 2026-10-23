@@ -645,6 +645,13 @@ func TestEnrollUnavailableReasonNamesEnrollmentInBothFailureCases(t *testing.T) 
 // TestEnrollNewWithoutPublicURLNamesEnrollment drives runEnrollNew's own
 // stdout — the CLI counterpart to TestEnrollMintResponseReasonNamesEnrollment,
 // the other of the two call sites enrollUnavailableReason fixes.
+//
+// The QR check skips line 1, which is the minted code itself: an
+// onetimecode.Alphabet code can spell "QR" (CI printed QK8T-2WQR, #2098), so
+// a whole-output check failed about 1 run in 150 (10 of 1000 with
+// `-count=1000` before this change). Line 1 must be a presented code, so if
+// the output's shape changes, the test fails instead of checking the wrong
+// line.
 func TestEnrollNewWithoutPublicURLNamesEnrollment(t *testing.T) {
 	ddir := t.TempDir()
 	r, w, err := os.Pipe()
@@ -664,10 +671,14 @@ func TestEnrollNewWithoutPublicURLNamesEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out), "QR") {
-		t.Fatalf("enroll new output mentions QR: %s", out)
+	code, rest, _ := strings.Cut(string(out), "\n")
+	if !onetimecode.IsPresentedCode(code) {
+		t.Fatalf("enroll new output's first line is not the minted code: %q", out)
 	}
-	if !strings.Contains(string(out), "enrollment URL") {
+	if strings.Contains(rest, "QR") {
+		t.Fatalf("enroll new output mentions QR after the code: %s", out)
+	}
+	if !strings.Contains(rest, "enrollment URL") {
 		t.Fatalf("enroll new output does not name the enrollment URL: %s", out)
 	}
 }

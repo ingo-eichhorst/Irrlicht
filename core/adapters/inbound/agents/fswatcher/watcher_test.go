@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,51 @@ func setupFakeProjects(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// awaitReady blocks until w has attached its watch to the tree. Tests wait on
+// it instead of sleeping a guessed interval before mutating files (#2098).
+func awaitReady(t *testing.T, w *Watcher) {
+	t.Helper()
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not signal Ready")
+	}
+}
+
+// seamDirs installs one of Watch's per-directory test seams (onDirArmed,
+// onRearmed) and returns the directories it reports, in order. It must be
+// called before Watch starts. The send never blocks: a test that stops
+// reading must not wedge Watch's goroutine.
+func seamDirs(seam *func(dir string)) <-chan string {
+	seen := make(chan string, 64)
+	*seam = func(dir string) {
+		select {
+		case seen <- dir:
+		default:
+		}
+	}
+	return seen
+}
+
+// awaitDir waits until seen reports dir, skipping any other directory. If it
+// does not within timeout, the test fails with dir, failure and the elapsed
+// time.
+func awaitDir(t *testing.T, seen <-chan string, dir, failure string, timeout time.Duration) {
+	t.Helper()
+	start := time.Now()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case got := <-seen:
+			if got == dir {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("%s %s within %s", dir, failure, time.Since(start))
+		}
+	}
 }
 
 func TestNewWithRoot(t *testing.T) {
@@ -111,11 +157,7 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 
 	// Wait for the watch to attach before mutating files — closes the
 	// attach race without a guessed sleep.
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not signal Ready")
-	}
+	awaitReady(t, w)
 
 	// Create a new transcript file.
 	transcriptPath := filepath.Join(root, "-Users-test-myproject", "abc-123.jsonl")
@@ -181,11 +223,7 @@ func TestWatch_MetadataParentIsPresentOnFirstNewEvent(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- w.Watch(ctx) }()
-	select {
-	case <-w.Ready():
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not signal Ready")
-	}
+	awaitReady(t, w)
 
 	path := filepath.Join(root, "-Users-test-myproject", "child.jsonl")
 	if err := os.WriteFile(path, []byte("parent-thread\n"), 0644); err != nil {
@@ -227,7 +265,7 @@ func TestWatch_EmitsActivity(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, w)
 
 	// Drain the startup EventNewSession emitted for the pre-existing file.
 	select {
@@ -290,7 +328,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, w)
 
 	// Drain the startup EventNewSession emitted for the pre-existing file.
 	select {
@@ -372,9 +410,14 @@ func TestHandleEvent_RemovedPendingHeaderLinkedTranscriptClearsPendingState(t *t
 	}
 }
 
+// TestWatch_NewProjectDir writes a transcript into a project directory
+// created after Watch started, strictly after the watcher has armed that
+// directory. That is the case fsnotify/fsnotify#783 breaks on macOS, and the
+// one the rearm queue repairs (#2098).
 func TestWatch_NewProjectDir(t *testing.T) {
 	root := setupFakeProjects(t)
 	w := NewWithRoot(root, testAdapter, 0)
+	armed := seamDirs(&w.onDirArmed)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -383,16 +426,14 @@ func TestWatch_NewProjectDir(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, w)
 
 	// Create a new project directory and put a transcript in it.
 	newProjDir := filepath.Join(root, "-Users-test-newproject")
 	if err := os.MkdirAll(newProjDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-
-	// Give the watcher time to register the new directory.
-	time.Sleep(100 * time.Millisecond)
+	awaitDir(t, armed, newProjDir, "was not armed", 2*time.Second)
 
 	transcriptPath := filepath.Join(newProjDir, "new-sess.jsonl")
 	if err := os.WriteFile(transcriptPath, []byte(`{"type":"start"}`+"\n"), 0644); err != nil {
@@ -420,6 +461,99 @@ func TestWatch_NewProjectDir(t *testing.T) {
 	}
 }
 
+// TestWatch_RunsTheQueuedRearm checks that Watch's own loop runs the re-arm
+// handleDirCreate queues for a directory created at runtime (#2098).
+// TestRearmDue_RepairsARuntimeDirWhoseWatchWasDowngraded calls rearmDue
+// itself, so without this test the select case that runs it in the daemon
+// could be dropped with every other test green. The test does not need the
+// fsnotify race: every runtime-created directory is queued, downgraded or
+// not.
+func TestWatch_RunsTheQueuedRearm(t *testing.T) {
+	root := setupFakeProjects(t)
+	w := NewWithRoot(root, testAdapter, 0)
+	armed := seamDirs(&w.onDirArmed)
+	rearmed := seamDirs(&w.onRearmed)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	awaitReady(t, w)
+
+	dir := mkdir(t, filepath.Join(root, "-Users-test-rearmed"))
+	awaitDir(t, armed, dir, "was not armed", 2*time.Second)
+	awaitDir(t, rearmed, dir, "was never re-armed by Watch's loop", 2*time.Second)
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// TestWatch_RuntimeDirStress is the opt-in instrument for #2098, and it is
+// skipped unless FSWATCHER_STRESS_ROUNDS is set. It runs TestWatch_NewProjectDir's
+// round FSWATCHER_STRESS_ROUNDS times on each of 12 parallel watchers, and
+// the watchers' own load supplies the contention. The fsnotify race it
+// exposes is too rare to show up in one run of that test. The periodic
+// sweep is disabled so it cannot recover a lost file on its own. A round
+// counts as lost when the transcript is not reported within 1s.
+//
+//	FSWATCHER_STRESS_ROUNDS=800 go test -race -count=1 \
+//	  -run '^TestWatch_RuntimeDirStress$' ./core/adapters/inbound/agents/fswatcher/
+func TestWatch_RuntimeDirStress(t *testing.T) {
+	rounds, _ := strconv.Atoi(os.Getenv("FSWATCHER_STRESS_ROUNDS"))
+	if rounds <= 0 {
+		t.Skip("opt-in: set FSWATCHER_STRESS_ROUNDS=<n> (#2098)")
+	}
+	for i := range 12 {
+		t.Run(fmt.Sprintf("watcher-%d", i), func(t *testing.T) {
+			t.Parallel()
+			root := setupFakeProjects(t)
+			w := NewWithRoot(root, testAdapter, 0).WithReconcileInterval(-1)
+			armed := seamDirs(&w.onDirArmed)
+			ch := w.Subscribe()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = w.Watch(ctx) }()
+			awaitReady(t, w)
+
+			lost := 0
+			for r := range rounds {
+				dir := filepath.Join(root, fmt.Sprintf("-proj-%d", r))
+				mkdir(t, dir)
+				awaitDir(t, armed, dir, "was not armed", 5*time.Second)
+				sessionID := fmt.Sprintf("sess-%d", r)
+				writeTranscript(t, filepath.Join(dir, sessionID+".jsonl"), "{}\n")
+				if !sawNewSession(ch, sessionID, time.Second) {
+					lost++
+					t.Logf("round %d: %s was never reported", r, sessionID)
+				}
+			}
+			if lost > 0 {
+				t.Errorf("%d of %d transcripts written into an armed runtime-created dir were never reported", lost, rounds)
+			}
+		})
+	}
+}
+
+// sawNewSession reports whether an EventNewSession for sessionID arrives on
+// ch within timeout, discarding any other event.
+func sawNewSession(ch <-chan agent.Event, sessionID string, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession && ev.SessionID == sessionID {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
+
 // TestWatch_NestedSubdirWithExistingFiles reproduces the bug where
 // Claude Code creates a parent session directory together with a
 // nested subagents/ directory and subagent transcript files in rapid
@@ -439,7 +573,7 @@ func TestWatch_NestedSubdirWithExistingFiles(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, w)
 
 	// Build the entire subtree in one go, mimicking Claude Code's
 	// "create parent session + subagents dir + agent transcripts" flow.
@@ -500,7 +634,7 @@ func TestWatch_IgnoresNonJSONL(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	time.Sleep(100 * time.Millisecond)
+	awaitReady(t, w)
 
 	// Create a non-.jsonl file — should not trigger an event.
 	nonTranscript := filepath.Join(root, "-Users-test-myproject", "config.json")
@@ -565,6 +699,11 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
+	// The one sleep left in this file, kept on purpose (#2098): it gives
+	// Watch time to reach waitForRoot before root exists. Ready() cannot
+	// express that, because it closes only after root exists. If the sleep
+	// is too short the test still passes, but only covers the root-present
+	// path.
 	time.Sleep(100 * time.Millisecond)
 
 	// Now create root and a project dir.
@@ -572,8 +711,8 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Give watcher time to detect root and add watches.
-	time.Sleep(200 * time.Millisecond)
+	// Ready closes only once root exists and its scan is done.
+	awaitReady(t, w)
 
 	// Write a transcript.
 	tp := filepath.Join(root, "-test-proj", "late-sess.jsonl")

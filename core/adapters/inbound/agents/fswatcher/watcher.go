@@ -56,6 +56,32 @@ const defaultReconcileInterval = 15 * time.Second
 // this reporting exists to leave (#1255).
 const maxLoggedWatchFailures = 10
 
+// rearmSettle is how long after handleDirCreate arms a directory created at
+// runtime Watch waits before re-registering that subtree and reconciling its
+// files (see rearmDue).
+//
+// The re-registration works around fsnotify/fsnotify#783 (open, unfixed in
+// v1.10.1 and on its main). On kqueue, fsnotify's reader goroutine registers
+// a new subdirectory itself right after it delivers the Create. It reads the
+// subdirectory's flags before our Add stores NOTE_WRITE, and can then
+// re-register the same knote with only NOTE_DELETE|NOTE_RENAME. EV_ADD
+// replaces fflags, so the directory silently stops reporting the files
+// created inside it. addWatch's watched short-circuit keeps the periodic
+// sweep from registering it again. The directory therefore stays blind for
+// the rest of the run, and its transcripts surface only through the sweep's
+// file reconcile, every defaultReconcileInterval. A second Add after the
+// reader has finished restores the flags.
+//
+// The settle only has to outlast that reader's re-registration. Measured on
+// macOS for #2098 with TestWatch_RuntimeDirStress at
+// FSWATCHER_STRESS_ROUNDS=2400 under -race (12 parallel watchers):
+//   - with no repair, 8 of 28,800 transcripts were lost;
+//   - with this settle, 0 of 28,800 were lost.
+//
+// A file written during the blind window is still reported, because the
+// re-arm reconciles the directory's files.
+const rearmSettle = 100 * time.Millisecond
+
 // Watcher watches a directory tree for transcript file events. The default
 // path rule accepts .jsonl files. A custom session-ID callback owns the rule
 // for adapters that use another suffix.
@@ -122,6 +148,14 @@ type Watcher struct {
 	watchFailures       int
 	loggedWatchFailures int
 
+	// rearmQueue holds the directories handleDirCreate armed at runtime, in
+	// arm order, each with the time its re-registration falls due (see
+	// rearmSettle). rearmTimer fires for the head of the queue and is nil
+	// while the queue is empty. Both are touched only from the Watch
+	// goroutine, like the maps above.
+	rearmQueue []pendingRearm
+	rearmTimer *time.Timer
+
 	subMu sync.Mutex
 	subs  []chan agent.Event
 
@@ -150,6 +184,20 @@ type Watcher struct {
 	// TestWatch_ScanBoundaryReportsALateDiscoveryAsLate for the evidence that
 	// the boundary it exposes actually discriminates.
 	onBacklogScanComplete func()
+
+	// onDirArmed, when non-nil, is invoked on Watch's own goroutine right
+	// after handleDirCreate has armed a directory created at runtime (and its
+	// subtree). It is a test seam, unset in the daemon, like
+	// onBacklogScanComplete. A test can then write into the directory strictly
+	// after its watch exists, which is the case a guessed sleep only made
+	// likely (#2098).
+	onDirArmed func(dir string)
+
+	// onRearmed, when non-nil, is invoked on Watch's own goroutine after
+	// rearmDue has re-registered a queued subtree. It is a test seam, unset in
+	// the daemon. It lets a Watch-driven test observe that Watch's select
+	// really runs the re-arm (TestWatch_RunsTheQueuedRearm, #2098).
+	onRearmed func(dir string)
 }
 
 // Ready returns a channel that is closed once Watch has attached the
@@ -346,6 +394,10 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return err
 	}
 	defer watcher.Close()
+	// The rearm queue names directories armed through this watcher, so it
+	// lives exactly as long. drainPendingEvents can queue entries during the
+	// startup scan below, before the select loop exists.
+	defer w.stopRearm()
 
 	// Watch the root itself first — before scanning any pre-existing
 	// subdirectories below — so the kernel starts queuing Create events for
@@ -395,6 +447,8 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			return ctx.Err()
 		case <-reconcileC:
 			w.reconcile(ctx, watcher)
+		case <-w.rearmC():
+			w.rearmDue(watcher)
 		case ev, ok := <-watcher.Events:
 			if !w.dispatchEvent(watcher, ev, ok) {
 				return nil
@@ -411,13 +465,71 @@ func (w *Watcher) Watch(ctx context.Context) error {
 // resetRunState starts a Watch run's bookkeeping from empty, so a Watcher
 // driven twice doesn't inherit the previous run's view of what was already
 // emitted or already armed. pendingNew is left nil because its write sites
-// allocate it lazily.
+// allocate it lazily. The rearm queue is emptied as well: its directories
+// were armed through the previous run's fsnotify watcher, which is closed.
 func (w *Watcher) resetRunState() {
 	w.emitted = make(map[string]int64)
 	w.emittedSessionID = make(map[string]string)
 	w.watched = make(map[string]struct{})
 	w.watchFailed = make(map[string]struct{})
 	w.pendingNew = nil
+	w.stopRearm()
+}
+
+// pendingRearm is one rearmQueue entry: a directory armed at runtime and the
+// time its re-registration falls due.
+type pendingRearm struct {
+	dir string
+	due time.Time
+}
+
+// queueRearm schedules dir's subtree for one re-registration after
+// rearmSettle (see that constant for why). Entries are appended in arm order
+// with a fixed settle, so the queue is sorted by due time and the timer only
+// ever needs to track its head.
+func (w *Watcher) queueRearm(dir string) {
+	w.rearmQueue = append(w.rearmQueue, pendingRearm{dir: dir, due: time.Now().Add(rearmSettle)})
+	if w.rearmTimer == nil {
+		w.rearmTimer = time.NewTimer(rearmSettle)
+	}
+}
+
+// rearmC returns the channel Watch selects on for the next due re-arm. It is
+// nil while nothing is queued, which parks that select case.
+func (w *Watcher) rearmC() <-chan time.Time {
+	if w.rearmTimer == nil {
+		return nil
+	}
+	return w.rearmTimer.C
+}
+
+// rearmDue re-registers every queued subtree whose settle has elapsed. It
+// then re-arms the timer for the next entry, if there is one.
+func (w *Watcher) rearmDue(watcher *fsnotify.Watcher) {
+	w.rearmTimer = nil
+	now := time.Now()
+	for len(w.rearmQueue) > 0 && !w.rearmQueue[0].due.After(now) {
+		dir := w.rearmQueue[0].dir
+		w.rearmQueue = w.rearmQueue[1:]
+		w.reconcileSubtree(watcher, dir, true)
+		if w.onRearmed != nil {
+			w.onRearmed(dir)
+		}
+	}
+	if len(w.rearmQueue) == 0 {
+		w.rearmQueue = nil // release the drained backing array
+		return
+	}
+	w.rearmTimer = time.NewTimer(time.Until(w.rearmQueue[0].due))
+}
+
+// stopRearm drops every queued re-arm and stops its timer.
+func (w *Watcher) stopRearm() {
+	if w.rearmTimer != nil {
+		w.rearmTimer.Stop()
+		w.rearmTimer = nil
+	}
+	w.rearmQueue = nil
 }
 
 // reconcileTicker returns the channel Watch selects on to run the sweep that
@@ -615,6 +727,10 @@ func (w *Watcher) handleDirCreate(watcher *fsnotify.Watcher, name string) bool {
 	}
 	if strings.HasPrefix(name, w.root) {
 		w.addSubtree(watcher, name)
+		w.queueRearm(name)
+		if w.onDirArmed != nil {
+			w.onDirArmed(name)
+		}
 	}
 	return true
 }
@@ -1038,19 +1154,33 @@ func (w *Watcher) reconcile(ctx context.Context, watcher *fsnotify.Watcher) {
 		if ctx.Err() != nil {
 			return
 		}
-		_ = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip unreadable dirs
-			}
-			if d.IsDir() {
-				w.addWatch(watcher, p)
-				return nil
-			}
-			w.reconcileFile(p)
-			return nil
-		})
+		w.reconcileSubtree(watcher, path, false)
 		w.drainPendingEvents(watcher)
 	}
+}
+
+// reconcileSubtree arms every directory under dir and reports, through
+// reconcileFile, every transcript fsnotify never did. With reregister set,
+// each directory is first dropped from watched, so addWatch registers it
+// again even though it is recorded as armed. That second Add repairs a
+// registration fsnotify downgraded behind our back (rearmSettle explains
+// how). Without it, addWatch skips armed directories, as the periodic sweep
+// wants.
+func (w *Watcher) reconcileSubtree(watcher *fsnotify.Watcher, dir string, reregister bool) {
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable dirs
+		}
+		if d.IsDir() {
+			if reregister {
+				delete(w.watched, p)
+			}
+			w.addWatch(watcher, p)
+			return nil
+		}
+		w.reconcileFile(p)
+		return nil
+	})
 }
 
 // reconcileFile emits the event fsnotify should have delivered for path, if
