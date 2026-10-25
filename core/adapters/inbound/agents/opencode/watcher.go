@@ -203,6 +203,13 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return fmt.Errorf("opencode watcher: watch %s: %w", dbDir, err)
 	}
 
+	// trailing fires once after a store write the debounce dropped, so the
+	// last write of a burst is still scanned. Without it a turn end landing
+	// within minScanGap of the previous scan waited for some later write —
+	// measured live in #2106: an opencode2 TUI's idle row at 1792958760804
+	// reached the daemon only with the next unrelated write, 8.7 s later.
+	// TestWatch_AWriteInsideTheDebounceGapIsStillScanned pins it.
+	var trailing <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -211,20 +218,32 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// React to writes to the DB or WAL file.
-			if ev.Op&fsnotify.Write != 0 {
-				name := filepath.Base(ev.Name)
-				dbFile := filepath.Base(w.dbPath)
-				if name == dbFile || name == dbFile+"-wal" {
-					w.scanSessions()
-				}
+			if !w.isStoreWrite(ev) {
+				continue
 			}
+			if w.shouldScan() {
+				w.scanSessions()
+			} else if trailing == nil {
+				trailing = time.After(w.minScanGap)
+			}
+		case <-trailing:
+			trailing = nil
+			w.scanSessions()
 		case _, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
 		}
 	}
+}
+
+// isStoreWrite reports whether ev is a write to the database or its WAL.
+func (w *Watcher) isStoreWrite(ev fsnotify.Event) bool {
+	if ev.Op&fsnotify.Write == 0 {
+		return false
+	}
+	name, dbFile := filepath.Base(ev.Name), filepath.Base(w.dbPath)
+	return name == dbFile || name == dbFile+"-wal"
 }
 
 // Subscribe returns a channel that receives agent events.

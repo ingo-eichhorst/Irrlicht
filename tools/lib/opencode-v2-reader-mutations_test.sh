@@ -31,6 +31,8 @@
 #      migrated under a running watcher replays its imported row as activity.
 #  10. a failed first-sight read leaves an unseeded cursor → the next scan
 #      reads the session's stored history as activity and admits it.
+#  11. Watch arms no trailing scan → a turn end written inside the debounce
+#      gap is never scanned.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -226,6 +228,16 @@ assert_go_test_goes_red \
   "$OPENCODE" \
   '^TestV2Reader_AFailedFirstSightDoesNotSeedHistoryAsActivity$' \
   "stored history produced"
+
+# ── 11. no trailing scan after a debounced write ──
+assert_go_test_goes_red \
+  "Watch without the trailing scan" \
+  "$WATCHER" \
+  'trailing = time.After(w.minScanGap)' \
+  'trailing = nil' \
+  "$OPENCODE" \
+  '^TestWatch_AWriteInsideTheDebounceGapIsStillScanned$' \
+  "debounce gap was never scanned"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-reader-mutations: $fails FAILED"
