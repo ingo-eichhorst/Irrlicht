@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -39,6 +38,9 @@ type Parser struct {
 	// deltas. OpenCode todos have no stable identifier, so they're keyed by
 	// `content` — the closest thing to identity.
 	todos tailer.TodoReconciler
+
+	// v2 is the opencode 2.x branch's state (parser_v2.go).
+	v2 v2State
 }
 
 // ParseLine parses a raw map representing one OpenCode part row into a
@@ -58,6 +60,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 	if cwd, ok := raw["_cwd"].(string); ok {
 		ev.CWD = cwd
+	}
+
+	// An opencode 2.x session_message row (#2106) — the 1.x reading below
+	// does not apply to it.
+	if p.parseV2Message(raw, ev) {
+		return ev
 	}
 
 	partType, _ := raw["type"].(string)
@@ -179,21 +187,7 @@ func applyStepFinishTokens(raw map[string]interface{}, reason string, ev *tailer
 	if !ok {
 		return
 	}
-	snap := &tailer.TokenSnapshot{}
-	if v, ok := tokens["input"].(float64); ok {
-		snap.Input = int64(v)
-	}
-	if v, ok := tokens["output"].(float64); ok {
-		snap.Output = int64(v)
-	}
-	if cache, ok := tokens["cache"].(map[string]interface{}); ok {
-		if v, ok := cache["read"].(float64); ok {
-			snap.CacheRead = int64(v)
-		}
-		if v, ok := cache["write"].(float64); ok {
-			snap.CacheCreation = int64(v)
-		}
-	}
+	snap := tokenSnapshot(tokens)
 	if v, ok := tokens["total"].(float64); ok {
 		snap.Total = int64(v)
 	}
@@ -224,6 +218,23 @@ func applyStepFinishTokens(raw map[string]interface{}, reason string, ev *tailer
 	ev.Contribution = contrib
 }
 
+// tokenSnapshot reads opencode's {input, output, cache: {read, write}} token
+// counts, the shape both a 1.x step-finish and a 2.x step carry; each caller
+// sets Total its own way (1.x reports one, 2.x does not).
+func tokenSnapshot(tokens map[string]interface{}) *tailer.TokenSnapshot {
+	count := func(m map[string]interface{}, key string) int64 {
+		v, _ := m[key].(float64)
+		return int64(v)
+	}
+	cache, _ := tokens["cache"].(map[string]interface{})
+	return &tailer.TokenSnapshot{
+		Input:         count(tokens, "input"),
+		Output:        count(tokens, "output"),
+		CacheRead:     count(cache, "read"),
+		CacheCreation: count(cache, "write"),
+	}
+}
+
 // parseTextPart handles text parts — assistant text output during a turn.
 func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
 	role, _ := raw["_role"].(string)
@@ -238,17 +249,7 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 	// Assistant text part.
 	ev.EventType = "assistant_message"
 	if text, ok := raw["text"].(string); ok {
-		// Scan the FULL part text for the task-estimate marker (issue #558)
-		// before the display truncation below drops all but the last 200 runes.
-		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-			ev.TaskEstimate = est
-		}
-		if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-			ev.TaskSummary = s
-		}
-		ev.AssistantText = tailer.TruncateAssistantText(text)
-		// Execution-confidence sample (#737) from the FULL text, never the display tail.
-		ev.Hedge = session.MeasureHedgingCached(text) // re-parsed every poll by the store fold
+		applyAssistantText(text, ev)
 	}
 	return ev
 }

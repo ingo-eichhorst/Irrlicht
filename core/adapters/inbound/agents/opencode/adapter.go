@@ -1,56 +1,109 @@
 // Package opencode provides an inbound adapter that monitors OpenCode
 // (https://github.com/anomalyco/opencode) sessions by polling its SQLite
-// database at ~/.local/share/opencode/opencode.db.
+// database (StorePath; ~/.local/share/opencode/opencode.db by default).
 //
 // Unlike the other adapters (claudecode, codex, pi, aider) which tail JSONL
 // transcript files, OpenCode stores all session state in a single SQLite
 // database using WAL mode. The adapter watches the database file for writes
-// via fsnotify and queries the `part` table to extract normalized events.
+// via fsnotify and reads whichever schema the store carries:
 //
-// Session discovery works by querying the `session` table; activity events are
-// derived from new or updated rows in the `part` table. The `message` table
-// provides role context (user vs. assistant) for state transitions.
+//   - opencode 1.x: sessions from the `session` table, activity from new or
+//     updated rows in `part`, with `message` giving each part's role.
+//   - opencode 2.x (#2106): sessions from `session_v2`, activity from new or
+//     updated rows in `session_message` — one row per user prompt, per
+//     assistant step and per idle (turn end).
 package opencode
 
 import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 )
 
 // AdapterName identifies sessions originating from OpenCode.
 const AdapterName = "opencode"
 
-// ProcessName is the OS-level executable name for OpenCode, used by
-// the process lifecycle scanner to detect running instances via pgrep -x.
-const ProcessName = "opencode"
+// processCmdPattern matches an opencode process by its command line: the
+// executable — argv[0] — is `opencode`, `opencode2` or `opencode.exe`. The
+// 2.x TUI runs as `opencode` through Homebrew and as `opencode2` through the
+// npm package's bin of that name, and that package's binary — which both of
+// its bins symlink to (`ls -la ~/.local/opencode-v2/bin` on the dev host) — is
+// `opencode.exe` (#2106). Process.SessionHostArgv (IsServiceArgv) says which
+// of the matched processes is the 2.x service rather than a client.
+//
+// Anchored on argv[0] because the matchers read the WHOLE command line
+// (`pgrep -f` on macOS, /proc/<pid>/cmdline on Linux): unanchored, a process
+// that only names an opencode binary in its arguments matched — the dev
+// daemon minted placeholder rows for the tui-detach.py driver and its shell
+// wrapper, and `pgrep -lf '(^|/)opencode(2|\.exe)?( |$)'` listed
+// `sh -c sleep 20; echo /x/shim/opencode` where the anchored pattern listed
+// only the service and a TUI. The cost: an argv[0] containing a space does
+// not match.
+//
+// `( |$)` rather than `\s`: macOS pgrep's regex dialect has no `\s` —
+// `pgrep -lf '(^|/)zsh(\s|$)'` printed nothing on the dev host while
+// `pgrep -lf '(^|/)zsh( |$)'` listed three zsh processes.
+// TestDiscoverPID_FindsAnOpencode2ClientOnThisHost runs it through the host's
+// real matcher.
+const processCmdPattern = `^([^ ]*/)?opencode(2|\.exe)?( |$)`
 
-// dbRelPath is the path relative to $HOME where OpenCode stores its SQLite
-// database. Follows XDG Base Directory conventions on macOS/Linux.
-const dbRelPath = ".local/share/opencode/opencode.db"
+var processCmdRegex = regexp.MustCompile(processCmdPattern)
+
+// dataRelPath is opencode's data directory relative to $HOME when
+// $XDG_DATA_HOME is unset, and storeName the database file in it.
+const (
+	dataRelPath = ".local/share/opencode"
+	storeName   = "opencode.db"
+)
 
 // StorePath is the absolute path of the OpenCode SQLite database the daemon
 // reads — the ONE resolver both the watcher (which tails it) and the hook
 // receiver (which composes a session key from it) go through.
 //
-// A single function rather than two `filepath.Join(home, dbRelPath)` call sites
+// A single function rather than two call sites composing the path each
 // for the same reason pi's Source() is a function: the hook receiver's key and
 // the watcher's key must be the same string or they are two sessions, and a
 // second, independently-written composition is exactly the drift #1361 records.
 //
-// Known limitation, stated rather than left to be discovered: this does NOT
-// honour $XDG_DATA_HOME, which opencode's own Global.Path.data does
-// (`join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-// "opencode")`). That gap predates #1719 and is not introduced by it — a user
-// with XDG_DATA_HOME set has never been observed by this adapter at all,
-// because the watcher would find no database. It is stated here because this is
-// now the one place to fix it.
+// It resolves the store the way opencode does (#2106), read out of the 2.1.4
+// bundle with `strings` rather than by running it: the data dir is
+// `$XDG_DATA_HOME || ~/.local/share` joined with "opencode", and the database
+// is `$OPENCODE_DB ?? "opencode.db"` resolved against it
+// (`function LD(o){let e=process.env.OPENCODE_DB??(…"opencode.db"…);
+// return e===":memory:"?e:r.resolve(o,e)}`, called as `LD(o.data)`). So an
+// absolute OPENCODE_DB is used as is and a relative one lands in the data dir.
+// `:memory:` names no file to read; it falls back to the default store.
+//
+// Not followed: a non-stable release channel's `opencode-<channel>.db`, which
+// the same function picks when OPENCODE_DB is unset. The daemon reads the
+// stable store only.
 func StorePath() string {
-	home, err := os.UserHomeDir()
+	db := os.Getenv("OPENCODE_DB")
+	if db == "" || db == ":memory:" {
+		db = storeName
+	}
+	if filepath.IsAbs(db) {
+		return db
+	}
+	return filepath.Join(dataDir(), db)
+}
+
+// dataDir is opencode's data directory: $XDG_DATA_HOME/opencode, or
+// ~/.local/share/opencode. The override goes through agentpaths, whose rule is
+// the one every other relocatable root follows, opencode's own config dir
+// included (opencodeConfigDir): only an absolute value is honoured, and a
+// relative or unexpanded one ("data", "~/.data") is logged once and ignored
+// rather than resolved against the daemon's cwd.
+func dataDir() string {
+	dir, err := agentpaths.AbsRoot(agentpaths.FromEnv(AdapterName, "XDG_DATA_HOME", dataRelPath, AdapterName))
 	if err != nil {
 		log.Printf("opencode: $HOME not set, using relative path: %v", err)
+		return dataRelPath
 	}
-	return filepath.Join(home, dbRelPath)
+	return dir
 }
 
 // transcriptPathFor renders the string every downstream consumer keys an

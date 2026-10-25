@@ -169,13 +169,13 @@
       <h3>OpenCode</h3>
 
       <ul>
-        <li><strong>Storage location:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db</code> (watched via <code>opencode.db-wal</code> &mdash; no JSONL files)</li>
-        <li>fsnotify on the WAL file triggers polling of <code>session</code>/<code>part</code> tables; cursor uses <code>(time_created, part_id)</code> for dedup across identical-millisecond timestamps</li>
+        <li><strong>Storage location:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db</code>, or where <code>$OPENCODE_DB</code> / <code>$XDG_DATA_HOME</code> put it (watched via <code>opencode.db-wal</code> &mdash; no JSONL files)</li>
+        <li>fsnotify on the WAL file triggers polling of <code>session</code>/<code>part</code> tables (opencode 1.x) or <code>session_v2</code>/<code>session_message</code> (opencode 2.x, where an assistant step is one row rewritten in place and an <code>idle</code> row ends the turn); cursor uses <code>(time_updated, id)</code> for dedup across identical-millisecond timestamps</li>
         <li>Parent-child linking from the <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly; no path-based heuristics</li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
         <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>, <code>content-filter</code>) all map to <code>turn_done</code>; cost + token snapshots come from <code>MetricsProvider</code>, bypassing the JSONL tailer</li>
         <li><strong>Adapter name:</strong> <code>opencode</code></li>
-        <li>PID discovery via <code>pgrep -x opencode</code> + CWD match</li>
+        <li>PID discovery via <code>pgrep -f</code> on an argv[0] of <code>opencode</code>, <code>opencode2</code> or <code>opencode.exe</code> + CWD match, excluding the 2.x service (<code>opencode serve --service</code>)</li>
       </ul>
 
       <h3>Kiro CLI</h3>

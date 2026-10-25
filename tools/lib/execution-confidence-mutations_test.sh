@@ -261,7 +261,7 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "the opencode store fold not observing samples reddens its fold test" \
   "core/adapters/inbound/agents/opencode/metrics.go" \
-  $'\t\tconfidence.Observe(ev.Hedge)\n' \
+  $'\tf.confidence.Observe(ev.Hedge)\n' \
   $'\n' \
   "./core/adapters/inbound/agents/opencode/..." \
   'TestComputeMetrics_ExecutionConfidence' \

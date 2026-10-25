@@ -155,9 +155,9 @@ func DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd string, disambi
 // permissions) are skipped silently — this is a best-effort snapshot, not a
 // guarantee.
 //
-// Used by the OpenCode adapter to gate EventNewSession on a live process: a
-// session row in the DB is only surfaced if some opencode process currently
-// owns its CWD.
+// Used by the startup zombie sweep (via agents.ProcessNames). The OpenCode
+// adapter, which once gated EventNewSession on it, uses LiveCWDsByCmdline
+// since #2106 so the 2.x service can be excluded.
 func LiveCWDs(processName string) (map[string]struct{}, error) {
 	if processName == "" {
 		return nil, nil

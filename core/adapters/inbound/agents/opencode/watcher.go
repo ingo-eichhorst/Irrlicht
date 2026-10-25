@@ -14,7 +14,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver; no CGo required
 
-	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/sqlitero"
 )
@@ -32,11 +31,14 @@ const sessionQueryParam = "?session="
 // Detection strategy:
 //  1. Watch the database WAL file (opencode.db-wal) via fsnotify — every
 //     write by OpenCode flushes to the WAL, triggering a Write event.
-//  2. On each WAL event, query the `session` table for rows updated since the
-//     last poll to discover new sessions.
-//  3. For each known session, query the `part` table for rows updated since
+//  2. On each WAL event, read the store's schema (storeSchema): an opencode
+//     2.x store carrying `session_v2` is read by scanV2 (watcher_v2.go), and
+//     everything below describes the 1.x reader.
+//  3. Query the `session` table for rows updated since the last poll to
+//     discover new sessions.
+//  4. For each known session, query the `part` table for rows updated since
 //     the last cursor to derive activity events and state transitions.
-//  4. Query for recently archived sessions (time_archived IS NOT NULL) to
+//  5. Query for recently archived sessions (time_archived IS NOT NULL) to
 //     emit EventRemoved for sessions that were closed by the user.
 //
 // The watcher emits the same agent.Event types as the fswatcher:
@@ -75,13 +77,13 @@ type Watcher struct {
 	lastArchivedCheck time.Time
 
 	// liveCWDs returns the set of directories currently owned by a live
-	// opencode process. Defaults to processlifecycle.LiveCWDs(ProcessName);
-	// overridable from tests.
+	// opencode client. Defaults to LiveClientCWDs; overridable from tests.
 	liveCWDs func() map[string]struct{}
 
 	// sawV2Store is the schema the previous scan saw: true once the store
-	// carries `session_v2` (#2105). Read and written only by scanSessions,
-	// so the stand-down is logged on a transition rather than on every scan.
+	// carries `session_v2` (#2105). Read and written only by storeSchema, on
+	// scanSessions' goroutine, so the reader switch is logged on a transition
+	// rather than on every scan.
 	sawV2Store bool
 }
 
@@ -142,10 +144,10 @@ func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 }
 
 // defaultLiveCWDs returns the set of CWDs currently held by live opencode
-// processes. Failures are logged and treated as "no live processes" — the
+// clients. Failures are logged and treated as "no live processes" — the
 // scan continues but won't surface ghost sessions.
 func defaultLiveCWDs() map[string]struct{} {
-	set, err := processlifecycle.LiveCWDs(ProcessName)
+	set, err := LiveClientCWDs()
 	if err != nil {
 		log.Printf("opencode: LiveCWDs: %v", err)
 		return nil
@@ -201,6 +203,24 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return fmt.Errorf("opencode watcher: watch %s: %w", dbDir, err)
 	}
 
+	// Every scan after the initial one goes through `next`, a timer armed by
+	// the first store write after a scan to fire once minScanGap has passed
+	// since that scan (at once when it already has). Writes landing while it
+	// is armed are covered by it, so the last write of a burst is always
+	// scanned and scans stay at most one per minScanGap.
+	//
+	// Before #2106 a write within the gap was dropped and nothing scanned
+	// again until some later write — measured live: an opencode2 TUI's idle
+	// row (1792958760804) reached the daemon only with the next unrelated
+	// write, 8.7 s later. A first fix kept the immediate scan beside a
+	// separate trailing timer; a debug-logged live run then showed an
+	// immediate scan and the timer both firing at 21:36:37 and the turn's
+	// Terminal activity only at 21:36:54, 17 s after its idle row — which is
+	// what a timer firing within the gap of the immediate scan does, since
+	// scanSessions returns early inside the gap. One timer for every scan
+	// leaves no second path to race. TestWatch_AWriteInsideTheDebounceGapIsStillScanned
+	// pins the dropped write.
+	var next <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -209,13 +229,15 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// React to writes to the DB or WAL file.
-			if ev.Op&fsnotify.Write != 0 {
-				name := filepath.Base(ev.Name)
-				dbFile := filepath.Base(w.dbPath)
-				if name == dbFile || name == dbFile+"-wal" {
-					w.scanSessions()
-				}
+			if w.isStoreWrite(ev) && next == nil {
+				next = time.After(w.untilNextScan())
+			}
+		case <-next:
+			next = nil
+			if w.shouldScan() {
+				w.scanSessions()
+			} else {
+				next = time.After(w.untilNextScan())
 			}
 		case _, ok := <-watcher.Errors:
 			if !ok {
@@ -223,6 +245,26 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// untilNextScan is how long until minScanGap has passed since the last scan,
+// or 0 when it already has.
+func (w *Watcher) untilNextScan() time.Duration {
+	w.scanMu.Lock()
+	defer w.scanMu.Unlock()
+	if d := w.minScanGap - time.Since(w.lastScan); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// isStoreWrite reports whether ev is a write to the database or its WAL.
+func (w *Watcher) isStoreWrite(ev fsnotify.Event) bool {
+	if ev.Op&fsnotify.Write == 0 {
+		return false
+	}
+	name, dbFile := filepath.Base(ev.Name), filepath.Base(w.dbPath)
+	return name == dbFile || name == dbFile+"-wal"
 }
 
 // Subscribe returns a channel that receives agent events.
@@ -263,7 +305,9 @@ func (w *Watcher) scanSessions() {
 	if !w.shouldScan() {
 		return
 	}
+	w.scanMu.Lock()
 	w.lastScan = time.Now()
+	w.scanMu.Unlock()
 
 	db, err := sqlitero.Open(w.dbPath)
 	if err != nil {
@@ -272,11 +316,16 @@ func (w *Watcher) scanSessions() {
 	}
 	defer db.Close()
 
-	if w.standsDownForV2(db) {
+	isV2, ok := w.storeSchema(db)
+	if !ok {
+		return
+	}
+	if isV2 {
+		w.scanV2(db)
 		return
 	}
 
-	sessions, err := w.querySessions(db)
+	sessions, err := w.querySessions(db, v1SessionsQuery)
 	if err != nil {
 		log.Printf("opencode: db.Query(session): %v", err)
 		return
@@ -301,36 +350,40 @@ func (w *Watcher) scanSessions() {
 	w.gcExpiredCursors()
 }
 
-// standsDownForV2 reports whether this scan must run no 1.x SQL because the
-// store was written by opencode 2.x (#2105), logging only when that answer
-// changes.
+// storeSchema reports which reader this scan runs — the 2.x reader when the
+// store carries `session_v2`, the 1.x reader otherwise — logging only when
+// that answer changes. ok is false when the schema could not be read.
 //
-// It returns before querySessions, scanParts and emitRemovedForArchivedSessions
-// — every 1.x query this watcher issues. A FRESH 2.x store has no `session`,
-// `message` or `part` table, so those queries fail on every scan; a MIGRATED
-// one keeps the 1.x tables frozen, so they succeed and admit 1.x rows as live
-// whenever an `opencode` process — a 2.x TUI is comm `opencode` too — sits in
-// their directory. Reading 2.x sessions is #2104's P2, not this.
+// The 1.x reader never runs against a 2.x store (#2105): a FRESH 2.x store has
+// no `session`, `message` or `part` table, and a MIGRATED one keeps them
+// frozen, so 1.x queries there either fail on every scan or admit 1.x rows as
+// live whenever an `opencode` process sits in their directory. The schema is
+// read on every scan because a running daemon sees a 1.x store become a 2.x
+// one when opencode 2.x first opens it.
 //
-// A schema lookup that fails skips this scan rather than falling back to the
-// 1.x queries: a store the watcher cannot classify is the last one to run them
-// against. The next WAL write scans again.
-func (w *Watcher) standsDownForV2(db *sql.DB) bool {
+// A schema lookup that fails skips this scan rather than guessing: a store the
+// watcher cannot classify is the last one to run either reader against. The
+// next WAL write scans again.
+func (w *Watcher) storeSchema(db *sql.DB) (isV2, ok bool) {
 	isV2, err := storeIsV2(db)
 	if err != nil {
 		log.Printf("opencode: read store schema: %v — skipping this scan", err)
-		return true
+		return false, false
 	}
 	if isV2 != w.sawV2Store {
 		w.sawV2Store = isV2
 		if isV2 {
-			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — the 1.x reader "+
-				"stands down; opencode 2.x sessions are not read yet (#2104)", w.dbPath)
+			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — reading it with the 2.x reader", w.dbPath)
 		} else {
 			log.Printf("opencode: %s no longer has session_v2 — the 1.x reader resumes", w.dbPath)
 		}
+		// A cursor is a position in one reader's tables; carried across a
+		// switch it would read the other reader's rows against it.
+		w.mu.Lock()
+		w.cursors = make(map[string]*sessionCursor)
+		w.mu.Unlock()
 	}
-	return isV2
+	return isV2, true
 }
 
 // storeIsV2 reports whether the opencode store behind db was written by
@@ -355,31 +408,26 @@ func (w *Watcher) shouldScan() bool {
 	return time.Since(w.lastScan) >= w.minScanGap
 }
 
-// querySessions queries sessions updated within maxAge (or all if maxAge=0)
-// and scans the matching rows. We use time_updated to find both new sessions
-// and recently active ones.
-func (w *Watcher) querySessions(db *sql.DB) ([]sessionRow, error) {
-	var rows *sql.Rows
-	var err error
+// v1SessionsQuery lists the 1.x sessions updated at or after its one
+// argument, a cutoff in epoch ms (0 for no limit).
+const v1SessionsQuery = `
+	SELECT id, directory, time_updated, parent_id
+	FROM session
+	WHERE time_archived IS NULL
+	  AND time_updated >= ?
+	ORDER BY time_updated DESC
+	LIMIT 200
+`
+
+// querySessions runs a sessions query — v1SessionsQuery or v2SessionsQuery —
+// with the maxAge cutoff (none when maxAge is 0) and scans the matching rows.
+// time_updated finds both new sessions and recently active ones.
+func (w *Watcher) querySessions(db *sql.DB, query string) ([]sessionRow, error) {
+	cutoff := int64(0)
 	if w.maxAge > 0 {
-		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
-		rows, err = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			  AND time_updated >= ?
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`, cutoff)
-	} else {
-		rows, err = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`)
+		cutoff = time.Now().Add(-w.maxAge).UnixMilli()
 	}
+	rows, err := db.Query(query, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +439,7 @@ func (w *Watcher) querySessions(db *sql.DB) ([]sessionRow, error) {
 			sessions = append(sessions, s)
 		}
 	}
-	return sessions, nil
+	return sessions, rows.Err()
 }
 
 // scanSessionRow reads one session row. Applies the maxAge cutoff a second
@@ -440,21 +488,44 @@ func (w *Watcher) maybeEmitNewSession(s sessionRow, cur *sessionCursor, live map
 		cur.lastTS = s.timeUpdated
 		return
 	}
-	// TranscriptPath encodes the session ID so MetricsProvider
-	// (opencode/metrics.go ComputeMetrics) can extract it via
-	// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
-	// at the WAL (updated on every write), not the checkpoint-only
-	// main DB.
-	walPath := w.transcriptPathFor(s.id)
+	w.emitNewSession(s)
+	cur.emitted = true
+}
+
+// emitNewSession, emitActivity and emitRemoved build the three events both
+// readers emit, so the payload has one spelling. TranscriptPath encodes the
+// session ID so MetricsProvider (opencode/metrics.go ComputeMetrics) can
+// extract it via parseTranscriptPath; its WAL suffix routes
+// isStaleTranscript() at the WAL (updated on every write), not the
+// checkpoint-only main DB.
+func (w *Watcher) emitNewSession(s sessionRow) {
 	w.broadcast(agent.Event{
 		Type:            agent.EventNewSession,
 		SessionID:       s.id,
 		ProjectDir:      filepath.Base(s.directory),
-		TranscriptPath:  walPath,
+		TranscriptPath:  w.transcriptPathFor(s.id),
 		CWD:             s.directory,
 		ParentSessionID: s.parentID,
 	})
-	cur.emitted = true
+}
+
+func (w *Watcher) emitActivity(sessionID, directory string, terminal bool) {
+	w.broadcast(agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sessionID,
+		ProjectDir:     filepath.Base(directory),
+		TranscriptPath: w.transcriptPathFor(sessionID),
+		CWD:            directory,
+		Terminal:       terminal,
+	})
+}
+
+func (w *Watcher) emitRemoved(sessionID string) {
+	w.broadcast(agent.Event{
+		Type:           agent.EventRemoved,
+		SessionID:      sessionID,
+		TranscriptPath: w.transcriptPathFor(sessionID),
+	})
 }
 
 // gcExpiredCursors drops cursor entries whose most recent observation
@@ -512,12 +583,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if !known {
 			continue
 		}
-		walPath := w.transcriptPathFor(id)
-		w.broadcast(agent.Event{
-			Type:           agent.EventRemoved,
-			SessionID:      id,
-			TranscriptPath: walPath,
-		})
+		w.emitRemoved(id)
 		delete(w.cursors, id)
 	}
 }
@@ -595,21 +661,14 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 	acc.updateCursor(cur, lastTS)
 
 	if acc.hasActivity {
-		w.broadcast(agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sessionID,
-			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.transcriptPathFor(sessionID),
-			CWD:            directory,
-			Terminal:       acc.hasTerminal,
-		})
+		w.emitActivity(sessionID, directory, acc.hasTerminal)
 	}
 }
 
-// partScanAccumulator folds one scanParts pass over the part/message-joined
-// rows into the final hasActivity/hasTerminal/maxSeen/seenIDs state, keeping
-// scanParts itself a flat pipeline of query → accumulate → update cursor →
-// emit.
+// partScanAccumulator folds one pass over a session's new rows — scanParts'
+// 1.x parts or scanV2Messages' 2.x messages — into the final
+// hasActivity/hasTerminal/maxSeen/seenIDs state, keeping each scan a flat
+// pipeline of query → accumulate → update cursor → emit.
 type partScanAccumulator struct {
 	maxSeen     int64
 	hasActivity bool
@@ -617,29 +676,17 @@ type partScanAccumulator struct {
 	seenIDs     map[string]struct{}
 }
 
-// scanRow reads one part/message-joined row and folds it into the
-// accumulator, skipping parts already seen at the current cursor timestamp
-// (same-ms race, tracked via cur.seenIDs) and tracking dedup IDs as the
-// timestamp moves forward.
+// scanRow reads one part/message-joined row, observes it, and marks the turn
+// terminal when the part or its message ends it.
 func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS int64) {
 	var partID, partData, msgData string
 	var timeUpdated int64
 	if err := rows.Scan(&partID, &partData, &timeUpdated, &msgData); err != nil {
 		return
 	}
-	if cur != nil && timeUpdated == lastTS {
-		if _, seen := cur.seenIDs[partID]; seen {
-			return
-		}
+	if !a.observe(partID, timeUpdated, cur, lastTS) {
+		return
 	}
-	if timeUpdated > a.maxSeen {
-		a.maxSeen = timeUpdated
-		a.seenIDs = make(map[string]struct{})
-	}
-	if timeUpdated == a.maxSeen {
-		a.seenIDs[partID] = struct{}{}
-	}
-	a.hasActivity = true
 	// A turn ends via a step-finish part with a terminal reason, OR — for an
 	// aborted/errored turn — opencode records the failure on
 	// message.data.error and emits NO step-finish reason=error part, so the
@@ -651,6 +698,29 @@ func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS
 		return
 	}
 	a.hasTerminal = true
+}
+
+// observe folds one row's id and time_updated into the accumulator,
+// returning false for a row already seen at the cursor's timestamp (the
+// same-ms race, tracked via cur.seenIDs) and tracking dedup IDs as the
+// timestamp moves forward. Both readers' cursors are this (time_updated, id)
+// pair: a 1.x part and a 2.x session_message row are each rewritten in place
+// with a later time_updated.
+func (a *partScanAccumulator) observe(id string, timeUpdated int64, cur *sessionCursor, lastTS int64) bool {
+	if cur != nil && timeUpdated == lastTS {
+		if _, seen := cur.seenIDs[id]; seen {
+			return false
+		}
+	}
+	if timeUpdated > a.maxSeen {
+		a.maxSeen = timeUpdated
+		a.seenIDs = make(map[string]struct{})
+	}
+	if timeUpdated == a.maxSeen {
+		a.seenIDs[id] = struct{}{}
+	}
+	a.hasActivity = true
+	return true
 }
 
 // updateCursor advances cur to the accumulator's high-water mark: a full

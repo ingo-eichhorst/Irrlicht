@@ -93,8 +93,12 @@ func ReleasedPIDs(agents []agent.Agent) map[string]agent.ReleasedPIDFunc {
 // the startup zombie sweep. For ExactName matchers the OS process name
 // IS the matcher name. For CommandPattern matchers no reliable OS
 // process name exists (e.g. aider runs under python), so we fall back
-// to Identity.Name; the zombie sweep does pgrep -x against this and
-// finds nothing, which is correct behavior.
+// to Identity.Name and the zombie sweep does pgrep -x against that. For
+// an interpreter-launched agent that finds nothing. For one whose binary
+// carries the adapter's name it finds processes by that name alone, which
+// need not be the set the adapter's own pattern and argv exclude select:
+// for opencode it counts the 2.x service and misses an `opencode2` client
+// (#2106).
 func ProcessNames(agents []agent.Agent) map[string]string {
 	m := make(map[string]string, len(agents))
 	for _, a := range agents {

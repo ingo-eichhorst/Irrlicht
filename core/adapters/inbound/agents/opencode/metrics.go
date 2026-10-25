@@ -36,14 +36,17 @@ func ComputeMetrics(transcriptPath, sessionID string) (*session.SessionMetrics, 
 	}
 	defer db.Close()
 
-	// An opencode 2.x store (#2105) is read by nothing yet: its 1.x tables,
-	// where a migration left them, are frozen history, and a fresh one has
-	// none. The watcher logs the stand-down once per transition; this path
-	// runs per session refresh, so it stays quiet.
-	if isV2, err := storeIsV2(db); err != nil || isV2 {
+	// The reader follows the store's schema, as the watcher's does: a 2.x
+	// store's 1.x tables, where a migration left them, are frozen history
+	// (#2105), and a fresh one has none. The watcher logs the schema once per
+	// transition; this path runs per session refresh, so it stays quiet.
+	isV2, err := storeIsV2(db)
+	if err != nil {
 		return nil, nil
 	}
-
+	if isV2 {
+		return queryV2SessionMetrics(db, sid)
+	}
 	return querySessionMetrics(db, sid, dbPath)
 }
 
@@ -85,41 +88,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	}
 	defer rows.Close()
 
-	metrics := &session.SessionMetrics{
-		ModelName:     "unknown",
-		PressureLevel: "unknown",
-		LastCWD:       directory,
-	}
-
-	parser := &Parser{}
-	var lastEventType string
-	openTools := make(map[string]string) // callID → toolName
-	var lastAssistantText string
-	var lastTaskEstimate, firstTaskEstimate *tailer.TaskEstimate
-	var cumCost float64
-	var cumInput, cumOutput, cumCacheRead int64
-	hasData := false
-	var firstTS, lastTS time.Time
-
-	// Task accumulator mirrors the tailer's TaskDelta fold (tailer.go:708-728)
-	// because OpenCode's metrics path bypasses the tailer. See issue #277.
-	var tasks []session.Task
-	taskByID := make(map[string]int)
-
-	// The session-level failure fold, mirroring the tailer's applySessionError
-	// (core/pkg/tailer/tailer_metrics.go) because this path bypasses the
-	// tailer entirely — the same reason the task accumulator above is a
-	// hand-rolled mirror. Unlike the tailer's, this one needs no persistence
-	// across passes: querySessionMetrics rebuilds from EVERY part row on every
-	// call, so the fold below re-derives the current verdict from the whole
-	// history each time and the sticky field is simply this local.
-	var sessionErr *tailer.SessionError
-
-	// Execution confidence (#737), folded here because this path bypasses the
-	// tailer that normally holds it. Like sessionErr it needs no persistence:
-	// every call re-folds every part row, so it is rebuilt from scratch.
-	var confidence session.ExecutionConfidenceAccumulator
-
+	fold := newSessionFold(directory)
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
@@ -127,73 +96,130 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 			log.Printf("opencode: rows.Scan(part): %v", err)
 			continue
 		}
-		hasData = true
-		trackTimestampRange(time.UnixMilli(timeUpdated), &firstTS, &lastTS)
+		fold.row(timeUpdated)
 
-		role, modelID := applyRoleAndModel(msgData, metrics)
+		role, modelID := applyRoleAndModel(msgData, fold.metrics)
 
 		raw, ok := buildPartRaw(partData, role, directory, timeUpdated, modelID, msgData)
 		if !ok {
 			continue
 		}
-
-		ev := parser.ParseLine(raw)
-		if ev == nil || ev.Skip {
-			continue
-		}
-
-		lastEventType = ev.EventType
-		applySessionError(ev, &sessionErr)
-
-		applyToolTracking(ev, &openTools)
-		tailer.ApplyTaskDeltas(ev.TaskDeltas, &tasks, taskByID)
-		// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
-		// `todowrite` is a full-list replace by OpenCode semantics, so a
-		// snapshot is authoritative for both pruning (todos removed from
-		// the call vanish from metrics.Tasks) and status reversions the
-		// delta path skips by design. reconcileTaskSnapshot no-ops when
-		// there is no snapshot or no tasks yet.
-		tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &tasks, &taskByID)
-		applyContribution(ev.Contribution, &cumInput, &cumOutput, &cumCacheRead, &cumCost)
-		trackTokensAndText(ev, metrics, &lastAssistantText)
-		confidence.Observe(ev.Hedge)
-
-		// Track the latest task-estimate marker (issue #558) — mirrors the
-		// tailer's lastTaskEstimate persistence, which this path bypasses.
-		// A real user part resets it (new task/redirect — same rule as the
-		// tailer, including the tool-result guard): only markers after the
-		// last user message count.
-		applyTaskEstimateTracking(ev, &lastTaskEstimate, &firstTaskEstimate)
+		fold.observe(raw)
 	}
+	return fold.result(), nil
+}
 
-	if !hasData {
-		return nil, nil
+// sessionFold is ComputeMetrics' pass over one session's stored rows — 1.x
+// parts or 2.x messages, each parsed by Parser — accumulating what the tailer
+// would, because this path bypasses the tailer. Whatever result() does not
+// finalise is written straight into metrics.
+type sessionFold struct {
+	metrics *session.SessionMetrics
+	parser  Parser
+
+	firstTS, lastTS time.Time // zero firstTS: no row yet
+
+	openTools map[string]string // callID → toolName
+
+	// Latest and earliest task-estimate markers (issue #558).
+	lastTaskEstimate, firstTaskEstimate *tailer.TaskEstimate
+
+	// Task accumulator index; the tasks themselves are metrics.Tasks. Mirrors
+	// the tailer's TaskDelta fold (tailer.go:708-728) because OpenCode's
+	// metrics path bypasses the tailer. See issue #277.
+	taskByID map[string]int
+
+	// The session-level failure fold, mirroring the tailer's applySessionError
+	// (core/pkg/tailer/tailer_metrics.go) because this path bypasses the
+	// tailer entirely — the same reason the task accumulator above is a
+	// hand-rolled mirror. Unlike the tailer's, this one needs no persistence
+	// across passes: every pass rebuilds from EVERY row, so the fold
+	// re-derives the current verdict from the whole history each time and the
+	// sticky field is simply this one.
+	sessionErr *tailer.SessionError
+
+	// Execution confidence (#737), folded here because this path bypasses the
+	// tailer that normally holds it. Like sessionErr it needs no persistence:
+	// every pass re-folds every row, so it is rebuilt from scratch.
+	confidence session.ExecutionConfidenceAccumulator
+}
+
+func newSessionFold(cwd string) *sessionFold {
+	return &sessionFold{
+		metrics: &session.SessionMetrics{
+			ModelName:     "unknown",
+			PressureLevel: "unknown",
+			LastCWD:       cwd,
+		},
+		openTools: make(map[string]string),
+		taskByID:  make(map[string]int),
 	}
+}
 
-	metrics.LastEventType = lastEventType
-	metrics.HasOpenToolCall = len(openTools) > 0
-	metrics.OpenToolCallCount = len(openTools)
-	metrics.LastOpenToolNames = openToolNamesFrom(openTools)
-	metrics.LastAssistantText = lastAssistantText
-	metrics.EstimatedCostUSD = cumCost
-	metrics.CumInputTokens = cumInput
-	metrics.CumOutputTokens = cumOutput
-	metrics.CumCacheReadTokens = cumCacheRead
-	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
-	metrics.Tasks = tasks
-	metrics.SessionError = convertSessionError(sessionErr)
-	session.ApplyExecutionConfidence(metrics, confidence)
+// row records that one stored row, written at timeUpdated (epoch ms), exists.
+func (f *sessionFold) row(timeUpdated int64) {
+	trackTimestampRange(time.UnixMilli(timeUpdated), &f.firstTS, &f.lastTS)
+}
+
+// observe parses one row and folds its event in.
+func (f *sessionFold) observe(raw map[string]interface{}) {
+	ev := f.parser.ParseLine(raw)
+	if ev == nil || ev.Skip {
+		return
+	}
+	m := f.metrics
+
+	m.LastEventType = ev.EventType
+	if ev.ModelName != "" {
+		m.ModelName = tailer.NormalizeModelName(ev.ModelName)
+	}
+	applySessionError(ev, &f.sessionErr)
+
+	applyToolTracking(ev, &f.openTools)
+	tailer.ApplyTaskDeltas(ev.TaskDeltas, &m.Tasks, f.taskByID)
+	// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
+	// `todowrite` is a full-list replace by OpenCode semantics, so a
+	// snapshot is authoritative for both pruning (todos removed from
+	// the call vanish from metrics.Tasks) and status reversions the
+	// delta path skips by design. reconcileTaskSnapshot no-ops when
+	// there is no snapshot or no tasks yet.
+	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &m.Tasks, &f.taskByID)
+	applyContribution(ev.Contribution, &m.CumInputTokens, &m.CumOutputTokens, &m.CumCacheReadTokens, &m.EstimatedCostUSD)
+	trackTokensAndText(ev, m, &m.LastAssistantText)
+	f.confidence.Observe(ev.Hedge)
+
+	// Track the latest task-estimate marker (issue #558) — mirrors the
+	// tailer's lastTaskEstimate persistence, which this path bypasses.
+	// A real user part resets it (new task/redirect — same rule as the
+	// tailer, including the tool-result guard): only markers after the
+	// last user message count.
+	applyTaskEstimateTracking(ev, &f.lastTaskEstimate, &f.firstTaskEstimate)
+}
+
+// result is the fold's SessionMetrics, or nil when the session has no rows
+// yet.
+func (f *sessionFold) result() *session.SessionMetrics {
+	if f.firstTS.IsZero() {
+		return nil
+	}
+	metrics := f.metrics
+	metrics.HasOpenToolCall = len(f.openTools) > 0
+	metrics.OpenToolCallCount = len(f.openTools)
+	metrics.LastOpenToolNames = openToolNamesFrom(f.openTools)
+	metrics.ElapsedSeconds = int64(f.lastTS.Sub(f.firstTS).Seconds())
+	metrics.SessionError = convertSessionError(f.sessionErr)
+	session.ApplyExecutionConfidence(metrics, f.confidence)
 
 	// Surface the agent-authored task estimate + projected completion ETA
 	// (issue #558) — mirrors the conversion the shared metrics adapter does
 	// for tailer-path agents (metrics/adapter.go), which this path bypasses.
-	attachTaskEstimateAndETA(metrics, lastTaskEstimate, firstTaskEstimate)
+	attachTaskEstimateAndETA(metrics, f.lastTaskEstimate, f.firstTaskEstimate)
 
 	cm := capacity.DefaultCapacityManager()
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =
 		tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)
 
-	return metrics, nil
+	return metrics
 }
 
 // applySessionError folds one parsed event into the running session-level

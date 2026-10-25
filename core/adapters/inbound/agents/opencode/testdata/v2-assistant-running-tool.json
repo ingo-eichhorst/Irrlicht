@@ -1,0 +1,38 @@
+{
+ "time": {
+  "created": 1792951696522,
+  "streamed": 1792951699890
+ },
+ "agent": "build",
+ "model": {
+  "id": "qwen3.8-27b-splash",
+  "providerID": "local-splash"
+ },
+ "content": [
+  {
+   "type": "reasoning",
+   "text": "The user is asking to execute the `date` command using the shell tool and report its output.\n",
+   "time": {
+    "created": 1792951697767,
+    "completed": 1792951699887
+   }
+  },
+  {
+   "type": "tool",
+   "id": "call_c5e4f2784681dda6c89ffc4f00151276_0",
+   "name": "shell",
+   "executed": false,
+   "state": {
+    "status": "running",
+    "input": {
+     "command": "date"
+    },
+    "metadata": {}
+   },
+   "time": {
+    "created": 1792951699368,
+    "ran": 1792951699889
+   }
+  }
+ ]
+}

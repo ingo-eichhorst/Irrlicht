@@ -148,11 +148,12 @@
 
       <ul>
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/opencode/</code></li>
-        <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db-wal</code> via fsnotify; polls <code>session</code>/<code>part</code> tables on writes</li>
+        <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db-wal</code> (or where <code>$OPENCODE_DB</code> / <code>$XDG_DATA_HOME</code> put the store) via fsnotify; on writes polls <code>session</code>/<code>part</code> on an opencode 1.x store, <code>session_v2</code>/<code>session_message</code> on a 2.x one</li>
+        <li>opencode 2.x: a session is admitted on new activity while a client (TUI or <code>opencode run</code>) owns its directory; an <code>idle</code> row ends the turn, and its <code>failed</code> outcome becomes the session's error. Sessions the 2.x background service runs with no client are not shown yet</li>
         <li>First adapter on the SQLite-backed monitoring path: storage is a single WAL-mode database, not JSONL</li>
         <li>Bypasses the JSONL tailer via a <code>MetricsReader</code> on its <code>ProcessOwnedStore</code> source variant for cost + token snapshots</li>
         <li>Parent-child session linking via <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly, no path-based heuristics</li>
-        <li>CWD-based PID discovery via <code>pgrep -x opencode</code></li>
+        <li>CWD-based PID discovery via <code>pgrep -f</code> on <code>opencode</code>, <code>opencode2</code> or <code>opencode.exe</code>, excluding the 2.x service (<code>opencode serve --service</code>)</li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
         <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>, <code>content-filter</code>) all map to <code>turn_done</code></li>
         <li><strong>Account (consent: the adapter's observe permission):</strong> reads the <code>type</code> and the account-id claim (decoded from the access token) of the <code>openai-oauth</code> block in <code>~/.local/share/opencode/auth.json</code>, only to share a Codex quota reading with an OpenCode session on the same account. The token is not kept.</li>

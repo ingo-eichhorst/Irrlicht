@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -27,29 +28,10 @@ import (
 //   - a FRESH 2.x store has `session_v2` and no `session`, `message` or `part`
 //     table at all (#2105's issue body).
 //
-// Only the presence of `session_v2` matters to the stand-down, so the table is
-// created with a handful of its real columns rather than all 36 (`SELECT
-// count(*) FROM pragma_table_info('session_v2')` against that store).
-const createSessionV2 = `CREATE TABLE session_v2 (
-	id TEXT PRIMARY KEY,
-	project_id TEXT NOT NULL,
-	directory TEXT NOT NULL,
-	version TEXT NOT NULL,
-	time_created INTEGER NOT NULL,
-	time_updated INTEGER NOT NULL,
-	time_idle INTEGER,
-	idle_outcome TEXT
-)`
-
-const createSessionMessage = `CREATE TABLE session_message (
-	id TEXT PRIMARY KEY,
-	session_id TEXT NOT NULL,
-	type TEXT NOT NULL,
-	seq INTEGER NOT NULL,
-	time_created INTEGER NOT NULL,
-	time_updated INTEGER NOT NULL,
-	data TEXT NOT NULL
-)`
+// The 2.x tables are opencode 2.1.4's real ones (testdata/v2-schema.sql): since
+// #2106 a 2.x store is READ, by its own reader, so a stand-in table with a
+// handful of its columns would fail that reader's queries instead of standing
+// for a 2.x store.
 
 func execAll(t *testing.T, db *sql.DB, stmts ...string) {
 	t.Helper()
@@ -114,7 +96,7 @@ func TestScanSessions_MigratedV2StoreAdmitsNoFrozenV1Row(t *testing.T) {
 			w, db := setupTestDB(t)
 			seedRecentV1Session(t, db, "ses_frozen", "/Users/x/project")
 			if c.migrated {
-				execAll(t, db, createSessionV2, createSessionMessage)
+				createV2Schema(t, db)
 			}
 			ch := w.Subscribe()
 			defer w.Unsubscribe(ch)
@@ -139,7 +121,7 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	execAll(t, db, createSessionV2, createSessionMessage)
+	createV2Schema(t, db)
 
 	logs := captureStdLog(t)
 	w := NewWithDBPath(dbPath, time.Hour)
@@ -159,12 +141,12 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 	}
 }
 
-// TestScanSessions_LogsTheStandDownOncePerTransition pins the log contract the
-// stand-down adds: one line when the store turns 2.x, not one per scan — the
+// TestScanSessions_LogsTheSchemaOncePerTransition pins the log contract the
+// schema switch adds: one line when the store turns 2.x, not one per scan — the
 // watcher scans on every WAL write.
-func TestScanSessions_LogsTheStandDownOncePerTransition(t *testing.T) {
+func TestScanSessions_LogsTheSchemaOncePerTransition(t *testing.T) {
 	w, db := setupTestDB(t)
-	execAll(t, db, createSessionV2)
+	createV2Schema(t, db)
 	logs := captureStdLog(t)
 
 	for i := 0; i < 3; i++ {
@@ -172,7 +154,7 @@ func TestScanSessions_LogsTheStandDownOncePerTransition(t *testing.T) {
 	}
 
 	if n := strings.Count(logs.String(), "session_v2"); n != 1 {
-		t.Errorf("stand-down logged %d time(s) over three scans, want exactly once:\n%s", n, logs.String())
+		t.Errorf("schema switch logged %d time(s) over three scans, want exactly once:\n%s", n, logs.String())
 	}
 }
 
@@ -192,7 +174,7 @@ func TestComputeMetrics_MigratedV2StoreReadsNothing(t *testing.T) {
 			w, db := setupTestDB(t)
 			seedRecentV1Session(t, db, "ses_frozen", "/Users/x/project")
 			if c.migrated {
-				execAll(t, db, createSessionV2, createSessionMessage)
+				createV2Schema(t, db)
 			}
 
 			metrics, err := ComputeMetrics(w.transcriptPathFor("ses_frozen"), "")
@@ -203,5 +185,42 @@ func TestComputeMetrics_MigratedV2StoreReadsNothing(t *testing.T) {
 				t.Errorf("ComputeMetrics returned nil = %t, want %t", got, c.wantNil)
 			}
 		})
+	}
+}
+
+// TestScanSessions_MigrationUnderARunningWatcherReplaysNothing pins the cursor
+// reset storeSchema does when the store's schema switches (#2106 review). The
+// in-place migration keeps a 1.x session's id and timestamps — measured on the
+// sandbox's migrated store, read with mode=ro: the imported assistant row's
+// session_message.time_updated is 1792931562493, later than the session's
+// last 1.x part (1792931562448). A 1.x cursor carried into the 2.x reader
+// would therefore read the imported row as fresh activity, and with no idle
+// row ever arriving for it the session would sit in working.
+func TestScanSessions_MigrationUnderARunningWatcherReplaysNothing(t *testing.T) {
+	w, db := setupTestDB(t)
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_m", "/Users/x/project", now-10000, "")
+	insertMessage(t, db, "msg_a", "ses_m", "assistant", "m", now-10000)
+	insertPart(t, db, partRow{id: "prt_1", sessionID: "ses_m", messageID: "msg_a", partType: "text",
+		data: `{"type":"text","text":"hi"}`, ts: now - 9000})
+	insertPart(t, db, partRow{id: "prt_2", sessionID: "ses_m", messageID: "msg_a", partType: "step-finish",
+		data: `{"type":"step-finish","reason":"stop"}`, ts: now - 5000})
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+	w.scanSessions()
+	if n := len(eventsOfType(drainNow(ch), agent.EventNewSession)["ses_m"]); n != 1 {
+		t.Fatalf("the 1.x session got %d EventNewSession before the migration, want 1", n)
+	}
+
+	createV2Schema(t, db)
+	execAll(t, db,
+		fmt.Sprintf(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
+			VALUES ('ses_m', 'prj', 'slug', '/Users/x/project', '1.19.4', %d, %d)`, now-10000, now-3000),
+		fmt.Sprintf(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+			VALUES ('msg_a', 'ses_m', 'assistant', 1, %d, %d, '{"model":{"id":"m"},"content":[]}')`, now-10000, now-4000),
+	)
+	w.scanSessions()
+	if evs := drainNow(ch); len(evs) != 0 {
+		t.Errorf("the migrated, untouched 1.x session produced %d event(s), want 0: %+v", len(evs), evs)
 	}
 }
