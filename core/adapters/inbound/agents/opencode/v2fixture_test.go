@@ -81,8 +81,10 @@ func loadFixtureRows(t *testing.T, db *sql.DB, file, prefix string) {
 }
 
 // newV2Store builds an opencode 2.x store in a temp dir and a watcher on it
-// whose live-client set owns fixtureDir. maxAge is 0: the fixture's
-// timestamps are the capture's, not now.
+// whose live-client set owns fixtureDir and which sees no 2.x service — never
+// the host's: a dev machine running one would otherwise decide what these
+// tests admit (#2107). maxAge is 0: the fixture's timestamps are the
+// capture's, not now.
 func newV2Store(t *testing.T) (*Watcher, *sql.DB) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "opencode.db")
@@ -96,6 +98,7 @@ func newV2Store(t *testing.T) (*Watcher, *sql.DB) {
 	w := NewWithDBPath(dbPath, 0)
 	w.minScanGap = 0
 	w.liveCWDs = func() map[string]struct{} { return map[string]struct{}{fixtureDir: {}} }
+	w.serviceUp = func() bool { return false }
 	return w, db
 }
 

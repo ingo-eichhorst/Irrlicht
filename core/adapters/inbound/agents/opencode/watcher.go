@@ -80,6 +80,11 @@ type Watcher struct {
 	// opencode client. Defaults to LiveClientCWDs; overridable from tests.
 	liveCWDs func() map[string]struct{}
 
+	// serviceUp reports whether an opencode 2.x service (`serve --service`)
+	// is running — the host of every session no client runs (#2107).
+	// Defaults to defaultServiceUp; overridable from tests.
+	serviceUp func() bool
+
 	// sawV2Store is the schema the previous scan saw: true once the store
 	// carries `session_v2` (#2105). Read and written only by storeSchema, on
 	// scanSessions' goroutine, so the reader switch is logged on a transition
@@ -126,6 +131,7 @@ func New(maxAge time.Duration) *Watcher {
 		minScanGap:        defaultMinScanGap,
 		lastArchivedCheck: time.Now(),
 		liveCWDs:          defaultLiveCWDs,
+		serviceUp:         defaultServiceUp,
 	}
 }
 
@@ -140,6 +146,7 @@ func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 		minScanGap:        defaultMinScanGap,
 		lastArchivedCheck: time.Now(),
 		liveCWDs:          defaultLiveCWDs,
+		serviceUp:         defaultServiceUp,
 	}
 }
 
@@ -153,6 +160,18 @@ func defaultLiveCWDs() map[string]struct{} {
 		return nil
 	}
 	return set
+}
+
+// defaultServiceUp reports whether at least one opencode 2.x service is
+// running. A failed lookup is logged and reads as none, as defaultLiveCWDs'
+// does: a session it would have admitted waits for its next write.
+func defaultServiceUp() bool {
+	pids, err := ServicePIDs()
+	if err != nil {
+		log.Printf("opencode: ServicePIDs: %v", err)
+		return false
+	}
+	return len(pids) > 0
 }
 
 // Root returns the watched database path (satisfies the interface used in

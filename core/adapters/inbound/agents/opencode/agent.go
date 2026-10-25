@@ -45,20 +45,22 @@ func Agent() agent.Agent {
 			// (processCmdPattern, #2106).
 			Match:         agent.CommandPattern{Regex: processCmdRegex},
 			PIDForSession: DiscoverPID,
+			// Every session no client runs binds to the one 2.x service
+			// (#2107), so its roots share that PID while their sessions last;
+			// a client's PID stays exclusive (OwnsSharedPID).
+			SharedPIDOwner: OwnsSharedPID,
 			// SessionHostArgv rather than ExcludeArgv, as codex's app-server
 			// (#2088): the 2.x service hosts sessions rather than being
-			// infrastructure nothing binds to (#2104's P3 binds service-hosted
-			// sessions to it). Declaring it also opts opencode into
-			// PIDManager's hosted-placeholder pairing (hostGroups /
-			// pairHostedRoots, #2082), which acts only on a root whose bound
-			// PID's argv is the service. In #2105 no root gets there, by
-			// reading rather than by a test: 1.x roots bind by cwd through
-			// DiscoverPID, and the 1.x reader stands down on any store
-			// carrying session_v2, which a 2.x service's store does. Since
-			// #2106 the 2.x reader's roots bind through DiscoverPID as well,
-			// which excludes the service, so still no root binds to it.
-			// boundToSessionHost also needs a LauncherPID, which opencode
-			// does not declare.
+			// infrastructure nothing binds to — since #2107 a session no
+			// client runs binds to it (DiscoverPID). Declaring it keeps the
+			// scanner from minting a row for the service, and, with no
+			// ReleasedPID declared, lets the ready-session TTL end an idle root
+			// the live service still hosts (PIDManager.reapsIdleTopLevel). It
+			// does not opt opencode into the hosted-placeholder pairing
+			// (#2082): that needs a LauncherPID as well, which opencode does
+			// not declare — a service-bound root has no client to have left a
+			// placeholder behind, and a client's own session binds to the
+			// client.
 			SessionHostArgv: IsServiceArgv,
 		},
 		Source: agent.ProcessOwnedStore{
@@ -84,9 +86,11 @@ func Agent() agent.Agent {
 					"else opencode.db in $XDG_DATA_HOME/opencode, else " +
 					"~/.local/share/opencode/opencode.db. To tell which session belongs " +
 					"to which running OpenCode, it reads the command line and working " +
-					"directory of processes named opencode, opencode2 or opencode.exe, " +
-					"which is also how it leaves OpenCode 2.x's background service " +
-					"(`opencode serve --service`) out of that match. " +
+					"directory of processes named opencode, opencode2 or opencode.exe. " +
+					"The command line is also how it finds OpenCode 2.x's background " +
+					"service (`opencode serve --service`), which hosts the sessions no " +
+					"terminal client runs — those made through its API, the desktop app " +
+					"or the web app. " +
 					"To share a Codex quota reading with an OpenCode session logged into " +
 					"the SAME ChatGPT account, it also reads the openai-oauth block of " +
 					"~/.local/share/opencode/auth.json: its type, and the account-id claim " +

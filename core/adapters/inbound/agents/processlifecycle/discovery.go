@@ -149,6 +149,34 @@ func DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd string, disambi
 	return narrowByCWD(withoutExcludedArgv(pids, excludeArgv), cwd, disambiguate), nil
 }
 
+// PIDsByCmdlineKeepingArgv returns every live process whose full command line
+// matches cmdLinePattern and whose argv keepArgv accepts — the inverse of
+// DiscoverPIDByCWDAndCmdLineExcludingArgv's filter, with no cwd narrowing. It
+// is for a caller that looks for one kind of process by argv and must tell
+// one from several: opencode's service (#2107). The daemon's own PID is
+// excluded. An unreadable argv reaches keepArgv as nil, which a
+// SessionHostArgv-style predicate must not keep.
+func PIDsByCmdlineKeepingArgv(cmdLinePattern string, keepArgv func([]string) bool) ([]int, error) {
+	if cmdLinePattern == "" || keepArgv == nil {
+		return nil, nil
+	}
+	pids, err := osProc.FindByCmdline(cmdLinePattern)
+	if err != nil {
+		return nil, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
+	}
+	myPID := os.Getpid()
+	var kept []int
+	for _, pid := range pids {
+		if pid == myPID {
+			continue
+		}
+		if argv, _ := osProc.ArgvOf(pid); keepArgv(argv) {
+			kept = append(kept, pid)
+		}
+	}
+	return kept, nil
+}
+
 // LiveCWDs returns the set of working directories currently held by live
 // processes whose binary name matches processName. Excludes the daemon's own
 // PID. PIDs whose CWD cannot be read (race against process exit, restricted

@@ -127,6 +127,7 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 	w := NewWithDBPath(dbPath, time.Hour)
 	w.minScanGap = 0
 	w.liveCWDs = func() map[string]struct{} { return map[string]struct{}{"/Users/x/project": {}} }
+	w.serviceUp = func() bool { return false }
 	ch := w.Subscribe()
 	defer w.Unsubscribe(ch)
 

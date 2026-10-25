@@ -1917,11 +1917,32 @@ func (pm *PIDManager) reapsIdleTopLevel(snap livenessSnapshot) bool {
 	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
 		return false
 	}
-	// Don't delete sessions whose process is still alive.
-	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
+	// Don't delete sessions whose process is still alive — unless that
+	// process is a host whose life says nothing about the session's.
+	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil && !pm.idlesOnHost(snap) {
 		return false
 	}
 	return snap.sessionState == session.StateReady || snap.pid == 0
+}
+
+// idlesOnHost reports whether snap's root is bound to its adapter's session
+// host (Process.SessionHostArgv) while that adapter declares no ReleasedPID —
+// the root whose live PID is no evidence the session is still open (#2107).
+// The host outlives every session it holds, and with no release probe nothing
+// else ends one: opencode 2.x's service hosts the sessions no client runs, and
+// a client detaching writes nothing distinctive to the store (#2104's
+// measurement). So for such a root the ready-session TTL is the end rule,
+// which reapsIdleTopLevel applies. Codex declares a ReleasedPID and ends a
+// released root through endReleasedRoots instead, so its idle roots keep the
+// live-PID protection: TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra
+// is that lock. Behind observe consent, because it reads the bound PID's argv;
+// an unreadable argv is not the host, as the SessionHostArgv contract has it.
+func (pm *PIDManager) idlesOnHost(snap livenessSnapshot) bool {
+	isHost := pm.sessionHosts[snap.adapter]
+	if isHost == nil || pm.releasedPIDs[snap.adapter] != nil || pm.hostReadArgv == nil {
+		return false
+	}
+	return pm.observeAllowed(snap.adapter) && isHost(pm.hostReadArgv(snap.pid))
 }
 
 // reapStaleChild deletes snap when it's a finished or zombie subagent (ready,
@@ -2939,7 +2960,8 @@ type hostGroup struct {
 // TUI's placeholder and the cwd fallback waits 90s.
 //
 // The rule, for an adapter that declares a session host
-// (Process.SessionHostArgv) and whose observe consent is granted: within one
+// (Process.SessionHostArgv) and a LauncherPID (see hostGroups for why) and
+// whose observe consent is granted: within one
 // cwd, each root whose bound PID's argv that predicate recognizes retires the
 // oldest placeholder that was first seen before the root (or within
 // hostedPlaceholderMintLag after it) and does not share its PID — one
@@ -2977,13 +2999,21 @@ func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) [
 }
 
 // hostGroups groups states by (adapter, cwd) for the adapters that declare a
-// session host and whose observe consent is granted: placeholders, and the
-// roots that could have been hosted — top-level, with a transcript and a PID.
+// session host and a LauncherPID and whose observe consent is granted:
+// placeholders, and the roots that could have been hosted — top-level, with a
+// transcript and a PID.
+//
+// The LauncherPID is what says a hosted root has a client process of its own
+// — the process whose placeholder the pairing retires — as boundToSessionHost
+// reads it too. Codex declares one. Opencode does not (#2107): a 2.x client's
+// session binds to the client, whose own PID retires its placeholder, and a
+// root bound to the service has no client at all, so pairing it would retire
+// the placeholder of an unrelated client in the same directory.
 func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*hostGroup {
 	groups := make(map[[2]string]*hostGroup)
 	for _, s := range states {
 		isHost := pm.sessionHosts[s.Adapter]
-		if s.CWD == "" || isHost == nil {
+		if s.CWD == "" || isHost == nil || pm.launcherPIDs[s.Adapter] == nil {
 			continue
 		}
 		if !pm.observeAllowed(s.Adapter) {
