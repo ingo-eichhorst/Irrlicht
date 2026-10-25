@@ -27,6 +27,10 @@
 #   8. the matcher spells "space or end" `\s` → macOS pgrep finds no
 #      `opencode2` client (its ERE has no `\s`). Darwin only: Linux matches
 #      with Go's regexp, which has it, so there the mutation is not a defect.
+#   9. a schema switch keeps the other reader's cursors → a 1.x session
+#      migrated under a running watcher replays its imported row as activity.
+#  10. a failed first-sight read leaves an unseeded cursor → the next scan
+#      reads the session's stored history as activity and admits it.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -202,6 +206,26 @@ else
   echo "skip  processCmdPattern \\s mutation — $(uname -s) matches with Go's regexp, which has \\s;"
   echo "      the defect is macOS pgrep's dialect (test.yml runs this on macos-latest)"
 fi
+
+# ── 9. a schema switch keeps the other reader's cursors ──
+assert_go_test_goes_red \
+  "storeSchema without the cursor reset" \
+  "$WATCHER" \
+  $'\t\tw.mu.Lock()\n\t\tw.cursors = make(map[string]*sessionCursor)\n\t\tw.mu.Unlock()\n' \
+  '' \
+  "$OPENCODE" \
+  '^TestScanSessions_MigrationUnderARunningWatcherReplaysNothing$' \
+  "the migrated, untouched 1.x session produced 1 event(s)"
+
+# ── 10. a failed first-sight read leaves an unseeded cursor ──
+assert_go_test_goes_red \
+  "scanV2Session keeping an unseeded cursor after a failed read" \
+  "$WATCHER_V2" \
+  $'\t\t\tdelete(w.cursors, s.id)\n' \
+  '' \
+  "$OPENCODE" \
+  '^TestV2Reader_AFailedFirstSightDoesNotSeedHistoryAsActivity$' \
+  "stored history produced"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-reader-mutations: $fails FAILED"

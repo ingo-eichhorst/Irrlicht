@@ -173,6 +173,10 @@ func sanitizedChildEnv(homeDir, stateDir string) []string {
 		"COPILOT_HOME=",
 		"KIRO_HOME=",
 		"XDG_CONFIG_HOME=",
+		// opencode's StorePath follows both (#2106): an ambient value would
+		// point the child's watcher at the developer's real opencode store.
+		"OPENCODE_DB=",
+		"XDG_DATA_HOME=",
 		// Does not move claudeSettingsPath today; cleared for symmetry so the
 		// next adapter that honors it does not reopen this quietly.
 		"CLAUDE_CONFIG_DIR=",

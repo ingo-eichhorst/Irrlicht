@@ -31,11 +31,14 @@ const sessionQueryParam = "?session="
 // Detection strategy:
 //  1. Watch the database WAL file (opencode.db-wal) via fsnotify — every
 //     write by OpenCode flushes to the WAL, triggering a Write event.
-//  2. On each WAL event, query the `session` table for rows updated since the
-//     last poll to discover new sessions.
-//  3. For each known session, query the `part` table for rows updated since
+//  2. On each WAL event, read the store's schema (storeSchema): an opencode
+//     2.x store carrying `session_v2` is read by scanV2 (watcher_v2.go), and
+//     everything below describes the 1.x reader.
+//  3. Query the `session` table for rows updated since the last poll to
+//     discover new sessions.
+//  4. For each known session, query the `part` table for rows updated since
 //     the last cursor to derive activity events and state transitions.
-//  4. Query for recently archived sessions (time_archived IS NOT NULL) to
+//  5. Query for recently archived sessions (time_archived IS NOT NULL) to
 //     emit EventRemoved for sessions that were closed by the user.
 //
 // The watcher emits the same agent.Event types as the fswatcher:

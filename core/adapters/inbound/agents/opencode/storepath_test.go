@@ -28,6 +28,11 @@ func TestStorePath_HonoursOpencodesOverrides(t *testing.T) {
 		{"relative_opencode_db_joins_the_data_dir", "named.db", xdg, filepath.Join(xdg, "opencode", "named.db")},
 		{"relative_opencode_db_without_xdg", "named.db", "", filepath.Join(home, ".local", "share", "opencode", "named.db")},
 		{"in_memory_names_no_file", ":memory:", "", defaultPath},
+		// agentpaths' rule (#2106 review): an override must be absolute, so a
+		// relative or unexpanded value is ignored rather than resolved
+		// against the daemon's own cwd.
+		{"relative_xdg_data_home_is_ignored", "", "data", defaultPath},
+		{"unexpanded_xdg_data_home_is_ignored", "", "~/.data", defaultPath},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("HOME", home)

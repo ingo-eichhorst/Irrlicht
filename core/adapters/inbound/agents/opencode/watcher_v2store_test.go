@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -184,5 +185,42 @@ func TestComputeMetrics_MigratedV2StoreReadsNothing(t *testing.T) {
 				t.Errorf("ComputeMetrics returned nil = %t, want %t", got, c.wantNil)
 			}
 		})
+	}
+}
+
+// TestScanSessions_MigrationUnderARunningWatcherReplaysNothing pins the cursor
+// reset storeSchema does when the store's schema switches (#2106 review). The
+// in-place migration keeps a 1.x session's id and timestamps — measured on the
+// sandbox's migrated store, read with mode=ro: the imported assistant row's
+// session_message.time_updated is 1792931562493, later than the session's
+// last 1.x part (1792931562448). A 1.x cursor carried into the 2.x reader
+// would therefore read the imported row as fresh activity, and with no idle
+// row ever arriving for it the session would sit in working.
+func TestScanSessions_MigrationUnderARunningWatcherReplaysNothing(t *testing.T) {
+	w, db := setupTestDB(t)
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_m", "/Users/x/project", now-10000, "")
+	insertMessage(t, db, "msg_a", "ses_m", "assistant", "m", now-10000)
+	insertPart(t, db, partRow{id: "prt_1", sessionID: "ses_m", messageID: "msg_a", partType: "text",
+		data: `{"type":"text","text":"hi"}`, ts: now - 9000})
+	insertPart(t, db, partRow{id: "prt_2", sessionID: "ses_m", messageID: "msg_a", partType: "step-finish",
+		data: `{"type":"step-finish","reason":"stop"}`, ts: now - 5000})
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+	w.scanSessions()
+	if n := len(eventsOfType(drainNow(ch), agent.EventNewSession)["ses_m"]); n != 1 {
+		t.Fatalf("the 1.x session got %d EventNewSession before the migration, want 1", n)
+	}
+
+	createV2Schema(t, db)
+	execAll(t, db,
+		fmt.Sprintf(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated)
+			VALUES ('ses_m', 'prj', 'slug', '/Users/x/project', '1.19.4', %d, %d)`, now-10000, now-3000),
+		fmt.Sprintf(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+			VALUES ('msg_a', 'ses_m', 'assistant', 1, %d, %d, '{"model":{"id":"m"},"content":[]}')`, now-10000, now-4000),
+	)
+	w.scanSessions()
+	if evs := drainNow(ch); len(evs) != 0 {
+		t.Errorf("the migrated, untouched 1.x session produced %d event(s), want 0: %+v", len(evs), evs)
 	}
 }

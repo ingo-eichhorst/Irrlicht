@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 )
 
 // AdapterName identifies sessions originating from OpenCode.
@@ -96,16 +98,18 @@ func StorePath() string {
 }
 
 // dataDir is opencode's data directory: $XDG_DATA_HOME/opencode, or
-// ~/.local/share/opencode.
+// ~/.local/share/opencode. The override goes through agentpaths, whose rule is
+// the one every other relocatable root follows, opencode's own config dir
+// included (opencodeConfigDir): only an absolute value is honoured, and a
+// relative or unexpanded one ("data", "~/.data") is logged once and ignored
+// rather than resolved against the daemon's cwd.
 func dataDir() string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "opencode")
-	}
-	home, err := os.UserHomeDir()
+	dir, err := agentpaths.AbsRoot(agentpaths.FromEnv(AdapterName, "XDG_DATA_HOME", dataRelPath, AdapterName))
 	if err != nil {
 		log.Printf("opencode: $HOME not set, using relative path: %v", err)
+		return dataRelPath
 	}
-	return filepath.Join(home, dataRelPath)
+	return dir
 }
 
 // transcriptPathFor renders the string every downstream consumer keys an

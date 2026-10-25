@@ -192,11 +192,10 @@
 #                DATA dir — the SQLite store the daemon watches — from
 #                $XDG_DATA_HOME. A row naming the first relocates the install
 #                while the store stays real (claudecode's problem in mirror
-#                image); a row naming the second is worse, because irrlicht's
-#                own StorePath() joins $HOME with .local/share/opencode
-#                unconditionally, so the CLI would move and the daemon would
-#                keep watching the operator's real database. Closing it needs
-#                BOTH an XDG_DATA_HOME-aware StorePath and a two-variable row
+#                image); a row naming the second relocates the store while the
+#                install stays real, the same shape the other way round.
+#                irrlicht follows both variables (opencodeConfigDir; StorePath
+#                since #2106), so closing it needs only a two-variable row
 #                shape here (#1719).
 #
 # Those three are named in righome.Unisolatable with the same reasons, and the

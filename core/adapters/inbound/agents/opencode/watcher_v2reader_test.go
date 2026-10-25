@@ -229,3 +229,27 @@ func TestV2Reader_ASuspendedSessionIsStillRunning(t *testing.T) {
 		t.Errorf("the turn's end after the suspension lifted produced activity %+v, want one Terminal EventActivity", act)
 	}
 }
+
+// TestV2Reader_AFailedFirstSightDoesNotSeedHistoryAsActivity pins the cursor
+// cleanup scanV2Session does when a session's messages cannot be read on its
+// first sighting (#2106 review). A cursor left registered but unseeded would
+// make the next scan treat the session as known and read its whole stored
+// history as activity — admitting it on exactly the state first sight exists
+// to ignore. The read is made to fail with a row whose time_updated is text,
+// which SQLite stores as given and rows.Scan cannot put in an int64.
+func TestV2Reader_AFailedFirstSightDoesNotSeedHistoryAsActivity(t *testing.T) {
+	w, db := newV2Store(t)
+	loadV2Fixture(t, db, v2StoreRows)
+	execAll(t, db, `INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+		VALUES ('msg_unreadable', '`+sesToolTurn+`', 'user', 99, 1, 'x', '{}')`)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	w.scanSessions() // sesToolTurn's first sight fails to read
+	execAll(t, db, `DELETE FROM session_message WHERE id = 'msg_unreadable'`)
+	w.scanSessions() // and is first-sighted again here
+
+	if evs := drainNow(ch); len(evs) != 0 {
+		t.Errorf("stored history produced %d event(s) after a failed first sight, want 0: %+v", len(evs), evs)
+	}
+}
