@@ -1,7 +1,9 @@
 // hook_version.go holds the issue #1365 contract every hook-installing agent
 // adapter must satisfy: it declares the minimum upstream CLI version its
 // install requires, that floor is high enough that every event it writes
-// exists at it, and the floor actually refuses an older CLI.
+// exists at it, and the floor actually refuses an older CLI. An adapter that
+// also declares a ceiling (#2105) has it graded the same way: it parses, sits
+// above the floor, and actually refuses a newer CLI.
 //
 // It is the static half of the obligation. The runtime half — that
 // PermissionService consults the declaration before running the Apply closure
@@ -60,6 +62,9 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	})
 	t.Run("floor_refuses_an_older_cli", func(t *testing.T) {
 		assertFloorRefusesOlder(t, gate)
+	})
+	t.Run("ceiling_refuses_a_newer_cli", func(t *testing.T) {
+		assertCeilingRefusesNewer(t, gate)
 	})
 	t.Run("unknown_version_fails_open", func(t *testing.T) {
 		assertUnknownFailsOpen(t, gate)
@@ -209,6 +214,70 @@ func assertFloorRefusesOlder(t reporter, gate *agent.VersionGate) {
 			t.Errorf("refusal %q names neither the installed version %s nor the required %s; "+
 				"a user cannot act on it", why, older, gate.Min)
 		}
+	}
+}
+
+// assertCeilingRefusesNewer is #2105's arm: a declared ceiling (VersionGate.Max)
+// is parseable, sits above the floor, refuses AT itself and above, and refuses
+// as a ceiling, with a reason naming the installed version and the ceiling. A
+// gate that declares no ceiling has nothing for it to grade, and it reports
+// nothing.
+//
+// Two of its checks grade the DECLARATION and are reachable by a wrong wiring:
+// an unparseable Max fails open on every comparison, so the ceiling never
+// refuses anything; a Max at or below Min refuses every version, so the
+// install can never happen. The rest grade agent.VersionGate.Check — domain
+// code every wiring shares, the same split this file's floor arm draws — and
+// their mutation lives in the domain: tools/lib/opencode-v2-harmless-mutations_test.sh
+// makes Check ignore Max and requires opencode's wiring of this contract to go
+// red.
+func assertCeilingRefusesNewer(t reporter, gate *agent.VersionGate) {
+	t.Helper()
+	if gate.Max == "" {
+		return
+	}
+	ceiling, ok := cliversion.Parse(gate.Max)
+	if !ok {
+		t.Errorf("declared ceiling %q is not a major.minor.patch triple; an unparseable "+
+			"ceiling fails open on every comparison, so it never refuses anything", gate.Max)
+		return
+	}
+	floor, floorOK := cliversion.Parse(gate.Min)
+	if floorOK && ceiling.Compare(floor) <= 0 {
+		t.Errorf("declared ceiling %s is not above the floor %s, so the gate refuses every "+
+			"version and the install can never happen", gate.Max, gate.Min)
+		return
+	}
+	// The ceiling itself and one step up each field: an exclusive bound that a
+	// comparison gets wrong by one shows up at the ceiling, and a field-wise
+	// comparison that is wrong at one position shows up one step above it.
+	for _, newer := range append([]cliversion.Version{ceiling}, successors(ceiling)...) {
+		bound, why := gate.Check(newer.String())
+		if bound != agent.AtOrAboveCeiling {
+			t.Errorf("gate does not refuse %s as at or above its ceiling %s (it answered %d: %q)",
+				newer, gate.Max, bound, why)
+			continue
+		}
+		if !strings.Contains(why, newer.String()) || !strings.Contains(why, gate.Max) {
+			t.Errorf("ceiling refusal %q names neither the installed version %s nor the "+
+				"ceiling %s; a user cannot act on it", why, newer, gate.Max)
+		}
+	}
+	// That the ceiling is EXCLUSIVE — a version below it still installs — is
+	// floor_refuses_an_older_cli's first assertion, gate.Permits(gate.Min), run
+	// on this same gate: Min is below Max (checked above), so a ceiling that
+	// over-refuses reports there. Run during #2105: Check's `known && ok`
+	// mutated to `known && (ok || true)` turned opencode's wiring red in
+	// floor_refuses_an_older_cli ("gate refuses its own floor 1.14.50") while
+	// this arm stayed green.
+}
+
+// successors returns the version one step above v in each field.
+func successors(v cliversion.Version) []cliversion.Version {
+	return []cliversion.Version{
+		{Major: v.Major, Minor: v.Minor, Patch: v.Patch + 1},
+		{Major: v.Major, Minor: v.Minor + 1, Patch: v.Patch},
+		{Major: v.Major + 1, Minor: v.Minor, Patch: v.Patch},
 	}
 }
 

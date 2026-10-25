@@ -126,7 +126,8 @@ func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 
 // SessionHosts produces the adapter-name → Process.SessionHostArgv map the
 // PID manager uses to retire the pre-session a hosted root's client left
-// behind (#2082). Only adapters that declare one appear (today: codex).
+// behind (#2082). Only adapters that declare one appear (today: codex and
+// opencode, pinned by TestSessionHosts_OptInSet).
 func SessionHosts(agents []agent.Agent) map[string]func([]string) bool {
 	m := make(map[string]func([]string) bool)
 	for _, a := range agents {

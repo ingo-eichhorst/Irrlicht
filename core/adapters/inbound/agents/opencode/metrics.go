@@ -36,6 +36,14 @@ func ComputeMetrics(transcriptPath, sessionID string) (*session.SessionMetrics, 
 	}
 	defer db.Close()
 
+	// An opencode 2.x store (#2105) is read by nothing yet: its 1.x tables,
+	// where a migration left them, are frozen history, and a fresh one has
+	// none. The watcher logs the stand-down once per transition; this path
+	// runs per session refresh, so it stays quiet.
+	if isV2, err := storeIsV2(db); err != nil || isV2 {
+		return nil, nil
+	}
+
 	return querySessionMetrics(db, sid, dbPath)
 }
 

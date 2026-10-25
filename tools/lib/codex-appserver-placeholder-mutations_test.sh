@@ -316,7 +316,7 @@ assert_go_test_goes_red \
   'if false && a.Process.SessionHostArgv != nil {' \
   "./core/adapters/inbound/agents/" \
   '^TestSessionHosts_OptInSet$' \
-  "session hosts = [], want [codex]"
+  "session hosts = [], want [codex opencode]"
 
 # ── 18. a short option form missing from valueOptions ──
 assert_go_test_goes_red \

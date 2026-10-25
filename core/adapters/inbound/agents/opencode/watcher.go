@@ -78,6 +78,11 @@ type Watcher struct {
 	// opencode process. Defaults to processlifecycle.LiveCWDs(ProcessName);
 	// overridable from tests.
 	liveCWDs func() map[string]struct{}
+
+	// sawV2Store is the schema the previous scan saw: true once the store
+	// carries `session_v2` (#2105). Read and written only by scanSessions,
+	// so the stand-down is logged on a transition rather than on every scan.
+	sawV2Store bool
 }
 
 // sessionCursor tracks the last-seen part timestamp and deduplicates parts
@@ -267,6 +272,10 @@ func (w *Watcher) scanSessions() {
 	}
 	defer db.Close()
 
+	if w.standsDownForV2(db) {
+		return
+	}
+
 	sessions, err := w.querySessions(db)
 	if err != nil {
 		log.Printf("opencode: db.Query(session): %v", err)
@@ -290,6 +299,51 @@ func (w *Watcher) scanSessions() {
 
 	w.emitRemovedForArchivedSessions(db)
 	w.gcExpiredCursors()
+}
+
+// standsDownForV2 reports whether this scan must run no 1.x SQL because the
+// store was written by opencode 2.x (#2105), logging only when that answer
+// changes.
+//
+// It returns before querySessions, scanParts and emitRemovedForArchivedSessions
+// — every 1.x query this watcher issues. A FRESH 2.x store has no `session`,
+// `message` or `part` table, so those queries fail on every scan; a MIGRATED
+// one keeps the 1.x tables frozen, so they succeed and admit 1.x rows as live
+// whenever an `opencode` process — a 2.x TUI is comm `opencode` too — sits in
+// their directory. Reading 2.x sessions is #2104's P2, not this.
+//
+// A schema lookup that fails skips this scan rather than falling back to the
+// 1.x queries: a store the watcher cannot classify is the last one to run them
+// against. The next WAL write scans again.
+func (w *Watcher) standsDownForV2(db *sql.DB) bool {
+	isV2, err := storeIsV2(db)
+	if err != nil {
+		log.Printf("opencode: read store schema: %v — skipping this scan", err)
+		return true
+	}
+	if isV2 != w.sawV2Store {
+		w.sawV2Store = isV2
+		if isV2 {
+			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — the 1.x reader "+
+				"stands down; opencode 2.x sessions are not read yet (#2104)", w.dbPath)
+		} else {
+			log.Printf("opencode: %s no longer has session_v2 — the 1.x reader resumes", w.dbPath)
+		}
+	}
+	return isV2
+}
+
+// storeIsV2 reports whether the opencode store behind db was written by
+// opencode 2.x, which is the one fact the 1.x reader needs: whether its tables
+// still mean what it thinks. `session_v2` is the table 2.x introduced; it is
+// present in a fresh 2.x store and in a 1.x store 2.x migrated in place, and
+// absent from every 1.x store.
+func storeIsV2(db *sql.DB) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'`,
+	).Scan(&n)
+	return n > 0, err
 }
 
 // shouldScan reports whether enough time has passed since the last scan to

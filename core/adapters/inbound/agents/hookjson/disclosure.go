@@ -63,3 +63,25 @@ func RequiresVersion(cliName, minVersion string) string {
 		"Requires %s %s or newer; on an older version nothing is written and the daemon reports why.",
 		cliName, minVersion)
 }
+
+// RequiresVersionRange is RequiresVersion for a gate that also declares an
+// exclusive ceiling (agent.VersionGate.Max, issue #2105). With no ceiling it is
+// RequiresVersion, so an adapter can switch to it without changing its copy.
+// minVersion is always set in practice: AssertHookVersionGate refuses a hooks
+// permission that declares no floor.
+//
+// The ceiling half discloses two things, because the install does two things
+// there: nothing is written, and the file an earlier install left behind is
+// removed — PermissionService runs the adapter's own Writes.Uninstall on a
+// ceiling refusal, and that deletes a file in the user's tree, which the copy
+// the user consents to must say.
+func RequiresVersionRange(cliName, minVersion, maxVersion string) string {
+	if maxVersion == "" {
+		return RequiresVersion(cliName, minVersion)
+	}
+	return fmt.Sprintf(
+		"Requires %s %s or newer and older than %s; on an older version nothing is written, "+
+			"on %s or newer nothing is written and the file an earlier install left there is removed, "+
+			"and either way the daemon reports why.",
+		cliName, minVersion, maxVersion, maxVersion)
+}

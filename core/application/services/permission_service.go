@@ -17,8 +17,6 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
-	"irrlicht/core/pkg/cliprobe"
-	"irrlicht/core/pkg/cliversion"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -935,6 +933,11 @@ func (s *PermissionService) runEffects(effects []pendingEffect) int {
 // because planAnswerLocked re-runs the effect when a re-answer finds a
 // recorded failure, the refusal's own advice — upgrade the CLI and grant again
 // — is literally the gesture that retries it.
+//
+// A declared ceiling (VersionGate.Max, issue #2105) is checked in the same
+// place and refuses the same way, with one addition: a ceiling refusal also
+// removes the file an earlier install left behind (removeAfterCeilingRefusal).
+// A floor refusal removes nothing.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
@@ -948,16 +951,19 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 		// always safe and always wanted, including on a CLI too old to have
 		// understood them in the first place.
 		err := error(nil)
+		bound := agent.WithinBounds
 		if e.target == permission.StateGranted {
 			// Home guard before version gate: the version gate may shell out to
 			// probe the CLI, and there is no reason to pay for that on an
 			// install that is about to be refused anyway.
 			if err = s.sharedConfigRefusal(e.perm); err == nil {
-				err = s.hookVersionRefusal(e.perm)
+				bound, err = s.hookVersionRefusal(e.perm)
 			}
 		}
 		if err == nil {
 			err = effect()
+		} else if bound == agent.AtOrAboveCeiling {
+			err = s.removeAfterCeilingRefusal(e, err)
 		}
 		if err != nil {
 			reason = err.Error()
@@ -984,74 +990,6 @@ func (s *PermissionService) recordEffectResult(e pendingEffect, reason string) {
 // Caller holds s.mu.
 func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 	return s.effectErrs[effectKey(agentName, permKey)] != ""
-}
-
-// hookVersionRefusal resolves the installed upstream CLI version for a
-// permission that declares a floor and returns a non-nil error when the
-// install must not proceed. It returns nil for every permission that declares
-// no floor, which is every non-hook permission and any hook adapter that has
-// not opted in.
-//
-// Resolution prefers the adapter's own passive signal over running anything:
-// Codex reads cli_version out of the transcript it is already tailing, which
-// costs nothing and works when the binary is not on the daemon's PATH. The
-// probe is the fallback for adapters with no such signal.
-func (s *PermissionService) hookVersionRefusal(p agent.Permission) error {
-	if p.Writes == nil || p.Writes.Version == nil || p.Writes.Version.Min == "" {
-		return nil
-	}
-	gate := p.Writes.Version
-
-	installed := ""
-	if gate.Observed != nil {
-		installed = gate.Observed()
-	}
-	if s.shouldConfirmByProbe(gate, installed) {
-		probed, err := cliprobe.Probe(s.effectContext(), gate.Probe)
-		if err != nil {
-			// Unknown version: fail open, but say so. A probe that could not
-			// run is the state most likely to be misread later as "the gate
-			// checked and approved".
-			s.log.LogInfo("permissions", "", fmt.Sprintf(
-				"%s: version probe failed (%v); installing anyway — an unreadable version is not an old one", p.Key, err))
-		} else {
-			installed = probed
-		}
-	}
-
-	if allowed, why := gate.Permits(installed); !allowed {
-		return errors.New(why)
-	}
-	return nil
-}
-
-// shouldConfirmByProbe decides whether to spend a process on confirming the
-// version. It returns false only for the case that needs no help: a passive
-// signal that parses and already clears the floor.
-//
-// The two cases it does probe are the ones where the passive answer cannot be
-// relied on:
-//
-//   - It is unknown or unparseable. An adapter with no Observed source at all
-//     (Claude Code) is always here, and so is one whose source returned
-//     something it could not read — falling open without asking the binary
-//     that could have answered would make the gate decorative.
-//   - It parses and says "too old". A passive signal is the LAST-RUN version,
-//     not the installed one, so it can only be stale downward: a user who
-//     upgrades and grants before starting a new session would otherwise be
-//     refused on a version they no longer run, with nothing installed and the
-//     permission still showing green. A false refusal is the one direction
-//     this gate must never produce quietly, so it is worth a process to be
-//     sure.
-func (s *PermissionService) shouldConfirmByProbe(gate *agent.VersionGate, installed string) bool {
-	if len(gate.Probe) == 0 {
-		return false
-	}
-	if _, parsed := cliversion.Parse(installed); !parsed {
-		return true
-	}
-	allowed, _ := gate.Permits(installed)
-	return !allowed
 }
 
 // effectContext is the daemon-lifetime context effects run under, so a

@@ -42,6 +42,19 @@ func Agent() agent.Agent {
 		Process: agent.Process{
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
+			// SessionHostArgv rather than ExcludeArgv, as codex's app-server
+			// (#2088): the 2.x service hosts sessions rather than being
+			// infrastructure nothing binds to (#2104's P3 binds service-hosted
+			// sessions to it). Declaring it also opts opencode into
+			// PIDManager's hosted-placeholder pairing (hostGroups /
+			// pairHostedRoots, #2082), which acts only on a root whose bound
+			// PID's argv is the service. In #2105 no root gets there, by
+			// reading rather than by a test: 1.x roots bind by cwd through
+			// DiscoverPID, and the 1.x reader stands down on any store
+			// carrying session_v2, which a 2.x service's store does.
+			// boundToSessionHost also needs a LauncherPID, which opencode
+			// does not declare.
+			SessionHostArgv: IsServiceArgv,
 		},
 		Source: agent.ProcessOwnedStore{
 			// Panic rather than return "" so a future caller that wires
@@ -99,7 +112,7 @@ func Agent() agent.Agent {
 					"file deliberately registers only opencode's read-only event tap, " +
 					"never a hook that could answer a permission prompt for you or change " +
 					"what opencode does. " +
-					hookjson.RequiresVersion("opencode", minOpenCodeVersion) +
+					hookjson.RequiresVersionRange("opencode", minOpenCodeVersion, maxOpenCodeVersion) +
 					" Toggling off deletes the file (also available via " +
 					"`irrlichd --uninstall-hooks`); nothing else in your opencode " +
 					"installation was changed, so there is nothing else to undo.",
@@ -111,6 +124,7 @@ func Agent() agent.Agent {
 					Verify:    VerifyHooksInstalled,
 					Version: &agent.VersionGate{
 						Min:   minOpenCodeVersion,
+						Max:   maxOpenCodeVersion,
 						Probe: []string{"opencode", "--version"},
 					},
 				},

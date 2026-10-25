@@ -35,10 +35,25 @@ var selfTestInstalledEvents = []string{"SessionStart", "PostToolUse", "Notificat
 // sentence derived from selfTestInstalledEvents rather than hand-restated, which
 // is the fix #1356 shipped. Each mutation below overrides exactly one part.
 func correctDisclosure() HookDisclosure {
-	return disclosureWith(
+	return disclosureStating(hookjson.RequiresVersion(selfTestCLIName, selfTestFloor), selfTestGate())
+}
+
+// correctCeilingDisclosure is correctDisclosure for a gate that also declares a
+// ceiling (#2105), with the copy rendered by hookjson.RequiresVersionRange.
+func correctCeilingDisclosure() HookDisclosure {
+	return disclosureStating(
+		hookjson.RequiresVersionRange(selfTestCLIName, selfTestFloor, selfTestCeiling),
+		selfTestCeilingGate(),
+	)
+}
+
+// disclosureStating builds copy that is right about every event and states
+// versionSentence about the version gate, declared against gate.
+func disclosureStating(versionSentence string, gate *agent.VersionGate) HookDisclosure {
+	return disclosureWithGate(
 		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
-		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
-			hookjson.RequiresVersion(selfTestCLIName, selfTestFloor),
+		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+versionSentence,
+		gate,
 	)
 }
 
@@ -46,6 +61,12 @@ func correctDisclosure() HookDisclosure {
 // floor is declared on the permission (not just mentioned in the copy) because
 // the fourth obligation reads it off the declaration.
 func disclosureWith(touches, detail string) HookDisclosure {
+	return disclosureWithGate(touches, detail, selfTestGate())
+}
+
+// disclosureWithGate is disclosureWith with the declared version gate chosen by
+// the caller.
+func disclosureWithGate(touches, detail string, gate *agent.VersionGate) HookDisclosure {
 	return HookDisclosure{
 		Agent: agent.Agent{
 			Identity: agent.Identity{Name: selfTestDisclosureAgent},
@@ -55,7 +76,7 @@ func disclosureWith(touches, detail string) HookDisclosure {
 				Touches: touches,
 				Detail:  detail,
 				Apply:   func() error { return nil },
-				Writes:  &agent.ManagedUserFile{Version: selfTestGate()},
+				Writes:  &agent.ManagedUserFile{Version: gate},
 			}},
 		},
 		PermissionKey: agent.HooksPermissionKey,
@@ -146,12 +167,21 @@ func disclosureWords(d HookDisclosure) map[string]bool { return wordsIn(disclosu
 // TestDisclosureArms_PassACorrectDisclosure is the family's vacuity guard. Every
 // arm is run against copy that is right in every respect: an arm that reported
 // unconditionally would satisfy all four mutations below and look like coverage.
+//
+// The with_a_ceiling fixture (#2105) also proves hookjson.RequiresVersionRange's
+// sentence trips none of the event-shaped or entry-count arms, which scan the
+// whole copy.
 func TestDisclosureArms_PassACorrectDisclosure(t *testing.T) {
-	for name, arm := range disclosureArms() {
-		t.Run(name, func(t *testing.T) {
-			d := correctDisclosure()
-			mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }), "a correct disclosure")
-		})
+	for suffix, correct := range map[string]func() HookDisclosure{
+		"":                correctDisclosure,
+		"/with_a_ceiling": correctCeilingDisclosure,
+	} {
+		for name, arm := range disclosureArms() {
+			t.Run(name+suffix, func(t *testing.T) {
+				d := correct()
+				mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }), "a correct disclosure")
+			})
+		}
 	}
 }
 
@@ -253,6 +283,22 @@ func TestDisclosureArm_StatesTheVersionFloor(t *testing.T) {
 	const what = "a declared version floor the consent copy never mentions (#1393)"
 	mustReport(t, rec, wantOf(t, "states_the_version_floor"), what)
 	mustAlsoName(t, rec, selfTestFloor, what)
+}
+
+// TestDisclosureArm_StatesTheVersionCeiling is #2105's clause of the same arm:
+// the permission declares a ceiling, and the copy states only the floor — the
+// "X or newer" sentence that reads as true on exactly the CLI the ceiling
+// refuses.
+func TestDisclosureArm_StatesTheVersionCeiling(t *testing.T) {
+	d := disclosureStating(hookjson.RequiresVersion(selfTestCLIName, selfTestFloor), selfTestCeilingGate())
+
+	rec := observe(t, func(at armT) {
+		perm, _ := disclosureUnderTest(d)
+		assertStatesVersionFloor(at, perm, disclosureText(d))
+	})
+	const what = "a declared ceiling the consent copy never mentions (#2105)"
+	mustReport(t, rec, wantOf(t, "states_the_version_floor"), what)
+	mustAlsoName(t, rec, selfTestCeiling, what)
 }
 
 // TestDisclosureArm_PermissionIsModifyKind covers the kind obligation, which is
