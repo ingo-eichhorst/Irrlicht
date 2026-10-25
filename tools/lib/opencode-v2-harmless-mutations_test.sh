@@ -18,9 +18,9 @@
 #      wiring can get wrong, so its mutation is here, in the domain).
 #   2. the service never removes after a ceiling refusal → the 1.x plugin
 #      survives a grant against opencode 2.1.4.
-#   3. a ceiling refusal is an untyped error → the service cannot tell it from
-#      a floor refusal and removes nothing.
-#   4. the service treats a gate as declared only when it has a floor → a
+#   3. hookVersionRefusal reports every refusal as a floor refusal → the
+#      service cannot tell a ceiling refusal apart and removes nothing.
+#   4. VersionGate.Bounded counts only a floor as a declared bound → a
 #      ceiling-only gate installs at 2.1.4.
 #   5. the watcher scans a 2.x store anyway → a frozen 1.x row is admitted.
 #   6. ComputeMetrics reads a 2.x store anyway → it folds a frozen 1.x row.
@@ -119,6 +119,7 @@ assert_go_test_goes_red() {
 
 DOMAIN_FILE="core/domain/agent/declaration.go"
 SERVICE_FILE="core/application/services/permission_service.go"
+GATE_FILE="core/application/services/permission_version_gate.go"
 OPENCODE="./core/adapters/inbound/agents/opencode/"
 OPENCODE_AGENT="core/adapters/inbound/agents/opencode/agent.go"
 SERVICES="./core/application/services/"
@@ -128,8 +129,8 @@ CONTRACTS="./core/internal/contracttesting/"
 assert_go_test_goes_red \
   "agent.VersionGate.Check without the ceiling" \
   "$DOMAIN_FILE" \
-  'if g.Max != "" {' \
-  'if false && g.Max != "" {' \
+  'if ok, known := cliversion.AtLeast(installed, g.Max); known && ok {' \
+  'if ok, known := cliversion.AtLeast(installed, g.Max); false && known && ok {' \
   "$OPENCODE" \
   '^TestHooksPermission_DeclaresVersionGate$' \
   "as at or above its ceiling 2.0.0"
@@ -138,28 +139,28 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "runClosureEffect without the ceiling removal" \
   "$SERVICE_FILE" \
-  $'} else {\n\t\t\terr = s.removeAfterCeilingRefusal(e, err)\n\t\t}' \
-  '}' \
+  '} else if bound == agent.AtOrAboveCeiling {' \
+  '} else if false && bound == agent.AtOrAboveCeiling {' \
   "$SERVICES" \
   '^TestOpenCodeCeiling_RemovesTheStaleV1Plugin$' \
   "survived a grant against opencode 2.1.4"
 
-# ── 3. a ceiling refusal is an untyped error ──
+# ── 3. every refusal reported as a floor refusal ──
 assert_go_test_goes_red \
-  "hookVersionRefusal returning an untyped ceiling refusal" \
-  "$SERVICE_FILE" \
-  'return &ceilingRefusal{why: why}' \
-  'return errors.New(why)' \
+  "hookVersionRefusal dropping which bound refused" \
+  "$GATE_FILE" \
+  'return bound, errors.New(why)' \
+  'return agent.BelowFloor, errors.New(why)' \
   "$SERVICES" \
   '^TestHookVersionGate_CeilingRefusesAndRemovesTheStaleArtifact$' \
   "Writes.Uninstall ran 0 time(s), want 1"
 
 # ── 4. a gate counts as declared only with a floor ──
 assert_go_test_goes_red \
-  "hookVersionRefusal skipping a ceiling-only gate" \
-  "$SERVICE_FILE" \
-  '(p.Writes.Version.Min == "" && p.Writes.Version.Max == "")' \
-  'p.Writes.Version.Min == ""' \
+  "agent.VersionGate.Bounded ignoring a ceiling-only gate" \
+  "$DOMAIN_FILE" \
+  'return g != nil && (g.Min != "" || g.Max != "")' \
+  'return g != nil && g.Min != ""' \
   "$SERVICES" \
   '^TestHookVersionGate_CeilingAloneIsEnforced$' \
   "Apply ran at 2.1.4 against a gate whose only bound is a 2.0.0 ceiling"

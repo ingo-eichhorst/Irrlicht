@@ -35,21 +35,25 @@ var selfTestInstalledEvents = []string{"SessionStart", "PostToolUse", "Notificat
 // sentence derived from selfTestInstalledEvents rather than hand-restated, which
 // is the fix #1356 shipped. Each mutation below overrides exactly one part.
 func correctDisclosure() HookDisclosure {
-	return disclosureWith(
-		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
-		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
-			hookjson.RequiresVersion(selfTestCLIName, selfTestFloor),
-	)
+	return disclosureStating(hookjson.RequiresVersion(selfTestCLIName, selfTestFloor), selfTestGate())
 }
 
 // correctCeilingDisclosure is correctDisclosure for a gate that also declares a
 // ceiling (#2105), with the copy rendered by hookjson.RequiresVersionRange.
 func correctCeilingDisclosure() HookDisclosure {
+	return disclosureStating(
+		hookjson.RequiresVersionRange(selfTestCLIName, selfTestFloor, selfTestCeiling),
+		selfTestCeilingGate(),
+	)
+}
+
+// disclosureStating builds copy that is right about every event and states
+// versionSentence about the version gate, declared against gate.
+func disclosureStating(versionSentence string, gate *agent.VersionGate) HookDisclosure {
 	return disclosureWithGate(
 		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
-		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
-			hookjson.RequiresVersionRange(selfTestCLIName, selfTestFloor, selfTestCeiling),
-		selfTestCeilingGate(),
+		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+versionSentence,
+		gate,
 	)
 }
 
@@ -163,22 +167,21 @@ func disclosureWords(d HookDisclosure) map[string]bool { return wordsIn(disclosu
 // TestDisclosureArms_PassACorrectDisclosure is the family's vacuity guard. Every
 // arm is run against copy that is right in every respect: an arm that reported
 // unconditionally would satisfy all four mutations below and look like coverage.
+//
+// The with_a_ceiling fixture (#2105) also proves hookjson.RequiresVersionRange's
+// sentence trips none of the event-shaped or entry-count arms, which scan the
+// whole copy.
 func TestDisclosureArms_PassACorrectDisclosure(t *testing.T) {
-	for name, arm := range disclosureArms() {
-		t.Run(name, func(t *testing.T) {
-			d := correctDisclosure()
-			mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }), "a correct disclosure")
-		})
-	}
-	// The same guard for copy that states a ceiling (#2105). It also proves
-	// hookjson.RequiresVersionRange's sentence trips none of the event-shaped
-	// or entry-count arms, which scan the whole copy.
-	for name, arm := range disclosureArms() {
-		t.Run(name+"/with_a_ceiling", func(t *testing.T) {
-			d := correctCeilingDisclosure()
-			mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }),
-				"a correct disclosure of a gate with a ceiling")
-		})
+	for suffix, correct := range map[string]func() HookDisclosure{
+		"":                correctDisclosure,
+		"/with_a_ceiling": correctCeilingDisclosure,
+	} {
+		for name, arm := range disclosureArms() {
+			t.Run(name+suffix, func(t *testing.T) {
+				d := correct()
+				mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }), "a correct disclosure")
+			})
+		}
 	}
 }
 
@@ -287,12 +290,7 @@ func TestDisclosureArm_StatesTheVersionFloor(t *testing.T) {
 // "X or newer" sentence that reads as true on exactly the CLI the ceiling
 // refuses.
 func TestDisclosureArm_StatesTheVersionCeiling(t *testing.T) {
-	d := disclosureWithGate(
-		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
-		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
-			hookjson.RequiresVersion(selfTestCLIName, selfTestFloor),
-		selfTestCeilingGate(),
-	)
+	d := disclosureStating(hookjson.RequiresVersion(selfTestCLIName, selfTestFloor), selfTestCeilingGate())
 
 	rec := observe(t, func(at armT) {
 		perm, _ := disclosureUnderTest(d)

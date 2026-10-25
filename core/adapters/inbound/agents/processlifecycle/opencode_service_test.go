@@ -48,11 +48,13 @@ func TestOpenCodeServiceGetsNoPlaceholderRow(t *testing.T) {
 			drained = true
 		}
 	}
-	if !s.TracksPIDForTest(tui) || !minted[project] {
+	// maybeTrackNewPID tracks a PID and emits its EventNewSession under one
+	// lock, so a minted cwd is a tracked PID.
+	if !minted[project] {
 		t.Fatalf("the TUI client (pid %d, cwd %s) got no row — the scan did not run, or the "+
 			"service predicate swallowed a client; minted cwds = %v", tui, project, minted)
 	}
-	if s.TracksPIDForTest(service) || minted[home] {
+	if minted[home] {
 		t.Errorf("opencode 2.x's background service (pid %d, `serve --service`, cwd %s) was "+
 			"minted a placeholder row; minted cwds = %v", service, home, minted)
 	}

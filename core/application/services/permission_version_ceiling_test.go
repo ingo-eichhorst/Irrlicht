@@ -30,12 +30,10 @@ func opencodeHooksAt(t *testing.T, observed string) agent.Permission {
 		if p.Writes == nil || p.Writes.Version == nil {
 			t.Fatal("opencode's hooks permission declares no version gate")
 		}
-		gate := *p.Writes.Version
-		gate.Observed = func() string { return observed }
-		gate.Probe = nil
-		writes := *p.Writes
-		writes.Version = &gate
-		p.Writes = &writes
+		// Agent() builds a fresh ManagedUserFile and VersionGate per call, so
+		// changing them in place touches nothing the daemon holds.
+		p.Writes.Version.Observed = func() string { return observed }
+		p.Writes.Version.Probe = nil
 		return p
 	}
 	t.Fatal("opencode declares no hooks permission")

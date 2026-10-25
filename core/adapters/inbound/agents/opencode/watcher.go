@@ -79,10 +79,10 @@ type Watcher struct {
 	// overridable from tests.
 	liveCWDs func() map[string]struct{}
 
-	// storeIsV2 is the schema the previous scan saw: true once the store
+	// sawV2Store is the schema the previous scan saw: true once the store
 	// carries `session_v2` (#2105). Read and written only by scanSessions,
 	// so the stand-down is logged on a transition rather than on every scan.
-	storeIsV2 bool
+	sawV2Store bool
 }
 
 // sessionCursor tracks the last-seen part timestamp and deduplicates parts
@@ -321,8 +321,8 @@ func (w *Watcher) standsDownForV2(db *sql.DB) bool {
 		log.Printf("opencode: read store schema: %v — skipping this scan", err)
 		return true
 	}
-	if isV2 != w.storeIsV2 {
-		w.storeIsV2 = isV2
+	if isV2 != w.sawV2Store {
+		w.sawV2Store = isV2
 		if isV2 {
 			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — the 1.x reader "+
 				"stands down; opencode 2.x sessions are not read yet (#2104)", w.dbPath)

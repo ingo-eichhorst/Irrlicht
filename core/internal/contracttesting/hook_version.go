@@ -220,8 +220,8 @@ func assertFloorRefusesOlder(t reporter, gate *agent.VersionGate) {
 // assertCeilingRefusesNewer is #2105's arm: a declared ceiling (VersionGate.Max)
 // is parseable, sits above the floor, refuses AT itself and above, and refuses
 // as a ceiling, with a reason naming the installed version and the ceiling. A
-// gate that declares no ceiling — every adapter but opencode — has nothing for
-// it to grade, and it reports nothing.
+// gate that declares no ceiling has nothing for it to grade, and it reports
+// nothing.
 //
 // Two of its checks grade the DECLARATION and are reachable by a wrong wiring:
 // an unparseable Max fails open on every comparison, so the ceiling never
@@ -263,13 +263,10 @@ func assertCeilingRefusesNewer(t reporter, gate *agent.VersionGate) {
 				"ceiling %s; a user cannot act on it", why, newer, gate.Max)
 		}
 	}
-	// Exclusive means the highest version below the ceiling still installs —
-	// as long as the floor admits it at all.
-	if below, ok := justBelow(ceiling); ok && (!floorOK || below.Compare(floor) >= 0) {
-		if allowed, why := gate.Permits(below.String()); !allowed {
-			t.Errorf("gate refuses %s, below its exclusive ceiling %s (%s)", below, gate.Max, why)
-		}
-	}
+	// That the ceiling is EXCLUSIVE — a version below it still installs — is
+	// floor_refuses_an_older_cli's first assertion, gate.Permits(gate.Min), run
+	// on this same gate: Min is below Max (checked above), so a ceiling that
+	// over-refuses reports there.
 }
 
 // successors returns the version one step above v in each field.
@@ -279,22 +276,6 @@ func successors(v cliversion.Version) []cliversion.Version {
 		{Major: v.Major, Minor: v.Minor + 1, Patch: v.Patch},
 		{Major: v.Major + 1, Minor: v.Minor, Patch: v.Patch},
 	}
-}
-
-// justBelow returns a version immediately below v: v with its lowest non-zero
-// field decremented and every field after it raised far past any real release.
-// It reports false for 0.0.0, which has nothing below it.
-func justBelow(v cliversion.Version) (cliversion.Version, bool) {
-	const wide = 1 << 20
-	switch {
-	case v.Patch > 0:
-		return cliversion.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch - 1}, true
-	case v.Minor > 0:
-		return cliversion.Version{Major: v.Major, Minor: v.Minor - 1, Patch: wide}, true
-	case v.Major > 0:
-		return cliversion.Version{Major: v.Major - 1, Minor: wide, Patch: wide}, true
-	}
-	return cliversion.Version{}, false
 }
 
 // predecessors returns every version reachable by decrementing exactly one

@@ -345,8 +345,8 @@ type VersionGate struct {
 	Min string
 
 	// Max is an EXCLUSIVE ceiling: the first upstream CLI version this
-	// install is known NOT to work at (issue #2105). Empty means no ceiling,
-	// which is every adapter but opencode. It exists for a new upstream major
+	// install is known NOT to work at (issue #2105). Empty means no ceiling.
+	// It exists for a new upstream major
 	// that rejects the artifact this install writes — opencode 2.x refuses the
 	// 1.x plugin file on every load — so "the CLI is new enough" stops being
 	// the only question. Like Min, it gates the whole install, never single
@@ -400,27 +400,33 @@ func (g *VersionGate) Check(installed string) (VersionBound, string) {
 		return WithinBounds, ""
 	}
 	// The unknown-fails-open decision is AtLeast's and is encoded there once:
-	// it already reports ok=true, known=false for anything it could not read.
-	// Re-deriving it here from `known` would mean two places decide the
+	// it reports ok=true, known=false for anything it could not read — an
+	// undeclared (empty) bound included, so neither branch needs its own
+	// emptiness guard. Re-deriving that here would mean two places decide the
 	// direction and the contract arm that claims to pin it would only be
 	// pinning this copy. The ceiling therefore refuses only on known && ok.
-	if g.Min != "" {
-		if ok, _ := cliversion.AtLeast(installed, g.Min); !ok {
-			return BelowFloor, fmt.Sprintf(
-				"installed CLI is %s, which is older than the %s required by the hook events this installs; "+
-					"nothing was written — upgrade the CLI and grant again",
-				installed, g.Min)
-		}
+	if ok, _ := cliversion.AtLeast(installed, g.Min); !ok {
+		return BelowFloor, fmt.Sprintf(
+			"installed CLI is %s, which is older than the %s required by the hook events this installs; "+
+				"nothing was written — upgrade the CLI and grant again",
+			installed, g.Min)
 	}
-	if g.Max != "" {
-		if ok, known := cliversion.AtLeast(installed, g.Max); known && ok {
-			return AtOrAboveCeiling, fmt.Sprintf(
-				"installed CLI is %s, and this hook install supports only versions below %s%s; "+
-					"nothing was written",
-				installed, g.Max, unsupportedMajor(g.Max))
-		}
+	if ok, known := cliversion.AtLeast(installed, g.Max); known && ok {
+		return AtOrAboveCeiling, fmt.Sprintf(
+			"installed CLI is %s, and this hook install supports only versions below %s%s; "+
+				"nothing was written",
+			installed, g.Max, unsupportedMajor(g.Max))
 	}
 	return WithinBounds, ""
+}
+
+// Bounded reports whether the gate declares any bound at all — a floor, a
+// ceiling, or both. It is the one answer to "is there a gate to enforce?", so
+// a caller does not re-derive it from the fields: PermissionService asked
+// `Min != ""` before the ceiling existed (#2105), which would have skipped a
+// ceiling-only gate without a word.
+func (g *VersionGate) Bounded() bool {
+	return g != nil && (g.Min != "" || g.Max != "")
 }
 
 // unsupportedMajor renders " (N.x is not supported yet)" for a ceiling that is
