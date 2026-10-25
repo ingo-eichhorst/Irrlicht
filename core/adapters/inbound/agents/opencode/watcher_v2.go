@@ -4,10 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
-	"path/filepath"
 	"time"
-
-	"irrlicht/core/domain/agent"
 )
 
 // The opencode 2.x reader (#2106). A 2.x store keeps sessions in `session_v2`
@@ -41,18 +38,17 @@ import (
 
 // scanV2 is scanSessions for a 2.x store.
 func (w *Watcher) scanV2(db *sql.DB) {
-	sessions, err := w.queryV2Sessions(db)
+	sessions, err := w.querySessions(db, v2SessionsQuery)
 	if err != nil {
 		log.Printf("opencode: db.Query(session_v2): %v", err)
 		return
 	}
 
-	live := w.liveCWDs()
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	now := time.Now()
+	live := w.liveOnce()
 	listed := make(map[string]struct{}, len(sessions))
 	for _, s := range sessions {
 		listed[s.id] = struct{}{}
@@ -62,40 +58,39 @@ func (w *Watcher) scanV2(db *sql.DB) {
 	w.gcExpiredCursors()
 }
 
-// queryV2Sessions lists the 2.x sessions a client may be running: not
-// archived, updated within maxAge (all when maxAge is 0). Suspended rows stay
-// listed — see the time_suspended note above.
-func (w *Watcher) queryV2Sessions(db *sql.DB) ([]sessionRow, error) {
-	cutoff := int64(0)
-	if w.maxAge > 0 {
-		cutoff = time.Now().Add(-w.maxAge).UnixMilli()
-	}
-	rows, err := db.Query(`
-		SELECT id, directory, time_updated, parent_id
-		FROM session_v2
-		WHERE time_archived IS NULL
-		  AND time_updated >= ?
-		ORDER BY time_updated DESC
-		LIMIT 200
-	`, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// v2SessionsQuery lists the 2.x sessions a client may be running: not
+// archived, updated at or after its one argument (querySessions' maxAge
+// cutoff). Suspended rows stay listed — see the time_suspended note above.
+const v2SessionsQuery = `
+	SELECT id, directory, time_updated, parent_id
+	FROM session_v2
+	WHERE time_archived IS NULL
+	  AND time_updated >= ?
+	ORDER BY time_updated DESC
+	LIMIT 200
+`
 
-	var sessions []sessionRow
-	for rows.Next() {
-		if s, ok := w.scanSessionRow(rows); ok {
-			sessions = append(sessions, s)
+// liveOnce returns a lookup into the live-client set that enumerates
+// processes at most once, on first use: the 2.x reader needs the set only to
+// admit a session with new activity, which most scans have none of, and the
+// enumeration is a process listing plus a cwd read per client. A failed
+// enumeration (nil) is not retried within the scan.
+func (w *Watcher) liveOnce() func(dir string) bool {
+	var live map[string]struct{}
+	done := false
+	return func(dir string) bool {
+		if !done {
+			live, done = w.liveCWDs(), true
 		}
+		_, ok := live[dir]
+		return ok
 	}
-	return sessions, rows.Err()
 }
 
 // scanV2Session reads session s's new and rewritten messages and emits what
 // they amount to. The first time s is seen, its messages only seed the
 // cursor.
-func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, live map[string]struct{}, now time.Time) {
+func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, live func(dir string) bool, now time.Time) {
 	cur, known := w.cursors[s.id]
 	if !known {
 		cur = &sessionCursor{seenIDs: make(map[string]struct{})}
@@ -117,27 +112,13 @@ func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, live map[string]struct
 	}
 
 	if !cur.emitted {
-		if _, alive := live[s.directory]; !alive {
+		if !live(s.directory) {
 			return
 		}
-		w.broadcast(agent.Event{
-			Type:            agent.EventNewSession,
-			SessionID:       s.id,
-			ProjectDir:      filepath.Base(s.directory),
-			TranscriptPath:  w.transcriptPathFor(s.id),
-			CWD:             s.directory,
-			ParentSessionID: s.parentID,
-		})
+		w.emitNewSession(s)
 		cur.emitted = true
 	}
-	w.broadcast(agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      s.id,
-		ProjectDir:     filepath.Base(s.directory),
-		TranscriptPath: w.transcriptPathFor(s.id),
-		CWD:            s.directory,
-		Terminal:       acc.hasTerminal,
-	})
+	w.emitActivity(s.id, s.directory, acc.hasTerminal)
 }
 
 // scanV2Messages folds sessionID's session_message rows written since cur
@@ -187,11 +168,7 @@ func (w *Watcher) emitRemovedForGoneV2Sessions(db *sql.DB, listed map[string]str
 			continue
 		}
 		if cur.emitted {
-			w.broadcast(agent.Event{
-				Type:           agent.EventRemoved,
-				SessionID:      id,
-				TranscriptPath: w.transcriptPathFor(id),
-			})
+			w.emitRemoved(id)
 		}
 		delete(w.cursors, id)
 	}

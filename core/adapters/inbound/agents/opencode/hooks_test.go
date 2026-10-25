@@ -128,7 +128,7 @@ func opencodeStoreRoot(t *testing.T) string {
 	// environment would move the store root out of this temp HOME.
 	t.Setenv("OPENCODE_DB", "")
 	t.Setenv("XDG_DATA_HOME", "")
-	root := filepath.Dir(filepath.Join(home, dbRelPath))
+	root := filepath.Join(home, dataRelPath)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatalf("create store dir: %v", err)
 	}

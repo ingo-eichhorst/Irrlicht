@@ -111,27 +111,22 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 
 // sessionFold is ComputeMetrics' pass over one session's stored rows — 1.x
 // parts or 2.x messages, each parsed by Parser — accumulating what the tailer
-// would, because this path bypasses the tailer.
+// would, because this path bypasses the tailer. Whatever result() does not
+// finalise is written straight into metrics.
 type sessionFold struct {
 	metrics *session.SessionMetrics
 	parser  Parser
 
-	hasData         bool
-	firstTS, lastTS time.Time
+	firstTS, lastTS time.Time // zero firstTS: no row yet
 
-	lastEventType     string
-	openTools         map[string]string // callID → toolName
-	lastAssistantText string
+	openTools map[string]string // callID → toolName
 
 	// Latest and earliest task-estimate markers (issue #558).
 	lastTaskEstimate, firstTaskEstimate *tailer.TaskEstimate
 
-	cumCost                           float64
-	cumInput, cumOutput, cumCacheRead int64
-
-	// Task accumulator mirrors the tailer's TaskDelta fold (tailer.go:708-728)
-	// because OpenCode's metrics path bypasses the tailer. See issue #277.
-	tasks    []session.Task
+	// Task accumulator index; the tasks themselves are metrics.Tasks. Mirrors
+	// the tailer's TaskDelta fold (tailer.go:708-728) because OpenCode's
+	// metrics path bypasses the tailer. See issue #277.
 	taskByID map[string]int
 
 	// The session-level failure fold, mirroring the tailer's applySessionError
@@ -163,32 +158,34 @@ func newSessionFold(cwd string) *sessionFold {
 
 // row records that one stored row, written at timeUpdated (epoch ms), exists.
 func (f *sessionFold) row(timeUpdated int64) {
-	f.hasData = true
 	trackTimestampRange(time.UnixMilli(timeUpdated), &f.firstTS, &f.lastTS)
 }
 
-// observe parses one row and folds its event in, returning the event, or nil
-// for a row the parser skips.
-func (f *sessionFold) observe(raw map[string]interface{}) *tailer.ParsedEvent {
+// observe parses one row and folds its event in.
+func (f *sessionFold) observe(raw map[string]interface{}) {
 	ev := f.parser.ParseLine(raw)
 	if ev == nil || ev.Skip {
-		return nil
+		return
 	}
+	m := f.metrics
 
-	f.lastEventType = ev.EventType
+	m.LastEventType = ev.EventType
+	if ev.ModelName != "" {
+		m.ModelName = tailer.NormalizeModelName(ev.ModelName)
+	}
 	applySessionError(ev, &f.sessionErr)
 
 	applyToolTracking(ev, &f.openTools)
-	tailer.ApplyTaskDeltas(ev.TaskDeltas, &f.tasks, f.taskByID)
+	tailer.ApplyTaskDeltas(ev.TaskDeltas, &m.Tasks, f.taskByID)
 	// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
 	// `todowrite` is a full-list replace by OpenCode semantics, so a
 	// snapshot is authoritative for both pruning (todos removed from
 	// the call vanish from metrics.Tasks) and status reversions the
 	// delta path skips by design. reconcileTaskSnapshot no-ops when
 	// there is no snapshot or no tasks yet.
-	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &f.tasks, &f.taskByID)
-	applyContribution(ev.Contribution, &f.cumInput, &f.cumOutput, &f.cumCacheRead, &f.cumCost)
-	trackTokensAndText(ev, f.metrics, &f.lastAssistantText)
+	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &m.Tasks, &f.taskByID)
+	applyContribution(ev.Contribution, &m.CumInputTokens, &m.CumOutputTokens, &m.CumCacheReadTokens, &m.EstimatedCostUSD)
+	trackTokensAndText(ev, m, &m.LastAssistantText)
 	f.confidence.Observe(ev.Hedge)
 
 	// Track the latest task-estimate marker (issue #558) — mirrors the
@@ -197,27 +194,19 @@ func (f *sessionFold) observe(raw map[string]interface{}) *tailer.ParsedEvent {
 	// tailer, including the tool-result guard): only markers after the
 	// last user message count.
 	applyTaskEstimateTracking(ev, &f.lastTaskEstimate, &f.firstTaskEstimate)
-	return ev
 }
 
 // result is the fold's SessionMetrics, or nil when the session has no rows
 // yet.
 func (f *sessionFold) result() *session.SessionMetrics {
-	if !f.hasData {
+	if f.firstTS.IsZero() {
 		return nil
 	}
 	metrics := f.metrics
-	metrics.LastEventType = f.lastEventType
 	metrics.HasOpenToolCall = len(f.openTools) > 0
 	metrics.OpenToolCallCount = len(f.openTools)
 	metrics.LastOpenToolNames = openToolNamesFrom(f.openTools)
-	metrics.LastAssistantText = f.lastAssistantText
-	metrics.EstimatedCostUSD = f.cumCost
-	metrics.CumInputTokens = f.cumInput
-	metrics.CumOutputTokens = f.cumOutput
-	metrics.CumCacheReadTokens = f.cumCacheRead
 	metrics.ElapsedSeconds = int64(f.lastTS.Sub(f.firstTS).Seconds())
-	metrics.Tasks = f.tasks
 	metrics.SessionError = convertSessionError(f.sessionErr)
 	session.ApplyExecutionConfidence(metrics, f.confidence)
 

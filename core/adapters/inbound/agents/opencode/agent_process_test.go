@@ -11,22 +11,16 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
-// matchesArgv answers what Agent().Process.Match would for argv: a
-// CommandPattern is matched against the space-joined command line, as
-// processlifecycle's Linux observer and macOS `pgrep -f` match it; an
-// ExactName against the executable's base name, which is what `pgrep -x`
-// compares.
+// matchesArgv answers what Agent().Process.Match would for argv: the
+// CommandPattern against the space-joined command line, as processlifecycle's
+// Linux observer and macOS `pgrep -f` match it.
 func matchesArgv(t *testing.T, argv []string) bool {
 	t.Helper()
-	switch m := Agent().Process.Match.(type) {
-	case agent.CommandPattern:
-		return m.Regex.MatchString(strings.Join(argv, " "))
-	case agent.ExactName:
-		return filepath.Base(argv[0]) == m.Name
-	default:
-		t.Fatalf("unexpected matcher %T", m)
-		return false
+	m, ok := Agent().Process.Match.(agent.CommandPattern)
+	if !ok {
+		t.Fatalf("opencode's matcher is %T, want a CommandPattern", Agent().Process.Match)
 	}
+	return m.Regex.MatchString(strings.Join(argv, " "))
 }
 
 // TestProcessMatch_ClientArgvShapes is #2106's red-first matcher table. A
@@ -61,7 +55,7 @@ func TestProcessMatch_ClientArgvShapes(t *testing.T) {
 		{[]string{"python3", "/x/tui-detach.py", "/x/shim/opencode"}, false},
 		{[]string{"sh", "-c", "sleep 20; echo /x/shim/opencode"}, false},
 	} {
-		got := matchesArgv(t, c.argv) && (sessionHost == nil || !sessionHost(c.argv))
+		got := matchesArgv(t, c.argv) && !sessionHost(c.argv)
 		if got != c.client {
 			t.Errorf("client(%q) = %t, want %t", c.argv, got, c.client)
 		}

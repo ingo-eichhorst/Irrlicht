@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 
@@ -148,14 +147,15 @@ func setToRunningTool(t *testing.T, db *sql.DB, sessionID string) {
 }
 
 // drainNow returns every event already buffered on ch. scanSessions
-// broadcasts synchronously, so after it returns its events are buffered.
+// broadcasts before it returns (a non-blocking send into the subscriber's
+// 64-slot buffer, which these tests never fill), so nothing is waited for.
 func drainNow(ch <-chan agent.Event) []agent.Event {
 	var evs []agent.Event
 	for {
 		select {
 		case ev := <-ch:
 			evs = append(evs, ev)
-		case <-time.After(20 * time.Millisecond):
+		default:
 			return evs
 		}
 	}

@@ -1,22 +1,19 @@
 package opencode
 
 import (
-	"encoding/json"
 	"testing"
 
 	"irrlicht/core/pkg/tailer"
 )
 
-// v2Row decodes one session_message row into the map ParseLine takes: the
-// row's data with its `type` column added, which is how the 2.x metrics path
-// builds it.
+// v2Row decodes one session_message row into the map ParseLine takes, with
+// the 2.x metrics path's own builder.
 func v2Row(t *testing.T, typ, data string) map[string]interface{} {
 	t.Helper()
-	var raw map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &raw); err != nil {
-		t.Fatalf("fixture row %s: %v", data, err)
+	raw, ok := buildV2MessageRaw(typ, data, fixtureDir, 1)
+	if !ok {
+		t.Fatalf("fixture row %s does not parse", data)
 	}
-	raw["type"] = typ
 	return raw
 }
 

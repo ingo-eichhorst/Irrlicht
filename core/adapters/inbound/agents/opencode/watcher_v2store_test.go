@@ -141,10 +141,10 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 	}
 }
 
-// TestScanSessions_LogsTheStandDownOncePerTransition pins the log contract the
-// stand-down adds: one line when the store turns 2.x, not one per scan — the
+// TestScanSessions_LogsTheSchemaOncePerTransition pins the log contract the
+// schema switch adds: one line when the store turns 2.x, not one per scan — the
 // watcher scans on every WAL write.
-func TestScanSessions_LogsTheStandDownOncePerTransition(t *testing.T) {
+func TestScanSessions_LogsTheSchemaOncePerTransition(t *testing.T) {
 	w, db := setupTestDB(t)
 	createV2Schema(t, db)
 	logs := captureStdLog(t)
@@ -154,7 +154,7 @@ func TestScanSessions_LogsTheStandDownOncePerTransition(t *testing.T) {
 	}
 
 	if n := strings.Count(logs.String(), "session_v2"); n != 1 {
-		t.Errorf("stand-down logged %d time(s) over three scans, want exactly once:\n%s", n, logs.String())
+		t.Errorf("schema switch logged %d time(s) over three scans, want exactly once:\n%s", n, logs.String())
 	}
 }
 

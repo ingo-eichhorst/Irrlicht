@@ -58,15 +58,8 @@ func queryV2SessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetric
 		}
 		fold.row(timeUpdated)
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &raw); err != nil {
-			continue
-		}
-		raw["type"] = typ
-		raw["_cwd"] = directory
-		raw["_ts"] = float64(timeUpdated)
-		if ev := fold.observe(raw); ev != nil && ev.ModelName != "" {
-			fold.metrics.ModelName = tailer.NormalizeModelName(ev.ModelName)
+		if raw, ok := buildV2MessageRaw(typ, data, directory, timeUpdated); ok {
+			fold.observe(raw)
 		}
 	}
 	// A session with no step yet — a failed one can end without any — names
@@ -93,6 +86,20 @@ func queryV2SessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetric
 type v2Totals struct {
 	cost                                 float64
 	input, output, cacheRead, cacheWrite int64
+}
+
+// buildV2MessageRaw decodes one session_message row into the map
+// Parser.ParseLine takes: the row's data JSON with its `type` column added and
+// the same synthetic context keys buildPartRaw gives a 1.x part. ok is false
+// when the data does not parse.
+func buildV2MessageRaw(typ, data, cwd string, timeUpdated int64) (raw map[string]interface{}, ok bool) {
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return nil, false
+	}
+	raw["type"] = typ
+	raw["_cwd"] = cwd
+	raw["_ts"] = float64(timeUpdated)
+	return raw, true
 }
 
 // modelRefID reads the id out of session_v2.model, a JSON model reference, or

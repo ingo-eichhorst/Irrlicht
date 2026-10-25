@@ -81,9 +81,9 @@ type Watcher struct {
 	liveCWDs func() map[string]struct{}
 
 	// sawV2Store is the schema the previous scan saw: true once the store
-	// carries `session_v2` (#2105). Read and written only by scanSessions,
-	// so the reader switch is logged on a transition rather than on every
-	// scan.
+	// carries `session_v2` (#2105). Read and written only by storeSchema, on
+	// scanSessions' goroutine, so the reader switch is logged on a transition
+	// rather than on every scan.
 	sawV2Store bool
 }
 
@@ -283,7 +283,7 @@ func (w *Watcher) scanSessions() {
 		return
 	}
 
-	sessions, err := w.querySessions(db)
+	sessions, err := w.querySessions(db, v1SessionsQuery)
 	if err != nil {
 		log.Printf("opencode: db.Query(session): %v", err)
 		return
@@ -366,31 +366,26 @@ func (w *Watcher) shouldScan() bool {
 	return time.Since(w.lastScan) >= w.minScanGap
 }
 
-// querySessions queries sessions updated within maxAge (or all if maxAge=0)
-// and scans the matching rows. We use time_updated to find both new sessions
-// and recently active ones.
-func (w *Watcher) querySessions(db *sql.DB) ([]sessionRow, error) {
-	var rows *sql.Rows
-	var err error
+// v1SessionsQuery lists the 1.x sessions updated at or after its one
+// argument, a cutoff in epoch ms (0 for no limit).
+const v1SessionsQuery = `
+	SELECT id, directory, time_updated, parent_id
+	FROM session
+	WHERE time_archived IS NULL
+	  AND time_updated >= ?
+	ORDER BY time_updated DESC
+	LIMIT 200
+`
+
+// querySessions runs a sessions query — v1SessionsQuery or v2SessionsQuery —
+// with the maxAge cutoff (none when maxAge is 0) and scans the matching rows.
+// time_updated finds both new sessions and recently active ones.
+func (w *Watcher) querySessions(db *sql.DB, query string) ([]sessionRow, error) {
+	cutoff := int64(0)
 	if w.maxAge > 0 {
-		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
-		rows, err = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			  AND time_updated >= ?
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`, cutoff)
-	} else {
-		rows, err = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`)
+		cutoff = time.Now().Add(-w.maxAge).UnixMilli()
 	}
+	rows, err := db.Query(query, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +397,7 @@ func (w *Watcher) querySessions(db *sql.DB) ([]sessionRow, error) {
 			sessions = append(sessions, s)
 		}
 	}
-	return sessions, nil
+	return sessions, rows.Err()
 }
 
 // scanSessionRow reads one session row. Applies the maxAge cutoff a second
@@ -451,21 +446,44 @@ func (w *Watcher) maybeEmitNewSession(s sessionRow, cur *sessionCursor, live map
 		cur.lastTS = s.timeUpdated
 		return
 	}
-	// TranscriptPath encodes the session ID so MetricsProvider
-	// (opencode/metrics.go ComputeMetrics) can extract it via
-	// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
-	// at the WAL (updated on every write), not the checkpoint-only
-	// main DB.
-	walPath := w.transcriptPathFor(s.id)
+	w.emitNewSession(s)
+	cur.emitted = true
+}
+
+// emitNewSession, emitActivity and emitRemoved build the three events both
+// readers emit, so the payload has one spelling. TranscriptPath encodes the
+// session ID so MetricsProvider (opencode/metrics.go ComputeMetrics) can
+// extract it via parseTranscriptPath; its WAL suffix routes
+// isStaleTranscript() at the WAL (updated on every write), not the
+// checkpoint-only main DB.
+func (w *Watcher) emitNewSession(s sessionRow) {
 	w.broadcast(agent.Event{
 		Type:            agent.EventNewSession,
 		SessionID:       s.id,
 		ProjectDir:      filepath.Base(s.directory),
-		TranscriptPath:  walPath,
+		TranscriptPath:  w.transcriptPathFor(s.id),
 		CWD:             s.directory,
 		ParentSessionID: s.parentID,
 	})
-	cur.emitted = true
+}
+
+func (w *Watcher) emitActivity(sessionID, directory string, terminal bool) {
+	w.broadcast(agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sessionID,
+		ProjectDir:     filepath.Base(directory),
+		TranscriptPath: w.transcriptPathFor(sessionID),
+		CWD:            directory,
+		Terminal:       terminal,
+	})
+}
+
+func (w *Watcher) emitRemoved(sessionID string) {
+	w.broadcast(agent.Event{
+		Type:           agent.EventRemoved,
+		SessionID:      sessionID,
+		TranscriptPath: w.transcriptPathFor(sessionID),
+	})
 }
 
 // gcExpiredCursors drops cursor entries whose most recent observation
@@ -523,12 +541,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if !known {
 			continue
 		}
-		walPath := w.transcriptPathFor(id)
-		w.broadcast(agent.Event{
-			Type:           agent.EventRemoved,
-			SessionID:      id,
-			TranscriptPath: walPath,
-		})
+		w.emitRemoved(id)
 		delete(w.cursors, id)
 	}
 }
@@ -606,21 +619,14 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 	acc.updateCursor(cur, lastTS)
 
 	if acc.hasActivity {
-		w.broadcast(agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sessionID,
-			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.transcriptPathFor(sessionID),
-			CWD:            directory,
-			Terminal:       acc.hasTerminal,
-		})
+		w.emitActivity(sessionID, directory, acc.hasTerminal)
 	}
 }
 
-// partScanAccumulator folds one scanParts pass over the part/message-joined
-// rows into the final hasActivity/hasTerminal/maxSeen/seenIDs state, keeping
-// scanParts itself a flat pipeline of query → accumulate → update cursor →
-// emit.
+// partScanAccumulator folds one pass over a session's new rows — scanParts'
+// 1.x parts or scanV2Messages' 2.x messages — into the final
+// hasActivity/hasTerminal/maxSeen/seenIDs state, keeping each scan a flat
+// pipeline of query → accumulate → update cursor → emit.
 type partScanAccumulator struct {
 	maxSeen     int64
 	hasActivity bool
@@ -628,10 +634,8 @@ type partScanAccumulator struct {
 	seenIDs     map[string]struct{}
 }
 
-// scanRow reads one part/message-joined row and folds it into the
-// accumulator, skipping parts already seen at the current cursor timestamp
-// (same-ms race, tracked via cur.seenIDs) and tracking dedup IDs as the
-// timestamp moves forward.
+// scanRow reads one part/message-joined row, observes it, and marks the turn
+// terminal when the part or its message ends it.
 func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS int64) {
 	var partID, partData, msgData string
 	var timeUpdated int64

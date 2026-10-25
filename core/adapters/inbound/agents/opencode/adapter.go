@@ -59,14 +59,11 @@ const (
 	storeName   = "opencode.db"
 )
 
-// dbRelPath is the default store relative to $HOME.
-const dbRelPath = dataRelPath + "/" + storeName
-
 // StorePath is the absolute path of the OpenCode SQLite database the daemon
 // reads — the ONE resolver both the watcher (which tails it) and the hook
 // receiver (which composes a session key from it) go through.
 //
-// A single function rather than two `filepath.Join(home, dbRelPath)` call sites
+// A single function rather than two call sites composing the path each
 // for the same reason pi's Source() is a function: the hook receiver's key and
 // the watcher's key must be the same string or they are two sessions, and a
 // second, independently-written composition is exactly the drift #1361 records.
@@ -85,14 +82,11 @@ const dbRelPath = dataRelPath + "/" + storeName
 // stable store only.
 func StorePath() string {
 	db := os.Getenv("OPENCODE_DB")
-	if db == ":memory:" {
-		db = ""
+	if db == "" || db == ":memory:" {
+		db = storeName
 	}
 	if filepath.IsAbs(db) {
 		return db
-	}
-	if db == "" {
-		db = storeName
 	}
 	return filepath.Join(dataDir(), db)
 }

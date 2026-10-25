@@ -32,15 +32,6 @@ const (
 	v2TypeIdle      = "idle"
 )
 
-// isV2Message reports whether raw is a 2.x session_message row.
-func isV2Message(raw map[string]interface{}) bool {
-	switch raw["type"] {
-	case v2TypeUser, v2TypeAssistant, v2TypeIdle:
-		return true
-	}
-	return false
-}
-
 // v2State is what the 2.x branch carries from one row to the next within one
 // pass over a session.
 type v2State struct {
@@ -52,8 +43,9 @@ type v2State struct {
 	stepError map[string]interface{}
 }
 
-// parseV2Message parses one 2.x session_message row.
-func (p *Parser) parseV2Message(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
+// parseV2Message parses raw into ev when it is a 2.x session_message row,
+// and reports whether it was one.
+func (p *Parser) parseV2Message(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	switch raw["type"] {
 	case v2TypeUser:
 		ev.EventType = "user_message"
@@ -63,8 +55,10 @@ func (p *Parser) parseV2Message(raw map[string]interface{}, ev *tailer.ParsedEve
 		p.parseV2Assistant(raw, ev)
 	case v2TypeIdle:
 		p.parseV2Idle(raw, ev)
+	default:
+		return false
 	}
-	return ev
+	return true
 }
 
 // parseV2Assistant reads one step. It is "assistant_message" whatever the
@@ -157,13 +151,10 @@ func v2SessionError(idleErr interface{}, stepErr map[string]interface{}) *tailer
 	if class, _ := e["type"].(string); class != "" {
 		se.Class = class
 	}
-	if msg, _ := e["message"].(string); msg != "" {
+	if msg := opencodeErrorMessage(e); msg != "" {
 		se.Message = msg
 	}
-	if status, ok := e["status"].(float64); ok {
-		code := int(status)
-		se.HTTPStatus = &code
-	}
+	se.HTTPStatus = tailer.OptInt(e, "status")
 	return se
 }
 
@@ -171,18 +162,9 @@ func v2SessionError(idleErr interface{}, stepErr map[string]interface{}) *tailer
 // sum of all five — the context the step left behind. Input does not include
 // the cached prompt: a sandbox step reported input 45 beside cache.read 7456.
 func v2Tokens(tokens map[string]interface{}) *tailer.TokenSnapshot {
-	count := func(m map[string]interface{}, key string) int64 {
-		v, _ := m[key].(float64)
-		return int64(v)
-	}
-	cache, _ := tokens["cache"].(map[string]interface{})
-	snap := &tailer.TokenSnapshot{
-		Input:         count(tokens, "input"),
-		Output:        count(tokens, "output"),
-		CacheRead:     count(cache, "read"),
-		CacheCreation: count(cache, "write"),
-	}
-	snap.Total = snap.Input + snap.Output + count(tokens, "reasoning") + snap.CacheRead + snap.CacheCreation
+	snap := tokenSnapshot(tokens)
+	reasoning, _ := tokens["reasoning"].(float64)
+	snap.Total = snap.Input + snap.Output + int64(reasoning) + snap.CacheRead + snap.CacheCreation
 	return snap
 }
 
