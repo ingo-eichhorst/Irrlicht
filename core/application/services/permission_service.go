@@ -935,6 +935,11 @@ func (s *PermissionService) runEffects(effects []pendingEffect) int {
 // because planAnswerLocked re-runs the effect when a re-answer finds a
 // recorded failure, the refusal's own advice — upgrade the CLI and grant again
 // — is literally the gesture that retries it.
+//
+// A declared ceiling (VersionGate.Max, issue #2105) is checked in the same
+// place and refuses the same way, with one addition: a ceiling refusal also
+// removes the file an earlier install left behind (removeAfterCeilingRefusal).
+// A floor refusal removes nothing.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
@@ -989,10 +994,11 @@ func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 }
 
 // hookVersionRefusal resolves the installed upstream CLI version for a
-// permission that declares a floor and returns a non-nil error when the
-// install must not proceed. It returns nil for every permission that declares
-// no floor, which is every non-hook permission and any hook adapter that has
-// not opted in.
+// permission that declares a version bound — a floor, a ceiling (#2105), or
+// both — and returns a non-nil error when the install must not proceed: a
+// *ceilingRefusal at or above the ceiling, a plain error below the floor. It
+// returns nil for every permission that declares neither bound, which is every
+// non-hook permission and any hook adapter that has not opted in.
 //
 // Resolution prefers the adapter's own passive signal over running anything:
 // Codex reads cli_version out of the transcript it is already tailing, which
