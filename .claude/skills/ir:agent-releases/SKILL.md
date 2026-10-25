@@ -71,11 +71,23 @@ you verified against, since it may lag the newest release.
 - **Aider is effectively dormant** — no release since 2026-02-12, 5 commits in the 2.5 months before 2026-07-15. Safe to check every few runs rather than every run.
 
 #### OpenCode
-- Check: `https://github.com/anomalyco/opencode/releases` — **`sst/opencode` redirects here** (repo transferred; same project/history)
-- npm package remains `opencode-ai`; binary still `opencode`
+- Repo: `https://github.com/anomalyco/opencode` — **`sst/opencode` redirects here** (repo transferred; same project/history)
+- **Two major lines ship from this one repo, and they publish through different channels.** Sweep V1 and V2 separately; a V1-only sweep sees no V2 version at all.
+
+**V1 (1.x)**
+- Check: `https://github.com/anomalyco/opencode/releases` — authoritative for V1 only (of its 882 releases on 2026-10-25, 876 are `v0.*`/`v1.*`, two are unprefixed `0.0.x`, four are `pr-*` screenshot/video tags, and none is 2.x)
+- npm package for V1 remains `opencode-ai` (`npm view opencode-ai dist-tags.latest` → `1.19.4` on 2026-10-25); V1 binary still `opencode`
 - Focus on: session **SQLite DB** schema (`~/.local/share/opencode/opencode.db`), process name, config file changes
 - Note: sessions have been SQLite (drizzle) since ~2026-02-14, **not** JSON files. Legacy JSON storage still exists in `packages/opencode/src/storage/storage.ts` but `session.ts` no longer routes through it — do not mistake the leftover for live storage.
 - The DB filename is channel-scoped upstream (`opencode-<channel>.db`); stable channels (`latest`/`beta`/`prod`) get plain `opencode.db` — see `packages/core/src/database/database.ts`
+
+**V2 (2.x)** — sources verified 2026-10-25
+- ⚠️ **V2 has no GitHub releases.** `gh api --paginate 'repos/anomalyco/opencode/releases?per_page=100' --jq '.[].tag_name' | grep -c '^v2'` → `0` of 882 releases on 2026-10-25 (newest release v1.19.4), and `gh api repos/anomalyco/opencode/releases/tags/v2.1.4` → 404 although tag `v2.1.4` exists. Use the sources below instead.
+- npm: **`@opencode/cli`** — `npm view @opencode/cli version time` (2.0.0 published 2026-09-11; `latest` was `2.1.4` on 2026-10-25). It installs two bins, `opencode` **and** `opencode2`, both pointing to `bin/opencode.exe`.
+- Tags: `gh api repos/anomalyco/opencode/git/matching-refs/tags/v2 --jq '.[].ref' | sed 's#refs/tags/##' | sort -V` (38 tags, v2.0.0–v2.1.4, on 2026-10-25). The API returns them in lexical order — `v2.0.9` comes back after `v2.0.32` — so always pipe through `sort -V` before taking the newest. ⚠️ Do not list them with `tags?per_page=N`: that endpoint's first page held only `vscode-v*` tags and no V2 tag.
+- Release notes: `https://raw.githubusercontent.com/anomalyco/opencode/dev/CHANGELOG.md` ("Release notes for OpenCode V2, newest first"). Newest entry: `curl -fsS https://raw.githubusercontent.com/anomalyco/opencode/dev/CHANGELOG.md | awk '/^## v2/ && !f {print; f=1}'` → `## v2.1.4 — 2026-10-23` on 2026-10-25. Do not shorten the `awk` to `grep -m1` or `head`: they close the pipe early and curl then exits 56. Read it from `dev`, not from a tag — a tag's own copy is one release behind (the copy at `v2.1.4` stops at v2.1.3), and at `v1.19.4` the file is a 404. Coverage is partial: the file starts at v2.0.26 (2026-10-08), so 28 of the 38 tags have no entry (v2.0.0–v2.0.25, plus v2.0.31 and v2.1.1 inside its range). Do not guess at missing entries; diff the tags instead.
+- Homebrew Core: `Formula/o/opencode.rb` builds from the V2 tags (its `url` was `https://github.com/anomalyco/opencode/archive/refs/tags/v2.1.4.tar.gz` on 2026-10-25). That is why a `brew upgrade` moves a Homebrew user from 1.x to 2.x with no GitHub release to announce it.
+- Focus on: the store tables `session_v2`/`session_message`, the `{id, setup}` plugin API, `serve --service` + `service.json`, and the `permission.*`/`session.execution.*` events — the upstream surfaces measured live on 2.1.4 in https://github.com/ingo-eichhorst/Irrlicht/issues/2104#issuecomment-6397816103
 
 #### Gemini CLI — ⚠️ scheduled for deprecation in irrlicht v0.7
 - **Deprecation scheduled (decided 2026-08-20, at v0.5.10).** The maintainer can no longer
