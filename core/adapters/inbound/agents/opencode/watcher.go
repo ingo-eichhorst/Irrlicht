@@ -203,13 +203,24 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return fmt.Errorf("opencode watcher: watch %s: %w", dbDir, err)
 	}
 
-	// trailing fires once after a store write the debounce dropped, so the
-	// last write of a burst is still scanned. Without it a turn end landing
-	// within minScanGap of the previous scan waited for some later write —
-	// measured live in #2106: an opencode2 TUI's idle row at 1792958760804
-	// reached the daemon only with the next unrelated write, 8.7 s later.
-	// TestWatch_AWriteInsideTheDebounceGapIsStillScanned pins it.
-	var trailing <-chan time.Time
+	// Every scan after the initial one goes through `next`, a timer armed by
+	// the first store write after a scan to fire once minScanGap has passed
+	// since that scan (at once when it already has). Writes landing while it
+	// is armed are covered by it, so the last write of a burst is always
+	// scanned and scans stay at most one per minScanGap.
+	//
+	// Before #2106 a write within the gap was dropped and nothing scanned
+	// again until some later write — measured live: an opencode2 TUI's idle
+	// row (1792958760804) reached the daemon only with the next unrelated
+	// write, 8.7 s later. A first fix kept the immediate scan beside a
+	// separate trailing timer; a debug-logged live run then showed an
+	// immediate scan and the timer both firing at 21:36:37 and the turn's
+	// Terminal activity only at 21:36:54, 17 s after its idle row — which is
+	// what a timer firing within the gap of the immediate scan does, since
+	// scanSessions returns early inside the gap. One timer for every scan
+	// leaves no second path to race. TestWatch_AWriteInsideTheDebounceGapIsStillScanned
+	// pins the dropped write.
+	var next <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -218,23 +229,33 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if !w.isStoreWrite(ev) {
-				continue
+			if w.isStoreWrite(ev) && next == nil {
+				next = time.After(w.untilNextScan())
 			}
+		case <-next:
+			next = nil
 			if w.shouldScan() {
 				w.scanSessions()
-			} else if trailing == nil {
-				trailing = time.After(w.minScanGap)
+			} else {
+				next = time.After(w.untilNextScan())
 			}
-		case <-trailing:
-			trailing = nil
-			w.scanSessions()
 		case _, ok := <-watcher.Errors:
 			if !ok {
 				return nil
 			}
 		}
 	}
+}
+
+// untilNextScan is how long until minScanGap has passed since the last scan,
+// or 0 when it already has.
+func (w *Watcher) untilNextScan() time.Duration {
+	w.scanMu.Lock()
+	defer w.scanMu.Unlock()
+	if d := w.minScanGap - time.Since(w.lastScan); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // isStoreWrite reports whether ev is a write to the database or its WAL.
@@ -284,7 +305,9 @@ func (w *Watcher) scanSessions() {
 	if !w.shouldScan() {
 		return
 	}
+	w.scanMu.Lock()
 	w.lastScan = time.Now()
+	w.scanMu.Unlock()
 
 	db, err := sqlitero.Open(w.dbPath)
 	if err != nil {
