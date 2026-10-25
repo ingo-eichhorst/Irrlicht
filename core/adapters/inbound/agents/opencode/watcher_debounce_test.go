@@ -101,8 +101,9 @@ func (w *Watcher) tracks(sessionID string) bool {
 // armed by W1 fired inside the gap of the immediate scan W2 caused, so
 // scanSessions returned early, and W3 — the idle row, landing between them —
 // was never scanned. Seen red against that loop (c32186fc5's watcher.go via
-// `go test -overlay`): "was never scanned (waited 4.0s)" in 3 of 3 runs, by
-// this PR's final reviewer and again before committing.
+// `go test -overlay`) in 3 of 3 runs, by this PR's final reviewer at a 1 s gap
+// and again at the 2 s gap below, which widens the windows the old loop's
+// race needs.
 //
 // The writes are placed relative to the admitting scan S1, read off the
 // EventNewSession at 2 ms resolution. If a loaded host oversleeps the
@@ -110,7 +111,7 @@ func (w *Watcher) tracks(sessionID string) bool {
 // it never fails the single-timer loop, which scans any write within one
 // minScanGap of the scan before it.
 func TestWatch_AWriteAfterAnImmediateScanIsStillScanned(t *testing.T) {
-	const gap = time.Second
+	const gap = 2 * time.Second
 	w, db := newV2Store(t)
 	w.minScanGap = gap
 	db.SetMaxOpenConns(1)
@@ -155,11 +156,14 @@ func TestWatch_AWriteAfterAnImmediateScanIsStillScanned(t *testing.T) {
 	drainNow(ch)
 
 	at := func(d time.Duration) { time.Sleep(time.Until(s1.Add(d))) }
-	at(300 * time.Millisecond) // W1, inside S1's gap
+	// The old loop's timer, armed by W1, fires at S1+2.5 s: W2 must land
+	// after S1's gap and before that (a 500 ms window), W3 between W2 and
+	// that (200 ms).
+	at(500 * time.Millisecond) // W1, inside S1's gap
 	execAll(t, db, poke)
-	at(1100 * time.Millisecond) // W2, past S1's gap
+	at(2200 * time.Millisecond) // W2, past S1's gap
 	execAll(t, db, poke)
-	at(1150 * time.Millisecond) // W3, the idle row, inside W2's scan's gap
+	at(2300 * time.Millisecond) // W3, the idle row, inside W2's scan's gap
 	putBack(t, db, sesPermission, "seq > 5")
 	ended := time.Now()
 	for {
