@@ -27,29 +27,10 @@ import (
 //   - a FRESH 2.x store has `session_v2` and no `session`, `message` or `part`
 //     table at all (#2105's issue body).
 //
-// Only the presence of `session_v2` matters to the stand-down, so the table is
-// created with a handful of its real columns rather than all 36 (`SELECT
-// count(*) FROM pragma_table_info('session_v2')` against that store).
-const createSessionV2 = `CREATE TABLE session_v2 (
-	id TEXT PRIMARY KEY,
-	project_id TEXT NOT NULL,
-	directory TEXT NOT NULL,
-	version TEXT NOT NULL,
-	time_created INTEGER NOT NULL,
-	time_updated INTEGER NOT NULL,
-	time_idle INTEGER,
-	idle_outcome TEXT
-)`
-
-const createSessionMessage = `CREATE TABLE session_message (
-	id TEXT PRIMARY KEY,
-	session_id TEXT NOT NULL,
-	type TEXT NOT NULL,
-	seq INTEGER NOT NULL,
-	time_created INTEGER NOT NULL,
-	time_updated INTEGER NOT NULL,
-	data TEXT NOT NULL
-)`
+// The 2.x tables are opencode 2.1.4's real ones (testdata/v2-schema.sql): since
+// #2106 a 2.x store is READ, by its own reader, so a stand-in table with a
+// handful of its columns would fail that reader's queries instead of standing
+// for a 2.x store.
 
 func execAll(t *testing.T, db *sql.DB, stmts ...string) {
 	t.Helper()
@@ -114,7 +95,7 @@ func TestScanSessions_MigratedV2StoreAdmitsNoFrozenV1Row(t *testing.T) {
 			w, db := setupTestDB(t)
 			seedRecentV1Session(t, db, "ses_frozen", "/Users/x/project")
 			if c.migrated {
-				execAll(t, db, createSessionV2, createSessionMessage)
+				createV2Schema(t, db)
 			}
 			ch := w.Subscribe()
 			defer w.Unsubscribe(ch)
@@ -139,7 +120,7 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	execAll(t, db, createSessionV2, createSessionMessage)
+	createV2Schema(t, db)
 
 	logs := captureStdLog(t)
 	w := NewWithDBPath(dbPath, time.Hour)
@@ -164,7 +145,7 @@ func TestScanSessions_FreshV2StoreRunsNoV1SQL(t *testing.T) {
 // watcher scans on every WAL write.
 func TestScanSessions_LogsTheStandDownOncePerTransition(t *testing.T) {
 	w, db := setupTestDB(t)
-	execAll(t, db, createSessionV2)
+	createV2Schema(t, db)
 	logs := captureStdLog(t)
 
 	for i := 0; i < 3; i++ {
@@ -192,7 +173,7 @@ func TestComputeMetrics_MigratedV2StoreReadsNothing(t *testing.T) {
 			w, db := setupTestDB(t)
 			seedRecentV1Session(t, db, "ses_frozen", "/Users/x/project")
 			if c.migrated {
-				execAll(t, db, createSessionV2, createSessionMessage)
+				createV2Schema(t, db)
 			}
 
 			metrics, err := ComputeMetrics(w.transcriptPathFor("ses_frozen"), "")

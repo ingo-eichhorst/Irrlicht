@@ -40,7 +40,10 @@ func Agent() agent.Agent {
 			IconSVGDark:  iconSVGDark,
 		},
 		Process: agent.Process{
-			Match:         agent.ExactName{Name: ProcessName},
+			// A command-line pattern rather than an exact name: an opencode
+			// 2.x client can run as `opencode`, `opencode2` or `opencode.exe`
+			// (processCmdPattern, #2106).
+			Match:         agent.CommandPattern{Regex: processCmdRegex},
 			PIDForSession: DiscoverPID,
 			// SessionHostArgv rather than ExcludeArgv, as codex's app-server
 			// (#2088): the 2.x service hosts sessions rather than being
@@ -51,7 +54,9 @@ func Agent() agent.Agent {
 			// PID's argv is the service. In #2105 no root gets there, by
 			// reading rather than by a test: 1.x roots bind by cwd through
 			// DiscoverPID, and the 1.x reader stands down on any store
-			// carrying session_v2, which a 2.x service's store does.
+			// carrying session_v2, which a 2.x service's store does. Since
+			// #2106 the 2.x reader's roots bind through DiscoverPID as well,
+			// which excludes the service, so still no root binds to it.
 			// boundToSessionHost also needs a LauncherPID, which opencode
 			// does not declare.
 			SessionHostArgv: IsServiceArgv,
@@ -71,10 +76,17 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session database",
 				FeatureUnlocked: "Session list, timeline, cost & token metrics",
-				Touches:         "Reads ~/.local/share/opencode/opencode.db (read-only polling) and the type and account-id claim of the openai-oauth entry in ~/.local/share/opencode/auth.json",
-				Detail: "Polls OpenCode's SQLite database at " +
-					"~/.local/share/opencode/opencode.db in read-only mode to derive " +
+				Touches:         "Reads OpenCode's database — ~/.local/share/opencode/opencode.db, or where $OPENCODE_DB or $XDG_DATA_HOME puts it (read-only polling) — the command line of running opencode processes, and the type and account-id claim of the openai-oauth entry in ~/.local/share/opencode/auth.json",
+				Detail: "Polls OpenCode's SQLite database in read-only mode to derive " +
 					"session state, cost, and token metrics. No row is ever written. " +
+					"The database is found where OpenCode itself puts it: $OPENCODE_DB " +
+					"when set (a relative name is taken inside OpenCode's data directory), " +
+					"else opencode.db in $XDG_DATA_HOME/opencode, else " +
+					"~/.local/share/opencode/opencode.db. To tell which session belongs " +
+					"to which running OpenCode, it reads the command line and working " +
+					"directory of processes named opencode, opencode2 or opencode.exe, " +
+					"which is also how it leaves OpenCode 2.x's background service " +
+					"(`opencode serve --service`) out of that match. " +
 					"To share a Codex quota reading with an OpenCode session logged into " +
 					"the SAME ChatGPT account, it also reads the openai-oauth block of " +
 					"~/.local/share/opencode/auth.json: its type, and the account-id claim " +

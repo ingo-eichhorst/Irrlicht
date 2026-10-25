@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -39,6 +38,9 @@ type Parser struct {
 	// deltas. OpenCode todos have no stable identifier, so they're keyed by
 	// `content` — the closest thing to identity.
 	todos tailer.TodoReconciler
+
+	// v2 is the opencode 2.x branch's state (parser_v2.go).
+	v2 v2State
 }
 
 // ParseLine parses a raw map representing one OpenCode part row into a
@@ -58,6 +60,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 	if cwd, ok := raw["_cwd"].(string); ok {
 		ev.CWD = cwd
+	}
+
+	// An opencode 2.x session_message row (#2106) — the 1.x reading below
+	// does not apply to it.
+	if isV2Message(raw) {
+		return p.parseV2Message(raw, ev)
 	}
 
 	partType, _ := raw["type"].(string)
@@ -238,17 +246,7 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 	// Assistant text part.
 	ev.EventType = "assistant_message"
 	if text, ok := raw["text"].(string); ok {
-		// Scan the FULL part text for the task-estimate marker (issue #558)
-		// before the display truncation below drops all but the last 200 runes.
-		if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-			ev.TaskEstimate = est
-		}
-		if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-			ev.TaskSummary = s
-		}
-		ev.AssistantText = tailer.TruncateAssistantText(text)
-		// Execution-confidence sample (#737) from the FULL text, never the display tail.
-		ev.Hedge = session.MeasureHedgingCached(text) // re-parsed every poll by the store fold
+		applyAssistantText(text, ev)
 	}
 	return ev
 }

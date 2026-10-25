@@ -22,8 +22,11 @@
 #      service cannot tell a ceiling refusal apart and removes nothing.
 #   4. VersionGate.Bounded counts only a floor as a declared bound → a
 #      ceiling-only gate installs at 2.1.4.
-#   5. the watcher scans a 2.x store anyway → a frozen 1.x row is admitted.
-#   6. ComputeMetrics reads a 2.x store anyway → it folds a frozen 1.x row.
+#   5. the watcher's schema selector picks the 1.x reader for a 2.x store →
+#      a frozen 1.x row is admitted. (#2106 replaced #2105's stand-down with a
+#      2.x reader; the selector is what keeps the 1.x reader off 2.x stores.)
+#   6. ComputeMetrics' schema selector picks the 1.x reader for a 2.x store →
+#      it folds a frozen 1.x row.
 #   7. opencode's SessionHostArgv never matches → the scanner mints a
 #      placeholder row for the service.
 #   8. --prompt is dropped from the value-taking options → `opencode --prompt
@@ -165,22 +168,22 @@ assert_go_test_goes_red \
   '^TestHookVersionGate_CeilingAloneIsEnforced$' \
   "Apply ran at 2.1.4 against a gate whose only bound is a 2.0.0 ceiling"
 
-# ── 5. the watcher scans a 2.x store anyway ──
+# ── 5. the watcher's selector reads a 2.x store with the 1.x reader ──
 assert_go_test_goes_red \
-  "scanSessions without the stand-down" \
+  "scanSessions with the schema selector forced to the 1.x reader" \
   "core/adapters/inbound/agents/opencode/watcher.go" \
-  'if w.standsDownForV2(db) {' \
-  'if w.standsDownForV2(db) && false {' \
+  $'if isV2 {\n\t\tw.scanV2(db)' \
+  $'if isV2 && false {\n\t\tw.scanV2(db)' \
   "$OPENCODE" \
   '^TestScanSessions_MigratedV2StoreAdmitsNoFrozenV1Row$' \
   "EventNewSession count = 1, want 0"
 
-# ── 6. ComputeMetrics reads a 2.x store anyway ──
+# ── 6. ComputeMetrics' selector reads a 2.x store with the 1.x reader ──
 assert_go_test_goes_red \
-  "ComputeMetrics without the stand-down" \
+  "ComputeMetrics with the schema selector forced to the 1.x reader" \
   "core/adapters/inbound/agents/opencode/metrics.go" \
-  'if isV2, err := storeIsV2(db); err != nil || isV2 {' \
-  'if isV2, err := storeIsV2(db); false && (err != nil || isV2) {' \
+  $'if isV2 {\n\t\treturn queryV2SessionMetrics(db, sid)' \
+  $'if isV2 && false {\n\t\treturn queryV2SessionMetrics(db, sid)' \
   "$OPENCODE" \
   '^TestComputeMetrics_MigratedV2StoreReadsNothing$' \
   "ComputeMetrics returned nil = false, want true"

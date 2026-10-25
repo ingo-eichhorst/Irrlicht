@@ -14,7 +14,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver; no CGo required
 
-	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/sqlitero"
 )
@@ -75,13 +74,13 @@ type Watcher struct {
 	lastArchivedCheck time.Time
 
 	// liveCWDs returns the set of directories currently owned by a live
-	// opencode process. Defaults to processlifecycle.LiveCWDs(ProcessName);
-	// overridable from tests.
+	// opencode client. Defaults to LiveClientCWDs; overridable from tests.
 	liveCWDs func() map[string]struct{}
 
 	// sawV2Store is the schema the previous scan saw: true once the store
 	// carries `session_v2` (#2105). Read and written only by scanSessions,
-	// so the stand-down is logged on a transition rather than on every scan.
+	// so the reader switch is logged on a transition rather than on every
+	// scan.
 	sawV2Store bool
 }
 
@@ -142,10 +141,10 @@ func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 }
 
 // defaultLiveCWDs returns the set of CWDs currently held by live opencode
-// processes. Failures are logged and treated as "no live processes" — the
+// clients. Failures are logged and treated as "no live processes" — the
 // scan continues but won't surface ghost sessions.
 func defaultLiveCWDs() map[string]struct{} {
-	set, err := processlifecycle.LiveCWDs(ProcessName)
+	set, err := LiveClientCWDs()
 	if err != nil {
 		log.Printf("opencode: LiveCWDs: %v", err)
 		return nil
@@ -272,7 +271,12 @@ func (w *Watcher) scanSessions() {
 	}
 	defer db.Close()
 
-	if w.standsDownForV2(db) {
+	isV2, ok := w.storeSchema(db)
+	if !ok {
+		return
+	}
+	if isV2 {
+		w.scanV2(db)
 		return
 	}
 
@@ -301,36 +305,40 @@ func (w *Watcher) scanSessions() {
 	w.gcExpiredCursors()
 }
 
-// standsDownForV2 reports whether this scan must run no 1.x SQL because the
-// store was written by opencode 2.x (#2105), logging only when that answer
-// changes.
+// storeSchema reports which reader this scan runs — the 2.x reader when the
+// store carries `session_v2`, the 1.x reader otherwise — logging only when
+// that answer changes. ok is false when the schema could not be read.
 //
-// It returns before querySessions, scanParts and emitRemovedForArchivedSessions
-// — every 1.x query this watcher issues. A FRESH 2.x store has no `session`,
-// `message` or `part` table, so those queries fail on every scan; a MIGRATED
-// one keeps the 1.x tables frozen, so they succeed and admit 1.x rows as live
-// whenever an `opencode` process — a 2.x TUI is comm `opencode` too — sits in
-// their directory. Reading 2.x sessions is #2104's P2, not this.
+// The 1.x reader never runs against a 2.x store (#2105): a FRESH 2.x store has
+// no `session`, `message` or `part` table, and a MIGRATED one keeps them
+// frozen, so 1.x queries there either fail on every scan or admit 1.x rows as
+// live whenever an `opencode` process sits in their directory. The schema is
+// read on every scan because a running daemon sees a 1.x store become a 2.x
+// one when opencode 2.x first opens it.
 //
-// A schema lookup that fails skips this scan rather than falling back to the
-// 1.x queries: a store the watcher cannot classify is the last one to run them
-// against. The next WAL write scans again.
-func (w *Watcher) standsDownForV2(db *sql.DB) bool {
+// A schema lookup that fails skips this scan rather than guessing: a store the
+// watcher cannot classify is the last one to run either reader against. The
+// next WAL write scans again.
+func (w *Watcher) storeSchema(db *sql.DB) (isV2, ok bool) {
 	isV2, err := storeIsV2(db)
 	if err != nil {
 		log.Printf("opencode: read store schema: %v — skipping this scan", err)
-		return true
+		return false, false
 	}
 	if isV2 != w.sawV2Store {
 		w.sawV2Store = isV2
 		if isV2 {
-			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — the 1.x reader "+
-				"stands down; opencode 2.x sessions are not read yet (#2104)", w.dbPath)
+			log.Printf("opencode: %s has session_v2 (an opencode 2.x store) — reading it with the 2.x reader", w.dbPath)
 		} else {
 			log.Printf("opencode: %s no longer has session_v2 — the 1.x reader resumes", w.dbPath)
 		}
+		// A cursor is a position in one reader's tables; carried across a
+		// switch it would read the other reader's rows against it.
+		w.mu.Lock()
+		w.cursors = make(map[string]*sessionCursor)
+		w.mu.Unlock()
 	}
-	return isV2
+	return isV2, true
 }
 
 // storeIsV2 reports whether the opencode store behind db was written by
@@ -627,19 +635,9 @@ func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS
 	if err := rows.Scan(&partID, &partData, &timeUpdated, &msgData); err != nil {
 		return
 	}
-	if cur != nil && timeUpdated == lastTS {
-		if _, seen := cur.seenIDs[partID]; seen {
-			return
-		}
+	if !a.observe(partID, timeUpdated, cur, lastTS) {
+		return
 	}
-	if timeUpdated > a.maxSeen {
-		a.maxSeen = timeUpdated
-		a.seenIDs = make(map[string]struct{})
-	}
-	if timeUpdated == a.maxSeen {
-		a.seenIDs[partID] = struct{}{}
-	}
-	a.hasActivity = true
 	// A turn ends via a step-finish part with a terminal reason, OR — for an
 	// aborted/errored turn — opencode records the failure on
 	// message.data.error and emits NO step-finish reason=error part, so the
@@ -651,6 +649,29 @@ func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS
 		return
 	}
 	a.hasTerminal = true
+}
+
+// observe folds one row's id and time_updated into the accumulator,
+// returning false for a row already seen at the cursor's timestamp (the
+// same-ms race, tracked via cur.seenIDs) and tracking dedup IDs as the
+// timestamp moves forward. Both readers' cursors are this (time_updated, id)
+// pair: a 1.x part and a 2.x session_message row are each rewritten in place
+// with a later time_updated.
+func (a *partScanAccumulator) observe(id string, timeUpdated int64, cur *sessionCursor, lastTS int64) bool {
+	if cur != nil && timeUpdated == lastTS {
+		if _, seen := cur.seenIDs[id]; seen {
+			return false
+		}
+	}
+	if timeUpdated > a.maxSeen {
+		a.maxSeen = timeUpdated
+		a.seenIDs = make(map[string]struct{})
+	}
+	if timeUpdated == a.maxSeen {
+		a.seenIDs[id] = struct{}{}
+	}
+	a.hasActivity = true
+	return true
 }
 
 // updateCursor advances cur to the accumulator's high-water mark: a full

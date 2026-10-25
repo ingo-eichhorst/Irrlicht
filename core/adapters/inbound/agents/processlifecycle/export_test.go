@@ -3,7 +3,9 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +42,26 @@ func (o tableObserver) FindByName(name string) ([]int, error) {
 	return pids, nil
 }
 
-func (o tableObserver) FindByCmdline(string) ([]int, error) { return nil, nil }
+// FindByCmdline matches pattern against each row's space-joined argv — the
+// Linux observer's reading of `pgrep -f` (process_linux.go) — so an adapter
+// declaring a CommandPattern runs its real pattern against the table (#2106).
+func (o tableObserver) FindByCmdline(pattern string) ([]int, error) {
+	if pattern == "" {
+		return nil, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for pid, p := range o {
+		if re.MatchString(strings.Join(p.Argv, " ")) {
+			pids = append(pids, pid)
+		}
+	}
+	sort.Ints(pids)
+	return pids, nil
+}
 func (o tableObserver) ParentPIDOf(context.Context, int) (int, error) {
 	return 0, fmt.Errorf("parent not configured")
 }
