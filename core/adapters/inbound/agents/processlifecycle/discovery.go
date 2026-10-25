@@ -14,7 +14,14 @@ import (
 // (issue #570): pure observation through the ProcessObserver seam, with
 // no session side-effects — unlike the Scanner, which emits proc-<pid>
 // pre-sessions and is therefore permission-gated.
+//
+// On linux the answer comes from one /proc walk shared by every call within
+// liveTableTTL (livetable_linux.go), so a detection pass over all adapters
+// reads /proc once instead of once per adapter and probe.
 func HasLiveProcess(m agent.ProcessMatcher) bool {
+	if live, ok := hasLiveFromTable(m); ok {
+		return live
+	}
 	var pids []int
 	var err error
 	switch v := m.(type) {
