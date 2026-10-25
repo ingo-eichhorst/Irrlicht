@@ -14,6 +14,7 @@
 package opencode
 
 import (
+	"strings"
 	"testing"
 
 	"irrlicht/core/domain/agent"
@@ -59,6 +60,41 @@ func TestHooksGate_ProbeIsOpenCodeVersion(t *testing.T) {
 	for i := range want {
 		if gate.Probe[i] != want[i] {
 			t.Fatalf("Probe = %v, want %v", gate.Probe, want)
+		}
+	}
+}
+
+// TestHooksGate_CeilingRefusesOpenCode2 is #2105's red-first defect test. On
+// main the gate was Min-only, so the 2.1.4 the sandbox's V2 binary reports
+// passed it, and the daemon wrote the 1.x plugin file that opencode 2.x rejects
+// on every location load ("Plugin must export a default definition with an id
+// and an effect or setup function", measured in #2104). 2.1.4 is the version
+// that shipped as npm `@opencode/cli` latest when this was written.
+func TestHooksGate_CeilingRefusesOpenCode2(t *testing.T) {
+	gate := hooksVersionGate(t)
+	allowed, why := gate.Permits("2.1.4")
+	if allowed {
+		t.Fatal("the hooks gate permits opencode 2.1.4, so the daemon writes a 1.x plugin " +
+			"file that opencode 2.x refuses to load on every start")
+	}
+	for _, want := range []string{"2.1.4", "2.0.0", "2.x"} {
+		if !strings.Contains(why, want) {
+			t.Errorf("refusal %q does not name %q; the user reads it as the reason "+
+				"nothing was installed", why, want)
+		}
+	}
+}
+
+// TestHooksGate_PermitsOpenCode1 is a LOCK, not a defect test: it passed before
+// #2105 and must keep passing. The newest 1.x a brew user has (1.19.4 when this
+// was written) still installs the 1.x plugin — the ceiling sits at the major
+// boundary, not below it.
+func TestHooksGate_PermitsOpenCode1(t *testing.T) {
+	gate := hooksVersionGate(t)
+	for _, v := range []string{minOpenCodeVersion, "1.19.4", "1.999.999"} {
+		if allowed, why := gate.Permits(v); !allowed {
+			t.Errorf("the hooks gate refuses opencode %s (%s); every 1.x at or above the "+
+				"floor must still install", v, why)
 		}
 	}
 }

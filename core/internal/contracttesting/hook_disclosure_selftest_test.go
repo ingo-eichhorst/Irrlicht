@@ -42,10 +42,27 @@ func correctDisclosure() HookDisclosure {
 	)
 }
 
+// correctCeilingDisclosure is correctDisclosure for a gate that also declares a
+// ceiling (#2105), with the copy rendered by hookjson.RequiresVersionRange.
+func correctCeilingDisclosure() HookDisclosure {
+	return disclosureWithGate(
+		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
+		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
+			hookjson.RequiresVersionRange(selfTestCLIName, selfTestFloor, selfTestCeiling),
+		selfTestCeilingGate(),
+	)
+}
+
 // disclosureWith builds the wiring around one Touches/Detail pair. The version
 // floor is declared on the permission (not just mentioned in the copy) because
 // the fourth obligation reads it off the declaration.
 func disclosureWith(touches, detail string) HookDisclosure {
+	return disclosureWithGate(touches, detail, selfTestGate())
+}
+
+// disclosureWithGate is disclosureWith with the declared version gate chosen by
+// the caller.
+func disclosureWithGate(touches, detail string, gate *agent.VersionGate) HookDisclosure {
 	return HookDisclosure{
 		Agent: agent.Agent{
 			Identity: agent.Identity{Name: selfTestDisclosureAgent},
@@ -55,7 +72,7 @@ func disclosureWith(touches, detail string) HookDisclosure {
 				Touches: touches,
 				Detail:  detail,
 				Apply:   func() error { return nil },
-				Writes:  &agent.ManagedUserFile{Version: selfTestGate()},
+				Writes:  &agent.ManagedUserFile{Version: gate},
 			}},
 		},
 		PermissionKey: agent.HooksPermissionKey,
@@ -151,6 +168,16 @@ func TestDisclosureArms_PassACorrectDisclosure(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := correctDisclosure()
 			mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }), "a correct disclosure")
+		})
+	}
+	// The same guard for copy that states a ceiling (#2105). It also proves
+	// hookjson.RequiresVersionRange's sentence trips none of the event-shaped
+	// or entry-count arms, which scan the whole copy.
+	for name, arm := range disclosureArms() {
+		t.Run(name+"/with_a_ceiling", func(t *testing.T) {
+			d := correctCeilingDisclosure()
+			mustBeSilent(t, observe(t, func(at armT) { arm.run(at, d) }),
+				"a correct disclosure of a gate with a ceiling")
 		})
 	}
 }
@@ -253,6 +280,27 @@ func TestDisclosureArm_StatesTheVersionFloor(t *testing.T) {
 	const what = "a declared version floor the consent copy never mentions (#1393)"
 	mustReport(t, rec, wantOf(t, "states_the_version_floor"), what)
 	mustAlsoName(t, rec, selfTestFloor, what)
+}
+
+// TestDisclosureArm_StatesTheVersionCeiling is #2105's clause of the same arm:
+// the permission declares a ceiling, and the copy states only the floor — the
+// "X or newer" sentence that reads as true on exactly the CLI the ceiling
+// refuses.
+func TestDisclosureArm_StatesTheVersionCeiling(t *testing.T) {
+	d := disclosureWithGate(
+		hookjson.EntriesTouched(selfTestConfigPath, selfTestInstalledEvents),
+		"Adds "+hookjson.EventList(selfTestInstalledEvents)+" entries. "+
+			hookjson.RequiresVersion(selfTestCLIName, selfTestFloor),
+		selfTestCeilingGate(),
+	)
+
+	rec := observe(t, func(at armT) {
+		perm, _ := disclosureUnderTest(d)
+		assertStatesVersionFloor(at, perm, disclosureText(d))
+	})
+	const what = "a declared ceiling the consent copy never mentions (#2105)"
+	mustReport(t, rec, wantOf(t, "states_the_version_floor"), what)
+	mustAlsoName(t, rec, selfTestCeiling, what)
 }
 
 // TestDisclosureArm_PermissionIsModifyKind covers the kind obligation, which is

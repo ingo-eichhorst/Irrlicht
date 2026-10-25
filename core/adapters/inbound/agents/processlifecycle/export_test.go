@@ -57,3 +57,16 @@ func (o tableObserver) HoldsForWriting(int, string) (bool, error) { return false
 func (o tableObserver) EnvOf(int, map[string]struct{}) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+
+// PollForTest runs one scan synchronously, so an external test can drive an
+// adapter's real argv predicate through the scanner without Watch's ticker
+// (#2105).
+func (s *Scanner) PollForTest() { s.poll() }
+
+// TracksPIDForTest reports whether the scanner holds pid as a live process.
+func (s *Scanner) TracksPIDForTest(pid int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.tracked[pid]
+	return ok
+}

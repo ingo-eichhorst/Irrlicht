@@ -200,16 +200,28 @@ func assertModifyKind(t reporter, key string, kind permission.Kind) {
 // Touches/Detail can keep stating one exact count and one exact list. A gate
 // that filtered events per version would make the count a range, which is the
 // hand-waving #1356 abolished.
+//
+// A declared ceiling (VersionGate.Max, #2105) is held to the same rule: at or
+// above it nothing is written AND the file an earlier install left is removed,
+// so copy that reads "X or newer" with no upper bound describes an install that
+// will not happen, on exactly the CLI the user just upgraded to.
 func assertStatesVersionFloor(t reporter, perm agent.Permission, disclosure string) {
 	t.Helper()
-	if perm.Writes == nil || perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
+	if perm.Writes == nil || perm.Writes.Version == nil {
 		return
 	}
-	if !strings.Contains(disclosure, perm.Writes.Version.Min) {
+	gate := perm.Writes.Version
+	if gate.Min != "" && !strings.Contains(disclosure, gate.Min) {
 		t.Errorf("consent copy never states the %s minimum CLI version the install is gated "+
 			"on — the user reads this text and grants, then nothing is written and the copy "+
 			"gave no hint why (#1365); render it with hookjson.RequiresVersion so it cannot "+
-			"drift from the gate", perm.Writes.Version.Min)
+			"drift from the gate", gate.Min)
+	}
+	if gate.Max != "" && !strings.Contains(disclosure, gate.Max) {
+		t.Errorf("consent copy never states the %s ceiling the install is gated on — at or "+
+			"above it nothing is written and an earlier install's file is removed, and the "+
+			"copy gave no hint (#2105); render it with hookjson.RequiresVersionRange so it "+
+			"cannot drift from the gate", gate.Max)
 	}
 }
 

@@ -54,6 +54,19 @@ func selfTestGate() *agent.VersionGate {
 	}
 }
 
+// selfTestCeiling is the exclusive ceiling the ceiling fixtures declare: a major
+// boundary above selfTestFloor, the shape opencode's [1.14.50, 2.0.0) has.
+const selfTestCeiling = "3.0.0"
+
+// selfTestCeilingGate is selfTestGate plus a correct ceiling (#2105). It is a
+// separate fixture rather than a field on selfTestGate because the disclosure
+// family shares selfTestGate, and its correct copy states no ceiling.
+func selfTestCeilingGate() *agent.VersionGate {
+	gate := selfTestGate()
+	gate.Max = selfTestCeiling
+	return gate
+}
+
 // correctVersionGate is a wiring that satisfies all five obligations. Each
 // mutation below overrides exactly one thing.
 func correctVersionGate() HookVersionGate {
@@ -91,7 +104,11 @@ func TestVersionArms_PassACorrectDeclaration(t *testing.T) {
 		"floor_covers_every_installed_event": func(at armT) {
 			assertFloorCoversEveryEvent(at, gate.Min, g.Installed, g.Since)
 		},
-		"floor_refuses_an_older_cli": func(at armT) { assertFloorRefusesOlder(at, gate) },
+		"floor_refuses_an_older_cli":  func(at armT) { assertFloorRefusesOlder(at, gate) },
+		"ceiling_refuses_a_newer_cli": func(at armT) { assertCeilingRefusesNewer(at, gate) },
+		"ceiling_refuses_a_newer_cli_with_a_ceiling": func(at armT) {
+			assertCeilingRefusesNewer(at, selfTestCeilingGate())
+		},
 		"unknown_version_fails_open": func(at armT) { assertUnknownFailsOpen(at, gate) },
 		"version_source_is_declared": func(at armT) {
 			assertVersionSourceDeclared(at, g.PermissionKey, gate)
@@ -190,6 +207,43 @@ func TestVersionArm_FloorRefusesAnOlderCLI(t *testing.T) {
 	})
 	mustReport(t, rec, "has no version below it",
 		"a floor of 0.0.0 — nothing is below it, so the obligation exercised nothing and passed")
+}
+
+// TestVersionArm_CeilingRefusesANewerCLI covers the arm's two reachable
+// mutations — the ways a DECLARATION can make a ceiling decorative (#2105):
+//
+//   - an unparseable Max: Check fails open on it, so the ceiling never refuses
+//     anything, and the stale 1.x file opencode 2.x rejects is written anyway;
+//   - a Max at or below Min: the gate refuses every version, so the install the
+//     user granted can never happen.
+//
+// Its other checks grade agent.VersionGate.Check, which no wiring can get
+// wrong; their mutation (Check ignoring Max) is in
+// tools/lib/opencode-v2-harmless-mutations_test.sh.
+func TestVersionArm_CeilingRefusesANewerCLI(t *testing.T) {
+	for name, c := range map[string]struct {
+		max, want, what string
+	}{
+		"a_ceiling_that_never_refuses": {
+			max: "three", want: "never refuses anything",
+			what: "an unparseable ceiling, which fails open on every comparison",
+		},
+		"a_ceiling_equal_to_the_floor": {
+			max: selfTestFloor, want: "is not above the floor",
+			what: "a ceiling at the floor, which refuses every version",
+		},
+		"a_ceiling_below_the_floor": {
+			max: "1.0.0", want: "is not above the floor",
+			what: "a ceiling below the floor, which refuses every version",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gate := selfTestGate()
+			gate.Max = c.max
+			rec := observe(t, func(at armT) { assertCeilingRefusesNewer(at, gate) })
+			mustReport(t, rec, c.want, c.what)
+		})
+	}
 }
 
 // TestVersionArm_UnknownVersionFailsOpen_IsALock records what this arm is,

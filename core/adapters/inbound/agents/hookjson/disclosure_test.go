@@ -47,7 +47,31 @@ func TestRequiresVersion(t *testing.T) {
 // hook entry on ClaudeCode 2.1.122+" — would fail an adapter's disclosure test
 // for a reason having nothing to do with its install.
 func TestRequiresVersion_DoesNotTripTheDisclosureContract(t *testing.T) {
-	s := RequiresVersion("Claude Code", "2.1.122")
+	for _, s := range []string{
+		RequiresVersion("Claude Code", "2.1.122"),
+		RequiresVersionRange("Claude Code", "1.14.50", "2.0.0"),
+	} {
+		assertTripsNoDisclosureArm(t, s)
+	}
+}
+
+// TestRequiresVersionRange pins the ceiling sentence (#2105): it states both
+// bounds and the removal a ceiling refusal performs, and with no ceiling it is
+// exactly RequiresVersion, so an adapter switching to it changes no copy.
+func TestRequiresVersionRange(t *testing.T) {
+	got := RequiresVersionRange("opencode", "1.14.50", "2.0.0")
+	for _, want := range []string{"opencode", "1.14.50", "2.0.0", "nothing is written", "removed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RequiresVersionRange() = %q, missing %q", got, want)
+		}
+	}
+	if got, want := RequiresVersionRange("opencode", "1.14.50", ""), RequiresVersion("opencode", "1.14.50"); got != want {
+		t.Errorf("RequiresVersionRange with no ceiling = %q, want RequiresVersion's %q", got, want)
+	}
+}
+
+func assertTripsNoDisclosureArm(t *testing.T, s string) {
+	t.Helper()
 	if regexp.MustCompile(`(\d+) hook entr(?:y|ies)`).MatchString(s) {
 		t.Errorf("version sentence %q states a hook-entry count; it would be read as the "+
 			"install's count and contradict the real one", s)

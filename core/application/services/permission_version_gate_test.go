@@ -118,6 +118,89 @@ func TestHookVersionGate_RefusesBelowFloorAndSaysWhy(t *testing.T) {
 	}
 }
 
+// TestHookVersionGate_FloorRefusalRemovesNothing is a LOCK (#2105): it passed
+// before the ceiling existed and pins that the floor stays write-free in BOTH
+// directions. A floor refusal cannot tell a stale probe — cliprobe resolves
+// /opt/homebrew/bin before PATH, so it can read a brew 1.x while the user runs
+// something else (#2105 correction 1) — from a real downgrade, and making it
+// delete would change behaviour for every hook adapter that declares a floor.
+func TestHookVersionGate_FloorRefusalRemovesNothing(t *testing.T) {
+	applied := false
+	svc, _ := newGateService()
+	p := gatedHooksPermission("2.1.122", "2.1.121", &applied)
+	uninstalls := countUninstalls(p)
+
+	grant(svc, p)
+
+	if *uninstalls != 0 {
+		t.Errorf("a FLOOR refusal called Writes.Uninstall %d time(s); only the ceiling removes "+
+			"an earlier install", *uninstalls)
+	}
+}
+
+// countUninstalls swaps p's Writes.Uninstall for one that counts its calls and
+// reports a removal, returning the counter.
+func countUninstalls(p agent.Permission) *int {
+	n := 0
+	p.Writes.Uninstall = func() (bool, error) { n++; return true, nil }
+	return &n
+}
+
+// TestHookVersionGate_CeilingAloneIsEnforced pins that a gate is "declared"
+// when it states either bound (#2105). Before the ceiling, hookVersionRefusal
+// returned early on an empty Min, so a ceiling-only gate would have been
+// skipped without a word. AssertHookVersionGate requires a floor of every hooks
+// permission, so no adapter ships this shape; the service must not depend on
+// that to enforce what is declared.
+func TestHookVersionGate_CeilingAloneIsEnforced(t *testing.T) {
+	applied := false
+	svc, _ := newGateService()
+	p := gatedHooksPermission("", "2.1.4", &applied)
+	p.Writes.Version.Max = "2.0.0"
+
+	grant(svc, p)
+
+	if applied {
+		t.Error("Apply ran at 2.1.4 against a gate whose only bound is a 2.0.0 ceiling")
+	}
+}
+
+// TestHookVersionGate_CeilingRefusesAndRemovesTheStaleArtifact is #2105's
+// red-first defect test for the service half. Before the ceiling existed a CLI
+// at or above a declared Max was installed into like any other, and the file an
+// earlier 1.x install left behind stayed for opencode 2.x to reject on every
+// load. A ceiling refusal must (a) not run Apply, (b) say why with both
+// versions, and (c) remove the earlier install through the adapter's own
+// sentinel-checked Uninstall.
+func TestHookVersionGate_CeilingRefusesAndRemovesTheStaleArtifact(t *testing.T) {
+	applied := false
+	svc, log := newGateService()
+	p := gatedHooksPermission("1.14.50", "2.1.4", &applied)
+	p.Writes.Version.Max = "2.0.0"
+	uninstalls := countUninstalls(p)
+
+	grant(svc, p)
+
+	if applied {
+		t.Error("Apply ran although the installed CLI is at or above the declared ceiling")
+	}
+	if !log.errorMentioning("2.1.4", "2.0.0") {
+		t.Errorf("no logged failure naming both the installed version and the ceiling; "+
+			"errors were %v", log.errors)
+	}
+	svc.mu.Lock()
+	reason := svc.effectErrs[effectKey("test-agent", "hooks")]
+	svc.mu.Unlock()
+	if !strings.Contains(reason, "2.1.4") || !strings.Contains(reason, "2.0.0") {
+		t.Errorf("EffectError = %q, want it to name 2.1.4 and the 2.0.0 ceiling — it is what "+
+			"both wizards render as \"granted but NOT applied, because …\"", reason)
+	}
+	if *uninstalls != 1 {
+		t.Errorf("Writes.Uninstall ran %d time(s), want 1: the file an earlier install left "+
+			"behind is what opencode 2.x rejects on every load", *uninstalls)
+	}
+}
+
 func TestHookVersionGate_InstallsAtOrAboveFloor(t *testing.T) {
 	for _, v := range []string{"2.1.122", "2.1.226", "3.0.0"} {
 		applied := false

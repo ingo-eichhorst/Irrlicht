@@ -1,7 +1,9 @@
 // hook_version.go holds the issue #1365 contract every hook-installing agent
 // adapter must satisfy: it declares the minimum upstream CLI version its
 // install requires, that floor is high enough that every event it writes
-// exists at it, and the floor actually refuses an older CLI.
+// exists at it, and the floor actually refuses an older CLI. An adapter that
+// also declares a ceiling (#2105) has it graded the same way: it parses, sits
+// above the floor, and actually refuses a newer CLI.
 //
 // It is the static half of the obligation. The runtime half — that
 // PermissionService consults the declaration before running the Apply closure
@@ -60,6 +62,9 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	})
 	t.Run("floor_refuses_an_older_cli", func(t *testing.T) {
 		assertFloorRefusesOlder(t, gate)
+	})
+	t.Run("ceiling_refuses_a_newer_cli", func(t *testing.T) {
+		assertCeilingRefusesNewer(t, gate)
 	})
 	t.Run("unknown_version_fails_open", func(t *testing.T) {
 		assertUnknownFailsOpen(t, gate)
@@ -210,6 +215,86 @@ func assertFloorRefusesOlder(t reporter, gate *agent.VersionGate) {
 				"a user cannot act on it", why, older, gate.Min)
 		}
 	}
+}
+
+// assertCeilingRefusesNewer is #2105's arm: a declared ceiling (VersionGate.Max)
+// is parseable, sits above the floor, refuses AT itself and above, and refuses
+// as a ceiling, with a reason naming the installed version and the ceiling. A
+// gate that declares no ceiling — every adapter but opencode — has nothing for
+// it to grade, and it reports nothing.
+//
+// Two of its checks grade the DECLARATION and are reachable by a wrong wiring:
+// an unparseable Max fails open on every comparison, so the ceiling never
+// refuses anything; a Max at or below Min refuses every version, so the
+// install can never happen. The rest grade agent.VersionGate.Check — domain
+// code every wiring shares, the same split this file's floor arm draws — and
+// their mutation lives in the domain: tools/lib/opencode-v2-harmless-mutations_test.sh
+// makes Check ignore Max and requires opencode's wiring of this contract to go
+// red.
+func assertCeilingRefusesNewer(t reporter, gate *agent.VersionGate) {
+	t.Helper()
+	if gate.Max == "" {
+		return
+	}
+	ceiling, ok := cliversion.Parse(gate.Max)
+	if !ok {
+		t.Errorf("declared ceiling %q is not a major.minor.patch triple; an unparseable "+
+			"ceiling fails open on every comparison, so it never refuses anything", gate.Max)
+		return
+	}
+	floor, floorOK := cliversion.Parse(gate.Min)
+	if floorOK && ceiling.Compare(floor) <= 0 {
+		t.Errorf("declared ceiling %s is not above the floor %s, so the gate refuses every "+
+			"version and the install can never happen", gate.Max, gate.Min)
+		return
+	}
+	// The ceiling itself and one step up each field: an exclusive bound that a
+	// comparison gets wrong by one shows up at the ceiling, and a field-wise
+	// comparison that is wrong at one position shows up one step above it.
+	for _, newer := range append([]cliversion.Version{ceiling}, successors(ceiling)...) {
+		bound, why := gate.Check(newer.String())
+		if bound != agent.AtOrAboveCeiling {
+			t.Errorf("gate does not refuse %s as at or above its ceiling %s (it answered %d: %q)",
+				newer, gate.Max, bound, why)
+			continue
+		}
+		if !strings.Contains(why, newer.String()) || !strings.Contains(why, gate.Max) {
+			t.Errorf("ceiling refusal %q names neither the installed version %s nor the "+
+				"ceiling %s; a user cannot act on it", why, newer, gate.Max)
+		}
+	}
+	// Exclusive means the highest version below the ceiling still installs —
+	// as long as the floor admits it at all.
+	if below, ok := justBelow(ceiling); ok && (!floorOK || below.Compare(floor) >= 0) {
+		if allowed, why := gate.Permits(below.String()); !allowed {
+			t.Errorf("gate refuses %s, below its exclusive ceiling %s (%s)", below, gate.Max, why)
+		}
+	}
+}
+
+// successors returns the version one step above v in each field.
+func successors(v cliversion.Version) []cliversion.Version {
+	return []cliversion.Version{
+		{Major: v.Major, Minor: v.Minor, Patch: v.Patch + 1},
+		{Major: v.Major, Minor: v.Minor + 1, Patch: v.Patch},
+		{Major: v.Major + 1, Minor: v.Minor, Patch: v.Patch},
+	}
+}
+
+// justBelow returns a version immediately below v: v with its lowest non-zero
+// field decremented and every field after it raised far past any real release.
+// It reports false for 0.0.0, which has nothing below it.
+func justBelow(v cliversion.Version) (cliversion.Version, bool) {
+	const wide = 1 << 20
+	switch {
+	case v.Patch > 0:
+		return cliversion.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch - 1}, true
+	case v.Minor > 0:
+		return cliversion.Version{Major: v.Major, Minor: v.Minor - 1, Patch: wide}, true
+	case v.Major > 0:
+		return cliversion.Version{Major: v.Major - 1, Minor: wide, Patch: wide}, true
+	}
+	return cliversion.Version{}, false
 }
 
 // predecessors returns every version reachable by decrementing exactly one

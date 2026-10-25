@@ -353,7 +353,14 @@ below.
   `settings.json` at any version; every hook-installing adapter now declares
   the floor the same way, by declaring
   `Version: &agent.VersionGate{Min: "x.y.z", Probe: []string{"<cli>",
-  "--version"}}` and nothing else. No roster is kept here, because this one
+  "--version"}}` and nothing else. An adapter whose artifact a newer upstream
+  major rejects also declares an exclusive ceiling, `Max` (#2105: opencode
+  declares `[1.14.50, 2.0.0)` because opencode 2.x refuses the 1.x plugin
+  file); the contract's `ceiling_refuses_a_newer_cli` arm grades it, the
+  disclosure contract requires the copy to state it
+  (`hookjson.RequiresVersionRange`), and a ceiling refusal — unlike a floor
+  refusal — also runs the permission's `Writes.Uninstall` to remove the file an
+  earlier install left behind. No roster is kept here, because this one
   is enforced rather than maintained: `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
   projection so a new hook adapter is covered by existing rather than by

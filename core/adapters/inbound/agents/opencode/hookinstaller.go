@@ -186,6 +186,19 @@ var hookEventSince = map[string]string{
 // document).
 const minOpenCodeVersion = "1.14.50"
 
+// maxOpenCodeVersion is the exclusive ceiling of the plugin this installer
+// writes (issue #2105): the first opencode version known to reject it.
+//
+// opencode 2.x (npm `@opencode/cli`, 2.1.4 when this was written) loads files
+// from `plugin/` but refuses this 1.x-shaped one on every location load — the
+// sandbox's V2 log carries `WARN failed to load plugin … Plugin must export a
+// default definition with an id and an effect or setup function` for it
+// (#2104's live verification). Installing it there is a granted permission whose
+// channel never fires plus a warning per load, so at or above this version
+// nothing is written and PermissionService removes an earlier install's file.
+// A V2-shaped plugin is #2104's P4.
+const maxOpenCodeVersion = "2.0.0"
+
 // HookEndpointPath is the daemon's opencode hook route. Exported so
 // registerHookRoutes (core/cmd/irrlichd/startup.go) and beaconroute_test.go's
 // pinned map both derive from the same segment this installer renders into the

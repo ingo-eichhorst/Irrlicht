@@ -104,12 +104,13 @@ func TestReleasedPIDs_OptInSet(t *testing.T) {
 }
 
 // TestSessionHosts_OptInSet pins which adapters declare a session host
-// (#2082): only codex, whose app-server hosts every TUI's threads. Startup
-// projects this set into SetSessionHosts, so an adapter dropping out of it
-// turns the hosted-placeholder pairing off for that adapter.
+// (#2082): codex, whose app-server hosts every TUI's threads, and opencode,
+// whose 2.x background service (`serve --service`) hosts its sessions (#2105).
+// Startup projects this set into SetSessionHosts, so an adapter dropping out of
+// it turns the hosted-placeholder pairing off for that adapter.
 func TestSessionHosts_OptInSet(t *testing.T) {
 	got := slices.Sorted(maps.Keys(agents.SessionHosts(agents.All())))
-	if want := []string{codex.AdapterName}; !reflect.DeepEqual(got, want) {
+	if want := []string{codex.AdapterName, opencode.AdapterName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("session hosts = %v, want %v", got, want)
 	}
 }
