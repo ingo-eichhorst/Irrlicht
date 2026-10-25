@@ -266,7 +266,10 @@ func assertCeilingRefusesNewer(t reporter, gate *agent.VersionGate) {
 	// That the ceiling is EXCLUSIVE — a version below it still installs — is
 	// floor_refuses_an_older_cli's first assertion, gate.Permits(gate.Min), run
 	// on this same gate: Min is below Max (checked above), so a ceiling that
-	// over-refuses reports there.
+	// over-refuses reports there. Run during #2105: Check's `known && ok`
+	// mutated to `known && (ok || true)` turned opencode's wiring red in
+	// floor_refuses_an_older_cli ("gate refuses its own floor 1.14.50") while
+	// this arm stayed green.
 }
 
 // successors returns the version one step above v in each field.
