@@ -25,7 +25,11 @@ import (
 //	           failed.
 //
 // No 1.x part type is user, assistant or idle, so the row's type alone picks
-// the branch.
+// the branch. Read off the recorded corpus: every `type` across the 100
+// replaydata/agents/opencode/**/*.jsonl files is one of compaction, patch,
+// reasoning, step-finish, step-start, text or tool (`find
+// replaydata/agents/opencode -name '*.jsonl'` piped through a JSON census of
+// the field).
 const (
 	v2TypeUser      = "user"
 	v2TypeAssistant = "assistant"

@@ -34,6 +34,9 @@
 #  11. Watch scans on a write only when the gap has passed, as before #2106,
 #      instead of arming its scan timer → a turn end written inside the
 #      debounce gap is never scanned.
+#  12. Watch scans at once when it can and keeps a separate trailing timer
+#      (this PR's first fix, c32186fc5) → a write after an immediate scan,
+#      with a timer armed earlier, is never scanned.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -239,6 +242,16 @@ assert_go_test_goes_red \
   "$OPENCODE" \
   '^TestWatch_AWriteInsideTheDebounceGapIsStillScanned$' \
   "debounce gap was never scanned"
+
+# ── 12. an immediate scan beside a trailing timer ──
+assert_go_test_goes_red \
+  "Watch with an immediate scan beside a trailing timer" \
+  "$WATCHER" \
+  $'if w.isStoreWrite(ev) && next == nil {\n\t\t\t\tnext = time.After(w.untilNextScan())\n\t\t\t}\n\t\tcase <-next:\n\t\t\tnext = nil\n\t\t\tif w.shouldScan() {\n\t\t\t\tw.scanSessions()\n\t\t\t} else {\n\t\t\t\tnext = time.After(w.untilNextScan())\n\t\t\t}' \
+  $'if w.isStoreWrite(ev) && w.shouldScan() {\n\t\t\t\tw.scanSessions()\n\t\t\t} else if w.isStoreWrite(ev) && next == nil {\n\t\t\t\tnext = time.After(w.minScanGap)\n\t\t\t}\n\t\tcase <-next:\n\t\t\tnext = nil\n\t\t\tw.scanSessions()' \
+  "$OPENCODE" \
+  '^TestWatch_AWriteAfterAnImmediateScanIsStillScanned$' \
+  "the idle row written after an immediate scan was never scanned"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-reader-mutations: $fails FAILED"

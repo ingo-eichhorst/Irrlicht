@@ -94,3 +94,83 @@ func (w *Watcher) tracks(sessionID string) bool {
 	_, ok := w.cursors[sessionID]
 	return ok
 }
+
+// TestWatch_AWriteAfterAnImmediateScanIsStillScanned pins the single scan
+// timer (#2106). Its first form kept an immediate scan beside a trailing
+// timer armed by a dropped write, and lost the write sequence below: a timer
+// armed by W1 fired inside the gap of the immediate scan W2 caused, so
+// scanSessions returned early, and W3 — the idle row, landing between them —
+// was never scanned. Seen red against that loop (c32186fc5's watcher.go via
+// `go test -overlay`): "was never scanned (waited 4.0s)" in 3 of 3 runs, by
+// this PR's final reviewer and again before committing.
+//
+// The writes are placed relative to the admitting scan S1, read off the
+// EventNewSession at 2 ms resolution. If a loaded host oversleeps the
+// windows, the old loop scans W3 too and this passes without catching it —
+// it never fails the single-timer loop, which scans any write within one
+// minScanGap of the scan before it.
+func TestWatch_AWriteAfterAnImmediateScanIsStillScanned(t *testing.T) {
+	const gap = time.Second
+	w, db := newV2Store(t)
+	w.minScanGap = gap
+	db.SetMaxOpenConns(1)
+	execAll(t, db, `PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=5000`)
+	loadV2Fixture(t, db, v2StoreRows)
+	holdBackAfter(t, db, sesPermission, 4)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = w.Watch(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	start := time.Now()
+	for !w.tracks(sesPermission) {
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Fatalf("Watch's initial scan never saw %s (%s)", sesPermission, elapsed)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	setToRunningTool(t, db, sesPermission)
+	poke := `UPDATE session_v2 SET resume_attempts = resume_attempts + 1 WHERE id = '` + sesPermission + `'`
+
+	var s1 time.Time
+	start = time.Now()
+	for s1.IsZero() {
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Fatalf("the step never admitted the session (%s)", elapsed)
+		}
+		execAll(t, db, poke)
+		until := time.Now().Add(gap + 200*time.Millisecond)
+		for time.Now().Before(until) && s1.IsZero() {
+			for _, ev := range drainNow(ch) {
+				if ev.Type == agent.EventNewSession && ev.SessionID == sesPermission {
+					s1 = time.Now()
+				}
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	drainNow(ch)
+
+	at := func(d time.Duration) { time.Sleep(time.Until(s1.Add(d))) }
+	at(300 * time.Millisecond) // W1, inside S1's gap
+	execAll(t, db, poke)
+	at(1100 * time.Millisecond) // W2, past S1's gap
+	execAll(t, db, poke)
+	at(1150 * time.Millisecond) // W3, the idle row, inside W2's scan's gap
+	putBack(t, db, sesPermission, "seq > 5")
+	ended := time.Now()
+	for {
+		for _, ev := range drainNow(ch) {
+			if ev.Type == agent.EventActivity && ev.SessionID == sesPermission && ev.Terminal {
+				return
+			}
+		}
+		if elapsed := time.Since(ended); elapsed > 4*gap {
+			t.Fatalf("the idle row written after an immediate scan was never scanned (waited %s)", elapsed)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
