@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"irrlicht/core/domain/agent"
 )
@@ -165,16 +166,8 @@ func PIDsByCmdlineKeepingArgv(cmdLinePattern string, keepArgv func([]string) boo
 		return nil, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
 	}
 	myPID := os.Getpid()
-	var kept []int
-	for _, pid := range pids {
-		if pid == myPID {
-			continue
-		}
-		if argv, _ := osProc.ArgvOf(pid); keepArgv(argv) {
-			kept = append(kept, pid)
-		}
-	}
-	return kept, nil
+	pids = slices.DeleteFunc(pids, func(pid int) bool { return pid == myPID })
+	return withoutExcludedArgv(pids, func(argv []string) bool { return !keepArgv(argv) }), nil
 }
 
 // LiveCWDs returns the set of working directories currently held by live

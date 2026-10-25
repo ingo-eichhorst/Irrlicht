@@ -37,17 +37,19 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 // which lets one run at a time (#2104), but a second, such as another release
 // channel's, is not ruled out, and no row says which one hosts a session, so
 // it binds none rather than guess; and when the row is archived, deleted, or
-// not a 2.x row at all — a 1.x store's session is no service's.
+// not a 2.x row at all — a 1.x store's session is no service's. The row is
+// read first: it is an in-process read, and a session it rules out costs no
+// process listing.
 //
 // Never through the service's service.json, which would name it directly: that
 // file carries the service's password, and no consent covers reading it.
 func servicePIDFor(transcriptPath string) (int, error) {
+	if !v2SessionLive(transcriptPath) {
+		return 0, nil
+	}
 	pids, err := ServicePIDs()
 	if err != nil || len(pids) != 1 {
 		return 0, err
-	}
-	if !v2SessionLive(transcriptPath) {
-		return 0, nil
 	}
 	return pids[0], nil
 }

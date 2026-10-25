@@ -282,67 +282,60 @@ func opencodeHostedPIDManager(repo *mockRepo, consent func(adapter string) bool)
 // outlives it, and nothing in the store says a client has gone (#2104's
 // detach measurement). The ready-session TTL ends it. On the P2 build a live
 // PID kept any root from the TTL, so such a root stayed until the service
-// exited. The root inside the TTL is the control: the TTL, not the service
-// binding, ends it. Working is not ready, so the TTL leaves it alone. Without
-// opencode's observe consent the bound PID's argv is not read, so the live
-// PID keeps protecting the root.
+// exited. The other rows are locks: the root inside the TTL shows that the
+// TTL, not the service binding, ends it; working is not ready, so the TTL
+// leaves it alone; without opencode's observe consent the bound PID's argv is
+// not read, so the live PID keeps protecting the root; and a root bound to a
+// TUI client keeps that protection too — the rule is about the service, not
+// about opencode, and the client's exit ends such a root.
 func TestCheckPIDLiveness_IdleClientlessOpencodeRootEndsAtTheReadyTTL(t *testing.T) {
 	noOpencode := func(adapter string) bool { return adapter != opencode.AdapterName }
 	for _, tc := range []struct {
 		name     string
+		hostArgv []string
 		state    string
 		idle     time.Duration
 		consent  func(string) bool
 		wantGone bool
 	}{
-		{"ready, idle past the TTL", session.StateReady, time.Hour, nil, true},
-		{"ready, inside the TTL", session.StateReady, time.Minute, nil, false},
-		{"working, idle past the TTL", session.StateWorking, time.Hour, nil, false},
-		{"observe consent withheld", session.StateReady, time.Hour, noOpencode, false},
+		{"ready, idle past the TTL", opencodeServiceArgv, session.StateReady, time.Hour, nil, true},
+		{"ready, inside the TTL", opencodeServiceArgv, session.StateReady, time.Minute, nil, false},
+		{"working, idle past the TTL", opencodeServiceArgv, session.StateWorking, time.Hour, nil, false},
+		{"observe consent withheld", opencodeServiceArgv, session.StateReady, time.Hour, noOpencode, false},
+		{"bound to a TUI client", opencodeTUIArgv, session.StateReady, time.Hour, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := startOpencodeStandIn(t, opencodeServiceArgv)
+			pid := startOpencodeStandIn(t, tc.hostArgv)
 			store := newOpencodeV2Store(t)
 			cwd := t.TempDir()
 			repo := newMockRepo()
-			root := opencodeRoot("ses_api", cwd, store.session("ses_api", cwd), tc.state, svc, 2*time.Hour, tc.idle)
+			root := opencodeRoot("ses_api", cwd, store.session("ses_api", cwd), tc.state, pid, 2*time.Hour, tc.idle)
 			repo.states[root.SessionID] = root
 
 			opencodeHostedPIDManager(repo, tc.consent).CheckPIDLiveness()
 
 			if _, err := repo.Load("ses_api"); (err != nil) != tc.wantGone {
-				t.Errorf("%s: client-less opencode root on the live service removed = %t, want %t",
+				t.Errorf("%s: idle opencode root on a live pid removed = %t, want %t",
 					tc.name, err != nil, tc.wantGone)
 			}
 		})
 	}
 }
 
-// Lock (#2107): the TTL rule is about the service, not about opencode. A
-// root bound to a TUI client keeps the live-PID protection it had — the
-// client's exit ends it.
-func TestCheckPIDLiveness_IdleOpencodeRootOnAClientIsNotReaped(t *testing.T) {
-	tui := startOpencodeStandIn(t, opencodeTUIArgv)
-	store := newOpencodeV2Store(t)
-	cwd := t.TempDir()
-	repo := newMockRepo()
-	root := opencodeRoot("ses_tui", cwd, store.session("ses_tui", cwd), session.StateReady, tui, 2*time.Hour, time.Hour)
-	repo.states[root.SessionID] = root
-
-	opencodeHostedPIDManager(repo, nil).CheckPIDLiveness()
-
-	if _, err := repo.Load("ses_tui"); err != nil {
-		t.Error("an idle opencode root bound to its live TUI was reaped by the ready TTL")
-	}
-}
-
-// Red-first (#2107): a client-less root bound to the service retires no TUI
-// placeholder in its directory. #2082's pairing assumes a hosted root's client
-// left that placeholder behind, which is codex's shape: in 2.x a client's
-// session binds to the client itself, and a service-bound root has no client.
-// It went red once #2105 declared opencode's SessionHostArgv. Codex keeps the
-// pairing: TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer
-// is its lock.
+// Red-first (#2107): a client-less root bound to the service does not pair
+// with a TUI placeholder in its directory — #2082's pairing, which retires it
+// with no grace. That pairing assumes a hosted root's client left the
+// placeholder behind, which is codex's shape: in 2.x a client's session binds
+// to the client itself, and a service-bound root has no client. It went red
+// once #2105 declared opencode's SessionHostArgv. Codex keeps the pairing:
+// TestCheckPIDLiveness_CodexPlaceholderRetiredOnceItsRootBindsToAppServer is
+// its lock.
+//
+// Only the pairing. Once the placeholder is older than preSessionSweepGrace
+// (90s), the #113 same-cwd fallback (findSupersedingSession's matchCWD) still
+// retires it, as it does a TUI's placeholder beside any other adapter's root
+// in its cwd: the placeholder here is 30s old for that reason. Seen in review
+// with a 120s-old placeholder; left as residue.
 func TestCheckPIDLiveness_ServiceBoundOpencodeRootLeavesTheTUIPlaceholder(t *testing.T) {
 	svc := startOpencodeStandIn(t, opencodeServiceArgv)
 	tui := startOpencodeStandIn(t, opencodeTUIArgv)
@@ -362,5 +355,60 @@ func TestCheckPIDLiveness_ServiceBoundOpencodeRootLeavesTheTUIPlaceholder(t *tes
 
 	if _, err := repo.Load(placeholder); err != nil {
 		t.Fatalf("placeholder %s was retired by a service-bound opencode root in its cwd", placeholder)
+	}
+}
+
+// Red-first (#2107 review): a root bound to the service captures no launcher.
+// The service was spawned by some client and inherits that client's terminal
+// env — on the dev host the sandbox service's `ps eww` showed TERM_PROGRAM=zed
+// and a HERDR_PANE_ID — so reading the launcher from its PID would point
+// every API, desktop or web session at an unrelated terminal. The triage's
+// rule is "no launcher". The reader here answers for any PID, so the test is
+// about which roots are asked, not about whose env is readable. A root bound
+// to a TUI client is the lock: it keeps its launcher.
+func TestLauncherCapture_ServiceBoundOpencodeRootTakesNoLauncher(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		hostArgv     []string
+		seeded       bool // the root is already bound, as at daemon start
+		wantLauncher bool
+		act          func(pm *services.PIDManager, root *session.SessionState, pid int)
+	}{
+		{"service, assignment", opencodeServiceArgv, false, false, func(pm *services.PIDManager, root *session.SessionState, pid int) {
+			pm.HandlePIDAssigned(pid, root.SessionID)
+		}},
+		{"service, seed", opencodeServiceArgv, true, false, func(pm *services.PIDManager, root *session.SessionState, _ int) {
+			pm.SeedPIDs([]*session.SessionState{root})
+		}},
+		{"TUI client, assignment", opencodeTUIArgv, false, true, func(pm *services.PIDManager, root *session.SessionState, pid int) {
+			pm.HandlePIDAssigned(pid, root.SessionID)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pid := startOpencodeStandIn(t, tc.hostArgv)
+			store := newOpencodeV2Store(t)
+			cwd := t.TempDir()
+			repo := newMockRepo()
+			bound := 0
+			if tc.seeded {
+				bound = pid
+			}
+			root := opencodeRoot("ses_api", cwd, store.session("ses_api", cwd), session.StateReady, bound, time.Minute, 0)
+			repo.states[root.SessionID] = root
+			pm := opencodeHostedPIDManager(repo, nil)
+			pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+				return &session.Launcher{TermProgram: "SpawningClientsTerminal"}, true
+			})
+
+			tc.act(pm, root, pid)
+
+			got, err := repo.Load("ses_api")
+			if err != nil {
+				t.Fatalf("the root is gone: %v", err)
+			}
+			if (got.Launcher != nil) != tc.wantLauncher {
+				t.Errorf("%s: launcher = %+v, want one captured = %t", tc.name, got.Launcher, tc.wantLauncher)
+			}
+		})
 	}
 }

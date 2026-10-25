@@ -39,6 +39,10 @@
 #      root retires an unrelated TUI's placeholder.
 #  14. admitStaleTranscript asks the writer probe about a DB-backed key → the
 #      exemption the SharedPIDOwner doc states is gone (the lock's red).
+#  15. launcher capture reads a service-bound root's host → every client-less
+#      session takes the spawning client's terminal (review of #2114).
+#  16. the launcher skip ignores LauncherPID → a hosted codex root, whose
+#      LauncherPID names its TUI, loses its launcher (codex's lock).
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -132,8 +136,8 @@ DISCOVERY="core/adapters/inbound/agents/processlifecycle/discovery.go"
 PM_FILE="core/application/services/pid_manager.go"
 ACTIVITY="core/application/services/session_detector_activity.go"
 OWNS='return IsServiceArgv(processlifecycle.ReadArgv(pid)) && v2SessionLive(transcriptPath)'
-HOST_RULE='if isHost == nil || pm.releasedPIDs[snap.adapter] != nil || pm.hostReadArgv == nil {'
-HOST_ARGV='return pm.observeAllowed(snap.adapter) && isHost(pm.hostReadArgv(snap.pid))'
+HOST_RULE='return pm.releasedPIDs[snap.adapter] == nil && pm.onSessionHost(snap.adapter, snap.pid)'
+HOST_ARGV='return pm.observeAllowed(adapter) && isHost(pm.hostReadArgv(pid))'
 BIND='^TestOpenCodeDiscoverPID_BindsAClientlessSessionToTheService$'
 TTL='^TestCheckPIDLiveness_IdleClientlessOpencodeRootEndsAtTheReadyTTL$'
 
@@ -201,8 +205,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "PIDsByCmdlineKeepingArgv keeping every match" \
   "$DISCOVERY" \
-  'if argv, _ := osProc.ArgvOf(pid); keepArgv(argv) {' \
-  'if argv, _ := osProc.ArgvOf(pid); keepArgv(argv) || len(argv) > 0 {' \
+  'return withoutExcludedArgv(pids, func(argv []string) bool { return !keepArgv(argv) }), nil' \
+  'return pids, nil' \
   "$PROCLIFE" \
   "$BIND" \
   "client-less 2.x session binds to the service"
@@ -211,8 +215,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "the 2.x watcher admitting only under a client" \
   "$WATCHER_V2" \
-  'serviceUp, serviceRead = w.serviceUp(), true' \
-  'serviceUp, serviceRead = false, true' \
+  'serviceUp := sync.OnceValue(w.serviceUp)' \
+  'serviceUp := func() bool { return false }' \
   "$OPENCODE" \
   '^TestV2Reader_AdmitsAClientlessSessionOnLiveActivity$' \
   "live activity in a client-less session produced 0 EventNewSession, want 1"
@@ -225,14 +229,14 @@ assert_go_test_goes_red \
   'if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {' \
   "$SERVICES" \
   "$TTL" \
-  "ready, idle past the TTL: client-less opencode root on the live service removed = false, want true"
+  "ready, idle past the TTL: idle opencode root on a live pid removed = false, want true"
 
 # ── 10. the host rule reaches an adapter with a release probe ──
 assert_go_test_goes_red \
   "the host rule ignoring ReleasedPID" \
   "$PM_FILE" \
   "$HOST_RULE" \
-  'if isHost == nil || pm.hostReadArgv == nil {' \
+  'return pm.onSessionHost(snap.adapter, snap.pid)' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra$' \
   "an idle codex root hosted by the app-server daemon was reaped"
@@ -242,20 +246,20 @@ assert_go_test_goes_red \
   "the host rule ignoring the bound PID's argv" \
   "$PM_FILE" \
   "$HOST_ARGV" \
-  'return pm.observeAllowed(snap.adapter)' \
+  'return pm.observeAllowed(adapter)' \
   "$SERVICES" \
-  '^TestCheckPIDLiveness_IdleOpencodeRootOnAClientIsNotReaped$' \
-  "an idle opencode root bound to its live TUI was reaped by the ready TTL"
+  "$TTL" \
+  "bound to a TUI client: idle opencode root on a live pid removed = true, want false"
 
 # ── 12. the host rule ignores observe consent ──
 assert_go_test_goes_red \
   "the host rule ignoring observe consent" \
   "$PM_FILE" \
   "$HOST_ARGV" \
-  'return isHost(pm.hostReadArgv(snap.pid))' \
+  'return isHost(pm.hostReadArgv(pid))' \
   "$SERVICES" \
   "$TTL" \
-  "observe consent withheld: client-less opencode root on the live service removed = true, want false"
+  "observe consent withheld: idle opencode root on a live pid removed = true, want false"
 
 # ── 13. the pairing without LauncherPID ──
 assert_go_test_goes_red \
@@ -276,6 +280,26 @@ assert_go_test_goes_red \
   "$SERVICES" \
   '^TestAdmitStaleTranscript_DBBackedKeyNeverAsksTheWriterProbe$' \
   "admitting a DB-backed key asked opencode's PID discovery 1 time(s), want 0"
+
+# ── 15. launcher capture reads the service ──
+assert_go_test_goes_red \
+  "captureLauncher without the host-without-client skip" \
+  "$PM_FILE" \
+  $'\tif pm.hostedWithoutClient(state.Adapter, pid) {\n\t\treturn\n\t}\n' \
+  '' \
+  "$SERVICES" \
+  '^TestLauncherCapture_ServiceBoundOpencodeRootTakesNoLauncher$' \
+  "service, assignment: launcher = &{TermProgram:SpawningClientsTerminal"
+
+# ── 16. the launcher skip reaches an adapter with a LauncherPID ──
+assert_go_test_goes_red \
+  "hostedWithoutClient ignoring LauncherPID" \
+  "$PM_FILE" \
+  'return pm.launcherPIDs[adapter] == nil && pm.onSessionHost(adapter, pid)' \
+  'return pm.onSessionHost(adapter, pid)' \
+  "$SERVICES" \
+  '^TestHandlePIDAssigned_HostedCodexRootTakesItsTUIsLauncher$' \
+  "want the TUI's {TermProgram:ghostty"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-service-mutations: $fails FAILED"

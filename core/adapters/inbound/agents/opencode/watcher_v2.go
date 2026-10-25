@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -75,26 +76,22 @@ const v2SessionsQuery = `
 `
 
 // admissionOnce returns the lookup scanV2Session admits a session with: a
-// live client owns its directory, or else a 2.x service is up to host it.
-// Each half enumerates processes at most once per scan, on first use: the 2.x
+// 2.x service is up to host it, or a live client owns its directory. Each
+// half enumerates processes at most once per scan, on first use: the 2.x
 // reader needs them only to admit a session with new activity, which most
-// scans have none of, and the client half is a process listing plus an argv
-// and a cwd read per match, the service half a listing plus an argv read per
-// match. A failed enumeration is not retried within the scan.
+// scans have none of. The service half goes first because it is the cheaper
+// one — a process listing plus an argv read per match, where the client half
+// adds a cwd read per match — and when it answers yes the client half is not
+// needed. A failed enumeration is not retried within the scan.
 func (w *Watcher) admissionOnce() func(dir string) bool {
-	var live map[string]struct{}
-	liveRead, serviceRead, serviceUp := false, false, false
+	serviceUp := sync.OnceValue(w.serviceUp)
+	live := sync.OnceValue(w.liveCWDs)
 	return func(dir string) bool {
-		if !liveRead {
-			live, liveRead = w.liveCWDs(), true
-		}
-		if _, ok := live[dir]; ok {
+		if serviceUp() {
 			return true
 		}
-		if !serviceRead {
-			serviceUp, serviceRead = w.serviceUp(), true
-		}
-		return serviceUp
+		_, ok := live()[dir]
+		return ok
 	}
 }
 

@@ -55,11 +55,12 @@ func Agent() agent.Agent {
 			// client runs binds to it (DiscoverPID). Declaring it keeps the
 			// scanner from minting a row for the service, and, with no
 			// ReleasedPID declared, lets the ready-session TTL end an idle root
-			// the live service still hosts (PIDManager.reapsIdleTopLevel). It
-			// does not opt opencode into the hosted-placeholder pairing
-			// (#2082): that needs a LauncherPID as well, which opencode does
-			// not declare — a service-bound root has no client to have left a
-			// placeholder behind, and a client's own session binds to the
+			// the live service still hosts (PIDManager.reapsIdleTopLevel). With
+			// no LauncherPID declared, a service-bound root captures no
+			// launcher — the service's env is whichever client spawned it — and
+			// opencode stays out of the hosted-placeholder pairing (#2082),
+			// which needs one: a service-bound root has no client to have left
+			// a placeholder behind, and a client's own session binds to the
 			// client.
 			SessionHostArgv: IsServiceArgv,
 		},
