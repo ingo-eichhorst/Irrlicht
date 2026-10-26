@@ -114,19 +114,22 @@ func TestOpenCodeCeiling_RemovesTheStaleV1Plugin(t *testing.T) {
 	}
 }
 
-// v2Rendering is what the 2.x installer writes, read back from a reference
-// install in a tree of its own. It relocates the config dir, so call it before
-// isolating the tree under test.
-func v2Rendering(t *testing.T) []byte {
+// v2Rendering is what the 2.x installer writes (see rendering).
+func v2Rendering(t *testing.T) []byte { return rendering(t, opencode.EnsureHooksInstalledV2) }
+
+// rendering is what install writes, read back from a reference install in a
+// tree of its own. It relocates the config dir, so call it before isolating
+// the tree under test.
+func rendering(t *testing.T, install func() (bool, error)) []byte {
 	t.Helper()
 	isolateOpenCodeConfig(t)
-	if _, err := opencode.EnsureHooksInstalledV2(); err != nil {
-		t.Fatalf("reference 2.x install: %v", err)
+	if _, err := install(); err != nil {
+		t.Fatalf("reference install: %v", err)
 	}
 	ref, _ := opencode.PluginPath()
 	want, err := os.ReadFile(ref)
 	if err != nil {
-		t.Fatalf("read the reference 2.x install: %v", err)
+		t.Fatalf("read the reference install: %v", err)
 	}
 	return want
 }

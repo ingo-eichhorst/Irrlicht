@@ -221,17 +221,7 @@ func installedEventsOf(perm agent.Permission, d HookDisclosure) []string {
 	if len(variants) == 0 {
 		return d.Installed
 	}
-	var union []string
-	seen := map[string]bool{}
-	for _, v := range variants {
-		for _, event := range v.Events {
-			if !seen[event] {
-				seen[event] = true
-				union = append(union, event)
-			}
-		}
-	}
-	return union
+	return perm.Writes.VariantEvents()
 }
 
 // assertStatesEveryVariantCount is the count arm for a variant declaration

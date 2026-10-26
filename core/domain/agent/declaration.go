@@ -578,7 +578,7 @@ func (f *ManagedUserFile) SelectVariant(installed string) (*HookVariant, Version
 	return nil, AtOrAboveCeiling, fmt.Sprintf(
 		"installed CLI is %s, which is at or above %s, the ceiling of the hook artifact for %s%s; "+
 			"nothing was written",
-		installed, lower.Max, rangeOf(lower), next)
+		installed, lower.Max, lower.Range(), next)
 }
 
 // placeAmongVariants locates installed among the variants: the one whose range
@@ -591,11 +591,11 @@ func (f *ManagedUserFile) placeAmongVariants(installed string) (inside, lower, u
 		case WithinBounds:
 			return v, nil, nil
 		case AtOrAboveCeiling:
-			if lower == nil || versionBelow(lower.Max, v.Max) {
+			if lower == nil || cliversion.Less(lower.Max, v.Max) {
 				lower = v
 			}
 		case BelowFloor:
-			if upper == nil || versionBelow(v.Min, upper.Min) {
+			if upper == nil || cliversion.Less(v.Min, upper.Min) {
 				upper = v
 			}
 		}
@@ -608,17 +608,35 @@ func (f *ManagedUserFile) placeAmongVariants(installed string) (inside, lower, u
 func (f *ManagedUserFile) variantRanges() string {
 	ranges := make([]string, len(f.Variants))
 	for i := range f.Variants {
-		ranges[i] = rangeOf(&f.Variants[i])
+		ranges[i] = f.Variants[i].Range()
 	}
 	return strings.Join(ranges, ", ")
 }
 
-// rangeOf renders one variant's range for a refusal.
-func rangeOf(v *HookVariant) string {
+// Range renders the variant's version range for a refusal or a log line,
+// e.g. "2.1.4 up to 3.0.0", or "2.1.4 or newer" with no ceiling.
+func (v *HookVariant) Range() string {
 	if v.Max == "" {
 		return v.Min + " or newer"
 	}
 	return v.Min + " up to " + v.Max
+}
+
+// VariantEvents is every variant's events, each once, in declaration order —
+// the union the consent copy must name and what a check that cannot tell
+// which variant applies reports.
+func (f *ManagedUserFile) VariantEvents() []string {
+	var events []string
+	seen := map[string]bool{}
+	for _, v := range f.Variants {
+		for _, e := range v.Events {
+			if !seen[e] {
+				seen[e] = true
+				events = append(events, e)
+			}
+		}
+	}
+	return events
 }
 
 // unreadable renders why a version could not be used, for VersionUnknown's
@@ -628,14 +646,6 @@ func unreadable(installed string) string {
 		return "could not be learnt"
 	}
 	return fmt.Sprintf("%q is not a version", installed)
-}
-
-// versionBelow reports a < b for two declared bounds. An unparseable bound
-// compares as not-below, which only affects which neighbour a refusal names;
-// the contract reports the unparseable bound itself.
-func versionBelow(a, b string) bool {
-	ok, known := cliversion.AtLeast(a, b)
-	return known && !ok
 }
 
 // Identity is the always-required adapter metadata served via

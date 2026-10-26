@@ -63,7 +63,7 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 		if kept != nil {
 			s.log.LogInfo("permissions", "", fmt.Sprintf(
 				"%s: the installed CLI's version is unknown; keeping the hook artifact for %s, which is installed and current",
-				p.Key, variantRange(kept)))
+				p.Key, kept.Range()))
 			return kept, agent.WithinBounds, nil
 		}
 	}
@@ -78,6 +78,21 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 // Verify that fails is returned as the error, never read as "not current":
 // not being able to look is not the same finding as nothing being there.
 func currentVariant(w *agent.ManagedUserFile) (*agent.HookVariant, error) {
+	return firstVariantReading(w, agent.HookEntryStatus.Intact)
+}
+
+// oursPresent reports whether some variant reads a file of ours at the path,
+// current or not: its Verify reports no event Missing (Missing is what an
+// absent or foreign file reads as; Stale is ours, not current). A failing
+// Verify is returned as the error, as in currentVariant.
+func oursPresent(w *agent.ManagedUserFile) (bool, error) {
+	v, err := firstVariantReading(w, func(s agent.HookEntryStatus) bool { return len(s.Missing) == 0 })
+	return v != nil, err
+}
+
+// firstVariantReading returns the first variant whose own Verify reads as
+// match says, the first Verify error, or neither.
+func firstVariantReading(w *agent.ManagedUserFile, match func(agent.HookEntryStatus) bool) (*agent.HookVariant, error) {
 	for i := range w.Variants {
 		v := &w.Variants[i]
 		if v.Verify == nil {
@@ -87,53 +102,11 @@ func currentVariant(w *agent.ManagedUserFile) (*agent.HookVariant, error) {
 		if err != nil {
 			return nil, err
 		}
-		if status.Intact() {
+		if match(status) {
 			return v, nil
 		}
 	}
 	return nil, nil
-}
-
-// oursPresent reports whether some variant reads a file of ours at the path,
-// current or not: its Verify reports no event Missing (Missing is what an
-// absent or foreign file reads as; Stale is ours, not current). A failing
-// Verify is returned as the error, as in currentVariant.
-func oursPresent(w *agent.ManagedUserFile) (bool, error) {
-	for i := range w.Variants {
-		v := &w.Variants[i]
-		if v.Verify == nil {
-			continue
-		}
-		status, err := v.Verify()
-		if err != nil {
-			return false, err
-		}
-		if len(status.Missing) == 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// variantEvents is every variant's events, each once, in declaration order —
-// what a variant target reports when no single variant's list applies.
-func variantEvents(w *agent.ManagedUserFile) []string {
-	var events []string
-	seen := map[string]bool{}
-	for _, v := range w.Variants {
-		for _, e := range v.Events {
-			if !seen[e] {
-				seen[e] = true
-				events = append(events, e)
-			}
-		}
-	}
-	return events
-}
-
-// variantRange names a variant by its range for a log line.
-func variantRange(v *agent.HookVariant) string {
-	return v.Min + " up to " + v.Max
 }
 
 // versionGated reports whether a managed file's install depends on the
@@ -176,7 +149,7 @@ func resolveInstalledVersion(ctx context.Context, granted func(agentName, key st
 	if err != nil {
 		return installed, err
 	}
-	if len(w.Variants) > 0 && versionOlder(probed, installed) {
+	if len(w.Variants) > 0 && cliversion.Less(probed, installed) {
 		// A variant declaration takes the probe only UPWARD — a deliberate
 		// trade-off, not a claim that the store cannot be ahead. The passive
 		// answer is the version that last wrote the user's own store: stale
@@ -193,13 +166,6 @@ func resolveInstalledVersion(ctx context.Context, granted func(agentName, key st
 		return installed, nil
 	}
 	return probed, nil
-}
-
-// versionOlder reports a < b for two parseable versions, false when either
-// does not parse.
-func versionOlder(a, b string) bool {
-	ok, known := cliversion.AtLeast(a, b)
-	return known && !ok
 }
 
 // observedAllowed reports whether a passive version source may be read: it

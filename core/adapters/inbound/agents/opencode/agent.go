@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"strconv"
+
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
@@ -103,14 +105,14 @@ func Agent() agent.Agent {
 				Kind:            permission.KindModify,
 				Title:           "Install status hooks",
 				FeatureUnlocked: "Blocked-on-user detection and authoritative turn-end detection",
-				// "3 hook entries" and "5 hook entries" are what
-				// contracttesting's #1356 count arm reads — one count per
-				// artifact, each the number of event subscriptions that
-				// artifact holds (#2108). They live in ONE file, which is the
+				// "N hook entries" twice is what contracttesting's #1356 count
+				// arm reads — one count per artifact, each derived from the
+				// event list that artifact subscribes to (#2108). They live in ONE file, which is the
 				// unusual part, so Touches names the shape in the same breath
 				// rather than leaving it to Detail — the wizard row is what
 				// most users read.
-				Touches: "Writes 3 hook entries (opencode 1.x) or 5 hook entries (opencode 2.x) to " +
+				Touches: "Writes " + strconv.Itoa(len(installedHookEvents)) + " hook entries (opencode 1.x) or " +
+					strconv.Itoa(len(installedHookEventsV2)) + " hook entries (opencode 2.x) to " +
 					displayPluginPath + " — a small JavaScript file that opencode loads and runs",
 				Detail: hooksDetail(),
 				// Apply and Verify are the 1.x artifact's. PermissionService

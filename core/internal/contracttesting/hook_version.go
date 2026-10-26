@@ -211,10 +211,10 @@ func assertGateSpansItsVariants(t reporter, gate *agent.VersionGate, variants []
 	t.Helper()
 	lowest, highest := variants[0].Min, variants[0].Max
 	for _, v := range variants[1:] {
-		if versionLess(v.Min, lowest) {
+		if cliversion.Less(v.Min, lowest) {
 			lowest = v.Min
 		}
-		if highest != "" && (v.Max == "" || versionLess(highest, v.Max)) {
+		if highest != "" && (v.Max == "" || cliversion.Less(highest, v.Max)) {
 			highest = v.Max
 		}
 	}
@@ -268,13 +268,7 @@ func startsBeforeEnd(start, end string) bool {
 	if end == "" {
 		return true
 	}
-	return versionLess(start, end)
-}
-
-// versionLess reports a < b for two parseable versions, false otherwise.
-func versionLess(a, b string) bool {
-	ok, known := cliversion.AtLeast(a, b)
-	return known && !ok
+	return cliversion.Less(start, end)
 }
 
 // justBelow is a version just under v — the top of a range ending at v — with

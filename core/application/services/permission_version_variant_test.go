@@ -43,24 +43,14 @@ func probeSaying(version string) []string {
 // variants.
 func opencodeHooksProbing(t *testing.T, probed string) agent.Permission {
 	t.Helper()
-	p := opencodeHooksAt(t, "")
-	declared := realOpenCodeGate(t)
-	p.Writes.Version.Observed = declared.Observed
-	p.Writes.Version.ObservedRequires = declared.ObservedRequires
-	p.Writes.Version.Probe = probeSaying(probed)
-	return p
-}
-
-// realOpenCodeGate is the gate opencode's registration declares, untouched.
-func realOpenCodeGate(t *testing.T) *agent.VersionGate {
-	t.Helper()
 	for _, p := range opencode.Agent().Permissions {
 		if p.Key == opencode.PermissionKeyHooks && p.Writes != nil && p.Writes.Version != nil {
-			return p.Writes.Version
+			p.Writes.Version.Probe = probeSaying(probed)
+			return p
 		}
 	}
 	t.Fatal("opencode declares no hooks version gate")
-	return nil
+	return agent.Permission{}
 }
 
 // grantDatabase records the database permission granted for grant()'s agent,
@@ -123,21 +113,8 @@ func installed(t *testing.T, path string) []byte {
 	return got
 }
 
-// v1Rendering is what the 1.x installer writes, read back from a reference
-// install in a tree of its own. Call it before isolating the tree under test.
-func v1Rendering(t *testing.T) []byte {
-	t.Helper()
-	isolateOpenCodeConfig(t)
-	if _, err := opencode.EnsureHooksInstalled(); err != nil {
-		t.Fatalf("reference 1.x install: %v", err)
-	}
-	ref, _ := opencode.PluginPath()
-	want, err := os.ReadFile(ref)
-	if err != nil {
-		t.Fatalf("read the reference 1.x install: %v", err)
-	}
-	return want
-}
+// v1Rendering is what the 1.x installer writes (see rendering).
+func v1Rendering(t *testing.T) []byte { return rendering(t, opencode.EnsureHooksInstalled) }
 
 // TestVariantGate_AStoreShowingTwoXSelectsTwoX is red-first. The probe cannot
 // answer and the store can: opencode's own store — the 2.1.4 fixture, which

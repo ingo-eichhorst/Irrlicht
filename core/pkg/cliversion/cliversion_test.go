@@ -92,3 +92,22 @@ func TestAtLeast(t *testing.T) {
 		}
 	}
 }
+
+// TestLess pins the comparison #2108's variant code relies on: strictly older,
+// and never true when either side is unreadable.
+func TestLess(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"1.19.4", "2.1.4", true},
+		{"2.1.4", "2.1.4", false},
+		{"3.0.0", "2.99.99", false},
+		{"", "2.1.4", false},
+		{"2.1.4", "not a version", false},
+	} {
+		if got := Less(c.a, c.b); got != c.want {
+			t.Errorf("Less(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

@@ -59,8 +59,9 @@
 #      plugin survives a 3.0.0 opencode.
 #  28. the #1372 loop reporting a major change as damage → the designed
 #      upgrade rewrite is logged as someone else's tampering (finding 3).
-#  29. oursPresent swallowing a failed Verify → above every artifact, a plugin
-#      the loop cannot read reads intact (follow-up review finding 1).
+#  29. firstVariantReading (behind currentVariant and oursPresent) swallowing
+#      a failed Verify → above every artifact, a plugin the loop cannot read
+#      reads intact (follow-up review finding 1).
 #  30. the install's keep rule swallowing a failed Verify → an unknown
 #      version's refusal hides that the installed file could not be read.
 #
@@ -184,8 +185,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "runClosureEffect ignoring the selected variant" \
   "$SERVICE" \
-  'if effect = variant.Apply; effect == nil {' \
-  'if effect = e.perm.Apply; effect == nil {' \
+  'return variant.Apply, bound, nil' \
+  'return e.perm.Apply, bound, nil' \
   "$SERVICES" \
   '^TestOpenCodeUpgrade_RewritesTheOneXPluginInPlace$' \
   "is not the 2.x artifact"
@@ -354,8 +355,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "opencode's consent copy without the 2.x count" \
   "$AGENT" \
-  '"Writes 3 hook entries (opencode 1.x) or 5 hook entries (opencode 2.x) to "' \
-  '"Writes 3 hook entries (opencode 1.x) to "' \
+  'strconv.Itoa(len(installedHookEventsV2)) + " hook entries (opencode 2.x) to " +' \
+  '"" +' \
   "$OPENCODE" \
   '^TestHooksPermission_DisclosureMatchesInstalled$' \
   "consent copy never states 5 hook entries"
@@ -394,8 +395,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "resolveInstalledVersion taking a lower probe" \
   "$GATE" \
-  'if len(w.Variants) > 0 && versionOlder(probed, installed) {' \
-  'if false && len(w.Variants) > 0 && versionOlder(probed, installed) {' \
+  'if len(w.Variants) > 0 && cliversion.Less(probed, installed) {' \
+  'if false && len(w.Variants) > 0 && cliversion.Less(probed, installed) {' \
   "$SERVICES" \
   '^TestVariantGate_AProbeCannotLowerARefusedStoreAnswer$' \
   "the probe lowered the version to a major the store says is not running"
@@ -442,10 +443,10 @@ assert_go_test_goes_red \
 
 # ── 29. oursPresent swallowing a failed Verify ──
 assert_go_test_goes_red \
-  "oursPresent reading a failed Verify as nothing there" \
+  "firstVariantReading reading a failed Verify as nothing there" \
   "$GATE" \
-  $'\t\tif err != nil {\n\t\t\treturn false, err' \
-  $'\t\tif err != nil {\n\t\t\treturn false, nil' \
+  $'\t\tif err != nil {\n\t\t\treturn nil, err' \
+  $'\t\tif err != nil {\n\t\t\treturn nil, nil' \
   "$SERVICES" \
   '^TestVariantGate_ReverifyCannotReadThePluginAtTheNextMajor$' \
   "want unreadable:1"

@@ -990,13 +990,12 @@ func (s *PermissionService) gateGrant(e pendingEffect) (func() error, agent.Vers
 	if err != nil || variant == nil {
 		return e.perm.Apply, bound, err
 	}
-	var effect func() error
-	if effect = variant.Apply; effect == nil {
+	if variant.Apply == nil {
 		// The registry tripwire refuses this declaration; failing the effect
 		// here keeps one that slipped through from panicking the consent path.
-		return nil, bound, fmt.Errorf("the selected hook artifact (%s) declares no Apply", variantRange(variant))
+		return nil, bound, fmt.Errorf("the selected hook artifact (%s) declares no Apply", variant.Range())
 	}
-	return effect, bound, nil
+	return variant.Apply, bound, nil
 }
 
 // recordEffectResult stores this permission's effect outcome; the empty

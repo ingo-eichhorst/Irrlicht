@@ -421,14 +421,12 @@ var installer = hookartifact.Installer{
 // two renderings. Each one reads the other's file as ours-but-stale, which is
 // the in-place rewrite an upgrade (or a downgrade) needs, and Uninstall is the
 // same rule whichever one runs it.
-var installerV2 = hookartifact.Installer{
-	AdapterName:    installer.AdapterName,
-	Sentinel:       installer.Sentinel,
-	ResolveCommand: installer.ResolveCommand,
-	Path:           installer.Path,
-	Render:         renderPluginV2,
-	Events:         installedHookEventsV2,
-}
+var installerV2 = func() hookartifact.Installer {
+	in := installer
+	in.Render = renderPluginV2
+	in.Events = installedHookEventsV2
+	return in
+}()
 
 // EnsureHooksInstalled writes irrlicht's opencode plugin for the irrlichd that
 // is running now, creating opencode's plugin directory if it does not exist.

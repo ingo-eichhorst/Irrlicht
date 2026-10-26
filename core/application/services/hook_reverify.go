@@ -490,7 +490,7 @@ func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, st
 		return status, "", err
 	}
 	if variant.Verify == nil {
-		return agent.HookEntryStatus{}, "", fmt.Errorf("the selected hook artifact (%s) declares no Verify", variantRange(variant))
+		return agent.HookEntryStatus{}, "", fmt.Errorf("the selected hook artifact (%s) declares no Verify", variant.Range())
 	}
 	status, err = variant.Verify()
 	if err != nil || status.Intact() {
@@ -499,7 +499,7 @@ func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, st
 	// A failed read here only costs the label: the status above stands.
 	if current, _ := currentVariant(t.variants); current != nil && current != variant {
 		upgrade = fmt.Sprintf("the installed CLI is %s, so the hook artifact for %s replaces the current one for %s (#2108)",
-			installed, variantRange(variant), variantRange(current))
+			installed, variant.Range(), current.Range())
 	}
 	return status, upgrade, nil
 }
@@ -533,13 +533,13 @@ func unselectedStatus(w *agent.ManagedUserFile, bound agent.VersionBound) (agent
 		if err != nil || current != nil {
 			return agent.HookEntryStatus{}, err
 		}
-		return agent.HookEntryStatus{Missing: variantEvents(w)}, nil
+		return agent.HookEntryStatus{Missing: w.VariantEvents()}, nil
 	case agent.AtOrAboveCeiling:
 		present, err := oursPresent(w)
 		if err != nil || !present {
 			return agent.HookEntryStatus{}, err
 		}
-		return agent.HookEntryStatus{Stale: variantEvents(w)}, nil
+		return agent.HookEntryStatus{Stale: w.VariantEvents()}, nil
 	}
 	return agent.HookEntryStatus{}, nil
 }

@@ -106,3 +106,12 @@ func AtLeast(installed, minimum string) (ok, known bool) {
 	}
 	return got.Compare(floor) >= 0, true
 }
+
+// Less reports a < b when both parse, and false otherwise: an unreadable side
+// is never "less", the same fail-open reading AtLeast gives it. It is the one
+// spelling of "older than" for comparing two declared or observed versions —
+// a hook artifact's bounds, a probe against a store answer (#2108).
+func Less(a, b string) bool {
+	ok, known := AtLeast(a, b)
+	return known && !ok
+}
