@@ -267,8 +267,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "the hosted-placeholder pairing without the LauncherPID gate" \
   "$PM_FILE" \
-  'if s.CWD == "" || isHost == nil || pm.launcherPIDs[s.Adapter] == nil {' \
-  'if s.CWD == "" || isHost == nil {' \
+  'return pm.sessionHosts[adapter] != nil && pm.launcherPIDs[adapter] != nil' \
+  'return pm.sessionHosts[adapter] != nil' \
   "$SERVICES" \
   '^TestCheckPIDLiveness_ServiceBoundOpencodeRootLeavesTheTUIPlaceholder$' \
   "was retired by a service-bound opencode root in its cwd"

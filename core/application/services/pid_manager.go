@@ -3046,8 +3046,7 @@ func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) [
 func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*hostGroup {
 	groups := make(map[[2]string]*hostGroup)
 	for _, s := range states {
-		isHost := pm.sessionHosts[s.Adapter]
-		if s.CWD == "" || isHost == nil || pm.launcherPIDs[s.Adapter] == nil {
+		if s.CWD == "" || !pm.pairsHostedRoots(s.Adapter) {
 			continue
 		}
 		if !pm.observeAllowed(s.Adapter) {
@@ -3060,7 +3059,7 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 		key := [2]string{s.Adapter, s.CWD}
 		g := groups[key]
 		if g == nil {
-			g = &hostGroup{isHost: isHost}
+			g = &hostGroup{isHost: pm.sessionHosts[s.Adapter]}
 			groups[key] = g
 		}
 		if placeholder {
@@ -3070,6 +3069,12 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 		}
 	}
 	return groups
+}
+
+// pairsHostedRoots reports whether adapter's roots take part in the hosted
+// pairing: it declares a session host and a LauncherPID (see hostGroups).
+func (pm *PIDManager) pairsHostedRoots(adapter string) bool {
+	return pm.sessionHosts[adapter] != nil && pm.launcherPIDs[adapter] != nil
 }
 
 // hostedPlaceholderMintLag is how much later than a root its client's
