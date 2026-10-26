@@ -346,18 +346,35 @@ Envelope: `{"version":"v1","kind":…,"data":{"content":[…]}}`. **`version` is
 
 ### 7. opencode (`opencode`)
 
-The odd one out twice over: **SQLite-backed**, and the **only full tailer bypass**.
+The odd one out twice over: **SQLite-backed**, and the **only full tailer bypass**. One adapter covers **both majors** of opencode: it reads the 1.x schema (`session`/`message`/`part`) and the 2.x schema (`session_v2`/`session_message`), and installs one of two hook plugins. The 2.x support landed as #2104's phases P1–P4 (#2112, #2113, #2114, #2115); the 2.x material is in the subsections headed "opencode 2.x". Everything else in this section applies to both majors unless it says 1.x.
 
-- **Storage**: `~/.local/share/opencode/opencode.db` — hardcoded `$HOME`-relative (`adapter.go:24`, `watcher.go:107`). **`$XDG_DATA_HOME` is not honored.** Driver: `modernc.org/sqlite` (pure Go, no CGo).
-- ⚠️ **corrected (#1090) — "WAL-watched" is misleading.** fsnotify watches the **parent directory** (`watcher.go:186-189`) and accepts a `Write` whose basename is `opencode.db` **or** `opencode.db-wal` (`:200-206`). **The WAL's contents are never read** — there is no frame parsing. Every read opens the **main DB** read-only (`?mode=ro&_journal=WAL&_timeout=500`). The `-wal` suffix survives only as (a) an fsnotify trigger name and (b) a routing sentinel baked into `TranscriptPath`.
-- ⚠️ **"Polling" is a misnomer** despite the package doc saying so. The steady state is **event-driven with a 500ms debounce** (`defaultMinScanGap`) — the debounce exists to break the feedback loop where irrlicht's own read-only open touches `.db-shm`. The only real ticker is a 5s wait that runs **only while the DB does not yet exist**.
+- **Storage**: ⚠️ **corrected (#2109) — `$XDG_DATA_HOME` IS honored since #2106.** `StorePath()` (`adapter.go:83-92`) resolves the store the way opencode does:
+  - `$OPENCODE_DB` when set: an absolute value as is, a relative one inside the data dir, and `:memory:` falls back to the default;
+  - else `opencode.db` in the data dir: `$XDG_DATA_HOME/opencode` (absolute values only, through `agentpaths`; `dataDir`, `:100-107`), else `~/.local/share/opencode`.
+  - A non-stable release channel's `opencode-<channel>.db` is **not** followed (`:80-82`).
+  - The watcher and the hook receiver both key sessions through this one resolver. Driver: `modernc.org/sqlite` (pure Go, no CGo).
+- **Schema switch, on every scan.** `storeIsV2` (`watcher.go:413-419`) asks `sqlite_master` for a `session_v2` table. With it the 2.x reader runs (`scanV2`), without it the 1.x reader (`watcher.go:338-345`); `ComputeMetrics` makes the same choice (`metrics.go:39-50`).
+  - **The 1.x reader never runs against a 2.x store** (#2105, `watcher.go:372-385`). A fresh 2.x store has no 1.x tables, and one 2.x migrated keeps them frozen.
+  - The schema is re-read on every scan because a running daemon sees a 1.x store turn into a 2.x one the moment opencode 2.x first opens it. A switch logs once and drops every cursor (`:392-404`). A schema lookup that fails skips that scan.
+- ⚠️ **corrected (#1090) — "WAL-watched" is misleading.** fsnotify watches the **parent directory** (`watcher.go:220-223`) and accepts a `Write` whose basename is the store's **or** the store's plus `-wal` (`isStoreWrite`, `:281-287`). **The WAL's contents are never read** — there is no frame parsing. The `-wal` suffix survives only as (a) an fsnotify trigger name and (b) a routing sentinel baked into `TranscriptPath` (`transcriptPathFor`, `adapter.go:117-119`).
+- ⚠️ **corrected (#2109) — the DSN.** Every read opens the **main DB** through `core/pkg/sqlitero` (`file:<path>?mode=ro&_timeout=500`, `sqlitero.go:82-86`). The `?mode=ro&_journal=WAL&_timeout=500` this line used to quote carried `_journal=WAL`, which is a write (`sqlitero.go:68-75`).
+- ⚠️ **"Polling" is a misnomer** despite the package doc saying so. The steady state is **event-driven**, at most one scan per 500 ms (`defaultMinScanGap`, `watcher.go:21`). The gap breaks the feedback loop in which irrlicht's own read-only open touches `.db-shm`.
+  - Since #2106 **one armed timer** runs every scan after the first (`watcher.go:225-266`), so a write inside the gap is scanned when the gap ends. Before that, such a write was dropped until some later write, and a turn end reached the daemon 8.7 s and 17 s late in the two live runs that comment records.
+  - The only real ticker is a 5 s wait that runs **only while the data directory does not exist yet** (`pollForDB`, `:810-826`).
 - **Change detection** = fsnotify event → debounced **full SQL re-query**. No diffing.
-- **Config**: ⚠️ **none read by the adapter** — confirmed: the package's only `filepath.Join` is `$HOME`+`dbRelPath`, and there are no file reads at all. *Footnote:* `~/.local/share/opencode/auth.json` **is** read elsewhere (`quotainherit.go:377`) for quota inheritance and cost attribution, keying on `openai-oauth`/`anthropic-oauth`. That's a credentials file outside the adapter and **does not affect detection or classification**.
-- **Process detection is a hard discovery gate**, not just a PID nicety: `agent.ExactName{"opencode"}` → `pgrep -x`. `maybeEmitNewSession` **refuses to emit a session unless a live opencode process owns that session's `directory`** (`watcher.go:373-380`) — otherwise every non-archived DB row would re-emit as live on each daemon start. **No live process ⇒ no session, regardless of DB content.**
-- **PID discovery**: `DiscoverPIDByCWD` — deliberately not lsof-based (opencode opens/closes the DB per write). Known trade-off: two instances in the same CWD are indistinguishable.
+- **Config**: ⚠️ **corrected (#2109) — opencode's own config is never read, but the adapter does read two files.** It writes and re-reads **its own plugin** (`hookinstaller.go`, behind `hooks`), and it reads the `version` of the newest session in the store to choose that plugin (`storeversion.go`, behind `database`). Both are covered in the 2.x subsections.
+  - *Footnote:* `~/.local/share/opencode/auth.json` **is** read elsewhere (`readOpenCodeInheritKey`, `quotainherit.go:413-430`) for quota inheritance: only the `openai-oauth` block's type and the account-id claim decoded from its access token. ⚠️ **corrected (#2109):** the `anthropic-oauth` block is **not** read, because it carries no account id. The path is `$HOME`-relative and does **not** follow `$XDG_DATA_HOME`. It **does not affect detection or classification**.
+- **Process match**: ⚠️ **corrected (#2109) — no longer `ExactName{"opencode"}` / `pgrep -x`.** Since #2106 it is an `agent.CommandPattern` over the whole command line, anchored on argv[0]: `^([^ ]*/)?opencode(2|\.exe)?( |$)` (`processCmdPattern`, `adapter.go:29-51`). It matches `opencode` (Homebrew), `opencode2` (the npm package's bin) and `opencode.exe` (that package's binary).
+  - It is anchored because an unanchored pattern matched driver scripts that merely named the binary. It uses `( |$)` because macOS `pgrep` has no `\s`. The cost: an argv[0] containing a space does not match.
+- **Clients and the 2.x service.** Of the matched processes, `IsServiceArgv` (`serviceargv.go:22-36`) picks out opencode 2.x's background service: `serve` is the first positional token after argv[0], and `--service` follows it before any `--`. It skips the values of `--server`, `--session`/`-s`, `--prompt`, `--log-level` and `--completions`, so `opencode run serve --service` is a client. Every other match is a **client** (a TUI or `opencode run`).
+  - The service is declared as `Process.SessionHostArgv` (`agent.go:54-67`), so the scanner mints **no `proc-<pid>` row** for it.
+- **Discovery gate (1.x)**: `maybeEmitNewSession` **refuses to emit a session unless a live client owns that session's `directory`** (`watcher.go:500-512`). Otherwise every non-archived DB row would re-emit as live on each daemon start. **No live client ⇒ no 1.x session, regardless of DB content.** The 2.x gate is different; see the store-reader subsection.
+- **PID discovery**: `DiscoverPID` (`pid.go:24-31`) looks first for a **client** whose cwd is the session's directory (`DiscoverPIDByCWDAndCmdLineExcludingArgv`, the service excluded), else the **2.x service** (`servicePIDFor`). It is deliberately not lsof-based, because opencode opens and closes the DB for each write.
+  - Known trade-offs: two clients in the same CWD are indistinguishable, and a client-less session in a directory a client runs in binds to that client (`pid.go:20-23`).
 - **Orphan reaping** uses "no process of this adapter owns the CWD" rather than mtime staleness, since a shared WAL makes mtime meaningless.
+  - Known residual (#2106, `agents/maps.go:93-101`): the startup zombie sweep matches `pgrep -x opencode`, so it counts the 2.x service and misses an `opencode2` client.
 
-#### Schema dependencies — the break surface
+#### Schema dependencies (1.x) — the break surface
 Three tables. Any rename/drop of a listed column is a hard break.
 
 | Table | Columns read |
@@ -382,25 +399,130 @@ Note the two paths order by **different columns** — dropping either fails asym
 **Inside `part.data`**: `type ∈ {step-start, step-finish, text, tool}`; `reason`; `tokens.{input,output,total}`; `tokens.cache.{read,write}`; `cost`; `text`; `state.status ∈ {pending,running,completed,error}`; `callID`; `tool`; `state.input.todos[].{content,status}` for `tool == "todowrite"`.
 **Inside `message.data`**: `role`, `model.modelID` (fallback top-level `modelID`), `error`.
 
-#### Turn termination — three independent producers
+#### Turn termination (1.x) — three producers, one gap
 1. **`step-finish`** with `reason ∈ {stop, interrupted, length, error, content-filter}` → `turn_done`. (`tool-calls` is the non-terminal reason.)
 2. **`message.data.error`** non-empty — opencode emits **no** `step-finish reason="error"` for an aborted turn, only a bare `step-start`, so without this the session sticks in `working` until process exit (#493).
-3. Known residual gap: a turn that errors before emitting **any** part has no row for the join to carry, and is not surfaced — the remaining half of #493.
+3. **The hook plugin's `session.idle`**, when `hooks` is granted (`hooks.go:289-305`): it releases any permission hold and reports an authoritative turn end. See the hook-plugin subsection.
+
+Known residual gap: a turn that errors before emitting **any** part has no row for the join to carry, and is not surfaced by the store — the remaining half of #493.
 
 ⚠️ **Two things that make opencode uniquely fragile:**
-- The terminal-reason set is **duplicated** in `parser.go:122-144` **and** `watcher.go:474-478`. An upstream reason rename must be patched in **both**.
-- It is **100% dependent on `turn_done`** (see State Classification above) — so any break in the paths below is unrecoverable, not degraded.
+- On 1.x the terminal-reason set is **duplicated** in `parser.go:140-172` **and** `watcher.go:613-626` (`isTerminalPart`). An upstream reason rename must be patched in **both**. (2.x has no such pair: both paths key on the one `idle` constant.)
+- It is **100% dependent on `turn_done`** (see State Classification above), and so is the 2.x branch, whose steps are all `assistant_message`. Any break in a turn-end path is unrecoverable, not degraded.
 
-#### Metrics
+#### Metrics (1.x)
 Per-step (not cumulative) tokens from `part.data.tokens`; `cost` is a top-level float on the part; model from `message.data.model.modelID`, defaulting to `"unknown"`. `CacheCreation` is accumulated into the contribution but has no `Cum*` field. `ComputeMetricsTimeline` returns nil for provider-backed adapters — **opencode has no metrics timeline**.
 
+#### opencode 2.x: the store reader (#2106, #2107)
+`watcher_v2.go`, `parser_v2.go`, `metrics_v2.go`. Two tables. Any rename/drop of a listed column is a hard break.
+
+| Table | Columns read |
+|---|---|
+| `session_v2` | `id`, `directory`, `time_updated`, `parent_id`, `time_archived` (watcher); `model`, `cost`, `tokens_input`, `tokens_output`, `tokens_cache_read`, `tokens_cache_write` (metrics); `version`, `time_created` (the hook version gate) |
+| `session_message` | `id`, `session_id`, `type`, `data`, `time_updated` (watcher and metrics); `seq` (metrics order) |
+
+```sql
+-- discovery (watcher_v2.go:69-76)
+SELECT id, directory, time_updated, parent_id FROM session_v2
+WHERE time_archived IS NULL AND time_updated >= ?
+ORDER BY time_updated DESC LIMIT 200
+-- activity (watcher_v2.go:138-144): the cursor is (time_updated, id)
+SELECT id, type, time_updated FROM session_message
+WHERE session_id = ? AND time_updated >= ?
+ORDER BY time_updated ASC, id ASC
+-- metrics (metrics_v2.go:27-44): totals from the session row, the rest folded in seq order
+SELECT directory, model, cost, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write
+FROM session_v2 WHERE id = ?
+SELECT type, data, time_updated FROM session_message WHERE session_id = ? ORDER BY seq ASC
+-- hook version gate (storeversion.go:51-52)
+SELECT version FROM session_v2 ORDER BY time_created DESC, id DESC LIMIT 1
+```
+Again the two paths order by different columns: the watcher by `time_updated`, metrics by `seq`. Discovery keeps the **`LIMIT 200`** cap.
+
+- **Row types.** `session_message.type ∈ {user, assistant, idle}`: one row per prompt, one per assistant **step**, and one `idle` row per turn end (`parser_v2.go:11-37`). No 1.x part type uses these names, so the row's type alone picks the parser branch (`parser.go:67` tries `parseV2Message` first).
+- **Assistant rows are rewritten in place** while the step streams: same id, same `seq`, a later `time_updated` (36 of 36 rows on the sandbox store, `watcher_v2.go:11-20`). That is why the activity cursor is `(time_updated, id)` and not `seq`.
+- **Inside `data`** (`parser_v2.go:17-25`, `:71-173`):
+  - `user`: `text`.
+  - `assistant`: `model.id`; `content[]` items of type `text` (`text`) and `tool` (`id`, `name`, `state.status ∈ {streaming, running, completed, error}`); `tokens.{input,output,reasoning}` and `tokens.cache.{read,write}`; `error`.
+  - `idle`: `outcome ∈ {succeeded, interrupted, failed}`; `error` (`type`, `message`, `status`).
+- **Turn end = the `idle` row**, whatever its outcome (`turn_done`). It also closes any tool the last stored step still showed running. A `failed` outcome becomes the session's error, taken from the idle row's own `error`, else from the last step's (`parser_v2.go:121-163`). The watcher marks a scan terminal on the same constant (`typ == v2TypeIdle`, `watcher_v2.go:156`).
+- **Admission is on activity, not on first sight** (`watcher_v2.go:22-34`, `:98-131`).
+  - The first scan that sees a session only seeds its cursor. The session is emitted when a `session_message` row is inserted or rewritten **after** that, and only while `admissionOnce` (`:86-96`) answers yes: **a 2.x service is running**, or **a live client owns the session's directory**.
+  - Consequences: a migrated 1.x row, never written again, is never admitted; a daemon start does not admit the up to `maxAge` (5 days) of sessions the store lists; and **after a daemon restart an idle 2.x session is not shown until its next write**.
+- ⚠️ **`time_suspended` is not a close** (`watcher_v2.go:36-42`). 2.x set it on a TUI's session 8 ms after creating it, held it through the turn and cleared it at the idle. A reader that skipped suspended rows lost every TUI session for exactly the span it was working. Only an **archived or deleted** row is gone: `emitRemovedForGoneV2Sessions` checks each tracked session the scan did not list (`:167-197`).
+- **Metrics.** Token totals and cost are `session_v2`'s **own columns**, not a sum of the steps, because they also count calls no step row carries: three sandbox steps summed to 2219 input tokens where the session row said 2254, the difference being the title call (`metrics_v2.go:13-20`). The model comes from the steps, else from the `id` in `session_v2.model` (`:65-71`). 2.x reports no per-step total, so a step's `Total` is the sum of its five counts (`parser_v2.go:165-173`).
+
+#### opencode 2.x: the shared service (#2107)
+- **One service per user.** 2.x runs a background service, `opencode serve --service`, whose cwd is `$HOME` (`serviceargv.go:3-7`). The stable service binds a fixed port, 49374, which lets only one run at a time (`pid.go:36-38`).
+  - irrlicht identifies it **by argv alone** (`IsServiceArgv`). It reads neither the port nor `service.json`, which carries the service's password and is covered by no consent (`pid.go:44-45`).
+- **Who owns a session.** A session a client runs binds to that client. A session **no client runs** — one made through the service's HTTP API — lives inside the service and binds to the **service's PID** through `servicePIDFor` (`pid.go:46-55`), and only while its `session_v2` row is live (`v2SessionLive`, `:76-88`).
+  - With **more than one** `serve --service` running (another release channel, say), no row says which hosts a session, so it binds **none** rather than guess.
+  - **Desktop-app and web-app sessions are assumed to be client-less too.** The code says so (`watcher_v2.go:25-26`, the consent copy at `agent.go:93-96`), but their process model is **unmeasured** (#2114's residue).
+- **Shared PID.** `OwnsSharedPID` (`pid.go:57-70`) is the adapter's `Process.SharedPIDOwner` (`agent.go:49-53`): the service PID is shared by any number of client-less roots while their rows live, and an archived or deleted one gives it up. **A client's PID is never shared**, so two roots on one TUI keep 1.x's exclusive supersession.
+  - PIDManager consults it wherever it would otherwise retire a same-PID duplicate: at PID assignment (`pid_manager.go:1064-1066`), in the seed-time and periodic dedupes (`:2781`, `:3175`, `:3211`), and when it records a retirement (`:2805`).
+  - A **service exit ends every root bound to it**: `HandleWatcherExit` fans out to every holder of the PID (`pid_manager.go:745-760`).
+- **How a service-bound session ends.** The service outlives every session it hosts, and a client detaching writes nothing distinctive to the store, so its live PID is no evidence a session is open.
+  - The **ready-session TTL** is the end rule: 30 min by default, `IRRLICHT_READY_SESSION_TTL` to change it (`core/domain/config/config.go:25`, `:194`).
+  - The mechanism: `idlesOnHost` (`pid_manager.go:1947-1966`) withdraws the live-PID protection from a root bound to its adapter's `SessionHostArgv` host when the adapter declares no `ReleasedPID`; `reapsIdleTopLevel` (`:1934-1942`) then ends it once it has been `ready` (or PID-less) past the TTL. A busy service-bound root is not reaped. Client-bound roots keep the protection.
+  - An archived or deleted row also ends it, through the store reader.
+  - A service-bound root captures **no launcher**: the service's environment is whichever client spawned it (`agent.go:61-66`).
+
+#### Hook plugin — one file, two renderings (#1719; 2.x: #2108)
+- **Path**: `<config>/plugin/irrlicht.js`, where `<config>` is `$XDG_CONFIG_HOME/opencode` (absolute values only), else `~/.config/opencode` (`hookinstaller.go:362-391`). `$OPENCODE_CONFIG_DIR` is deliberately not consulted: it **adds** a directory, and the default one is scanned regardless (`:371-378`). opencode's own config file is never touched.
+- **Consent**: written behind `hooks` (`KindModify`). The receiver also needs `database` before it reads a body (`hooks.go:226-242`).
+- **Delivery**: address-free. The file runs `irrlichd hook-post opencode` and writes `{hook_event_name, session_id}` to its stdin, plus `event_id` from the 2.x plugin; the beacon reads the daemon's published address at fire time (`plugin_v2.js:41-47`, `:101-114`). The receiver drops any session id without opencode's `ses` prefix (`hooks.go:107-112`, `:249-255`) and composes the session key itself (`transcriptPathFor`), never from the body.
+
+| | 1.x `plugin.js` | 2.x `plugin_v2.js` |
+|---|---|---|
+| Runs in | every opencode session | the shared service, **once per project directory it has open** (`plugin_v2.js:24-30`) |
+| Forwards | `permission.asked`, `permission.replied`, `session.idle` (`hookinstaller.go:155-159`) | `permission.asked`, `permission.replied`, `session.execution.succeeded`, `session.execution.failed`, `session.execution.interrupted` (`hookinstaller.go:205-211`, `plugin_v2.js:58-64`) |
+| Turn end | `session.idle` | `session.execution.*`; 2.x publishes **no** `session.idle` (`hookinstaller.go:174-178`) |
+| Repeats | none; no `event_id` sent | every event arrives **once per instance**; the plugin forwards opencode's own event id as `event_id` |
+
+- **Dispatch** (`hooks.go:282-313`): `permission.asked` → `HandlePermissionPromptHook` (waiting); `permission.replied` → `ReleasePermissionPromptHold`; `session.idle` or any `session.execution.*` → release the hold, then `HandleStopHook` (an authoritative turn end). Any other name goes to `IgnoreUnknownEvent`, counted and reported once.
+- **Dedupe by `event_id`** (`hooks.go:169-212`, `:257-277`): a ring-backed set of the **1024** most recent ids. An id longer than **128** bytes is dropped, not remembered (opencode 2.1.4's are 30). It applies only when `event_id` is set, so a 1.x payload is dispatched every time. It runs **before** dispatch, so a repeated `permission.asked` arriving after its reply cannot hold the session in waiting again.
+- **Why the hook matters**: a pending permission request is held in memory and **never written to the store** (`hooks.go:34-42`, read from the 1.x bundle; for 2.x, measured in #2104 item 6 and not re-derived from code here). Without `hooks` granted there is **no waiting at all**, and a turn ends only on the store's own signal.
+- **Excluded on purpose** (`hookinstaller.go:126-154`, `:196-205`): the `permission.ask` *hook*, whose output can answer the prompt; `session.status`; `tool.execute.before`/`.after`; `message.part.updated`. For 2.x also `session.execution.started`, because the store's rows already open the turn, and **`form.*`**, an unverified surface.
+- `session.execution.failed` was **not observed live**; its name was read out of the 2.1.4 bundle (`hookinstaller.go:184-189`).
+
+#### opencode 2.x: the version split — which plugin, if any (#2105, #2108)
+Declared as `ManagedUserFile.Variants`, one `[Min, Max)` range per artifact, inside an envelope `VersionGate` of `[1.14.50, 3.0.0)` (`agent.go:126-159`). Selection is `SelectVariant` (`core/domain/agent/declaration.go:550-603`).
+
+| Installed opencode | What is written | Bound (`hookinstaller.go`) |
+|---|---|---|
+| below 1.14.50 | nothing | `minOpenCodeVersion` (`:236`) |
+| 1.14.50 up to, not including, 2.0.0 | the 1.x `plugin.js` | `maxOpenCodeVersion` = 2.0.0 (`:248`), P1's ceiling |
+| 2.0.0 up to, not including, 2.1.4 | nothing; an earlier file of ours is removed | `minOpenCodeV2Version` = 2.1.4 (`:254`) |
+| 2.1.4 up to, not including, 3.0.0 | the 2.x `plugin_v2.js` | `maxOpenCodeV2Version` = 3.0.0 (`:260`) |
+| 3.0.0 and up | nothing; an earlier file of ours is removed | the envelope ceiling |
+| unreadable | a current install is kept; otherwise nothing | `VersionUnknown` |
+
+- **P1's ceiling** (#2105). 2.0.0 is the first version known to reject the 1.x plugin: 2.x logs `Plugin must export a default definition with an id and an effect or setup function` for it on every load (`hookinstaller.go:238-248`). At or above a ceiling, `runClosureEffect` writes nothing and removes only a file carrying irrlicht's sentinel (`permission_service.go:959-966`, `removeAfterCeilingRefusal`, `permission_version_gate.go:208`).
+- **Rewrite in place.** Both renderings share the path, the sentinel and the beacon line, so each reads the other's file as **ours but stale** (`hookinstaller.go:293-299`, `:419-429`). The #1372 re-verify loop rewrites a 1.x file under a 2.x opencode within one pass (`VerifyHooksInstalledV2`, `:473-478`), and 2.x hot-reloads it.
+- **Where the version comes from** (`resolveInstalledVersion`, `permission_version_gate.go:137-169`):
+  - First the store: `newestObservedCLIVersion` (`storeversion.go:33-45`) reads the `version` of the newest-**created** session in `session_v2`, else in `session`. It orders by creation because a 2.x migration imports 1.x sessions with their old version and timestamps. It is read only while `database` is granted (`ObservedRequires`, `agent.go:134-140`).
+  - Then, only when that answer does not parse or selects no variant, the probe `opencode --version` (`shouldConfirmByProbe`, `:254-263`). For a variant declaration the probe can only **raise** the store's answer, never lower it (`:152-166`).
+
+#### opencode 2.x: known limits a user will notice
+- **Waiting lingers 6–11 s after a permission reply.** This is the cross-adapter #1366 waiting-exit dwell: `waitingExitDwell` is 6 s (`core/domain/session/state_dwell.go:28`), plus up to one 5 s `staleWorkingRefreshInterval` (`session_detector.go:41`). Only the waiting→working edge is debounced (`state_dwell.go:101-106`).
+  - So a post-reply turn shorter than the dwell goes straight from waiting to ready. That was **measured** in #2115's live run (turns ending 3.4 s and 4.6 s after the reply), not derived from code.
+- **Session forms (`form.*`) are not forwarded**, so a form that blocks the user does not show as waiting.
+- **The desktop and web-app process model is unmeasured.** Those sessions are assumed to be client-less.
+- **A session appears on its first write after the watcher first sees it, not at creation**, and after a daemon restart an idle one stays hidden until its next write.
+
 #### What breaks it
-- Move/rename the DB, honor `$XDG_DATA_HOME`, shard per-project, or version-suffix it → blackout (the watcher waits on a path that never appears).
-- Rename the `session` table or its columns → `querySessions` errors, is **logged and swallowed** → no sessions, no user-visible error.
-- Rename the OS process (`opencode-tui`, or wrapping under `node`/`bun`) → **a perfectly good DB with zero detected sessions.**
+- Move/rename the DB **outside `StorePath`'s rules** (e.g. a release-channel `opencode-<channel>.db`, per-project sharding, a version suffix) → blackout (the watcher waits on a path that never appears).
+- Rename the `session` table or its columns → `querySessions` errors, is **logged and swallowed** → no 1.x sessions, no user-visible error.
+- Rename the executable so argv[0] is no longer `opencode`, `opencode2` or `opencode.exe` (`opencode-tui`, or running under `node`/`bun`) → **a perfectly good DB with zero detected sessions.**
 - Move off WAL (e.g. back to a rollback journal): writes land in `opencode.db-journal`, matching **neither** filter arm. Main-DB writes still fire on some ops, so this degrades to **erratic rather than dead** — worse to diagnose.
-- A `directory` value that isn't the process CWD (e.g. storing a project root while running from a subdir) → the `LiveCWDs` exact-string match misses → no session.
-- Rename `state.status` or `callID` → tool calls open and never close → `HasOpenToolCall` blocks `IsAgentDone` even with a valid turn_done.
+- A `directory` value that isn't the client's CWD (e.g. storing a project root while running from a subdir) → the live-client exact-string match misses → no 1.x session; on 2.x the session is admitted only while a service runs, and then binds to the service rather than the client.
+- Rename `state.status` or `callID` (1.x) → tool calls open and never close → `HasOpenToolCall` blocks `IsAgentDone` even with a valid turn_done.
+- **2.x:** drop or rename `session_v2` → `storeIsV2` answers false and the **1.x reader runs**: on the frozen 1.x tables of a migrated store, or on no tables at all in a fresh one.
+- **2.x:** rename `session_message` or its `type` values, or stop writing the `idle` row → no store turn end. With `hooks` granted, the `session.execution.*` hook still ends the turn.
+- **2.x:** change the service's argv (`serve --service`) → `IsServiceArgv` misses it: the service is treated as a client in `$HOME`, gets a `proc-<pid>` row, and client-less sessions find no service to admit or bind them.
+- **2.x:** a second `serve --service` running beside the first → client-less sessions bind to no PID (`pid.go:46-55`).
+- **2.x:** a plugin-format change, or renamed bus events → the plugin loads nothing or forwards nothing, and waiting disappears silently, because the store has none. From 3.0.0 nothing is written, by design.
+- **2.x:** `session_v2.version` no longer written → plugin selection falls back to the `opencode --version` probe.
 
 ### 8. Antigravity (`antigravity`)
 
