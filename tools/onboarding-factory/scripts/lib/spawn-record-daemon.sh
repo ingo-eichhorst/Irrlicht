@@ -31,6 +31,8 @@
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=managed-file-snapshot.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/managed-file-snapshot.sh"
+# shellcheck source=adapter-slug.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapter-slug.sh"
 
 # State published for the caller (and read back by stop_record_daemon).
 RECORD_DAEMON_PID=""
@@ -89,6 +91,70 @@ record_daemon_require_bindable_sock() {
   return 0
 }
 
+# record_daemon_refuse_live_sock <sock> refuses (returns 1, saying why) when a
+# daemon already answers HTTP on the socket this run's daemon is about to bind.
+# Two daemons on one IRRLICHT_HOME share its socket, addr file, consent file
+# and state stores; the run's hooks, and its fixture, would be split between
+# them. The opencode-v2 column (#2109) makes it concrete: its home is the
+# OpenCode sandbox's own $HOME/.local/share/irrlicht, which is also where a
+# sandbox QA daemon (qa-run.sh) lives. A socket file nobody answers on is
+# stale and is not refused — the daemon replaces it. Checked BEFORE the
+# managed-file snapshot, like the socket-length guard: a run that must not
+# start must not touch the user's agent config either.
+record_daemon_refuse_live_sock() {
+  local sock="$1" code
+  [[ -S "$sock" ]] || return 0
+  code="$(curl -s -m 2 --unix-socket "$sock" -o /dev/null -w '%{http_code}' http://localhost/api/v1/sessions 2>/dev/null || true)" # NOSONAR (shell:S5332) — a unix-socket probe; no TLS listener exists
+  if [[ -n "$code" && "$code" != "000" ]]; then
+    echo "spawn-record-daemon: a daemon already answers on $sock (HTTP $code) — another" >&2
+    echo "  irrlichd owns this IRRLICHT_HOME. Stop it, or record under a different home; two" >&2
+    echo "  daemons on one home split the run's hooks and state between them" >&2
+    return 1
+  fi
+  return 0
+}
+
+# record_daemon_wipe_state_stores <irrlicht-home> removes the state stores a
+# recording daemon persists under its IRRLICHT_HOME — instances/, sessions/
+# and cost/, core/cmd/irrlichd/paths.go's stateStoreDir names — so a daemon
+# started there restores no session an EARLIER daemon left behind.
+# spawn_record_daemon calls it, after both socket guards, when the caller sets
+# RECORD_DAEMON_WIPE_STATE_STORES=1; run-cell.sh does that for the opencode-v2
+# column only (#2109): that column's home is a shared one (the OpenCode
+# sandbox's), and a restored 2.x session binds to the one live service pid
+# (OwnsSharedPID), so it reads as alive in the raw recording. Nothing else in
+# the home is touched: not the consent file, not the addr file, not the socket.
+#
+# It refuses an empty or relative home, and the PRODUCTION default home
+# ($HOME/.local/share/irrlicht): the production daemon (IRRLICHT_HOME unset)
+# keeps its per-session ledgers in that sessions/ (core/cmd/irrlichd/paths.go),
+# and an opencode-v2 run against a 2.x service under the operator's own HOME
+# would point IRRLICHT_ONBOARD_HOME exactly there. Review of #2109's P5a
+# traced that path; the refusal is the fix.
+record_daemon_wipe_state_stores() {
+  local home="$1" d removed="" real prod
+  if [[ "$home" != /* ]]; then
+    echo "spawn-record-daemon: refusing to wipe state stores under '$home' — not an absolute IRRLICHT_HOME" >&2
+    return 1
+  fi
+  real="$(cd "$home" 2>/dev/null && pwd -P || printf '%s' "$home")"
+  prod="$(cd "$HOME/.local/share/irrlicht" 2>/dev/null && pwd -P || printf '%s' "$HOME/.local/share/irrlicht")"
+  if [[ "$real" == "$prod" ]]; then
+    echo "spawn-record-daemon: refusing to wipe $home — it is the PRODUCTION daemon's home, whose" >&2
+    echo "  sessions/ holds its session ledgers. The opencode-v2 rig records only against a 2.x" >&2
+    echo "  service that does NOT run under your own HOME (replaydata/agents/opencode-v2/prerequisites.md)" >&2
+    return 1
+  fi
+  for d in instances sessions cost; do
+    if [[ -e "$home/$d" ]]; then
+      rm -rf "${home:?}/$d" || { echo "spawn-record-daemon: could not remove $home/$d" >&2; return 1; }
+      removed+="${removed:+ }$d/"
+    fi
+  done
+  echo "spawn-record-daemon: wiped the daemon state stores under $home (${removed:-none were present})"
+  return 0
+}
+
 # record_daemon_env <recordings-dir> <bind-addr> [<irrlicht-home>] prints the
 # daemon's environment, one NAME=VALUE per line, for `env` to apply. One per
 # line (rather than an array) so it can be asserted directly by the unit tests;
@@ -106,30 +172,19 @@ record_daemon_require_bindable_sock() {
 # down in spawn_record_daemon: snapshot_managed_files backs up every one of
 # those files first and the EXIT trap hands them back. Keep the two together —
 # if the snapshot ever stops running, this must stop being set.
-# adapter_slug_to_daemon_name <slug> prints the daemon's registered
-# agent.Identity.Name for an onboarding-factory adapter SLUG ($ADAPTER, the
-# replaydata/agents/<slug> directory name). Every adapter's slug matches its
-# daemon identity verbatim EXCEPT claudecode: the pre-#319 registry spelling
-# "claude-code" survives (mirrors
-# tools/onboarding-factory/internal/shard/shard.go's SlugForAdapter, which
-# maps the same divergence in the OPPOSITE direction — identity to slug).
-#
-# This is not cosmetic: record_adapter_names feeds straight into
-# PermissionService.Start's EXACT-STRING recordAdapters lookup
-# (permission_service.go, scopedOutByRecordAdapters), so a mismatched name
-# doesn't fail loudly — it silently scopes OUT the very adapter the run is
-# recording. A first cut of #1769 shipped IRRLICHT_RECORD_ADAPTERS=claudecode
-# unmodified and was caught only by a review subagent driving the real
-# PermissionService end to end: recording a claudecode cell would have
-# withheld claudecode's OWN hooks/statusline/instructions grants, breaking
-# every hook-delivered signal in that adapter's recordings — the one adapter
-# this issue exists to protect.
-adapter_slug_to_daemon_name() {
-  case "$1" in
-    claudecode) printf '%s' "claude-code" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
+# adapter_slug_to_daemon_name (lib/adapter-slug.sh, sourced above) translates
+# a column slug to the daemon's agent.Identity.Name. This is not cosmetic:
+# record_adapter_names feeds straight into PermissionService.Start's
+# EXACT-STRING recordAdapters lookup (permission_service.go,
+# scopedOutByRecordAdapters), so a mismatched name doesn't fail loudly — it
+# silently scopes OUT the very adapter the run is recording. A first cut of
+# #1769 shipped IRRLICHT_RECORD_ADAPTERS=claudecode unmodified and was caught
+# only by a review subagent driving the real PermissionService end to end:
+# recording a claudecode cell would have withheld claudecode's OWN
+# hooks/statusline/instructions grants, breaking every hook-delivered signal in
+# that adapter's recordings — the one adapter this issue exists to protect.
+# opencode-v2 (#2109) and deepseek-harness are the same divergence; the map
+# lives in adapter-slug.sh so every lib that needs it reads one copy.
 
 # record_adapter_names <comma-separated-slugs> translates each onboarding-
 # factory adapter slug to its daemon identity name (adapter_slug_to_daemon_name
@@ -193,6 +248,12 @@ spawn_record_daemon() {
   RECORD_DAEMON_STAGING="$staging"
   RECORD_DAEMON_SOCK="$(record_daemon_sock "$home")"
   record_daemon_require_bindable_sock "$RECORD_DAEMON_SOCK" || return 1
+  record_daemon_refuse_live_sock "$RECORD_DAEMON_SOCK" || return 1
+  # Only after both socket guards: a run that must not start must not have
+  # removed anything either.
+  if [[ "${RECORD_DAEMON_WIPE_STATE_STORES:-0}" == "1" ]]; then
+    record_daemon_wipe_state_stores "$home" || return 1
+  fi
 
   # Save the shared agent config the daemon is about to rewrite (see
   # lib/managed-file-snapshot.sh); the shutdown hands it back. WHICH files those

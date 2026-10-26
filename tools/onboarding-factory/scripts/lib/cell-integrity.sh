@@ -117,7 +117,7 @@ ci_missing_artifacts() {
 }
 
 # CLI: cell-integrity.sh [agent] [replaydata-root]
-#   No agent → all five adapters. exit 0 = every recorded cell is complete;
+#   No agent → the six columns below. exit 0 = every recorded cell is complete;
 #   exit 1 = at least one incomplete/orphaned cell (listed on stderr).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -uo pipefail
@@ -131,7 +131,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   command -v jq >/dev/null || { echo "cell-integrity: jq is required" >&2; exit 2; }
 
   if [[ -n "$agent_arg" ]]; then agents=("$agent_arg"); else
-    agents=(claudecode codex pi aider opencode); fi
+    # opencode-v2 (#2109): OpenCode 2.x's column, graded from its first cells.
+    agents=(claudecode codex pi aider opencode opencode-v2); fi
 
   bad=0
   for agent in "${agents[@]}"; do

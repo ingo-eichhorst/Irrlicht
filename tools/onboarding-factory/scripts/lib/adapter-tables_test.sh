@@ -74,6 +74,22 @@ else
        "only in precheck.sh: [${only_pre:-none}]  only in promote-recording.sh: [${only_pro:-none}] — a missing arm stamps agent_cli_version \"unknown\"; a wrong VER_FIELD stamps the wrong token"
 fi
 
+echo "== opencode-v2's version is read from its store in BOTH tables, never by running a binary (#2109) =="
+# The column records OpenCode 2.x. On this rig's host `opencode` on PATH is
+# brew's 1.x — the wrong answer — and the 2.x binary run without the sandbox
+# environment migrates the operator's real opencode.db in place. So both tables
+# must carry the "@store" sentinel (lib/cli-version.sh) for it; agreeing with
+# EACH OTHER on a binary would pass B3 above and still run it.
+for table in "$PRECHECK" "$PROMOTE"; do
+  arm="$(adapter_triples_from "$table" | grep '^opencode-v2 ' || true)"
+  if [[ "$arm" == "opencode-v2 @store 0" ]]; then
+    pass "$(basename "$table"): opencode-v2 resolves through @store"
+  else
+    fail "$(basename "$table"): opencode-v2's arm" \
+         "expected [opencode-v2 @store 0], got [${arm:-no arm}] — a binary here is run by the rig"
+  fi
+done
+
 echo "== every driver that counts turns has an extracted, covered counter (B4) =="
 TEST_FILE="$ROOT/replaydata/_lib/drive/turn-count_test.sh"
 for d in "$ROOT"/replaydata/agents/*/driver-interactive.sh; do

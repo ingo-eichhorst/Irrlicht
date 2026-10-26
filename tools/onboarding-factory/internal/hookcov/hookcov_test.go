@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // repoRoot resolves the repository root from this test file's own path, the
@@ -55,19 +56,32 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	// rig row at all — righome.Unisolatable records the two measurements that
 	// make one impossible: no home override, and a login-keychain credential
 	// keyed off $HOME). A GAP here is the honest reading of that, not a defect.
+	//
+	// deepseek-harness and opencode-v2 are COLUMN keys (#2109): the
+	// deepseek-harness column is the dsh adapter's, and the opencode-v2 column
+	// (OpenCode 2.x) is the opencode adapter's second column. Each answers for
+	// its adapter.
 	want := map[string]bool{
 		"aider": false, "antigravity": true, "claudecode": true, "codex": true,
 		"copilot": true, "dsh": false, "gemini-cli": true, "hermes": true, "junie": false,
 		"kiro-cli": true, "mistral-vibe": true, "muse": false, "opencode": true, "pi": true,
+		"deepseek-harness": false, "opencode-v2": true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Declared() = %v\nwant %v", got, want)
 	}
 
-	// Every registry adapter must be represented, so a false is an answer
-	// rather than a missing key.
-	if len(got) != len(agents.All()) {
-		t.Errorf("Declared() has %d entries for %d registry adapters", len(got), len(agents.All()))
+	// Every registry adapter, and every aliased column, must be represented,
+	// so a false is an answer rather than a missing key.
+	for _, a := range agents.All() {
+		if _, ok := got[slug(a.Identity.Name)]; !ok {
+			t.Errorf("Declared() has no entry for registry adapter %q", a.Identity.Name)
+		}
+	}
+	for _, col := range shard.AliasedColumns() {
+		if _, ok := got[col]; !ok {
+			t.Errorf("Declared() has no entry for column %q", col)
+		}
 	}
 }
 

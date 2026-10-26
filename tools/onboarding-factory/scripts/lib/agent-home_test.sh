@@ -91,7 +91,9 @@ rows="$(agent_home_table | grep -c .)"
   || fail "table declares at least 4 adapters" ">=4" "$rows"
 
 echo "== every row is well formed =="
-malformed="$(agent_home_table | awk 'NF != 3 || $2 !~ /^[A-Z_]+$/ || ($3 != "default" && $3 != "optin") { print NR": "$0 }')"
+# Field 2 is one variable, or a comma list whose items may carry `:driver`
+# (#2109's opencode-v2 row). righome.Table refuses the same shapes in Go.
+malformed="$(agent_home_table | awk 'NF != 3 || $2 !~ /^[A-Z_][A-Z0-9_]*(:driver)?(,[A-Z_][A-Z0-9_]*(:driver)?)*$/ || ($3 != "default" && $3 != "optin") { print NR": "$0 }')"
 assert_eq "no malformed rows" "" "$malformed"
 
 echo "== predecessor's cases: copilot (policy=default) =="
@@ -156,6 +158,49 @@ for pair in "kiro-cli KIRO_HOME" "mistral-vibe VIBE_HOME"; do
   run_isolate "$a" "$TMP/unused-$a" "$v=rel/$a"
   assert_eq "$a relative → hard failure" "1" "$RUN_STATUS"
 done
+
+echo "== the multi-variable row: opencode-v2 is all or nothing (#2109) =="
+assert_eq "opencode-v2 exports three variables" "XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME" \
+  "$(agent_home_vars opencode-v2 | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "the daemon reads two of them (XDG_STATE_HOME is driver-only)" "XDG_CONFIG_HOME XDG_DATA_HOME" \
+  "$(agent_home_daemon_vars opencode-v2 | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "opencode-v2 is opt-in" "optin" "$(agent_home_policy opencode-v2)"
+
+# run_isolate_oc2 runs the isolate in a child under the given env and reports
+# "<status>|<every variable as a CHILD of the isolating shell sees it>" — the
+# same read-back-through-env discipline as run_isolate, for three variables.
+run_isolate_oc2() {
+  env "$@" bash -c '
+    source "$1/agent-home.sh"
+    agent_home_isolate opencode-v2 /unused >/dev/null 2>"$2/oc2err"
+    st=$?
+    printf "%d|" "$st"
+    for v in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
+      printf "%s=%s;" "$v" "$(env | sed -n "s/^$v=//p")"
+    done
+  ' _ "$DIR" "$TMP/probe"
+}
+unset_all=(-u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME)
+assert_eq "none set → exit 0, nothing exported" "0|XDG_CONFIG_HOME=;XDG_DATA_HOME=;XDG_STATE_HOME=;" \
+  "$(run_isolate_oc2 "${unset_all[@]}")"
+assert_eq "all set → all three exported" \
+  "0|XDG_CONFIG_HOME=$TMP/oc2/c;XDG_DATA_HOME=$TMP/oc2/d;XDG_STATE_HOME=$TMP/oc2/s;" \
+  "$(run_isolate_oc2 "${unset_all[@]}" XDG_CONFIG_HOME="$TMP/oc2/c" XDG_DATA_HOME="$TMP/oc2/d" XDG_STATE_HOME="$TMP/oc2/s")"
+got="$(run_isolate_oc2 "${unset_all[@]}" XDG_CONFIG_HOME="$TMP/oc2/c")"
+assert_eq "half set (XDG_CONFIG_HOME alone) → HARD failure" "1" "${got%%|*}"
+case "$(cat "$TMP/probe/oc2err")" in
+  *HALF-relocated*) pass "half set → names the half relocation" ;;
+  *) fail "half set → names the half relocation" "HALF-relocated" "$(cat "$TMP/probe/oc2err")" ;;
+esac
+got="$(run_isolate_oc2 "${unset_all[@]}" XDG_CONFIG_HOME="$TMP/oc2/c" XDG_DATA_HOME="rel/d" XDG_STATE_HOME="$TMP/oc2/s")"
+assert_eq "one relative value → HARD failure" "1" "${got%%|*}"
+
+# The all-or-nothing rule's committed mutation is
+# tools/lib/opencode-v2-rig-mutations_test.sh's "agent_home_isolate without
+# its half-relocation refusal", which deletes the real block. Measured there:
+# the half-set run still exits 1 — the absolute-path check then refuses the
+# unset variable's empty value — so what the rule adds is the reason, and the
+# assertion that goes red is "half set → names the half relocation" above.
 
 echo "== an adapter with no row is reported, never silent =="
 run_isolate aider "$TMP/unused-aider"

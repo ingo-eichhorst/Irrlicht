@@ -194,3 +194,73 @@ func TestCatalogRendersDerivedCellsFromCapabilityModel(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalogColumnsComeFromTheCatalogThroughTheColumnMap pins #2109's viewer
+// half: a column is a catalog column (shard.Agents) routed to its registry
+// adapter by shard.DaemonAdapterForSlug, not one registry adapter = one
+// column. Built from agents.All() alone, the opencode-v2 column (OpenCode 2.x,
+// the opencode adapter's second column) had no column at all, and the dsh
+// adapter's column was spelled "dsh" — a directory that does not exist — so
+// its cells under deepseek-harness/ never rendered.
+func TestCatalogColumnsComeFromTheCatalogThroughTheColumnMap(t *testing.T) {
+	dir := t.TempDir()
+	ag := filepath.Join(dir, "replaydata", "agents")
+	if err := os.MkdirAll(ag, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ag, "scenarios.json"), []byte(`{
+  "meta": {"min_versions": {"opencode": "1.0.0", "opencode-v2": "2.0.0", "deepseek-harness": "0.1.0"}},
+  "scenarios": [{"id": "2.1", "name": "basic-turn", "section": "S", "feature": "Basic"}]
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{"opencode-v2", "deepseek-harness"} {
+		cellDir := filepath.Join(ag, col, "scenarios", "2-1_basic-turn")
+		if err := os.MkdirAll(cellDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cellDir, "metadata.json"),
+			[]byte(`{"scenario_id": "basic-turn", "metadata": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}`),
+			0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := &Server{RepoRoot: dir}
+	rec := httptest.NewRecorder()
+	srv.handleCatalog(rec, httptest.NewRequest(http.MethodGet, "/api/catalog", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var doc struct {
+		Agents []struct {
+			ID string `json:"id"`
+		} `json:"agents"`
+		Scenarios []struct {
+			Coverage map[string]map[string]any `json:"coverage"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, a := range doc.Agents {
+		ids[a.ID] = true
+	}
+	for _, want := range []string{"opencode", "opencode-v2", "deepseek-harness"} {
+		if !ids[want] {
+			t.Errorf("agents has no %q column (got %v)", want, doc.Agents)
+		}
+	}
+	if ids["dsh"] {
+		t.Errorf("agents still carries a \"dsh\" column — no replaydata/agents/dsh directory exists")
+	}
+	if len(doc.Scenarios) != 1 {
+		t.Fatalf("want 1 scenario, got %d", len(doc.Scenarios))
+	}
+	for _, col := range []string{"opencode-v2", "deepseek-harness"} {
+		if got := doc.Scenarios[0].Coverage[col]["daemon_capability"]; got != "full" {
+			t.Errorf("coverage[%q].daemon_capability = %v, want full — the column's own cell was not read", col, got)
+		}
+	}
+}

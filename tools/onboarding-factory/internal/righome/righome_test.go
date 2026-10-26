@@ -9,15 +9,12 @@ import (
 	"testing"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/domain/agent"
+	"irrlicht/tools/onboarding-factory/internal/driverteardown"
 	"irrlicht/tools/onboarding-factory/internal/hookcov"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 )
-
-// permissionKeyHooks mirrors hookcov's private constant of the same value. The
-// join below is pinned against hookcov.Declared(), so a rename on either side
-// surfaces as an adapter reporting no hooks permission rather than as silence.
-const permissionKeyHooks = "hooks"
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -66,11 +63,11 @@ func TestRigHomeTableMatchesTheAdapterRegistry(t *testing.T) {
 
 // TestEveryRigHomeRowRelocatesBothHalves is the arm that carries the weight.
 //
-// A row is a promise the rig acts on: it exports that variable before spawning
-// the daemon, and the driver passes the same value to the agent CLI. Two things
-// have to move for that to mean anything, and an adapter can move one without
-// the other — claudecode is exactly that shape, which is why it is exempt
-// rather than rowed:
+// A row is a promise the rig acts on: it exports those variables before
+// spawning the daemon, and the driver passes the same values to the agent CLI.
+// Two things have to move for that to mean anything, and an adapter can move
+// one without the other — claudecode is exactly that shape, which is why it is
+// exempt rather than rowed:
 //
 //	the SESSION ROOT the daemon watches (agent.Source), and
 //	every FILE the hooks install writes (Writes.Path plus every Also).
@@ -81,9 +78,13 @@ func TestRigHomeTableMatchesTheAdapterRegistry(t *testing.T) {
 // everything else claims to be isolated — the worst of the three outcomes,
 // because it is the one that looks isolated.
 //
-// It grades the DECLARED variable against the REAL resolvers, so a row naming a
-// variable no adapter reads fails here even though it is perfectly well formed
-// and passes the static arm above.
+// It grades the DECLARED variables against the REAL resolvers, through
+// GradeRelocation: every daemon-read variable set together must move both
+// halves; each one set alone must move something (a row naming a variable no
+// resolver reads fails here even though it is perfectly well formed and
+// passes the static arm above); and a driver-only variable — opencode-v2's
+// XDG_STATE_HOME — must move nothing, rather than being demanded of the
+// daemon (#2109).
 func TestEveryRigHomeRowRelocatesBothHalves(t *testing.T) {
 	rows, err := Table(repoRoot(t))
 	if err != nil {
@@ -92,57 +93,108 @@ func TestEveryRigHomeRowRelocatesBothHalves(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(row.Adapter, func(t *testing.T) {
-			home := filepath.Join(t.TempDir(), "scratch-home")
-			t.Setenv(row.EnvVar, home)
-
-			a := registryAdapterAfterEnv(t, row.Adapter)
-			assertSessionRootRelocates(t, row, home, a)
-			assertHookWritesRelocate(t, row, home, a)
+			for _, p := range GradeRelocation(row, liveRelocationProbe(t, row)) {
+				t.Error(p)
+			}
 		})
 	}
 }
 
-// registryAdapterAfterEnv builds the registry and finds one adapter, and is a
-// separate step because it must run AFTER the caller has set the env var.
+// outrankingOverrides names, per adapter, the variables its resolvers read
+// BEFORE a row's variables — set, they decide the path whatever the row says.
+// opencode.StorePath honours OPENCODE_DB first and returns an absolute value as
+// is (core/adapters/inbound/agents/opencode/adapter.go), so a runner that
+// exports it would see the opencode-v2 row "fail" to move the store.
+var outrankingOverrides = map[string][]string{
+	opencode.AdapterName: {"OPENCODE_DB"},
+}
+
+// liveRelocationProbe is GradeRelocation's probe over the real registry: it
+// points each named variable at its own directory under one scratch home,
+// UNSETS the row's other variables and the adapter's outrankingOverrides (so
+// a variable set by the test runner's own environment cannot pass for, or
+// override, one the row moved), builds the registry, and resolves the
+// adapter's session roots and hook writes. The original values come back when
+// the test ends.
+func liveRelocationProbe(t *testing.T, row Row) RelocationProbe {
+	t.Helper()
+	home := filepath.Join(t.TempDir(), "scratch-home")
+	overrides := outrankingOverrides[shard.DaemonAdapterForSlug(row.Adapter)]
+	touched := append(row.AllVars(), overrides...)
+	for _, v := range touched {
+		if old, ok := os.LookupEnv(v); ok {
+			t.Cleanup(func() { os.Setenv(v, old) })
+		} else {
+			t.Cleanup(func() { os.Unsetenv(v) })
+		}
+	}
+	return func(set []string) (Resolved, error) {
+		for _, v := range touched {
+			os.Unsetenv(v)
+		}
+		for _, v := range set {
+			os.Setenv(v, filepath.Join(home, v))
+		}
+		a := registryAdapterAfterEnv(t, row.Adapter)
+		sessions, err := sessionRootsFor(a)
+		if err != nil {
+			return Resolved{}, fmt.Errorf("adapter %q: %w", a.Identity.Name, err)
+		}
+		hooks, err := hookWritesOf(a)
+		if err != nil {
+			return Resolved{}, fmt.Errorf("adapter %q: %w", a.Identity.Name, err)
+		}
+		return Resolved{Home: home, Sessions: sessions, Hooks: hooks}, nil
+	}
+}
+
+// registryAdapterAfterEnv builds the registry and finds the adapter that
+// records one column, and is a separate step because it must run AFTER the
+// caller has set the env vars.
 //
 // That ordering is the property rather than test hygiene. Three of the four
-// rows (copilot, codex, kiro-cli) declare a static Source.Dir computed by their
-// package's sessionsDir() at Agent() CONSTRUCTION time, so the watched root is
-// frozen when the registry is built; only vibe's DirFunc re-resolves lazily.
-// That is exactly why run-cell.sh has to export before spawn_record_daemon
-// rather than at any convenient point — a daemon already running cannot be
-// relocated. Building the registry first here reported all three as "does not
-// relocate", which is true of the object and false of the daemon.
-func registryAdapterAfterEnv(t *testing.T, slug string) agent.Agent {
+// original rows (copilot, codex, kiro-cli) declare a static Source.Dir computed
+// by their package's sessionsDir() at Agent() CONSTRUCTION time, so the watched
+// root is frozen when the registry is built; only vibe's DirFunc re-resolves
+// lazily. That is exactly why run-cell.sh has to export before
+// spawn_record_daemon rather than at any convenient point — a daemon already
+// running cannot be relocated. Building the registry first here reported all
+// three as "does not relocate", which is true of the object and false of the
+// daemon.
+//
+// The column is routed through shard.DaemonAdapterForSlug: the opencode-v2
+// column's adapter is opencode (#2109).
+func registryAdapterAfterEnv(t *testing.T, column string) agent.Agent {
 	t.Helper()
+	want := shard.DaemonAdapterForSlug(column)
 	for _, cand := range agents.All() {
-		if shard.SlugForAdapter(cand.Identity.Name) == slug {
+		if cand.Identity.Name == want {
 			return cand
 		}
 	}
-	t.Fatalf("no registry adapter with slug %q", slug)
+	t.Fatalf("no registry adapter %q for column %q", want, column)
 	return agent.Agent{}
 }
 
-// assertSessionRootRelocates is half one: if the watched root does not move,
-// the daemon records the operator's own sessions instead of the driver's.
-func assertSessionRootRelocates(t *testing.T, row Row, home string, a agent.Agent) {
-	t.Helper()
-	roots, err := sessionRootsOf(a)
-	if err != nil {
-		t.Fatalf("adapter %q: %v", row.Adapter, err)
+// storePathOverrides names the ProcessOwnedStore adapters whose
+// Source.PathForPID is a deliberate panic sentinel rather than a resolver, and
+// the function that resolves their store instead. opencode is the one:
+// agent.go's PathForPID panics "resolver not installed", because the daemon
+// constructs opencode's watcher inline (cmd/irrlichd/main.go) and a silent ""
+// would have produced no rows; StorePath is what that watcher opens. It is
+// named here, by adapter, rather than as a branch in sessionRootsOf's switch,
+// so the switch keeps answering only "what does this Source variant declare".
+var storePathOverrides = map[string]func() string{
+	opencode.AdapterName: opencode.StorePath,
+}
+
+// sessionRootsFor is sessionRootsOf, except for the adapters
+// storePathOverrides names.
+func sessionRootsFor(a agent.Agent) ([]string, error) {
+	if resolve, ok := storePathOverrides[a.Identity.Name]; ok {
+		return []string{resolve()}, nil
 	}
-	if len(roots) == 0 {
-		t.Fatalf("adapter %q resolves no session roots at all", row.Adapter)
-	}
-	for _, root := range roots {
-		if !strings.HasPrefix(root, home) {
-			t.Errorf("with %s=%s the session root is still %q — the daemon would watch the "+
-				"operator's real store while the driver wrote to the scratch home, and the "+
-				"recording would contain their sessions and not the driver's",
-				row.EnvVar, home, root)
-		}
-	}
+	return sessionRootsOf(a)
 }
 
 // sessionRootsOf resolves the paths the daemon watches for one adapter, for
@@ -224,42 +276,34 @@ func TestSessionRootsOfCoversEveryAgentSourceVariant(t *testing.T) {
 	}
 }
 
-// assertHookWritesRelocate is half two: if a written file does not move, the
-// install lands in the operator's real config while everything else in the run
-// claims to be isolated — the worst of the outcomes, because it looks isolated.
-func assertHookWritesRelocate(t *testing.T, row Row, home string, a agent.Agent) {
-	t.Helper()
-	var hooks *agent.Permission
-	for i := range a.Permissions {
-		if a.Permissions[i].Key == permissionKeyHooks {
-			hooks = &a.Permissions[i]
-		}
-	}
+// hookWritesOf resolves every file an adapter's hooks install writes:
+// Writes.Path plus every Writes.Also. An adapter with a rig-home row that
+// declares no hooks permission is refused rather than graded as "moved
+// nothing": the row's promise would only be half checked.
+func hookWritesOf(a agent.Agent) ([]string, error) {
+	hooks := hookcov.HooksPermission(a)
 	if hooks == nil {
-		t.Fatalf("adapter %q has a rig home row but declares no hooks permission — this arm's "+
-			"second half has nothing to grade, so the row's promise is only half checked; say "+
-			"so in the table rather than leaving it implied", row.Adapter)
+		return nil, fmt.Errorf("has a rig home row but declares no hooks permission — the row's second " +
+			"half has nothing to grade, so its promise is only half checked; say so in the table " +
+			"rather than leaving it implied")
 	}
 	if hooks.Writes == nil || hooks.Writes.Path == nil {
-		t.Fatalf("adapter %q's hooks permission declares no Writes.Path", row.Adapter)
+		return nil, fmt.Errorf("its hooks permission declares no Writes.Path")
 	}
-
 	resolvers := append([]func() (string, error){hooks.Writes.Path}, hooks.Writes.Also...)
+	out := make([]string, 0, len(resolvers))
 	for i, resolve := range resolvers {
-		label := "Writes.Path"
-		if i > 0 {
-			label = "Writes.Also[" + itoa(i-1) + "]"
-		}
 		got, err := resolve()
 		if err != nil {
-			t.Fatalf("resolving %s for %q: %v", label, row.Adapter, err)
+			label := "Writes.Path"
+			if i > 0 {
+				label = "Writes.Also[" + itoa(i-1) + "]"
+			}
+			return nil, fmt.Errorf("resolving %s: %w", label, err)
 		}
-		if !strings.HasPrefix(got, home) {
-			t.Errorf("with %s=%s the hooks install still writes %s to %q — the install would "+
-				"land in the operator's real config while everything else in the run claimed "+
-				"to be isolated", row.EnvVar, home, label, got)
-		}
+		out = append(out, got)
 	}
+	return out, nil
 }
 
 func itoa(i int) string {
@@ -309,20 +353,74 @@ func TestEveryRigHomeRowsDriverPassesTheHomeThroughTmux(t *testing.T) {
 					"cannot be checked, and a check that cannot run must say so", row.Adapter, err)
 			}
 
-			for _, l := range tmuxLaunchesMissingEnv(string(src), row.EnvVar) {
-				t.Errorf("%s:%d launches the agent under tmux without an explicit `env %s=…` "+
-					"prefix.\n%s\nThe pane inherits the tmux SERVER's environment, not the "+
-					"exported one, so on any machine with a server already running the daemon "+
-					"would watch the scratch home while the CLI wrote to the real one.",
-					path, l.line, row.EnvVar, l.window)
-			}
-			// Vacuity guard: a driver with no tmux launch at all satisfies the
-			// check above by having nothing to walk.
 			if countTmuxLaunches(string(src)) == 0 {
-				t.Errorf("%s contains no `tmux new-session` at all — this arm graded nothing", path)
+				assertServiceDriverChecksTheRow(t, path, string(src), row)
+				return
+			}
+			for _, v := range row.DaemonVars() {
+				for _, l := range tmuxLaunchesMissingEnv(string(src), v) {
+					t.Errorf("%s:%d launches the agent under tmux without an explicit `env %s=…` "+
+						"prefix.\n%s\nThe pane inherits the tmux SERVER's environment, not the "+
+						"exported one, so on any machine with a server already running the daemon "+
+						"would watch the scratch home while the CLI wrote to the real one.",
+						path, l.line, v, l.window)
+				}
 			}
 		})
 	}
+}
+
+// serviceEnvVarsDecl is the declaration a driver that launches NO agent
+// process carries instead of a tmux launch: the variables it checks the
+// already-running agent service's own environment for, before it drives
+// anything. opencode-v2's driver is the one (#2109): the 2.x service hosts
+// every session over HTTP, so there is no pane to hand a home to — the
+// service's environment was fixed when it started, and the only honest
+// promise is to refuse when it differs from the row's.
+const serviceEnvVarsDecl = "SERVICE_ENV_VARS="
+
+// assertServiceDriverChecksTheRow is the no-launch arm of the test above: the
+// driver must declare serviceEnvVarsDecl naming every variable of the row,
+// driver-only ones included (the driver reads the service's service.json
+// from its XDG_STATE_HOME, so a service under another state dir is another
+// service). A driver with neither a launch nor the declaration graded
+// nothing, and says so.
+func assertServiceDriverChecksTheRow(t *testing.T, path, src string, row Row) {
+	t.Helper()
+	declared, ok := scrapeServiceEnvVars(src)
+	if !ok {
+		t.Errorf("%s contains no `tmux new-session` and no %q declaration — this arm graded "+
+			"nothing", path, serviceEnvVarsDecl)
+		return
+	}
+	for _, v := range row.AllVars() {
+		if !declared[v] {
+			t.Errorf("%s launches no agent process, and its %s does not name %s — a service "+
+				"started under a different %s would be driven while the daemon watched the row's",
+				path, serviceEnvVarsDecl, v, v)
+		}
+	}
+}
+
+// scrapeServiceEnvVars reads a top-level SERVICE_ENV_VARS="A B C" line the way
+// recipe-lint reads DRIVE_ELICITS: quotes stripped, whitespace-split.
+func scrapeServiceEnvVars(src string) (map[string]bool, bool) {
+	for _, line := range strings.Split(src, "\n") {
+		if !strings.HasPrefix(line, serviceEnvVarsDecl) {
+			continue
+		}
+		raw := strings.TrimPrefix(line, serviceEnvVarsDecl)
+		if i := strings.Index(raw, "#"); i >= 0 {
+			raw = raw[:i]
+		}
+		raw = strings.NewReplacer(`"`, "", `'`, "").Replace(raw)
+		out := map[string]bool{}
+		for _, f := range strings.Fields(raw) {
+			out[f] = true
+		}
+		return out, len(out) > 0
+	}
+	return nil, false
 }
 
 // launchSite is one `tmux new-session` that does not carry the home variable.
@@ -343,15 +441,10 @@ func tmuxLaunchWindow(lines []string, i int) string {
 
 // countTmuxLaunches is the vacuity guard's own measurement, kept separate from
 // the verdict so "no launches found" cannot be confused with "all launches OK".
-func countTmuxLaunches(src string) int {
-	n := 0
-	for _, line := range strings.Split(src, "\n") {
-		if strings.Contains(line, "tmux new-session") {
-			n++
-		}
-	}
-	return n
-}
+// It is driverteardown.LaunchCount — comments stripped — so the static
+// teardown grader and this test agree on which drivers launch nothing (#2109:
+// that answer now routes a driver to the no-launch arms).
+func countTmuxLaunches(src string) int { return driverteardown.LaunchCount(src) }
 
 // launchWindowCarries reports whether one `tmux new-session` statement passes
 // envVar into the pane, in any spelling the drivers actually use.

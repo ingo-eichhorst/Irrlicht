@@ -1,0 +1,91 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-10-26T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nOpenCode 2.x gates a shell call behind a permission ask when the config says `bash: ask`; the recipe pins that in the cell's project-local opencode.json. The ask is answerable over the API (GET /api/session/{id}/permission, POST …/permission/{rid}/reply), which is the primitive the 1.x column never had (driver_gap:permission-approval). The daemon traces the ask through the 2.x plugin's permission.asked hook, which holds the session in waiting (HandlePermissionPromptHook) until permission.replied releases it (#2108). P4's QA run measured the arc live: S2 working → waiting (held 10s) → ready.\n\n## Spec choices\n\n- The reply is held 10s so waiting is observable, then answered `once`.\n- No post-reply working is asserted: the #1366 waiting-exit dwell (6s, plus up to a 5s refresh tick) swallowed it in P4 (the turn ended 3.4–4.6s after the reply). The turn-end phase anchors on waiting and expects ready.\n- The scenario text's 'final state waiting' describes a recipe that never answers; this column answers, so the arc closes.",
+      "caveats": [
+        "A turn that ends within the waiting-exit dwell goes waiting → ready with no working sample (#1366); the spec does not assert one.",
+        "The model must actually call the shell tool; a model that answers without it records no ask and fails permission_waiting."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: session_v2/session_message; a session is admitted on its first activity while a service is up (#2107)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/pid.go",
+          "note": "servicePIDFor: a session no client runs binds to the one running service"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/pr2115-p4/summary.txt",
+          "note": "P4 QA run on the sandbox service: S1 working → ready, S2 working → waiting → ready, S3 interrupted → ready, all on the service pid"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Splash model at 127.0.0.1:8085); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "settings pin `permission.bash: ask` in RUN_CWD/opencode.json, independent of the service's global config",
+        "permission_reply polls the session's pending asks, holds the first one 10s, then answers once"
+      ],
+      "settings": {
+        "permission": {
+          "bash": "ask"
+        }
+      },
+      "timeout_seconds": 240,
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the shell tool to run the command: date. Then report its output."
+        },
+        {
+          "type": "permission_reply",
+          "decision": "once",
+          "hold_seconds": 10
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "working, then a permission.asked hook_received and waiting on the same session",
+        "the session stays waiting while the ask is held",
+        "after the reply the turn ends in ready (a working sample in between is not required)"
+      ]
+    }
+  }
+}

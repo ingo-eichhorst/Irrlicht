@@ -48,7 +48,7 @@ done
 source "$LIBDIR/agent-home.sh"
 # shellcheck source=../onboarding-factory/scripts/lib/hook-install-wait.sh
 source "$LIBDIR/hook-install-wait.sh"
-for fn in agent_home_var wait_for_hook_install hook_install_explicit_paths hook_install_manifest_has; do
+for fn in agent_home_var agent_home_daemon_vars wait_for_hook_install hook_install_explicit_paths hook_install_manifest_has; do
   if ! declare -F "$fn" >/dev/null; then
     echo "FAIL: hook-install-wait_test — sourcing the libs defined no $fn" >&2
     exit 1
@@ -171,6 +171,55 @@ out="$(wait_for_hook_install pi "$S5" 2>&1)"; rc=$?
 unset PI_CODING_AGENT_DIR
 assert_eq "LOCK: rig-home prefix selection still passes when the file is there" 0 "$rc"
 assert_says "LOCK: …naming the prefix it selected on" "$S5DIR" "$out"
+
+echo "== a multi-variable row polls under EVERY daemon-read home (#2109) =="
+# opencode-v2's row is XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver. The
+# plugin lands under the FIRST; a wait that read one variable — the old shape —
+# would read the whole comma field as a variable name, find no value, and
+# decline to wait at all.
+OC2="$TMP/oc2"
+OC2_PLUGIN="$OC2/config/opencode/plugin/irrlicht.js"
+S6="$(staging_with s6 "$(printf 'absent\t0\t%s' "$OC2_PLUGIN")")"
+mkdir -p "$(dirname "$OC2_PLUGIN")"; : > "$OC2_PLUGIN"
+out="$(XDG_CONFIG_HOME="$OC2/config" XDG_DATA_HOME="$OC2/data" XDG_STATE_HOME="$OC2/state" \
+  wait_for_hook_install opencode-v2 "$S6" 2>&1)"; rc=$?
+assert_eq "opencode-v2: the plugin under XDG_CONFIG_HOME is waited for and found" 0 "$rc"
+assert_says "…counting the one declared file" "all 1 managed file(s)" "$out"
+assert_says "…naming the config home it polled" "$OC2/config/opencode" "$out"
+rm -f "$OC2_PLUGIN"
+out="$(XDG_CONFIG_HOME="$OC2/config" XDG_DATA_HOME="$OC2/data" XDG_STATE_HOME="$OC2/state" \
+  wait_for_hook_install opencode-v2 "$S6" 2>&1)"; rc=$?
+assert_eq "opencode-v2: a plugin that never arrives refuses the run" 1 "$rc"
+assert_says "…naming it" "$OC2_PLUGIN" "$out"
+# An XDG base directory is shared: another tool's managed file under it (the
+# kitty terminal integration's kitty.conf, absent and never written by an
+# opencode recording — measured on the first live opencode-v2 run) is not this
+# column's to wait for, only <base>/opencode/ is.
+S8="$(staging_with s8 "$(printf 'absent\t0\t%s' "$OC2_PLUGIN")" "$(printf 'absent\t1\t%s' "$OC2/config/kitty/kitty.conf")")"
+mkdir -p "$(dirname "$OC2_PLUGIN")"; : > "$OC2_PLUGIN"
+out="$(XDG_CONFIG_HOME="$OC2/config" XDG_DATA_HOME="$OC2/data" XDG_STATE_HOME="$OC2/state" \
+  wait_for_hook_install opencode-v2 "$S8" 2>&1)"; rc=$?
+assert_eq "opencode-v2: another tool's file under the shared XDG base is not waited on" 0 "$rc"
+assert_says "…naming the adapter's own subdirectory as the prefix" "$OC2/config/opencode" "$out"
+# When the plugin never arrives, the failure names the daemon's own refusal
+# for the ADAPTER — the daemon writes unapplied_grants[].agent as "opencode",
+# never as the column slug, so a filter on "opencode-v2" found nothing and
+# reported "the daemon names NO refusal" over a real one (#2109). curl is
+# shadowed so the daemon's permissions endpoint is a canned answer.
+rm -f "$OC2_PLUGIN"
+curl() { printf '%s' '{"unapplied_grants":[{"agent":"opencode","key":"hooks","reason":"version 1.19.4 is below the 2.x artifact"}]}'; return 0; }
+out="$(XDG_CONFIG_HOME="$OC2/config" XDG_DATA_HOME="$OC2/data" XDG_STATE_HOME="$OC2/state" \
+  wait_for_hook_install opencode-v2 "$S6" 127.0.0.1:7999 2>&1)"; rc=$?
+unset -f curl
+assert_eq "opencode-v2: a missing plugin with a named refusal still refuses" 1 "$rc"
+assert_says "…and names the opencode adapter's refusal" "the daemon names a refusal: hooks: version 1.19.4" "$out"
+# The driver-only variable is no place a hook install writes: a manifest row
+# under XDG_STATE_HOME is not something this column's wait owns.
+S7="$(staging_with s7 "$(printf 'absent\t0\t%s' "$OC2/state/opencode/x.json")")"
+out="$(XDG_CONFIG_HOME="$OC2/config" XDG_DATA_HOME="$OC2/data" XDG_STATE_HOME="$OC2/state" \
+  wait_for_hook_install opencode-v2 "$S7" 2>&1)"; rc=$?
+assert_eq "opencode-v2: nothing is polled under the driver-only XDG_STATE_HOME" 0 "$rc"
+assert_says "…and says nothing was checked" "nothing was checked" "$out"
 
 if (( fails > 0 )); then
   echo "hook-install-wait_test: $fails failure(s)"
