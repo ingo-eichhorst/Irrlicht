@@ -1969,10 +1969,11 @@ func (pm *PIDManager) idlesOnHost(snap livenessSnapshot) bool {
 // onSessionHost reports whether pid is adapter's session host: the adapter
 // declares a Process.SessionHostArgv and pid's argv matches it. Behind observe
 // consent, because it reads the PID's argv; an unreadable argv is not the
-// host, as the SessionHostArgv contract has it.
+// host, as the SessionHostArgv contract has it — which also covers a pid <= 0,
+// whose argv processlifecycle.ReadArgv answers nil without a read.
 func (pm *PIDManager) onSessionHost(adapter string, pid int) bool {
 	isHost := pm.sessionHosts[adapter]
-	if isHost == nil || pm.hostReadArgv == nil || pid <= 0 {
+	if isHost == nil || pm.hostReadArgv == nil {
 		return false
 	}
 	return pm.observeAllowed(adapter) && isHost(pm.hostReadArgv(pid))
