@@ -588,3 +588,61 @@ func TestVariantGate_AnUpgradeIsNotReportedAsTampering(t *testing.T) {
 		t.Errorf("no info line names the version the artifact was rewritten for; infos were %s", infos)
 	}
 }
+
+// unreadablePlugin seeds the 2.x plugin and makes it unreadable, restoring the
+// mode at cleanup so the temp tree can be removed.
+func unreadablePlugin(t *testing.T, path string) {
+	t.Helper()
+	if _, err := opencode.EnsureHooksInstalledV2(); err != nil {
+		t.Fatalf("seed the 2.x plugin: %v", err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("the plugin is still readable at mode 0 (running as root?) — this test cannot make it unreadable")
+	}
+}
+
+// TestVariantGate_ReverifyCannotReadThePluginAtTheNextMajor is red-first for
+// the follow-up review's finding 1: above every artifact the loop decides from
+// whether a file of ours is there, and a Verify that could not read the file
+// was taken as "none there" — the pass read intact, said nothing, and removed
+// nothing. Inability to look must read as unreadable, as it already does
+// inside a variant's range.
+func TestVariantGate_ReverifyCannotReadThePluginAtTheNextMajor(t *testing.T) {
+	path := isolateOpenCodeConfig(t)
+	unreadablePlugin(t, path)
+	observed := "3.0.0"
+	decl := opencodeAgentObserving(t, &observed, nil)
+	svc, log := newGateService()
+	v := verifierFor(t, svc, decl, log)
+
+	v.RunPassForTest(time.Unix(1_800_000_000, 0))
+
+	if snap := v.Snapshot(); snap.Outcomes[ReverifyUnreadable] != 1 {
+		t.Errorf("outcomes = %v, want unreadable:1 — a plugin the pass could not read is not an intact one", snap.Outcomes)
+	}
+}
+
+// TestVariantGate_AnUnknownVersionCannotReadThePlugin is red-first for the same
+// finding on the install path: with the version unknown, the keep rule reads
+// the installed file, and a read that fails must say so in the refusal rather
+// than read as "nothing installed".
+func TestVariantGate_AnUnknownVersionCannotReadThePlugin(t *testing.T) {
+	path := isolateOpenCodeConfig(t)
+	unreadablePlugin(t, path)
+	svc, log := newGateService()
+	p := opencodeHooksAt(t, "")
+	p.Writes.Version.Probe = probeSaying("")
+
+	grant(svc, p)
+
+	svc.mu.Lock()
+	reason := svc.effectErrs[effectKey("test-agent", "hooks")]
+	svc.mu.Unlock()
+	if !strings.Contains(reason, "permission denied") {
+		t.Errorf("EffectError = %q, want it to carry the failed read of the installed plugin (errors %v)", reason, log.errors)
+	}
+}

@@ -42,7 +42,7 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 		// variant declaration cannot pick its artifact without a version.
 		consequence := "installing anyway — an unreadable version is not an old one"
 		if len(p.Writes.Variants) > 0 {
-			consequence = "the artifact is chosen by the version, so an unreadable one installs nothing"
+			consequence = "the artifact is chosen by the version, so an unreadable one writes nothing new"
 		}
 		s.log.LogInfo("permissions", "", fmt.Sprintf(
 			"%s: version probe failed (%v); %s", p.Key, probeErr, consequence))
@@ -54,7 +54,13 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 		// variant's artifact that is installed and current is kept — its
 		// Apply finds the file current and writes nothing — rather than
 		// refused into an effect error no later intact pass would clear.
-		if kept := currentVariant(p.Writes); kept != nil {
+		kept, err := currentVariant(p.Writes)
+		if err != nil {
+			// Could not look at what is installed: say so, rather than
+			// refuse as if nothing were there.
+			return nil, bound, fmt.Errorf("%s; reading the installed hook file also failed: %w", why, err)
+		}
+		if kept != nil {
 			s.log.LogInfo("permissions", "", fmt.Sprintf(
 				"%s: the installed CLI's version is unknown; keeping the hook artifact for %s, which is installed and current",
 				p.Key, variantRange(kept)))
@@ -68,34 +74,45 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 }
 
 // currentVariant returns the variant whose artifact is installed and current
-// — its own Verify reads intact — or nil. Read-only: Verify writes nothing.
-func currentVariant(w *agent.ManagedUserFile) *agent.HookVariant {
+// — its own Verify reads intact — or nil. Read-only: Verify writes nothing. A
+// Verify that fails is returned as the error, never read as "not current":
+// not being able to look is not the same finding as nothing being there.
+func currentVariant(w *agent.ManagedUserFile) (*agent.HookVariant, error) {
 	for i := range w.Variants {
 		v := &w.Variants[i]
 		if v.Verify == nil {
 			continue
 		}
-		if status, err := v.Verify(); err == nil && status.Intact() {
-			return v
+		status, err := v.Verify()
+		if err != nil {
+			return nil, err
+		}
+		if status.Intact() {
+			return v, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // oursPresent reports whether some variant reads a file of ours at the path,
 // current or not: its Verify reports no event Missing (Missing is what an
-// absent or foreign file reads as; Stale is ours, not current).
-func oursPresent(w *agent.ManagedUserFile) bool {
+// absent or foreign file reads as; Stale is ours, not current). A failing
+// Verify is returned as the error, as in currentVariant.
+func oursPresent(w *agent.ManagedUserFile) (bool, error) {
 	for i := range w.Variants {
 		v := &w.Variants[i]
 		if v.Verify == nil {
 			continue
 		}
-		if status, err := v.Verify(); err == nil && len(status.Missing) == 0 {
-			return true
+		status, err := v.Verify()
+		if err != nil {
+			return false, err
+		}
+		if len(status.Missing) == 0 {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // variantEvents is every variant's events, each once, in declaration order —
@@ -160,13 +177,19 @@ func resolveInstalledVersion(ctx context.Context, granted func(agentName, key st
 		return installed, err
 	}
 	if len(w.Variants) > 0 && versionOlder(probed, installed) {
-		// A variant declaration takes the probe only UPWARD. The passive
-		// answer is the version that last wrote the user's own store, so it
-		// can be stale only downward (an upgrade since); a probe naming an
-		// OLDER version is reading another install — cliprobe resolves
-		// /opt/homebrew/bin first (#2105 correction 1), where a brew 1.x can
-		// sit beside an npm 2.x. Taking it would write the artifact the CLI
-		// that wrote the store rejects (#2104 item 10).
+		// A variant declaration takes the probe only UPWARD — a deliberate
+		// trade-off, not a claim that the store cannot be ahead. The passive
+		// answer is the version that last wrote the user's own store: stale
+		// DOWNWARD after an upgrade, which the probe corrects here, and stale
+		// UPWARD after a downgrade, until the downgraded CLI writes its first
+		// session and the #1372 loop follows it within one pass. A probe
+		// naming an OLDER version cannot be told apart from another install
+		// cliprobe resolved first — /opt/homebrew/bin, where a brew 1.x can sit
+		// beside an npm 2.x (#2105 correction 1) — and taking that answer
+		// writes the artifact the CLI that wrote the store rejects (#2104 item
+		// 10). The downgrade lag is the cheaper error; it was measured as
+		// impossible only for 2.x→1.x (#2104 item 3: 1.x hangs on a store 2.x
+		// migrated), not for a future major.
 		return installed, nil
 	}
 	return probed, nil
@@ -257,10 +280,11 @@ func (s *PermissionService) removeAfterCeilingRefusal(e pendingEffect, refused e
 // an artifact is never confirmed by a probe, and a refused one is confirmed
 // only UPWARD (resolveInstalledVersion): opencode's store reading 2.1.4 selects
 // the 2.x artifact even where cliprobe would resolve a brew 1.19.4 first
-// (#2105 correction 1), and a store reading 3.0.0 is not lowered to it. That
-// is the direction #2104 item 3 makes safe — opencode 1.x hangs on a store 2.x
-// has migrated, so a store a newer major wrote is not one an older CLI is
-// running against.
+// (#2105 correction 1), and a store reading 3.0.0 is not lowered to it — at
+// the cost of lagging a real downgrade until its first session (see
+// resolveInstalledVersion). For 2.x over 1.x the direction is measured safe:
+// opencode 1.x hangs on a store 2.x has migrated (#2104 item 3), so a store
+// 2.x wrote is not one a 1.x CLI is running against.
 func shouldConfirmByProbe(w *agent.ManagedUserFile, installed string) bool {
 	if len(w.Version.Probe) == 0 {
 		return false

@@ -59,6 +59,10 @@
 #      plugin survives a 3.0.0 opencode.
 #  28. the #1372 loop reporting a major change as damage → the designed
 #      upgrade rewrite is logged as someone else's tampering (finding 3).
+#  29. oursPresent swallowing a failed Verify → above every artifact, a plugin
+#      the loop cannot read reads intact (follow-up review finding 1).
+#  30. the install's keep rule swallowing a failed Verify → an unknown
+#      version's refusal hides that the installed file could not be read.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -400,8 +404,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "hookVersionRefusal without keeping a current install" \
   "$GATE" \
-  'if kept := currentVariant(p.Writes); kept != nil {' \
-  'if kept := currentVariant(p.Writes); false && kept != nil {' \
+  'if kept != nil {' \
+  'if false && kept != nil {' \
   "$SERVICES" \
   '^TestVariantGate_AnUnknownVersionAtStartKeepsACurrentInstall$' \
   "with a current install on disk, want none"
@@ -410,8 +414,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "unselectedStatus ignoring a current install" \
   "$REVERIFY" \
-  $'case agent.VersionUnknown:\n\t\tif currentVariant(w) == nil {' \
-  $'case agent.VersionUnknown:\n\t\tif true {' \
+  'if err != nil || current != nil {' \
+  'if err != nil || (current != nil && false) {' \
   "$SERVICES" \
   '^TestVariantGate_AnUnknownVersionKeepsACurrentInstall$' \
   "want no repair at all"
@@ -420,8 +424,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "unselectedStatus without the ceiling removal" \
   "$REVERIFY" \
-  'if oursPresent(w) {' \
-  'if false && oursPresent(w) {' \
+  'if err != nil || !present {' \
+  'if err != nil || !present || true {' \
   "$SERVICES" \
   '^TestVariantGate_ReverifyAtTheNextMajorRemovesOnceThenRests$' \
   "the 2.x plugin survived a pass under opencode 3.0.0"
@@ -430,11 +434,31 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "verifyTarget without the upgrade note" \
   "$REVERIFY" \
-  'if current := currentVariant(t.variants); current != nil && current != variant {' \
-  'if current := currentVariant(t.variants); false && current != nil && current != variant {' \
+  'if current, _ := currentVariant(t.variants); current != nil && current != variant {' \
+  'if current, _ := currentVariant(t.variants); false && current != nil && current != variant {' \
   "$SERVICES" \
   '^TestVariantGate_AnUpgradeIsNotReportedAsTampering$' \
   "the 1.x → 2.x rewrite was logged as tampering"
+
+# ── 29. oursPresent swallowing a failed Verify ──
+assert_go_test_goes_red \
+  "oursPresent reading a failed Verify as nothing there" \
+  "$GATE" \
+  $'\t\tif err != nil {\n\t\t\treturn false, err' \
+  $'\t\tif err != nil {\n\t\t\treturn false, nil' \
+  "$SERVICES" \
+  '^TestVariantGate_ReverifyCannotReadThePluginAtTheNextMajor$' \
+  "want unreadable:1"
+
+# ── 30. the keep rule swallowing a failed Verify ──
+assert_go_test_goes_red \
+  "hookVersionRefusal hiding a failed read of the installed file" \
+  "$GATE" \
+  $'kept, err := currentVariant(p.Writes)\n\t\tif err != nil {' \
+  $'kept, err := currentVariant(p.Writes)\n\t\tif false && err != nil {' \
+  "$SERVICES" \
+  '^TestVariantGate_AnUnknownVersionCannotReadThePlugin$' \
+  "want it to carry the failed read of the installed plugin"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-hooks-mutations: $fails FAILED"

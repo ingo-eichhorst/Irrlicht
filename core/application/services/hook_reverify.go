@@ -486,7 +486,8 @@ func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, st
 	installed, _ := resolveInstalledVersion(ctx, granted, t.adapter, t.variants)
 	variant, bound, _ := t.variants.SelectVariant(installed)
 	if variant == nil {
-		return unselectedStatus(t.variants, bound), "", nil
+		status, err = unselectedStatus(t.variants, bound)
+		return status, "", err
 	}
 	if variant.Verify == nil {
 		return agent.HookEntryStatus{}, "", fmt.Errorf("the selected hook artifact (%s) declares no Verify", variantRange(variant))
@@ -495,7 +496,8 @@ func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, st
 	if err != nil || status.Intact() {
 		return status, "", err
 	}
-	if current := currentVariant(t.variants); current != nil && current != variant {
+	// A failed read here only costs the label: the status above stands.
+	if current, _ := currentVariant(t.variants); current != nil && current != variant {
 		upgrade = fmt.Sprintf("the installed CLI is %s, so the hook artifact for %s replaces the current one for %s (#2108)",
 			installed, variantRange(variant), variantRange(current))
 	}
@@ -520,18 +522,26 @@ func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, st
 //     gone, leaving the refusal the removal recorded as the effect error.
 //   - BelowFloor: intact. A floor refusal removes nothing (#2105), so a
 //     repair could only record the refusal again on every back-off.
-func unselectedStatus(w *agent.ManagedUserFile, bound agent.VersionBound) agent.HookEntryStatus {
+//
+// A variant Verify that cannot read the file is returned as the error, which
+// the loop records as unreadable — the same outcome a selected variant's
+// failed Verify gets — never as intact.
+func unselectedStatus(w *agent.ManagedUserFile, bound agent.VersionBound) (agent.HookEntryStatus, error) {
 	switch bound {
 	case agent.VersionUnknown:
-		if currentVariant(w) == nil {
-			return agent.HookEntryStatus{Missing: variantEvents(w)}
+		current, err := currentVariant(w)
+		if err != nil || current != nil {
+			return agent.HookEntryStatus{}, err
 		}
+		return agent.HookEntryStatus{Missing: variantEvents(w)}, nil
 	case agent.AtOrAboveCeiling:
-		if oursPresent(w) {
-			return agent.HookEntryStatus{Stale: variantEvents(w)}
+		present, err := oursPresent(w)
+		if err != nil || !present {
+			return agent.HookEntryStatus{}, err
 		}
+		return agent.HookEntryStatus{Stale: variantEvents(w)}, nil
 	}
-	return agent.HookEntryStatus{}
+	return agent.HookEntryStatus{}, nil
 }
 
 func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error, now time.Time) {
