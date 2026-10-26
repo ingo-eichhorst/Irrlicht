@@ -474,6 +474,17 @@ type Process struct {
 	// every stale transcript in a directory one of its processes runs in. Its
 	// Source must also declare ParentSessionIDFromPath, because that admission
 	// excludes subagents only through the event's ParentSessionID.
+	//
+	// Both requirements bind only an adapter whose transcripts can be stale.
+	// A DB-backed key — a TranscriptPath carrying "?session=", which a
+	// ProcessOwnedStore adapter's watcher emits (opencode, #2107) — never is:
+	// the session detector's isStaleTranscript answers false for it, so its
+	// admitStaleTranscript admits on its first line and never asks the
+	// stale-transcript writer probe; and such a watcher's EventNewSession
+	// carries the session's ParentSessionID itself (opencode: emitNewSession,
+	// from session_v2.parent_id). Read in core/application/services
+	// (helpers.go, session_detector_activity.go) and in opencode's watcher.go,
+	// and pinned by TestAdmitStaleTranscript_DBBackedKeyNeverAsksTheWriterProbe.
 	SharedPIDOwner SharedPIDOwnerFunc
 	// ReleasedPID is optional. It ends a root session whose PID is still alive
 	// but has provably released the session's transcript, for an agent whose
@@ -501,11 +512,17 @@ type Process struct {
 
 	// SessionHostArgv, when non-nil, recognizes a matched process that hosts
 	// this agent's sessions on behalf of the processes a user talks to — the
-	// shared codex app-server (#2077). The scanner mints no pre-session for it,
-	// as for ExcludeArgv. Unlike ExcludeArgv, a root session legitimately binds
-	// to it, so nothing reaps a session for being bound to it; a root bound to
-	// it instead retires the pre-session its client left behind (#2082). A nil
-	// argv must not match, as for ExcludeArgv.
+	// shared codex app-server (#2077), opencode 2.x's service (#2105). The
+	// scanner mints no pre-session for it, as for ExcludeArgv. Unlike
+	// ExcludeArgv, a root session legitimately binds to it, so nothing reaps a
+	// session for being bound to it as infrastructure. With a LauncherPID also
+	// declared, a root bound to it retires the pre-session its client left
+	// behind (#2082); with none declared, a root bound to it captures no
+	// launcher, because the host's env is the spawning client's (#2107). With
+	// no ReleasedPID declared, the host's being alive no longer keeps an idle
+	// ready root from the ready-session TTL (#2107): the host outlives its
+	// sessions and nothing else ends one. A nil argv must not match, as for
+	// ExcludeArgv.
 	SessionHostArgv func(argv []string) bool
 
 	// RequireKnownHost, when true, gates session admission on the bound

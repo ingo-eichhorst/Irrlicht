@@ -985,8 +985,14 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// processes, so leave the reaper unwired there.
 	if !deps.DemoMode {
 		detector.SetInfraReaper(agents.ArgvExcluders(allAgents), processlifecycle.ReadArgv)
-		// Let the presession sweep retire a codex TUI's placeholder once a
-		// root in its cwd binds to the app-server hosting its thread (#2082).
+		// Recognize a root bound to its adapter's session host — codex's
+		// app-server, opencode 2.x's service. The presession sweep then
+		// retires a codex TUI's placeholder once a root in its cwd binds to
+		// the app-server (#2082), the ready TTL ends an idle opencode root
+		// the live service still hosts, and such a root captures no launcher
+		// from the service (#2107). Wired together with SetLauncherPIDs below:
+		// an adapter with no LauncherPID is read as one whose hosts have no
+		// client.
 		detector.SetSessionHosts(agents.SessionHosts(allAgents), processlifecycle.ReadArgv)
 		// Read a hosted codex root's launcher from its TUI when that TUI is
 		// the only one in the root's cwd, rather than from the daemon (#2083).

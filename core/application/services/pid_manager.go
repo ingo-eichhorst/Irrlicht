@@ -234,15 +234,23 @@ type PIDManager struct {
 	misboundRoots  map[releaseKey]bool
 
 	// sessionHosts maps adapter name → its Process.SessionHostArgv, and
-	// hostReadArgv reads a live PID's argv; together they let the presession
-	// sweep recognize a root bound to its adapter's session host (#2082). Both
-	// nil disables that pairing; installed once at startup via SetSessionHosts.
+	// hostReadArgv reads a live PID's argv; together they recognize a root
+	// bound to its adapter's session host. The presession sweep's pairing
+	// reads them directly in hostGroups/pairHostedRoots, and needs a
+	// LauncherPID too (#2082); onSessionHost reads them for the launcher
+	// backfill/refresh skip (boundToSessionHost, #2083), the ready-TTL host
+	// rule (idlesOnHost, #2107) and the launcher-capture skip
+	// (hostedWithoutClient, #2107). Both nil disables every one of these;
+	// installed once at startup via SetSessionHosts.
 	sessionHosts map[string]func([]string) bool
 	hostReadArgv func(pid int) []string
 	// launcherPIDs maps adapter name → its Process.LauncherPID: for a root
 	// bound to a host process, the process whose env and tty feed the
-	// launcher instead (#2083). Nil disables it; installed once at startup
-	// via SetLauncherPIDs. Consulted only behind observe consent.
+	// launcher instead (#2083). Its absence for an adapter is read as "this
+	// adapter's hosts have no client" by the pairing gate (hostGroups) and the
+	// launcher-capture skip (hostedWithoutClient), so it is wired together with
+	// sessionHosts; see SetLauncherPIDs. Installed once at startup via
+	// SetLauncherPIDs. Consulted only behind observe consent.
 	launcherPIDs map[string]agent.LauncherPIDFunc
 	// launcherReadAllowed reports whether the launcher read the hook's answer
 	// feeds is granted. Nil allows it; installed via SetLauncherReadGate.
@@ -372,11 +380,16 @@ func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, r
 	pm.readArgv = readArgv
 }
 
-// SetSessionHosts installs the seam the presession sweep uses to retire the
-// placeholder a hosted root's client left behind (#2082). hosts maps adapter
-// name → Process.SessionHostArgv; readArgv reads a PID's argv. Both nil (the
-// default, and what tests/demo mode leave) disables the pairing. Called once
-// at startup.
+// SetSessionHosts installs the seam that recognizes a root bound to its
+// adapter's session host: the presession sweep uses it to retire the
+// placeholder a hosted root's client left behind (#2082, with SetLauncherPIDs
+// too), the liveness sweep to let the ready TTL end an idle root such a host
+// still holds (idlesOnHost, #2107), and launcher capture to skip a root on a
+// host with no client (hostedWithoutClient). hosts maps adapter name →
+// Process.SessionHostArgv; readArgv reads a PID's argv. Both nil (the default,
+// and what tests/demo mode leave) disables all of these, and the launcher
+// backfill/refresh skip of #2083 (boundToSessionHost) with them; see the
+// sessionHosts field. Called once at startup.
 func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, readArgv func(pid int) []string) {
 	pm.sessionHosts = hosts
 	pm.hostReadArgv = readArgv
@@ -385,8 +398,11 @@ func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, read
 // SetLauncherPIDs installs the seam launcher capture uses to read a hosted
 // root's launcher from the process the user talks to (#2083). hooks maps
 // adapter name → Process.LauncherPID. Nil (the default, and what tests/demo
-// mode leave) keeps every launcher read on the session's own PID. Called once
-// at startup.
+// mode leave) keeps every launcher read on the session's own PID — except
+// where SetSessionHosts is wired: there an adapter with no entry here is one
+// whose hosts have no client, so a root on its host captures no launcher
+// (hostedWithoutClient, #2107) and pairs with no placeholder (hostGroups).
+// Startup wires the two together. Called once at startup.
 func (pm *PIDManager) SetLauncherPIDs(hooks map[string]agent.LauncherPIDFunc) {
 	pm.launcherPIDs = hooks
 }
@@ -461,9 +477,14 @@ func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath stri
 //
 // The read is of launcherSourcePID's answer, which is pid itself except for a
 // root its adapter's Process.LauncherPID attributes to another process
-// (#2083); state.PID is never changed here.
+// (#2083); state.PID is never changed here. A root bound to a host with no
+// client (hostedWithoutClient) captures none (#2107): the host's env is the
+// spawning client's, not the session's.
 func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if pm.launcherEnv == nil || state == nil || state.Launcher != nil || pid <= 0 {
+		return
+	}
+	if pm.hostedWithoutClient(state.Adapter, pid) {
 		return
 	}
 	// hostKnown is deliberately ignored: a first capture has no stored host to
@@ -513,14 +534,7 @@ func (pm *PIDManager) launcherSourcePID(state *session.SessionState, pid int) in
 // the roots whose launcher must never be read from their own PID once set
 // (#2083). Behind observe consent, because it reads the bound PID's argv.
 func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
-	isHost := pm.sessionHosts[state.Adapter]
-	if isHost == nil || pm.launcherPIDs[state.Adapter] == nil {
-		return false
-	}
-	if pm.hostReadArgv == nil || !pm.observeAllowed(state.Adapter) {
-		return false
-	}
-	return isHost(pm.hostReadArgv(state.PID))
+	return pm.launcherPIDs[state.Adapter] != nil && pm.onSessionHost(state.Adapter, state.PID)
 }
 
 // captureRoute invokes the route reader if one is installed and the session
@@ -923,7 +937,11 @@ func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
 // dsh and muse on 2026-10-11), each one asks
 // processlifecycle.DiscoverPIDByTranscriptWriter about the transcript or its
 // session lock. Muse asks about the lock and then the transcript, so a muse
-// session nobody holds costs two probes. Every other adapter, including
+// session nobody holds costs two probes. Opencode declares one too (#2107),
+// with a cwd-match PIDForSession, and is never asked here: its keys are
+// DB-backed (`?session=`), for which isStaleTranscript is false, so
+// admitStaleTranscript admits before reaching this probe (see
+// agent.Process.SharedPIDOwner). Every other adapter, including
 // claude-code, which writes and closes its transcript, gets (0, nil) and no
 // probe. The probe sits behind the same observe-consent gate as the shared-PID
 // probes. Its darwin cost is the lsof.writer row of the measurement quoted on
@@ -1917,11 +1935,57 @@ func (pm *PIDManager) reapsIdleTopLevel(snap livenessSnapshot) bool {
 	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
 		return false
 	}
-	// Don't delete sessions whose process is still alive.
-	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
+	if pm.livePIDKeeps(snap) {
 		return false
 	}
 	return snap.sessionState == session.StateReady || snap.pid == 0
+}
+
+// livePIDKeeps reports whether snap's process is still alive and so keeps the
+// session from the idle reap — unless that process is a host whose life says
+// nothing about the session's (idlesOnHost).
+func (pm *PIDManager) livePIDKeeps(snap livenessSnapshot) bool {
+	if snap.pid <= 0 || syscall.Kill(snap.pid, 0) != nil {
+		return false
+	}
+	return !pm.idlesOnHost(snap)
+}
+
+// idlesOnHost reports whether snap's root is bound to its adapter's session
+// host (onSessionHost) while that adapter declares no ReleasedPID — the root
+// whose live PID is no evidence the session is still open (#2107).
+// The host outlives every session it holds, and with no release probe nothing
+// else ends one: opencode 2.x's service hosts the sessions no client runs, and
+// a client detaching writes nothing distinctive to the store (#2104's
+// measurement). So for such a root the ready-session TTL is the end rule,
+// which reapsIdleTopLevel applies. Codex declares a ReleasedPID and ends a
+// released root through endReleasedRoots instead, so its idle roots keep the
+// live-PID protection: TestCheckPIDLiveness_IdleCodexRootOnAppServerIsNotReapedAsInfra
+// is that lock.
+func (pm *PIDManager) idlesOnHost(snap livenessSnapshot) bool {
+	return pm.releasedPIDs[snap.adapter] == nil && pm.onSessionHost(snap.adapter, snap.pid)
+}
+
+// onSessionHost reports whether pid is adapter's session host: the adapter
+// declares a Process.SessionHostArgv and pid's argv matches it. Behind observe
+// consent, because it reads the PID's argv; an unreadable argv is not the
+// host, as the SessionHostArgv contract has it — which also covers a pid <= 0,
+// whose argv processlifecycle.ReadArgv answers nil without a read.
+func (pm *PIDManager) onSessionHost(adapter string, pid int) bool {
+	isHost := pm.sessionHosts[adapter]
+	if isHost == nil || pm.hostReadArgv == nil {
+		return false
+	}
+	return pm.observeAllowed(adapter) && isHost(pm.hostReadArgv(pid))
+}
+
+// hostedWithoutClient reports whether pid is adapter's session host while the
+// adapter declares no LauncherPID — a root bound there has no client process
+// to take a launcher from (#2107). Opencode 2.x's service is such a host: it
+// hosts the sessions no client runs, and it inherits the env of whichever
+// client spawned it, so its terminal is no session's.
+func (pm *PIDManager) hostedWithoutClient(adapter string, pid int) bool {
+	return pm.launcherPIDs[adapter] == nil && pm.onSessionHost(adapter, pid)
 }
 
 // reapStaleChild deletes snap when it's a finished or zombie subagent (ready,
@@ -2939,7 +3003,8 @@ type hostGroup struct {
 // TUI's placeholder and the cwd fallback waits 90s.
 //
 // The rule, for an adapter that declares a session host
-// (Process.SessionHostArgv) and whose observe consent is granted: within one
+// (Process.SessionHostArgv) and a LauncherPID (see hostGroups for why) and
+// whose observe consent is granted: within one
 // cwd, each root whose bound PID's argv that predicate recognizes retires the
 // oldest placeholder that was first seen before the root (or within
 // hostedPlaceholderMintLag after it) and does not share its PID — one
@@ -2977,13 +3042,20 @@ func (pm *PIDManager) hostedPlaceholderVictims(states []*session.SessionState) [
 }
 
 // hostGroups groups states by (adapter, cwd) for the adapters that declare a
-// session host and whose observe consent is granted: placeholders, and the
-// roots that could have been hosted — top-level, with a transcript and a PID.
+// session host and a LauncherPID and whose observe consent is granted:
+// placeholders, and the roots that could have been hosted — top-level, with a
+// transcript and a PID.
+//
+// The LauncherPID is what says a hosted root has a client process of its own
+// — the process whose placeholder the pairing retires — as boundToSessionHost
+// reads it too. Codex declares one. Opencode does not (#2107): a 2.x client's
+// session binds to the client, whose own PID retires its placeholder, and a
+// root bound to the service has no client at all, so pairing it would retire
+// the placeholder of an unrelated client in the same directory.
 func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*hostGroup {
 	groups := make(map[[2]string]*hostGroup)
 	for _, s := range states {
-		isHost := pm.sessionHosts[s.Adapter]
-		if s.CWD == "" || isHost == nil {
+		if s.CWD == "" || !pm.pairsHostedRoots(s.Adapter) {
 			continue
 		}
 		if !pm.observeAllowed(s.Adapter) {
@@ -2996,7 +3068,7 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 		key := [2]string{s.Adapter, s.CWD}
 		g := groups[key]
 		if g == nil {
-			g = &hostGroup{isHost: isHost}
+			g = &hostGroup{isHost: pm.sessionHosts[s.Adapter]}
 			groups[key] = g
 		}
 		if placeholder {
@@ -3006,6 +3078,12 @@ func (pm *PIDManager) hostGroups(states []*session.SessionState) map[[2]string]*
 		}
 	}
 	return groups
+}
+
+// pairsHostedRoots reports whether adapter's roots take part in the hosted
+// pairing: it declares a session host and a LauncherPID (see hostGroups).
+func (pm *PIDManager) pairsHostedRoots(adapter string) bool {
+	return pm.sessionHosts[adapter] != nil && pm.launcherPIDs[adapter] != nil
 }
 
 // hostedPlaceholderMintLag is how much later than a root its client's

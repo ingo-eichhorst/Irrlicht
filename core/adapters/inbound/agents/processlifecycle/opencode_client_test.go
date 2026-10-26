@@ -1,7 +1,13 @@
 package processlifecycle_test
 
 import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
@@ -76,5 +82,140 @@ func TestOpenCodeLiveClientCWDs_ExcludesTheService(t *testing.T) {
 	}
 	if _, ok := live[driverDir]; ok {
 		t.Errorf("a driver naming opencode only in its arguments put %s in the live set %v", driverDir, live)
+	}
+}
+
+// opencodeV2StoreWith builds an opencode 2.x store from opencode 2.1.4's real
+// schema (the adapter's testdata/v2-schema.sql) holding one session_v2 row per
+// id — archived when archived[id] — and returns its path.
+func opencodeV2StoreWith(t *testing.T, dir string, archived map[string]bool, ids ...string) string {
+	t.Helper()
+	ddl, err := os.ReadFile(filepath.Join("..", "opencode", "testdata", "v2-schema.sql"))
+	if err != nil {
+		t.Fatalf("read the 2.x schema: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(string(ddl)); err != nil {
+		t.Fatalf("create the 2.x schema: %v", err)
+	}
+	for _, id := range ids {
+		var archivedAt any
+		if archived[id] {
+			archivedAt = int64(1792960000000)
+		}
+		if _, err := db.Exec(`INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated, time_archived)
+			VALUES (?, 'prj', 'slug', ?, '2.1.4', 1792950000000, 1792950000000, ?)`, id, dir, archivedAt); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	return dbPath
+}
+
+// opencodeV1Store builds a store with only 1.x's `session` table — no
+// session_v2 — holding id, and returns its path.
+func opencodeV1Store(t *testing.T, dir, id string) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, time_archived INTEGER)`,
+		`INSERT INTO session (id, directory) VALUES ('` + id + `', '` + dir + `')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	return dbPath
+}
+
+// sessionKey is the watcher's key for a session: the store's WAL with the
+// session id in a query parameter.
+func sessionKey(dbPath, id string) string { return dbPath + "-wal?session=" + id }
+
+// TestOpenCodeDiscoverPID_BindsAClientlessSessionToTheService is #2107's
+// red-first test for binding. A session no client runs — created through the
+// service's HTTP API, the desktop app or the web app — binds to the one 2.x
+// service, which hosts it. On the P2 build it bound to nothing (PID 0), and
+// with no PID neither the service's exit nor the same-PID policy reached it.
+//
+// The other rows are locks on what the fallback must not reach: a client in
+// the directory still wins, and the service is bound only for a live 2.x row —
+// not an archived one, and not a 1.x store's session, which no 2.x service
+// hosts (another HOME's service can run beside the daemon's own 1.x store).
+func TestOpenCodeDiscoverPID_BindsAClientlessSessionToTheService(t *testing.T) {
+	_, tuiProject, _, _, _ := opencodeV2Processes(t)
+	elsewhere := canonicalTempDir(t)
+	v2 := opencodeV2StoreWith(t, elsewhere, map[string]bool{"ses_archived": true}, "ses_api", "ses_tui", "ses_archived")
+	v1 := opencodeV1Store(t, elsewhere, "ses_v1")
+	for _, c := range []struct {
+		name, cwd, key string
+		want           int
+	}{
+		{"client-less 2.x session binds to the service", elsewhere, sessionKey(v2, "ses_api"), 42001},
+		{"a client in the session's directory still wins", tuiProject, sessionKey(v2, "ses_tui"), 42002},
+		{"an archived session is not bound to the service", elsewhere, sessionKey(v2, "ses_archived"), 0},
+		{"a session the store does not hold is not bound to the service", elsewhere, sessionKey(v2, "ses_unknown"), 0},
+		{"a 1.x store's session is not bound to a 2.x service", elsewhere, sessionKey(v1, "ses_v1"), 0},
+	} {
+		got, err := opencode.DiscoverPID(c.cwd, c.key, nil)
+		if err != nil || got != c.want {
+			t.Errorf("%s: DiscoverPID(%s) = (%d, %v), want (%d, nil)", c.name, c.cwd, got, err, c.want)
+		}
+	}
+}
+
+// TestOpenCodeDiscoverPID_BindsNoServiceWhenItCannotTellWhich: the service
+// binds a fixed port, so one runs per user — but another HOME's or another
+// channel's can run beside it, and which one hosts a session is not in its
+// row. Two services bind none rather than guess; none binds none.
+func TestOpenCodeDiscoverPID_BindsNoServiceWhenItCannotTellWhich(t *testing.T) {
+	home, other, project := canonicalTempDir(t), canonicalTempDir(t), canonicalTempDir(t)
+	key := sessionKey(opencodeV2StoreWith(t, project, nil, "ses_api"), "ses_api")
+	for _, c := range []struct {
+		name  string
+		procs map[int]processlifecycle.FakeProcess
+	}{
+		{"two services", map[int]processlifecycle.FakeProcess{
+			43001: {Name: "opencode", CWD: home, Argv: []string{"/opt/homebrew/bin/opencode", "serve", "--service"}},
+			43002: {Name: "opencode.exe", CWD: other, Argv: []string{"/x/node_modules/@opencode/cli/bin/opencode.exe", "serve", "--service"}},
+		}},
+		{"no service", map[int]processlifecycle.FakeProcess{
+			43003: {Name: "opencode", CWD: home, Argv: []string{"/opt/homebrew/bin/opencode", "serve"}},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			processlifecycle.SetFakeProcessesForTest(t, c.procs)
+			if got, err := opencode.DiscoverPID(project, key, nil); err != nil || got != 0 {
+				t.Errorf("DiscoverPID = (%d, %v), want (0, nil)", got, err)
+			}
+		})
+	}
+}
+
+// TestOpenCodeServicePIDs_AnUnreadableArgvIsNoService: a process pgrep lists
+// for opencode's pattern but whose argv cannot be read is not counted as the
+// 2.x service — the SessionHostArgv contract, through
+// PIDsByCmdlineKeepingArgv's inverted use of withoutExcludedArgv. Counted as
+// one, it would make DiscoverPID's `exactly one service` bind the wrong
+// process or none (review of #2114). Seen red with withoutExcludedArgv keeping
+// a nil argv (tools/lib/opencode-v2-service-mutations_test.sh, mutation 17).
+func TestOpenCodeServicePIDs_AnUnreadableArgvIsNoService(t *testing.T) {
+	home, project := canonicalTempDir(t), canonicalTempDir(t)
+	processlifecycle.SetFakeProcessesForTest(t, map[int]processlifecycle.FakeProcess{
+		44001: {Name: "opencode", CWD: home, Argv: []string{"/opt/homebrew/bin/opencode", "serve", "--service"}},
+		44002: {Name: "opencode", CWD: project, Cmdline: "/opt/homebrew/bin/opencode"},
+	})
+	got, err := opencode.ServicePIDs()
+	if err != nil || !slices.Equal(got, []int{44001}) {
+		t.Errorf("ServicePIDs() = (%v, %v), want ([44001], nil): pid 44002's argv is unreadable", got, err)
 	}
 }

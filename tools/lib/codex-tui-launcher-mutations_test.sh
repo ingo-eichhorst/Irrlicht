@@ -237,12 +237,12 @@ assert_go_test_goes_red \
   "$SEED/^TUI_launcher,_ambiguous_cwd\$" \
   "want neither"
 
-# ── 10. the hosted check without observe consent ──
+# ── 10. the hosted check without observe consent (onSessionHost, shared with the #2107 host rules) ──
 assert_go_test_goes_red \
   "the hosted-root check reading argv without observe consent" \
   "$PM_FILE" \
-  'if pm.hostReadArgv == nil || !pm.observeAllowed(state.Adapter) {' \
-  'if pm.hostReadArgv == nil {' \
+  'return pm.observeAllowed(adapter) && isHost(pm.hostReadArgv(pid))' \
+  'return isHost(pm.hostReadArgv(pid))' \
   "$SERVICES" \
   "$SEED/^observe_consent_withheld\$" \
   "--- FAIL: TestSeedPIDs_HostedCodexRootKeepsItsLauncher/observe_consent_withheld"

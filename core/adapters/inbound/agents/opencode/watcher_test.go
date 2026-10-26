@@ -61,6 +61,9 @@ func setupTestDB(t *testing.T) (*Watcher, *sql.DB) {
 
 	w := NewWithDBPath(dbPath, 1*time.Hour)
 	w.minScanGap = 0 // disable debounce for direct scanSessions() calls in tests
+	// No 2.x service, whatever the host runs: a test that turns the store 2.x
+	// must not have the dev machine's service decide its admissions (#2107).
+	w.serviceUp = func() bool { return false }
 	// Default test stub: every CWD currently in the DB is "live". Tests that
 	// want to exercise the no-live-process gate override this.
 	w.liveCWDs = func() map[string]struct{} {

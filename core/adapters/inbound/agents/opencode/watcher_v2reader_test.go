@@ -175,13 +175,51 @@ func TestV2Reader_RemovesArchivedAndDeletedSessions(t *testing.T) {
 	}
 }
 
+// TestV2Reader_AdmitsAClientlessSessionOnLiveActivity is #2107's red-first
+// test for admission. A session created through the service's HTTP API, the
+// desktop app or the web app has no client process: with no client in its
+// directory and a 2.x service up, it is admitted on activity observed live —
+// and never on what the store held at first sight, which is a backfill of up
+// to maxAge (5 days) of sessions. On the P2 build no client meant no
+// admission, so qa-run.sh's S1–S3 were NOT SEEN.
+func TestV2Reader_AdmitsAClientlessSessionOnLiveActivity(t *testing.T) {
+	w, db := newV2Store(t)
+	w.liveCWDs = func() map[string]struct{} { return nil }
+	w.serviceUp = func() bool { return true }
+	loadV2Fixture(t, db, v2StoreRows)
+	holdBackAfter(t, db, sesPermission, 4) // the store just after the prompt
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	w.scanSessions()
+	if evs := drainNow(ch); len(evs) != 0 {
+		t.Fatalf("first sight of the store produced %d event(s), want 0 — it is a backfill: %+v", len(evs), evs)
+	}
+
+	setToRunningTool(t, db, sesPermission)
+	w.scanSessions()
+	evs := drainNow(ch)
+	admitted := eventsOfType(evs, agent.EventNewSession)
+	if n := len(admitted[sesPermission]); n != 1 {
+		t.Fatalf("live activity in a client-less session produced %d EventNewSession, want 1: %+v", n, evs)
+	}
+	if len(admitted) != 1 {
+		t.Errorf("EventNewSession for %d session(s), want only the one with live activity: %v", len(admitted), admitted)
+	}
+	if ev := admitted[sesPermission][0]; ev.CWD != fixtureDir || ev.TranscriptPath != w.transcriptPathFor(sesPermission) {
+		t.Errorf("admitted with CWD %q, TranscriptPath %q; want %q, %q",
+			ev.CWD, ev.TranscriptPath, fixtureDir, w.transcriptPathFor(sesPermission))
+	}
+}
+
 // TestV2Reader_NoClientNoAdmission: activity in a directory no live client
-// owns admits nothing — the 2.x service runs every session it hosts, so its
-// own store writes must not stand in for a client (#2106; client-less
-// sessions are P3's).
+// owns admits nothing while no 2.x service is up either — the activity is
+// then a client that has already gone, not a session anything still hosts
+// (#2106, #2107).
 func TestV2Reader_NoClientNoAdmission(t *testing.T) {
 	w, db := newV2Store(t)
 	w.liveCWDs = func() map[string]struct{} { return map[string]struct{}{"/Users/x/elsewhere": {}} }
+	w.serviceUp = func() bool { return false }
 	loadFixtureRows(t, db, v2StoreRows, insertSessions)
 	ch := w.Subscribe()
 	defer w.Unsubscribe(ch)

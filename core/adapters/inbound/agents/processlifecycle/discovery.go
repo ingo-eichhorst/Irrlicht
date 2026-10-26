@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"irrlicht/core/domain/agent"
 )
@@ -99,7 +100,9 @@ func PIDsByCWDExcludingArgv(processName, cwd string, excludeArgv func([]string) 
 
 // withoutExcludedArgv drops the PIDs whose argv excludeArgv rejects. A nil
 // excludeArgv keeps every PID; an unreadable argv is passed to the predicate
-// as nil, which per the ExcludeArgv contract must not exclude on it.
+// as nil and the predicate decides. An ExcludeArgv predicate must not exclude
+// on it (its contract); PIDsByCmdlineKeepingArgv's inverted keep predicate
+// does, because a SessionHostArgv-style predicate never keeps nil.
 func withoutExcludedArgv(pids []int, excludeArgv func([]string) bool) []int {
 	if excludeArgv == nil {
 		return pids
@@ -147,6 +150,26 @@ func DiscoverPIDByCWDAndCmdLineExcludingArgv(cmdLinePattern, cwd string, disambi
 		return 0, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
 	}
 	return narrowByCWD(withoutExcludedArgv(pids, excludeArgv), cwd, disambiguate), nil
+}
+
+// PIDsByCmdlineKeepingArgv returns every live process whose full command line
+// matches cmdLinePattern and whose argv keepArgv accepts — the inverse of
+// DiscoverPIDByCWDAndCmdLineExcludingArgv's filter, with no cwd narrowing. It
+// is for a caller that looks for one kind of process by argv and must tell
+// one from several: opencode's service (#2107). The daemon's own PID is
+// excluded. An unreadable argv reaches keepArgv as nil, which a
+// SessionHostArgv-style predicate must not keep.
+func PIDsByCmdlineKeepingArgv(cmdLinePattern string, keepArgv func([]string) bool) ([]int, error) {
+	if cmdLinePattern == "" || keepArgv == nil {
+		return nil, nil
+	}
+	pids, err := osProc.FindByCmdline(cmdLinePattern)
+	if err != nil {
+		return nil, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
+	}
+	myPID := os.Getpid()
+	pids = slices.DeleteFunc(pids, func(pid int) bool { return pid == myPID })
+	return withoutExcludedArgv(pids, func(argv []string) bool { return !keepArgv(argv) }), nil
 }
 
 // LiveCWDs returns the set of working directories currently held by live

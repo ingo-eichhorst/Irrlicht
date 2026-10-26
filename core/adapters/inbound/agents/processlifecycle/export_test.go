@@ -14,6 +14,10 @@ type FakeProcess struct {
 	Name string // the executable base name FindByName matches
 	CWD  string
 	Argv []string
+	// Cmdline is what FindByCmdline matches; empty means the space-joined
+	// Argv. Set it with a nil Argv for a process whose command line pgrep
+	// lists but whose argv cannot be read (a hardened-runtime binary).
+	Cmdline string
 }
 
 // SetFakeProcessesForTest replaces the process observer with a fixed table for
@@ -43,8 +47,9 @@ func (o tableObserver) FindByName(name string) ([]int, error) {
 }
 
 // FindByCmdline matches pattern against each row's space-joined argv — the
-// Linux observer's reading of `pgrep -f` (process_linux.go) — so an adapter
-// declaring a CommandPattern runs its real pattern against the table (#2106).
+// Linux observer's reading of `pgrep -f` (process_linux.go) — or its Cmdline
+// when set, so an adapter declaring a CommandPattern runs its real pattern
+// against the table (#2106).
 func (o tableObserver) FindByCmdline(pattern string) ([]int, error) {
 	if pattern == "" {
 		return nil, nil
@@ -55,7 +60,11 @@ func (o tableObserver) FindByCmdline(pattern string) ([]int, error) {
 	}
 	var pids []int
 	for pid, p := range o {
-		if re.MatchString(strings.Join(p.Argv, " ")) {
+		cmdline := p.Cmdline
+		if cmdline == "" {
+			cmdline = strings.Join(p.Argv, " ")
+		}
+		if re.MatchString(cmdline) {
 			pids = append(pids, pid)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -20,13 +21,17 @@ import (
 //
 // Admission differs from the 1.x reader in one way. A session is admitted on
 // ACTIVITY — a session_message row inserted or rewritten after the watcher
-// first saw the session — while a live client owns its directory; what the
-// store already held at first sight is never activity. That is what keeps the
-// 1.x rows a 2.x migration imports (version 1.19.4, time_idle NULL, no idle
-// row) from being admitted on their imported state, without reading `version`:
-// a row is either written to again or it is history. The cost, stated rather
-// than discovered: after a daemon restart, a 2.x session idling under a live
-// client is not shown until its next write.
+// first saw the session — while a live client owns its directory, or, for a
+// session no client runs (one created through the service's HTTP API, the
+// desktop app or the web app), while a 2.x service is up to host it (#2107);
+// what the store already held at first sight is never activity. That is what
+// keeps the 1.x rows a 2.x migration imports (version 1.19.4, time_idle NULL,
+// no idle row) from being admitted on their imported state, without reading
+// `version`: a row is either written to again or it is history. It is also
+// what keeps a daemon start from admitting every session the service still
+// lists — up to maxAge (5 days) of them. The cost, stated rather than
+// discovered: after a daemon restart, an idle 2.x session is not shown until
+// its next write.
 //
 // time_suspended is NOT a close. Sampled at 30 ms against the sandbox store
 // while a TUI ran a turn, 2.x set it on the TUI's session 8 ms after creating
@@ -48,11 +53,11 @@ func (w *Watcher) scanV2(db *sql.DB) {
 	defer w.mu.Unlock()
 
 	now := time.Now()
-	live := w.liveOnce()
+	admits := w.admissionOnce()
 	listed := make(map[string]struct{}, len(sessions))
 	for _, s := range sessions {
 		listed[s.id] = struct{}{}
-		w.scanV2Session(db, s, live, now)
+		w.scanV2Session(db, s, admits, now)
 	}
 	w.emitRemovedForGoneV2Sessions(db, listed)
 	w.gcExpiredCursors()
@@ -70,27 +75,31 @@ const v2SessionsQuery = `
 	LIMIT 200
 `
 
-// liveOnce returns a lookup into the live-client set that enumerates
-// processes at most once, on first use: the 2.x reader needs the set only to
-// admit a session with new activity, which most scans have none of, and the
-// enumeration is a process listing plus a cwd read per client. A failed
-// enumeration (nil) is not retried within the scan.
-func (w *Watcher) liveOnce() func(dir string) bool {
-	var live map[string]struct{}
-	done := false
+// admissionOnce returns the lookup scanV2Session admits a session with: a
+// 2.x service is up to host it, or a live client owns its directory. Each
+// half enumerates processes at most once per scan, on first use: the 2.x
+// reader needs them only to admit a session with new activity, which most
+// scans have none of. The service half goes first because it is the cheaper
+// one — a process listing plus an argv read per match, where the client half
+// adds a cwd read per match — and when it answers yes the client half is not
+// needed. A failed enumeration is not retried within the scan.
+func (w *Watcher) admissionOnce() func(dir string) bool {
+	serviceUp := sync.OnceValue(w.serviceUp)
+	live := sync.OnceValue(w.liveCWDs)
 	return func(dir string) bool {
-		if !done {
-			live, done = w.liveCWDs(), true
+		if serviceUp() {
+			return true
 		}
-		_, ok := live[dir]
+		_, ok := live()[dir]
 		return ok
 	}
 }
 
 // scanV2Session reads session s's new and rewritten messages and emits what
 // they amount to. The first time s is seen, its messages only seed the
-// cursor.
-func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, live func(dir string) bool, now time.Time) {
+// cursor. A session not yet admitted is admitted on activity only while
+// admits answers yes for its directory.
+func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, admits func(dir string) bool, now time.Time) {
 	cur, known := w.cursors[s.id]
 	if !known {
 		cur = &sessionCursor{seenIDs: make(map[string]struct{})}
@@ -112,7 +121,7 @@ func (w *Watcher) scanV2Session(db *sql.DB, s sessionRow, live func(dir string) 
 	}
 
 	if !cur.emitted {
-		if !live(s.directory) {
+		if !admits(s.directory) {
 			return
 		}
 		w.emitNewSession(s)

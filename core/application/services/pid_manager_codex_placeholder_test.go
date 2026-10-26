@@ -84,16 +84,24 @@ func (f *codexPlaceholderFixture) root(id string, pid int, cwd string, age time.
 }
 
 // pidManager wires codex's declarations as startup.go does
-// (agents.ArgvExcluders → SetInfraReaper, agents.SessionHosts →
-// SetSessionHosts), with f.argv as the argv reader.
+// (agents.ReleasedPIDs → PIDManagerDeps, agents.ArgvExcluders →
+// SetInfraReaper, agents.SessionHosts → SetSessionHosts, agents.LauncherPIDs →
+// SetLauncherPIDs), with f.argv as the argv reader. The pairing needs the
+// LauncherPID (hostGroups) and the ready-TTL host rule reads the ReleasedPID
+// (idlesOnHost), both since #2107. The release probe is the real one. A root
+// it finds released for a whole streak is still kept here: the fixture wires
+// no PID discovery, and endReleasedRoot keeps a root whose discovery cannot
+// answer (read in pid_manager.go).
 func (f *codexPlaceholderFixture) pidManager() *services.PIDManager {
 	pm := services.NewPIDManager(services.PIDManagerDeps{
 		Repo: f.repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
+		ReleasedPIDs:     agents.ReleasedPIDs([]agent.Agent{codex.Agent()}),
 		OnSessionDeleted: func(string) {},
 	})
 	readArgv := func(pid int) []string { return f.argv[pid] }
 	pm.SetInfraReaper(agents.ArgvExcluders([]agent.Agent{codex.Agent()}), readArgv)
 	pm.SetSessionHosts(f.hosts, readArgv)
+	pm.SetLauncherPIDs(agents.LauncherPIDs([]agent.Agent{codex.Agent()}))
 	if f.consent != nil {
 		pm.SetConsentGate(f.consent)
 	}
