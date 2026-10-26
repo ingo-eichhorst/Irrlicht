@@ -60,6 +60,16 @@ func TestEveryHookInstallDeclaresAVerifier(t *testing.T) {
 					"damaged install can be detected and never repaired (#1372)",
 					a.Identity.Name, p.Key)
 			}
+			// A permission writing one artifact per upstream major (#2108) is
+			// installed through the selected variant's Apply and re-verified
+			// through its Verify, so each variant needs both.
+			for _, v := range p.Writes.Variants {
+				if v.Apply == nil || v.Verify == nil {
+					t.Errorf("%s/%s declares a hook artifact for %s up to %s with no Apply or "+
+						"no Verify — selected, it is either never written or never re-verified (#1372)",
+						a.Identity.Name, p.Key, v.Min, v.Max)
+				}
+			}
 		}
 	}
 }

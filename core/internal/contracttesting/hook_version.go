@@ -5,6 +5,13 @@
 // also declares a ceiling (#2105) has it graded the same way: it parses, sits
 // above the floor, and actually refuses a newer CLI.
 //
+// An adapter that writes a different artifact per upstream major (#2108,
+// agent.ManagedUserFile.Variants) has every variant graded the same way — its
+// floor parses and covers its own events, it is selected across its own range
+// and refused one step outside it — plus what only a set of variants can get
+// wrong: two ranges overlapping, a gate whose envelope is not its variants'
+// span, and an unknown version selecting an artifact.
+//
 // It is the static half of the obligation. The runtime half — that
 // PermissionService consults the declaration before running the Apply closure
 // — cannot be checked from a declaration and lives in the services package's
@@ -36,12 +43,14 @@ type HookVersionGate struct {
 	PermissionKey string
 	// Installed is the installer's event list — pass the same variable handed
 	// to hookjson.Config.Events, never a copy, for the reason spelled out on
-	// HookDisclosure.Installed.
+	// HookDisclosure.Installed. Leave it nil for a permission that declares
+	// Variants (#2108): each variant carries its own list.
 	Installed []string
 	// Since maps each installed event to the upstream CLI version at which it
 	// is proven to exist. Every entry in Installed needs one: an event with no
 	// stated provenance is an event nobody checked, which is exactly the
-	// position claudecode's seven-event install was in.
+	// position claudecode's seven-event install was in. Nil for a variant
+	// declaration, whose variants carry their own.
 	Since map[string]string
 }
 
@@ -53,13 +62,16 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	if reason != "" {
 		t.Fatal(reason)
 	}
+	writes := declaredWrites(g)
 
 	t.Run("floor_is_parseable", func(t *testing.T) {
 		assertFloorParses(t, gate.Min)
 	})
-	t.Run("floor_covers_every_installed_event", func(t *testing.T) {
-		assertFloorCoversEveryEvent(t, gate.Min, g.Installed, g.Since)
-	})
+	if len(writes.Variants) == 0 {
+		t.Run("floor_covers_every_installed_event", func(t *testing.T) {
+			assertFloorCoversEveryEvent(t, gate.Min, g.Installed, g.Since)
+		})
+	}
 	t.Run("floor_refuses_an_older_cli", func(t *testing.T) {
 		assertFloorRefusesOlder(t, gate)
 	})
@@ -72,6 +84,27 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	t.Run("version_source_is_declared", func(t *testing.T) {
 		assertVersionSourceDeclared(t, g.PermissionKey, gate)
 	})
+	if len(writes.Variants) == 0 {
+		return
+	}
+
+	// A variant declaration (#2108): the gate above is the envelope, whose
+	// floor no single event list belongs to, so event coverage moves onto each
+	// variant — with what only a set of variants can get wrong.
+	t.Run("gate_spans_exactly_its_variants", func(t *testing.T) {
+		assertGateSpansItsVariants(t, gate, writes.Variants)
+	})
+	t.Run("variants_are_disjoint", func(t *testing.T) {
+		assertVariantsDisjoint(t, writes.Variants)
+	})
+	t.Run("unknown_version_selects_no_variant", func(t *testing.T) {
+		assertUnknownSelectsNoVariant(t, writes)
+	})
+	for i := range writes.Variants {
+		t.Run("variant_"+rangeName(&writes.Variants[i]), func(t *testing.T) {
+			assertVariant(t, writes, i)
+		})
+	}
 }
 
 // versionGateUnderTest returns the declared gate the contract grades, or a
@@ -95,7 +128,179 @@ func versionGateUnderTest(g HookVersionGate) (*agent.VersionGate, string) {
 			"older CLI may reject, and the user sees a granted permission whose channel never fires",
 			g.PermissionKey)
 	}
+	if len(perm.Writes.Variants) > 0 && (g.Installed != nil || g.Since != nil) {
+		return nil, fmt.Sprintf("hooks permission %q declares per-major variants (#2108), and each "+
+			"carries its own Events and Since — pass neither Installed nor Since, or the contract "+
+			"grades a second list against the declaration instead of the declaration itself",
+			g.PermissionKey)
+	}
 	return perm.Writes.Version, ""
+}
+
+// declaredWrites returns the managed file of the permission versionGateUnderTest
+// accepted. Only called after it did, so the lookup cannot miss.
+func declaredWrites(g HookVersionGate) *agent.ManagedUserFile {
+	perm, _ := findPermission(g.Agent, g.PermissionKey)
+	return perm.Writes
+}
+
+// assertVariant grades one variant: the single-gate arms over its own range
+// and its own events, then the selection itself — the variant is chosen at its
+// floor and just under its ceiling, and not one step outside either.
+func assertVariant(t reporter, writes *agent.ManagedUserFile, i int) {
+	t.Helper()
+	v := &writes.Variants[i]
+	if v.Apply == nil || v.Verify == nil {
+		t.Errorf("the hook artifact for %s declares no Apply or no Verify — the service runs the "+
+			"selected variant's Apply and the #1372 loop its Verify, so a nil one is an install "+
+			"that can be selected and never written, or written and never checked", rangeName(v))
+	}
+	assertFloorParses(t, v.Min)
+	assertFloorCoversEveryEvent(t, v.Min, v.Events, v.Since)
+	assertCeilingRefusesNewer(t, &agent.VersionGate{Min: v.Min, Max: v.Max})
+	assertVariantSelectedAcrossItsRange(t, writes, i)
+}
+
+// assertVariantSelectedAcrossItsRange is the selection arm: SelectVariant —
+// the function PermissionService installs with — picks this variant at its
+// floor and one patch under its ceiling, and refuses it one step below its
+// floor and at or above its ceiling, each refusal naming the version refused.
+// It walks the same neighbours the single-gate arms walk, for the same reason:
+// an off-by-one in a field-wise comparison shows up at exactly those.
+func assertVariantSelectedAcrossItsRange(t reporter, writes *agent.ManagedUserFile, i int) {
+	t.Helper()
+	v := &writes.Variants[i]
+	floor, ok := cliversion.Parse(v.Min)
+	if !ok {
+		return // reported by assertFloorParses
+	}
+	inside := []cliversion.Version{floor}
+	var outside []cliversion.Version
+	outside = append(outside, predecessors(floor)...)
+	if ceiling, ok := cliversion.Parse(v.Max); ok {
+		if top, ok := justBelow(ceiling); ok && top.Compare(floor) >= 0 {
+			inside = append(inside, top)
+		}
+		outside = append(outside, append([]cliversion.Version{ceiling}, successors(ceiling)...)...)
+	}
+	for _, in := range inside {
+		if got, bound, why := writes.SelectVariant(in.String()); got != v {
+			t.Errorf("%s selects %s (bound %d: %q), but it is inside the hook artifact for %s — "+
+				"the range this variant declares is not the range it is installed at",
+				in, describeSelection(got), bound, why, rangeName(v))
+		}
+	}
+	for _, out := range outside {
+		got, _, why := writes.SelectVariant(out.String())
+		if got == v {
+			t.Errorf("%s selects the hook artifact for %s, outside its declared range — the "+
+				"version that artifact is known not to load at gets it anyway", out, rangeName(v))
+			continue
+		}
+		if got == nil && !strings.Contains(why, out.String()) {
+			t.Errorf("refusal %q does not name the installed version %s; a user cannot act on it", why, out)
+		}
+	}
+}
+
+// assertGateSpansItsVariants: the envelope's floor is the lowest variant's and
+// its ceiling the highest's. A wider envelope states a floor or ceiling in the
+// consent copy that no artifact is installed at; a narrower one refuses a
+// version a variant was declared for.
+func assertGateSpansItsVariants(t reporter, gate *agent.VersionGate, variants []agent.HookVariant) {
+	t.Helper()
+	lowest, highest := variants[0].Min, variants[0].Max
+	for _, v := range variants[1:] {
+		if cliversion.Less(v.Min, lowest) {
+			lowest = v.Min
+		}
+		if highest != "" && (v.Max == "" || cliversion.Less(highest, v.Max)) {
+			highest = v.Max
+		}
+	}
+	if gate.Min != lowest {
+		t.Errorf("the gate's floor is %q but its lowest variant starts at %q — the envelope "+
+			"must be exactly the span of the variants it gates", gate.Min, lowest)
+	}
+	if gate.Max != highest {
+		t.Errorf("the gate's ceiling is %q but its highest variant ends at %q — the envelope "+
+			"must be exactly the span of the variants it gates", gate.Max, highest)
+	}
+}
+
+// assertVariantsDisjoint: no version selects two variants. SelectVariant
+// returns the first match, so an overlap is not an error anywhere at runtime —
+// it silently writes whichever artifact was declared first.
+func assertVariantsDisjoint(t reporter, variants []agent.HookVariant) {
+	t.Helper()
+	for i := range variants {
+		for j := i + 1; j < len(variants); j++ {
+			a, b := &variants[i], &variants[j]
+			if startsBeforeEnd(a.Min, b.Max) && startsBeforeEnd(b.Min, a.Max) {
+				t.Errorf("the hook artifacts for %s and %s overlap — a version in both installs "+
+					"whichever was declared first, silently", rangeName(a), rangeName(b))
+			}
+		}
+	}
+}
+
+// assertUnknownSelectsNoVariant is the variant counterpart of
+// unknown_version_fails_open, and it points the other way on purpose (#2108):
+// one artifact may be installed blind, two cannot, because the wrong guess
+// writes exactly the file the other major rejects. Every unreadable version
+// must select nothing and be refused as unknown, with a reason.
+func assertUnknownSelectsNoVariant(t reporter, writes *agent.ManagedUserFile) {
+	t.Helper()
+	for _, unknown := range []string{"", "not a version", "2.1"} {
+		got, bound, why := writes.SelectVariant(unknown)
+		if got != nil || bound != agent.VersionUnknown || why == "" {
+			t.Errorf("unreadable version %q selected %s (bound %d, reason %q), want no variant "+
+				"refused as unknown — guessing the major installs the file the other one rejects",
+				unknown, describeSelection(got), bound, why)
+		}
+	}
+}
+
+// startsBeforeEnd reports whether a range starting at start begins before one
+// ending at end (exclusive; "" is unbounded). An unparseable bound is reported
+// by the parse arms and treated here as not overlapping.
+func startsBeforeEnd(start, end string) bool {
+	if end == "" {
+		return true
+	}
+	return cliversion.Less(start, end)
+}
+
+// justBelow is a version just under v — the top of a range ending at v — with
+// the fields below the one decremented saturated, so a major-boundary ceiling
+// like 3.0.0 yields 2.99999.99999 rather than nothing. False only for 0.0.0.
+func justBelow(v cliversion.Version) (cliversion.Version, bool) {
+	const top = 99999
+	switch {
+	case v.Patch > 0:
+		return cliversion.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch - 1}, true
+	case v.Minor > 0:
+		return cliversion.Version{Major: v.Major, Minor: v.Minor - 1, Patch: top}, true
+	case v.Major > 0:
+		return cliversion.Version{Major: v.Major - 1, Minor: top, Patch: top}, true
+	}
+	return cliversion.Version{}, false
+}
+
+// rangeName names a variant by its range for subtest names and messages.
+func rangeName(v *agent.HookVariant) string {
+	if v.Max == "" {
+		return v.Min + "+"
+	}
+	return v.Min + "-" + v.Max
+}
+
+// describeSelection names what SelectVariant chose, for a message.
+func describeSelection(v *agent.HookVariant) string {
+	if v == nil {
+		return "no variant"
+	}
+	return "the hook artifact for " + rangeName(v)
 }
 
 // assertVersionSourceDeclared is the arm that keeps a floor from being

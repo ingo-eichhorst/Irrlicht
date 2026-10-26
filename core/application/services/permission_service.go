@@ -938,6 +938,10 @@ func (s *PermissionService) runEffects(effects []pendingEffect) int {
 // place and refuses the same way, with one addition: a ceiling refusal also
 // removes the file an earlier install left behind (removeAfterCeilingRefusal).
 // A floor refusal removes nothing.
+//
+// A permission declaring per-major variants (ManagedUserFile.Variants, #2108)
+// runs the SELECTED variant's Apply instead of its own: the version gate
+// chooses the artifact as well as whether to write one.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
@@ -953,12 +957,7 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 		err := error(nil)
 		bound := agent.WithinBounds
 		if e.target == permission.StateGranted {
-			// Home guard before version gate: the version gate may shell out to
-			// probe the CLI, and there is no reason to pay for that on an
-			// install that is about to be refused anyway.
-			if err = s.sharedConfigRefusal(e.perm); err == nil {
-				bound, err = s.hookVersionRefusal(e.perm)
-			}
+			effect, bound, err = s.gateGrant(e)
 		}
 		if err == nil {
 			err = effect()
@@ -973,6 +972,30 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 		}
 	}
 	s.recordEffectResult(e, reason)
+}
+
+// gateGrant decides whether a grant's Apply may run, and which one: the
+// permission's own, or for a per-major declaration (#2108) the selected
+// variant's. On a refusal it returns the error and the bound that refused, and
+// no effect.
+//
+// Home guard before version gate: the version gate may shell out to probe the
+// CLI, and there is no reason to pay for that on an install that is about to be
+// refused anyway.
+func (s *PermissionService) gateGrant(e pendingEffect) (func() error, agent.VersionBound, error) {
+	if err := s.sharedConfigRefusal(e.perm); err != nil {
+		return nil, agent.WithinBounds, err
+	}
+	variant, bound, err := s.hookVersionRefusal(e.agentName, e.perm)
+	if err != nil || variant == nil {
+		return e.perm.Apply, bound, err
+	}
+	if variant.Apply == nil {
+		// The registry tripwire refuses this declaration; failing the effect
+		// here keeps one that slipped through from panicking the consent path.
+		return nil, bound, fmt.Errorf("the selected hook artifact (%s) declares no Apply", variant.Range())
+	}
+	return variant.Apply, bound, nil
 }
 
 // recordEffectResult stores this permission's effect outcome; the empty

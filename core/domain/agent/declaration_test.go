@@ -2,6 +2,7 @@ package agent
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,62 @@ func TestProcessSkipsPreSession(t *testing.T) {
 	} {
 		if got := tc.p.SkipsPreSession(tc.argv); got != tc.want {
 			t.Errorf("%s: SkipsPreSession(%q) = %t, want %t", tc.name, tc.argv, got, tc.want)
+		}
+	}
+}
+
+// TestSelectVariant walks SelectVariant over a two-artifact declaration shaped
+// like opencode's (#2108) — [1.14.50, 2.0.0), a gap, [2.1.4, 3.0.0) — and over a
+// single-artifact one, whose answers must be exactly VersionGate.Check's.
+func TestSelectVariant(t *testing.T) {
+	two := &ManagedUserFile{
+		Version: &VersionGate{Min: "1.14.50", Max: "3.0.0"},
+		Variants: []HookVariant{
+			{Min: "1.14.50", Max: "2.0.0"},
+			{Min: "2.1.4", Max: "3.0.0"},
+		},
+	}
+	cases := []struct {
+		installed string
+		variant   int // index into two.Variants, -1 for none
+		bound     VersionBound
+		names     []string
+	}{
+		{"1.14.50", 0, WithinBounds, nil},
+		{"1.99.99", 0, WithinBounds, nil},
+		{"2.1.4", 1, WithinBounds, nil},
+		{"2.99.0", 1, WithinBounds, nil},
+		{"1.14.49", -1, BelowFloor, []string{"1.14.49", "1.14.50"}},
+		{"2.0.0", -1, AtOrAboveCeiling, []string{"2.0.0", "2.1.4", "1.14.50 up to 2.0.0"}},
+		{"2.1.3", -1, AtOrAboveCeiling, []string{"2.1.3", "2.0.0", "2.1.4"}},
+		{"3.0.0", -1, AtOrAboveCeiling, []string{"3.0.0", "3.x"}},
+		{"", -1, VersionUnknown, []string{"could not be learnt", "1.14.50 up to 2.0.0, 2.1.4 up to 3.0.0"}},
+		{"2.1", -1, VersionUnknown, []string{`"2.1" is not a version`}},
+	}
+	for _, c := range cases {
+		got, bound, why := two.SelectVariant(c.installed)
+		var want *HookVariant
+		if c.variant >= 0 {
+			want = &two.Variants[c.variant]
+		}
+		if got != want || bound != c.bound {
+			t.Errorf("SelectVariant(%q) = (%v, %d), want (%v, %d) — reason %q", c.installed, got, bound, want, c.bound, why)
+		}
+		for _, n := range c.names {
+			if !strings.Contains(why, n) {
+				t.Errorf("SelectVariant(%q) reason %q does not name %q", c.installed, why, n)
+			}
+		}
+	}
+
+	// A single-artifact declaration selects nothing and answers as Check does,
+	// unknown failing OPEN — the direction every other adapter keeps.
+	one := &ManagedUserFile{Version: &VersionGate{Min: "1.0.0", Max: "2.0.0"}}
+	for _, v := range []string{"", "0.9.0", "1.5.0", "2.0.0"} {
+		got, bound, why := one.SelectVariant(v)
+		wantBound, wantWhy := one.Version.Check(v)
+		if got != nil || bound != wantBound || why != wantWhy {
+			t.Errorf("single-artifact SelectVariant(%q) = (%v, %d, %q), want (nil, %d, %q)", v, got, bound, why, wantBound, wantWhy)
 		}
 	}
 }

@@ -206,6 +206,11 @@ type reverifyTarget struct {
 	permKey    string
 	configPath string
 	verify     func() (agent.HookEntryStatus, error)
+	// variants is the declaration of a permission that writes a different
+	// artifact per upstream major (#2108), nil for every other target. Such a
+	// target is verified against the variant its installed version selects,
+	// never against verify — see verifyTarget.
+	variants *agent.ManagedUserFile
 }
 
 func (t reverifyTarget) id() string { return t.adapter + "/" + t.permKey }
@@ -285,7 +290,9 @@ func (v *HookEntryVerifier) consent() (func(string, string) bool, func(string, s
 }
 
 // NewHookEntryVerifier builds the loop and resolves its targets from the agent
-// registry: every modify-kind permission declaring a HookInstall with a Verify.
+// registry: every modify-kind permission declaring a HookInstall with a Verify,
+// or with per-major variants (#2108), which are verified through the variant
+// the installed version selects (verifyTarget).
 //
 // An adapter that declares a hook install but no Verify is SKIPPED rather than
 // faulted here — one adapter's missing declaration must not disable the loop
@@ -325,16 +332,9 @@ func NewHookEntryVerifier(cfg HookEntryReverifyConfig) *HookEntryVerifier {
 			// instruction-block and kitty permissions reach here too — they
 			// declare no Verify and drop out, which is the correct answer
 			// rather than a coincidence.
-			if p.Writes == nil || p.Writes.Verify == nil {
+			t, ok := reverifyTargetFor(a.Identity.Name, p)
+			if !ok {
 				continue
-			}
-			t := reverifyTarget{adapter: a.Identity.Name, permKey: p.Key, verify: p.Writes.Verify}
-			if p.Writes.Path != nil {
-				// Best effort: an unresolvable path costs the row its
-				// actionability, not the loop its function.
-				if path, err := p.Writes.Path(); err == nil {
-					t.configPath = path
-				}
 			}
 			v.targets = append(v.targets, t)
 			v.state[t.id()] = &reverifyState{}
@@ -342,6 +342,27 @@ func NewHookEntryVerifier(cfg HookEntryReverifyConfig) *HookEntryVerifier {
 	}
 	sort.Slice(v.targets, func(i, j int) bool { return v.targets[i].id() < v.targets[j].id() })
 	return v
+}
+
+// reverifyTargetFor builds the target for one permission, or reports false
+// when it declares nothing to re-verify: no managed file, or neither a Verify
+// nor per-major variants (#2108).
+func reverifyTargetFor(adapter string, p agent.Permission) (reverifyTarget, bool) {
+	if p.Writes == nil || (p.Writes.Verify == nil && len(p.Writes.Variants) == 0) {
+		return reverifyTarget{}, false
+	}
+	t := reverifyTarget{adapter: adapter, permKey: p.Key, verify: p.Writes.Verify}
+	if len(p.Writes.Variants) > 0 {
+		t.variants = p.Writes
+	}
+	if p.Writes.Path != nil {
+		// Best effort: an unresolvable path costs the row its actionability,
+		// not the loop its function.
+		if path, err := p.Writes.Path(); err == nil {
+			t.configPath = path
+		}
+	}
+	return t, true
 }
 
 // Run drives one pass per Interval until ctx is cancelled. Its own goroutine
@@ -363,7 +384,7 @@ func (v *HookEntryVerifier) Run(ctx context.Context) {
 	// Safe to run here: the caller starts this only after PermissionService.Start
 	// has synchronously re-applied every granted install, so this pass observes
 	// the boot repair rather than racing it.
-	v.pass(v.now())
+	v.pass(ctx, v.now())
 
 	ticker := time.NewTicker(v.cfg.Interval)
 	defer ticker.Stop()
@@ -372,7 +393,7 @@ func (v *HookEntryVerifier) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			v.pass(v.now())
+			v.pass(ctx, v.now())
 		}
 	}
 }
@@ -381,7 +402,7 @@ func (v *HookEntryVerifier) Run(ctx context.Context) {
 // package convention (RunPIDLivenessSweepForTest, RunStaleSessionRefreshForTest)
 // is a plain synchronous seam onto the same function the ticker calls, rather
 // than a fake clock.
-func (v *HookEntryVerifier) RunPassForTest(now time.Time) { v.pass(now) }
+func (v *HookEntryVerifier) RunPassForTest(now time.Time) { v.pass(context.Background(), now) }
 
 func (v *HookEntryVerifier) now() time.Time {
 	if v.cfg.Now != nil {
@@ -398,17 +419,21 @@ func (v *HookEntryVerifier) now() time.Time {
 // asked FIRST, before the back-off check and before the file is opened, so a
 // revoked permission cannot be read even once — and so a target sitting in a
 // long back-off window still notices its consent went away.
-func (v *HookEntryVerifier) pass(now time.Time) {
+//
+// ctx is Run's, so a daemon shutdown cancels a version probe a variant target's
+// verification is running (#2108); cliprobe bounds every probe itself either
+// way.
+func (v *HookEntryVerifier) pass(ctx context.Context, now time.Time) {
 	if v == nil {
 		return
 	}
 	granted, repair := v.consent()
 	for _, t := range v.targets {
-		v.checkTarget(t, now, granted, repair)
+		v.checkTarget(ctx, t, now, granted, repair)
 	}
 }
 
-func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted func(string, string) bool, repair func(string, string) (bool, error)) {
+func (v *HookEntryVerifier) checkTarget(ctx context.Context, t reverifyTarget, now time.Time, granted func(string, string) bool, repair func(string, string) (bool, error)) {
 	if granted == nil || !granted(t.adapter, t.permKey) {
 		v.mu.Lock()
 		st := v.state[t.id()]
@@ -428,7 +453,7 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 		return
 	}
 
-	status, err := t.verify()
+	status, upgrade, err := verifyTarget(ctx, t, granted)
 	if err != nil {
 		v.recordUnreadable(t, err, now)
 		return
@@ -437,7 +462,86 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 		v.recordIntact(t)
 		return
 	}
-	v.repair(t, status, now, repair)
+	v.repair(t, status, upgrade, now, repair)
+}
+
+// verifyTarget reads one target's install, without writing anything.
+//
+// A variant declaration (#2108) is checked against the variant its installed
+// version selects, and that version is resolved by the same function the
+// install resolves it with (resolveInstalledVersion) under the same consent this
+// pass already holds — so a 1.x plugin file under an opencode that has since
+// become 2.x reads Stale here and the repair below rewrites it, within one
+// pass rather than at the next daemon start. upgrade then names that change,
+// so the repair is reported as one rather than as someone else's rewrite.
+//
+// A version that selects no variant reads as unselectedStatus says.
+func verifyTarget(ctx context.Context, t reverifyTarget, granted func(string, string) bool) (status agent.HookEntryStatus, upgrade string, err error) {
+	if t.variants == nil {
+		status, err = t.verify()
+		return status, "", err
+	}
+	// A failed probe needs no line here: a repair runs the install's own
+	// resolution, which logs it.
+	installed, _ := resolveInstalledVersion(ctx, granted, t.adapter, t.variants)
+	variant, bound, _ := t.variants.SelectVariant(installed)
+	if variant == nil {
+		status, err = unselectedStatus(t.variants, bound)
+		return status, "", err
+	}
+	if variant.Verify == nil {
+		return agent.HookEntryStatus{}, "", fmt.Errorf("the selected hook artifact (%s) declares no Verify", variant.Range())
+	}
+	status, err = variant.Verify()
+	if err != nil || status.Intact() {
+		return status, "", err
+	}
+	// A failed read here only costs the label: the status above stands.
+	if current, _ := currentVariant(t.variants); current != nil && current != variant {
+		upgrade = fmt.Sprintf("the installed CLI is %s, so the hook artifact for %s replaces the current one for %s (#2108)",
+			installed, variant.Range(), current.Range())
+	}
+	return status, upgrade, nil
+}
+
+// unselectedStatus is what a variant target reads when its installed version
+// selects no variant: damage only where a repair could change something,
+// because a repair here runs into the same refusal the install did, and a
+// refusal it records becomes the permission's effect error — the wizard's
+// "granted but NOT applied" — until the next successful apply.
+//
+//   - VersionUnknown: intact while some variant's artifact is installed and
+//     current, which the install keeps (hookVersionRefusal). An unreadable
+//     version for one pass — a probe launchd's PATH cannot reach, a store read
+//     timing out during a migration — must not turn a working install into a
+//     recorded failure. With none current, every event reads Missing, and the
+//     repair records the truthful refusal: nothing is installed and the major
+//     is unknown.
+//   - AtOrAboveCeiling (above the highest variant, or between two): Stale while
+//     a file of ours is there, so the repair removes it; intact once it is
+//     gone, leaving the refusal the removal recorded as the effect error.
+//   - BelowFloor: intact. A floor refusal removes nothing (#2105), so a
+//     repair could only record the refusal again on every back-off.
+//
+// A variant Verify that cannot read the file is returned as the error, which
+// the loop records as unreadable — the same outcome a selected variant's
+// failed Verify gets — never as intact.
+func unselectedStatus(w *agent.ManagedUserFile, bound agent.VersionBound) (agent.HookEntryStatus, error) {
+	switch bound {
+	case agent.VersionUnknown:
+		current, err := currentVariant(w)
+		if err != nil || current != nil {
+			return agent.HookEntryStatus{}, err
+		}
+		return agent.HookEntryStatus{Missing: w.VariantEvents()}, nil
+	case agent.AtOrAboveCeiling:
+		present, err := oursPresent(w)
+		if err != nil || !present {
+			return agent.HookEntryStatus{}, err
+		}
+		return agent.HookEntryStatus{Stale: w.VariantEvents()}, nil
+	}
+	return agent.HookEntryStatus{}, nil
 }
 
 func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error, now time.Time) {
@@ -482,7 +586,11 @@ func (v *HookEntryVerifier) recordIntact(t reverifyTarget) {
 }
 
 // repair asks the permission service to re-install. It never writes itself.
-func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatus, now time.Time, doRepair func(string, string) (bool, error)) {
+//
+// upgrade, when set, names a variant declaration's version change (#2108): the
+// rewrite is the install following the CLI to another major, not damage, and
+// is logged as that.
+func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatus, upgrade string, now time.Time, doRepair func(string, string) (bool, error)) {
 	if doRepair == nil {
 		v.recordDamageWithoutRepair(t, status)
 		return
@@ -538,6 +646,13 @@ func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatu
 	}
 
 	v.count(ReverifyRepaired)
+	if upgrade != "" {
+		if v.cfg.Log != nil {
+			v.cfg.Log.LogInfo("hooks", "", fmt.Sprintf("%s/%s: %s; rewrote %s in place (#1372)",
+				t.adapter, t.permKey, upgrade, t.configPath))
+		}
+		return
+	}
 	v.logRepair(t, status, n, backoff)
 }
 

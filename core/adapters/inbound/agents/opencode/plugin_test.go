@@ -9,6 +9,12 @@
 // "the Go side is correct" and "the thing that actually runs inside the user's
 // agent is correct", and each one names the specific failure it would catch.
 //
+// There are two artifacts since #2108 — plugin.js for opencode 1.x and
+// plugin_v2.js for 2.x — and every guard that is about the artifact rather than
+// one format's loader runs over both (shippedArtifacts). The two loaders differ,
+// so the shape guards do too: 1.x dispatches named hooks off the object the
+// plugin function returns, 2.x hands setup a context object.
+//
 // What is NOT covered here, stated rather than implied: nothing in this file
 // executes the JavaScript. Running it needs either bun (which `go test
 // ./core/...` does not otherwise require, and a gate that could be absent is
@@ -26,6 +32,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/hookbeacon"
 )
 
 // hookRegistrationRE finds the hook keys the shipped plugin registers on the
@@ -73,24 +81,63 @@ func TestShippedPluginRegistersOnlyTheReadOnlyEventTap(t *testing.T) {
 	}
 }
 
-// TestShippedPluginForwardsExactlyTheInstalledHookEvents binds the artifact to
+// shippedArtifact is one embedded plugin template and what the Go side
+// declares about it.
+type shippedArtifact struct {
+	name     string
+	template *string
+	render   func(command string) ([]byte, error)
+	// events is the installer's own event list for this artifact.
+	events []string
+	// eventID is whether this artifact forwards the event's own id — the 2.x
+	// one does, because its events arrive once per plugin instance (#2108).
+	eventID bool
+}
+
+// shippedArtifacts is every artifact this adapter can install, each with the
+// event list its installer and its variant declare.
+func shippedArtifacts() []shippedArtifact {
+	return []shippedArtifact{
+		{name: "plugin.js", template: &pluginTemplate, render: renderPlugin, events: installedHookEvents},
+		{name: "plugin_v2.js", template: &pluginV2Template, render: renderPluginV2, events: installedHookEventsV2, eventID: true},
+	}
+}
+
+// TestShippedPluginForwardsExactlyTheInstalledHookEvents binds each artifact to
 // the Go-side declaration.
 //
 // Two failures it catches, and they point in opposite directions: a plugin
-// forwarding an event installedHookEvents does not list delivers a name the
+// forwarding an event its installer does not list delivers a name the
 // receiver's switch answers with IgnoreUnknownEvent forever, and a plugin
 // forwarding fewer means the consent copy — which derives its list and its count
 // from that same slice — over-promises what is installed.
 func TestShippedPluginForwardsExactlyTheInstalledHookEvents(t *testing.T) {
-	const marker = "const IRRLICHT_EVENTS = new Set(["
-	i := strings.Index(pluginTemplate, marker)
-	if i < 0 {
-		t.Fatalf("plugin.js no longer declares %q — this guard cannot run", marker)
+	for _, a := range shippedArtifacts() {
+		t.Run(a.name, func(t *testing.T) {
+			forwarded := forwardedEvents(t, *a.template)
+			want := append([]string(nil), a.events...)
+			sort.Strings(want)
+			sort.Strings(forwarded)
+			if !reflect.DeepEqual(forwarded, want) {
+				t.Errorf("%s forwards %v but its installer declares %v — the shipped artifact and the consent copy disagree about what is installed",
+					a.name, forwarded, want)
+			}
+		})
 	}
-	rest := pluginTemplate[i+len(marker):]
+}
+
+// forwardedEvents reads the IRRLICHT_EVENTS set out of a template.
+func forwardedEvents(t *testing.T, template string) []string {
+	t.Helper()
+	const marker = "const IRRLICHT_EVENTS = new Set(["
+	i := strings.Index(template, marker)
+	if i < 0 {
+		t.Fatalf("the template no longer declares %q — this guard cannot run", marker)
+	}
+	rest := template[i+len(marker):]
 	j := strings.Index(rest, "]")
 	if j < 0 {
-		t.Fatal("plugin.js's IRRLICHT_EVENTS array is unterminated — this guard cannot run")
+		t.Fatal("the template's IRRLICHT_EVENTS array is unterminated — this guard cannot run")
 	}
 
 	var forwarded []string
@@ -105,14 +152,10 @@ func TestShippedPluginForwardsExactlyTheInstalledHookEvents(t *testing.T) {
 		}
 		forwarded = append(forwarded, name)
 	}
-
-	want := append([]string(nil), installedHookEvents...)
-	sort.Strings(want)
-	sort.Strings(forwarded)
-	if !reflect.DeepEqual(forwarded, want) {
-		t.Errorf("plugin.js forwards %v but installedHookEvents declares %v — the shipped artifact and the consent copy disagree about what is installed",
-			forwarded, want)
+	if len(forwarded) == 0 {
+		t.Fatal("IRRLICHT_EVENTS parsed to nothing — this guard would pass any declaration")
 	}
+	return forwarded
 }
 
 // TestShippedPluginPayloadMatchesTheReceiversFields pins the wire between the
@@ -120,17 +163,38 @@ func TestShippedPluginForwardsExactlyTheInstalledHookEvents(t *testing.T) {
 // receiver decodes it into openCodeHookPayload; nothing in Go's type system
 // connects them, so a renamed field would simply arrive as a zero value and the
 // receiver would drop every hook in silence.
+//
+// Every receiver field must be written by every artifact, except event_id by
+// the 1.x one: 1.x delivers each event once and forwards no id, and the field
+// is omitempty so a 1.x payload's bytes are what they were (#2108). The 2.x
+// artifact must write it — without it every 2.x event is dispatched once per
+// plugin instance.
 func TestShippedPluginPayloadMatchesTheReceiversFields(t *testing.T) {
 	typ := reflect.TypeOf(openCodeHookPayload{})
-	for i := 0; i < typ.NumField(); i++ {
-		tag := typ.Field(i).Tag.Get("json")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		name := strings.Split(tag, ",")[0]
-		if !strings.Contains(pluginTemplate, name+":") {
-			t.Errorf("openCodeHookPayload decodes %q but plugin.js never writes it — the receiver would see a zero value and drop the hook", name)
-		}
+	for _, a := range shippedArtifacts() {
+		t.Run(a.name, func(t *testing.T) {
+			checked := 0
+			for i := 0; i < typ.NumField(); i++ {
+				tag := typ.Field(i).Tag.Get("json")
+				if tag == "" || tag == "-" {
+					continue
+				}
+				name := strings.Split(tag, ",")[0]
+				writes := strings.Contains(*a.template, name+":")
+				switch {
+				case name == "event_id" && !a.eventID:
+					if writes {
+						t.Errorf("%s writes event_id, which only the 2.x artifact forwards", a.name)
+					}
+				case !writes:
+					t.Errorf("openCodeHookPayload decodes %q but %s never writes it — the receiver would see a zero value and drop the hook", name, a.name)
+				}
+				checked++
+			}
+			if checked == 0 {
+				t.Fatal("openCodeHookPayload has no json-tagged field — this guard checked nothing")
+			}
+		})
 	}
 }
 
@@ -145,14 +209,18 @@ func TestShippedPluginPayloadMatchesTheReceiversFields(t *testing.T) {
 // nobody controls, for types a plain .js file cannot use anyway.
 func TestShippedPluginImportsOnlyNodeBuiltins(t *testing.T) {
 	importRE := regexp.MustCompile(`(?m)^import .* from "([^"]+)"`)
-	found := importRE.FindAllStringSubmatch(pluginTemplate, -1)
-	if len(found) == 0 {
-		t.Fatal("no import found in plugin.js at all — this guard's detector has stopped matching")
-	}
-	for _, m := range found {
-		if !strings.HasPrefix(m[1], "node:") {
-			t.Errorf("plugin.js imports %q, which is not a node: builtin — the consent copy promises no package is fetched from anywhere", m[1])
-		}
+	for _, a := range shippedArtifacts() {
+		t.Run(a.name, func(t *testing.T) {
+			found := importRE.FindAllStringSubmatch(*a.template, -1)
+			if len(found) == 0 {
+				t.Fatalf("no import found in %s at all — this guard's detector has stopped matching", a.name)
+			}
+			for _, m := range found {
+				if !strings.HasPrefix(m[1], "node:") {
+					t.Errorf("%s imports %q, which is not a node: builtin — the consent copy promises no package is fetched from anywhere", a.name, m[1])
+				}
+			}
+		})
 	}
 }
 
@@ -174,28 +242,55 @@ func TestShippedPluginExportsOnlyAFunction(t *testing.T) {
 }
 
 // TestRenderedPluginCarriesTheCommandAndNothingAddressShaped is the
-// DeliveryAddressFree property at the artifact level: the rendered file names
+// DeliveryAddressFree property at the artifact level: each rendered file names
 // the beacon command and contains nothing a daemon on a different port would
 // have to rewrite.
 func TestRenderedPluginCarriesTheCommandAndNothingAddressShaped(t *testing.T) {
 	const command = `/opt/irrlicht/irrlichd --version >/dev/null && /opt/irrlicht/irrlichd hook-post opencode >/dev/null || true`
-	rendered, err := renderPlugin(command)
+	for _, a := range shippedArtifacts() {
+		t.Run(a.name, func(t *testing.T) {
+			rendered, err := a.render(command)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			got, ok := beaconCommandOf(rendered)
+			if !ok {
+				t.Fatal("the rendered plugin's beacon line does not read back — an installed copy could never be recognized as current")
+			}
+			if got != command {
+				t.Errorf("read back %q, want %q", got, command)
+			}
+			if strings.Contains(string(rendered), beaconCommandPlaceholder) {
+				t.Error("the rendered plugin still contains the placeholder — substitution did not happen")
+			}
+			for _, addressShaped := range []string{"127.0.0.1", "localhost", "http://", ":7837"} {
+				if strings.Contains(string(rendered), addressShaped) {
+					t.Errorf("the rendered plugin contains %q — a DeliveryAddressFree artifact carries no address, which is what makes the #1178 stale-port class inexpressible", addressShaped)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderedPluginsAreOneInstall pins what makes the 1.x and 2.x artifacts
+// ONE install rather than two (#2108): each installer reads the other's
+// rendered file as ours, so an upgrade or a downgrade rewrites it in place and
+// Uninstall removes either. A 2.x file without the sentinel would read as a
+// user's own to the 1.x installer, which would then refuse to overwrite it.
+func TestRenderedPluginsAreOneInstall(t *testing.T) {
+	command, err := hookbeacon.Command("/opt/irrlicht/irrlichd", AdapterName)
 	if err != nil {
-		t.Fatalf("renderPlugin: %v", err)
+		t.Fatalf("beacon command: %v", err)
 	}
-	got, ok := beaconCommandOf(rendered)
-	if !ok {
-		t.Fatal("the rendered plugin's beacon line does not read back — an installed copy could never be recognized as current")
-	}
-	if got != command {
-		t.Errorf("read back %q, want %q", got, command)
-	}
-	if strings.Contains(string(rendered), beaconCommandPlaceholder) {
-		t.Error("the rendered plugin still contains the placeholder — substitution did not happen")
-	}
-	for _, addressShaped := range []string{"127.0.0.1", "localhost", "http://", ":7837"} {
-		if strings.Contains(string(rendered), addressShaped) {
-			t.Errorf("the rendered plugin contains %q — a DeliveryAddressFree artifact carries no address, which is what makes the #1178 stale-port class inexpressible", addressShaped)
+	for _, a := range shippedArtifacts() {
+		rendered, err := a.render(command)
+		if err != nil {
+			t.Fatalf("render %s: %v", a.name, err)
+		}
+		for name, in := range map[string]bool{"installer": installer.IsOurs(rendered), "installerV2": installerV2.IsOurs(rendered)} {
+			if !in {
+				t.Errorf("%s does not recognize the rendered %s as ours — it would refuse to rewrite it and Uninstall would leave it behind", name, a.name)
+			}
 		}
 	}
 }
@@ -205,38 +300,44 @@ func TestRenderedPluginCarriesTheCommandAndNothingAddressShaped(t *testing.T) {
 // chose, and a path containing a quote or a backslash must not be able to
 // terminate the JavaScript string literal it lands in.
 func TestRenderedPluginSurvivesAHostilePath(t *testing.T) {
-	for _, command := range []string{
-		`/tmp/a"b/irrlichd hook-post opencode`,
-		`/tmp/a\b/irrlichd hook-post opencode`,
-		"/tmp/a\nb/irrlichd hook-post opencode",
-		"/tmp/a\\\"; process.exit(1); //b/irrlichd hook-post opencode",
-	} {
-		rendered, err := renderPlugin(command)
-		if err != nil {
-			t.Fatalf("renderPlugin(%q): %v", command, err)
-		}
-		got, ok := beaconCommandOf(rendered)
-		if !ok {
-			t.Errorf("renderPlugin(%q): the beacon line does not read back", command)
-			continue
-		}
-		if got != command {
-			t.Errorf("renderPlugin(%q) read back %q — the quoting did not round-trip, which means the literal was terminated early", command, got)
+	for _, a := range shippedArtifacts() {
+		for _, command := range []string{
+			`/tmp/a"b/irrlichd hook-post opencode`,
+			`/tmp/a\b/irrlichd hook-post opencode`,
+			"/tmp/a\nb/irrlichd hook-post opencode",
+			"/tmp/a\\\"; process.exit(1); //b/irrlichd hook-post opencode",
+		} {
+			rendered, err := a.render(command)
+			if err != nil {
+				t.Fatalf("%s render(%q): %v", a.name, command, err)
+			}
+			got, ok := beaconCommandOf(rendered)
+			if !ok {
+				t.Errorf("%s render(%q): the beacon line does not read back", a.name, command)
+				continue
+			}
+			if got != command {
+				t.Errorf("%s render(%q) read back %q — the quoting did not round-trip, which means the literal was terminated early", a.name, command, got)
+			}
 		}
 	}
 }
 
 // TestRenderPluginRefusesWhenTheTemplateLostItsPlaceholder is the loud-failure
-// guard. A template that stopped carrying the token renderPlugin substitutes
+// guard. A template that stopped carrying the token the renderer substitutes
 // would otherwise be installed verbatim — and the file would then shell out to
 // the literal string "__IRRLICHT_BEACON_COMMAND__" on every event.
 func TestRenderPluginRefusesWhenTheTemplateLostItsPlaceholder(t *testing.T) {
-	original := pluginTemplate
-	t.Cleanup(func() { pluginTemplate = original })
-	pluginTemplate = strings.Replace(pluginTemplate, beaconCommandPlaceholder, `"gone"`, 1)
+	for _, a := range shippedArtifacts() {
+		t.Run(a.name, func(t *testing.T) {
+			original := *a.template
+			t.Cleanup(func() { *a.template = original })
+			*a.template = strings.Replace(*a.template, beaconCommandPlaceholder, `"gone"`, 1)
 
-	if _, err := renderPlugin("irrlichd hook-post opencode"); err == nil {
-		t.Fatal("renderPlugin succeeded against a template with no placeholder — it would have installed a file that runs the placeholder as a command")
+			if _, err := a.render("irrlichd hook-post opencode"); err == nil {
+				t.Fatal("render succeeded against a template with no placeholder — it would have installed a file that runs the placeholder as a command")
+			}
+		})
 	}
 }
 
@@ -244,17 +345,116 @@ func TestRenderPluginRefusesWhenTheTemplateLostItsPlaceholder(t *testing.T) {
 // argument: an empty command renders a file that spawns `/bin/sh -c ""` on
 // every event, forever, silently.
 func TestRenderPluginRefusesAnEmptyCommand(t *testing.T) {
-	if _, err := renderPlugin(""); err == nil {
-		t.Fatal("renderPlugin(\"\") succeeded — the installed file would spawn an empty shell command on every opencode event")
+	for _, a := range shippedArtifacts() {
+		if _, err := a.render(""); err == nil {
+			t.Errorf("%s render(\"\") succeeded — the installed file would spawn an empty shell command on every opencode event", a.name)
+		}
 	}
 }
 
-// TestPlaceholderAppearsExactlyOnce pins what renderPlugin's single-replacement
+// TestPlaceholderAppearsExactlyOnce pins what the single-replacement
 // substitution assumes. A second occurrence would be left in the installed file
 // verbatim.
 func TestPlaceholderAppearsExactlyOnce(t *testing.T) {
-	if n := strings.Count(pluginTemplate, beaconCommandPlaceholder); n != 1 {
-		t.Errorf("the placeholder appears %d times in plugin.js, want exactly 1 — renderPlugin substitutes only the first", n)
+	for _, a := range shippedArtifacts() {
+		if n := strings.Count(*a.template, beaconCommandPlaceholder); n != 1 {
+			t.Errorf("the placeholder appears %d times in %s, want exactly 1 — the renderer substitutes only the first", n, a.name)
+		}
+	}
+}
+
+// --- the 2.x artifact's shape (#2108) ---
+
+// v2ContextUseRE finds every use of the context opencode 2.x hands setup,
+// capturing the member read off it. A bare use — the context passed on, or
+// indexed — captures nothing and is checked against the allowed hand-offs.
+var v2ContextUseRE = regexp.MustCompile(`\bctx\b(?:\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*))?`)
+
+// v2AllowedContextHandOffs are the only places the 2.x plugin may name the
+// context without reading a member off it: the two parameters that receive it
+// and the one call that passes it from setup to the subscription loop.
+var v2AllowedContextHandOffs = []string{"function irrlichtSetup(ctx)", "function forward(ctx)", "forward(ctx);"}
+
+// jsLineCommentRE strips whole-line // comments, so prose naming a context
+// member is not read as a use of it. Only WHOLE-LINE comments: a "//" after
+// code could be inside a string literal, and stripping from there would hide
+// the rest of the line — so the guard below refuses a template that has one.
+var jsLineCommentRE = regexp.MustCompile(`(?m)^\s*//.*$`)
+
+// jsTrailingSlashesRE finds a "//" after code on the same line.
+var jsTrailingSlashesRE = regexp.MustCompile(`(?m)^.*\S.*//.*$`)
+
+// TestShippedV2PluginUsesOnlyTheEventBus is the 2.x counterpart of
+// TestShippedPluginRegistersOnlyTheReadOnlyEventTap, and it carries the same
+// stake. 2.x has no returned hooks object to read keys off: the capabilities
+// are members of the context setup receives, and #2104's probe plugin logged
+// their names — permission, tool, command, provider, credential and shell
+// among them. The 2.x artifact may read exactly one member, `event`, and call
+// exactly one method on that, `subscribe`. Anything else is a capability a
+// monitoring plugin has no business holding.
+func TestShippedV2PluginUsesOnlyTheEventBus(t *testing.T) {
+	code := jsLineCommentRE.ReplaceAllString(pluginV2Template, "")
+	if trailing := jsTrailingSlashesRE.FindAllString(code, -1); len(trailing) > 0 {
+		t.Fatalf("plugin_v2.js has \"//\" after code on %q — keep comments on their own lines so this guard reads every use of the context", trailing)
+	}
+	members := map[string]bool{}
+	bare := 0
+	for _, loc := range v2ContextUseRE.FindAllStringSubmatchIndex(code, -1) {
+		if loc[2] >= 0 {
+			members[code[loc[2]:loc[3]]] = true
+			continue
+		}
+		allowed := false
+		for _, handOff := range v2AllowedContextHandOffs {
+			start := loc[0] - strings.Index(handOff, "ctx")
+			if start >= 0 && strings.HasPrefix(code[start:], handOff) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			t.Errorf("plugin_v2.js names the context outside the allowed hand-offs at %q — a context passed on or indexed is one this guard cannot follow",
+				code[loc[0]:min(len(code), loc[1]+24)])
+		}
+		bare++
+	}
+	if len(members) == 0 || bare == 0 {
+		t.Fatalf("found members %v and %d bare uses of the context — this guard's detector has stopped matching and would pass vacuously", members, bare)
+	}
+	if !reflect.DeepEqual(members, map[string]bool{"event": true}) {
+		t.Errorf("plugin_v2.js reads %v off the context, want exactly [event] — the context is where a 2.x plugin registers tools and answers permissions", members)
+	}
+	calls := regexp.MustCompile(`\bctx\.event\.([A-Za-z_$][A-Za-z0-9_$]*)`).FindAllStringSubmatch(code, -1)
+	if len(calls) == 0 {
+		t.Fatal("plugin_v2.js never calls anything on ctx.event — this guard cannot run")
+	}
+	for _, c := range calls {
+		if c[1] != "subscribe" {
+			t.Errorf("plugin_v2.js calls ctx.event.%s, want only subscribe — the read-only stream", c[1])
+		}
+	}
+}
+
+// TestShippedV2PluginExportsAnIDAndASetup pins the 2.x loader fact the 1.x
+// artifact fails: "Plugin must export a default definition with an id and an
+// effect or setup function" (#2104 item 10). The 2.x artifact's only export is
+// a default object literal whose keys are exactly id and setup.
+func TestShippedV2PluginExportsAnIDAndASetup(t *testing.T) {
+	exports := regexp.MustCompile(`(?m)^export\b.*$`).FindAllString(pluginV2Template, -1)
+	if len(exports) != 1 || exports[0] != "export default {" {
+		t.Fatalf("plugin_v2.js has top-level exports %q, want exactly one: %q", exports, "export default {")
+	}
+	body := pluginV2Template[strings.Index(pluginV2Template, "export default {"):]
+	end := strings.Index(body, "\n};")
+	if end < 0 {
+		t.Fatal("plugin_v2.js's default export is not closed by a top-level \"};\" — this guard cannot read its keys")
+	}
+	var keys []string
+	for _, m := range regexp.MustCompile(`(?m)^\t([A-Za-z_$][A-Za-z0-9_$]*)\s*:`).FindAllStringSubmatch(body[:end], -1) {
+		keys = append(keys, m[1])
+	}
+	if !reflect.DeepEqual(keys, []string{"id", "setup"}) {
+		t.Errorf("plugin_v2.js's default export has keys %v, want exactly [id setup]", keys)
 	}
 }
 

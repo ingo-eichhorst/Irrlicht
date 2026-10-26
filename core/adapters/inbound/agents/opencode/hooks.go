@@ -5,6 +5,15 @@
 // blocked-on-user signal, permission.replied releases it, and session.idle
 // releases it AND reports the authoritative turn end.
 //
+// opencode 2.x (#2108) ends a turn with session.execution.succeeded, .failed or
+// .interrupted instead — it never publishes session.idle (#2104 item 8) — and
+// each of those is dispatched exactly as session.idle is. Its plugin runs once
+// per project directory inside 2.x's shared service, every instance sees the
+// same event stream, and each event therefore arrives once per instance (#2104
+// item 12); the 2.x plugin forwards the event's own id, and the receiver drops
+// an id it has already dispatched (recentEventIDs). A 1.x payload carries no id
+// and is dispatched every time, as before.
+//
 // # opencode DOES have a blocked-on-user state, and it is invisible in the store
 //
 // #1719 asked whether opencode has any genuine blocked-on-user state and told
@@ -78,6 +87,7 @@ package opencode
 import (
 	"net/http"
 	"strings"
+	"sync"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
@@ -113,6 +123,11 @@ const sessionIDPrefix = "ses"
 type openCodeHookPayload struct {
 	HookEventName string `json:"hook_event_name"`
 	SessionID     string `json:"session_id"`
+	// EventID is opencode 2.x's own id for the bus event (#2108), forwarded
+	// so the receiver can drop the copy each further plugin instance delivers.
+	// Empty from the 1.x plugin, which forwards none, and omitted then, so a
+	// 1.x payload's bytes are what they were.
+	EventID string `json:"event_id,omitempty"`
 }
 
 // HookTarget is the interface the handler calls into. Satisfied by
@@ -143,17 +158,63 @@ type ConsentGranter = hookjson.ConsentGranter
 // decode without giving the adapter roots. AssertHookPathConfined's
 // PathDaemonDerived route asserts it.
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	seen := newRecentEventIDs(recentEventIDCapacity)
 	return hookjson.NewHandler(nil,
 		hookjson.RequireConsent(gate, AdapterName, PermissionKeyHooks, PermissionKeyDatabase),
 		func(consent hookjson.Consent, _ *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, consent, log, w, r)
+			serveHookRequest(target, seen, consent, log, w, r)
 		})
+}
+
+// recentEventIDCapacity bounds how many 2.x event ids the receiver remembers.
+// A repeat arrives from a sibling plugin instance spawning its own beacon for
+// the same event, so it lands within moments of the first; the bound only has
+// to outlast the events published in that window, across every session the
+// service hosts, and the five event types the 2.x plugin forwards are a few
+// per turn. It is a memory bound, not a tuning knob.
+const recentEventIDCapacity = 1024
+
+// maxEventIDLen bounds an event id the receiver will remember. opencode 2.1.4's
+// ids are 30 bytes ("evt_175fc0687002Gb1i3eKhC48Ken", from the sandbox daemon
+// log of #2108's live run); 128 leaves room for a longer scheme without letting
+// the dedupe set grow with the request body.
+const maxEventIDLen = 128
+
+// recentEventIDs is a bounded set of the event ids most recently dispatched:
+// a map for the lookup and a ring for the eviction order, behind a mutex
+// because the HTTP server runs handlers concurrently.
+type recentEventIDs struct {
+	mu   sync.Mutex
+	ids  map[string]struct{}
+	ring []string
+	next int
+}
+
+func newRecentEventIDs(capacity int) *recentEventIDs {
+	return &recentEventIDs{ids: make(map[string]struct{}, capacity), ring: make([]string, capacity)}
+}
+
+// firstSighting records id and reports whether it is new. When the set is
+// full, the oldest id is forgotten to make room.
+func (r *recentEventIDs) firstSighting(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.ids[id]; dup {
+		return false
+	}
+	if old := r.ring[r.next]; old != "" {
+		delete(r.ids, old)
+	}
+	r.ring[r.next] = id
+	r.next = (r.next + 1) % len(r.ring)
+	r.ids[id] = struct{}{}
+	return true
 }
 
 // serveHookRequest is NewHookHandler's request logic. The step order matches
 // every sibling receiver's exactly, and each step is load-bearing — see the
 // contract assertions in hook*_test.go.
-func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.Logger, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, seen *recentEventIDs, consent hookjson.Consent, log outbound.Logger, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -193,6 +254,28 @@ func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.
 		return
 	}
 
+	// An event id longer than any opencode issues is not one our plugin
+	// forwarded. It is dropped rather than remembered: the set below holds
+	// every id it is handed until evicted, and a caller on this
+	// unauthenticated local endpoint could otherwise park up to the body
+	// bound (1 MiB) in each of its slots.
+	if len(payload.EventID) > maxEventIDLen {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// A 2.x event this receiver already dispatched, delivered again by
+	// another plugin instance (#2104 item 12). Dropped AFTER the session-id
+	// check, so an id from a payload that was itself dropped is never
+	// remembered, and before anything is dispatched — a repeated
+	// permission.asked that arrives after its permission.replied must not
+	// hold the session waiting again.
+	if payload.EventID != "" && !seen.firstSighting(payload.EventID) {
+		log.LogInfo(logComponentHookReceiver, sessionID, "dropped a repeat of "+payload.HookEventName+" (event "+payload.EventID+")")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Composed by the daemon from its own store resolver, never from the body.
 	transcriptPath := transcriptPathFor(sessionID)
 
@@ -203,8 +286,11 @@ func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.
 	case HookEventPermissionReplied:
 		log.LogInfo(logComponentHookReceiver, sessionID, "received permission.replied")
 		target.ReleasePermissionPromptHold(sessionID)
-	case HookEventSessionIdle:
-		log.LogInfo(logComponentHookReceiver, sessionID, "received session.idle")
+	case HookEventSessionIdle, HookEventExecutionSucceeded, HookEventExecutionFailed, HookEventExecutionInterrupted:
+		// session.idle is 1.x's turn end; the three session.execution.* are
+		// 2.x's (#2108), which publishes no session.idle. Each is the same
+		// authoritative claim, so each is handled the same way.
+		log.LogInfo(logComponentHookReceiver, sessionID, "received "+payload.HookEventName)
 		// Released before the turn-end report, and unconditionally: a release
 		// on an unheld signal is a no-op, and this is the only thing that
 		// closes a prompt torn down without a reply (a killed process, a

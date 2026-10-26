@@ -1,10 +1,11 @@
 // hookversion_test.go wires the opencode hooks permission into the shared issue
 // #1365 contract.
 //
-// Like geminicli, vibe and pi, this adapter declares no Observed version
-// source: opencode's store carries no CLI version column this adapter's reader
-// touches, so the gate falls straight through to Probe (`opencode --version`),
-// which cliversion runs itself.
+// The gate is a variant declaration (#2108): one artifact for opencode 1.x and
+// one for 2.x, at the same path, selected by the installed version. Observed
+// reads that version off the newest session in opencode's own store
+// (storeversion.go), behind the database permission; Probe
+// (`opencode --version`) is the fallback.
 //
 // What is deliberately NOT here — BelowFloorSaysWhy, AtOrAboveFloorInstalls and
 // UnknownVersionFailsOpen — is issue #1762: six adapters carry hand-written
@@ -25,9 +26,23 @@ func TestHooksPermission_DeclaresVersionGate(t *testing.T) {
 	contracttesting.AssertHookVersionGate(t, contracttesting.HookVersionGate{
 		Agent:         Agent(),
 		PermissionKey: PermissionKeyHooks,
-		Installed:     installedHookEvents,
-		Since:         hookEventSince,
 	})
+}
+
+// hooksWrites returns the declared managed file, read off the real
+// registration the daemon consumes rather than a copy.
+func hooksWrites(t *testing.T) *agent.ManagedUserFile {
+	t.Helper()
+	for _, p := range Agent().Permissions {
+		if p.Key == PermissionKeyHooks {
+			if p.Writes == nil {
+				t.Fatal("hooks permission declares no managed file")
+			}
+			return p.Writes
+		}
+	}
+	t.Fatal("no hooks permission")
+	return nil
 }
 
 // hooksVersionGate returns the declared gate, read off the real registration
@@ -64,37 +79,79 @@ func TestHooksGate_ProbeIsOpenCodeVersion(t *testing.T) {
 	}
 }
 
-// TestHooksGate_CeilingRefusesOpenCode2 is #2105's red-first defect test. On
-// main the gate was Min-only, so the 2.1.4 the sandbox's V2 binary reports
-// passed it, and the daemon wrote the 1.x plugin file that opencode 2.x rejects
-// on every location load ("Plugin must export a default definition with an id
-// and an effect or setup function", measured in #2104). 2.1.4 is the version
-// that shipped as npm `@opencode/cli` latest when this was written.
-func TestHooksGate_CeilingRefusesOpenCode2(t *testing.T) {
-	gate := hooksVersionGate(t)
-	allowed, why := gate.Permits("2.1.4")
-	if allowed {
-		t.Fatal("the hooks gate permits opencode 2.1.4, so the daemon writes a 1.x plugin " +
-			"file that opencode 2.x refuses to load on every start")
+// TestHooksGate_SelectsTheTwoXArtifactForOpenCode2 is #2108's red-first
+// declaration test. #2105 made the gate refuse 2.1.4 — the version the
+// sandbox's V2 binary reports, npm `@opencode/cli` latest when this was written
+// — so a user who upgraded got nothing. The gate now selects the 2.x artifact
+// there, and its Apply is the 2.x installer's.
+func TestHooksGate_SelectsTheTwoXArtifactForOpenCode2(t *testing.T) {
+	writes := hooksWrites(t)
+	variant, bound, why := writes.SelectVariant("2.1.4")
+	if variant == nil {
+		t.Fatalf("opencode 2.1.4 selects no hook artifact (bound %d: %q) — a user who upgraded "+
+			"gets no waiting detection and no authoritative turn end", bound, why)
 	}
-	for _, want := range []string{"2.1.4", "2.0.0", "2.x"} {
-		if !strings.Contains(why, want) {
-			t.Errorf("refusal %q does not name %q; the user reads it as the reason "+
-				"nothing was installed", why, want)
+	if variant.Min != minOpenCodeV2Version || len(variant.Events) != len(installedHookEventsV2) {
+		t.Errorf("opencode 2.1.4 selects the artifact for %s up to %s with %d events, want the 2.x "+
+			"one (%s up to %s, %d events)", variant.Min, variant.Max, len(variant.Events),
+			minOpenCodeV2Version, maxOpenCodeV2Version, len(installedHookEventsV2))
+	}
+}
+
+// TestHooksGate_RefusesBetweenAndAboveTheArtifacts pins the two refusals the
+// variant declaration keeps from #2105 (a LOCK for 2.0.0 and 3.0.0, which the
+// 1.x-only gate already refused): a 2.x older than the 2.x plugin's measured
+// floor, and the next major, whose plugin format nobody has seen. Both refuse
+// as AT OR ABOVE A CEILING, which is what makes PermissionService remove an
+// earlier install's file there, as #2105 did for every 2.x.
+func TestHooksGate_RefusesBetweenAndAboveTheArtifacts(t *testing.T) {
+	writes := hooksWrites(t)
+	for v, names := range map[string][]string{
+		"2.0.0": {"2.0.0", minOpenCodeV2Version},
+		"2.1.3": {"2.1.3", maxOpenCodeVersion, minOpenCodeV2Version},
+		"3.0.0": {"3.0.0", "3.x"},
+	} {
+		variant, bound, why := writes.SelectVariant(v)
+		if variant != nil || bound != agent.AtOrAboveCeiling {
+			t.Errorf("opencode %s selected %v with bound %d (%q), want no artifact, refused at a "+
+				"ceiling", v, variant != nil, bound, why)
+			continue
+		}
+		for _, want := range names {
+			if !strings.Contains(why, want) {
+				t.Errorf("the refusal for %s (%q) does not name %q", v, why, want)
+			}
 		}
 	}
 }
 
 // TestHooksGate_PermitsOpenCode1 is a LOCK, not a defect test: it passed before
-// #2105 and must keep passing. The newest 1.x a brew user has (1.19.4 when this
-// was written) still installs the 1.x plugin — the ceiling sits at the major
-// boundary, not below it.
+// #2105 and #2108 and must keep passing. The newest 1.x a brew user has (1.19.4
+// when this was written) still installs the 1.x plugin — the 1.x artifact's
+// ceiling sits at the major boundary, not below it.
 func TestHooksGate_PermitsOpenCode1(t *testing.T) {
-	gate := hooksVersionGate(t)
+	writes := hooksWrites(t)
 	for _, v := range []string{minOpenCodeVersion, "1.19.4", "1.999.999"} {
-		if allowed, why := gate.Permits(v); !allowed {
-			t.Errorf("the hooks gate refuses opencode %s (%s); every 1.x at or above the "+
-				"floor must still install", v, why)
+		variant, _, why := writes.SelectVariant(v)
+		if variant == nil || variant.Min != minOpenCodeVersion {
+			t.Errorf("opencode %s does not select the 1.x artifact (%s); every 1.x at or above "+
+				"the floor must still install it", v, why)
 		}
+	}
+}
+
+// TestHooksGate_ObservedReadsBehindTheDatabasePermission pins the declaration
+// half of #2108's consent rule: Observed reads opencode's session database,
+// which only the database permission discloses, so the gate names it and
+// PermissionService skips Observed while it is not granted (the service half is
+// TestVariantGate_ObservedIsNotConsultedWithoutItsPermission).
+func TestHooksGate_ObservedReadsBehindTheDatabasePermission(t *testing.T) {
+	gate := hooksVersionGate(t)
+	if gate.Observed == nil {
+		t.Fatal("the hooks gate declares no Observed version source")
+	}
+	if gate.ObservedRequires != PermissionKeyDatabase {
+		t.Errorf("ObservedRequires = %q, want %q — Observed reads the session database",
+			gate.ObservedRequires, PermissionKeyDatabase)
 	}
 }

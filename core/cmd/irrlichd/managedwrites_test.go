@@ -369,6 +369,23 @@ func gradablePermissions(t *testing.T, catalog []agent.Agent) []gradablePermissi
 			continue
 		}
 		out = append(out, gradablePermission{id: id, perm: p, declared: resolveDeclared(p)})
+		// A permission writing a different artifact per upstream major (#2108)
+		// installs through the SELECTED variant's Apply, never its own, so each
+		// variant's closure is graded as well, against the same declaration —
+		// except one that IS the permission's own Apply, graded just above:
+		// re-running it would rewrite identical bytes, and the grader would
+		// rightly call that a declared file nothing changed.
+		if p.Writes != nil {
+			own := reflect.ValueOf(p.Apply).Pointer()
+			for _, v := range p.Writes.Variants {
+				if v.Apply == nil || reflect.ValueOf(v.Apply).Pointer() == own {
+					continue
+				}
+				vp := p
+				vp.Apply = v.Apply
+				out = append(out, gradablePermission{id: id + "@" + v.Min + "-" + v.Max, perm: vp, declared: resolveDeclared(vp)})
+			}
+		}
 	}
 	// Map iteration is unordered; the sub-tests below are named per permission
 	// and a stable order keeps a failure reproducible.

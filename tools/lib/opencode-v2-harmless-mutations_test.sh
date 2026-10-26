@@ -17,7 +17,8 @@
 #      AssertHookVersionGate contract goes red (the arm grades domain code no
 #      wiring can get wrong, so its mutation is here, in the domain).
 #   2. the service never removes after a ceiling refusal → the 1.x plugin
-#      survives a grant against opencode 2.1.4.
+#      survives a grant against opencode 3.0.0. (#2108 made 2.1.4 install the
+#      2.x artifact in place; the removal now guards the next major.)
 #   3. hookVersionRefusal reports every refusal as a floor refusal → the
 #      service cannot tell a ceiling refusal apart and removes nothing.
 #   4. VersionGate.Bounded counts only a floor as a declared bound → a
@@ -33,8 +34,9 @@
 #      serve --service` (a client) reads as the service.
 #   9. the disclosure arm ignores a declared ceiling → copy stating only "X or
 #      newer" for a ceilinged gate passes.
-#  10. opencode's copy states only the floor → opencode's real disclosure
-#      wiring goes red.
+#  10. opencode's copy states only the floor of its 1.x artifact → opencode's
+#      real disclosure wiring goes red. (#2108 renders the copy per artifact;
+#      the 2.0.0 ceiling is now the 1.x artifact's.)
 #  11. the contract arm accepts an unparseable ceiling → the "ceiling that
 #      never refuses" self-test goes red.
 #
@@ -146,14 +148,14 @@ assert_go_test_goes_red \
   '} else if false && bound == agent.AtOrAboveCeiling {' \
   "$SERVICES" \
   '^TestOpenCodeCeiling_RemovesTheStaleV1Plugin$' \
-  "survived a grant against opencode 2.1.4"
+  "survived a grant against opencode 3.0.0"
 
 # ── 3. every refusal reported as a floor refusal ──
 assert_go_test_goes_red \
   "hookVersionRefusal dropping which bound refused" \
   "$GATE_FILE" \
-  'return bound, errors.New(why)' \
-  'return agent.BelowFloor, errors.New(why)' \
+  'return nil, bound, errors.New(why)' \
+  'return nil, agent.BelowFloor, errors.New(why)' \
   "$SERVICES" \
   '^TestHookVersionGate_CeilingRefusesAndRemovesTheStaleArtifact$' \
   "Writes.Uninstall ran 0 time(s), want 1"
@@ -222,8 +224,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "opencode's consent copy without the ceiling" \
   "$OPENCODE_AGENT" \
-  'hookjson.RequiresVersionRange("opencode", minOpenCodeVersion, maxOpenCodeVersion) +' \
-  'hookjson.RequiresVersion("opencode", minOpenCodeVersion) +' \
+  '"for opencode " + minOpenCodeVersion + " or newer and older than " + maxOpenCodeVersion +' \
+  '"for opencode " + minOpenCodeVersion + " or newer" +' \
   "$OPENCODE" \
   '^TestHooksPermission_DisclosureMatchesInstalled$' \
   "consent copy never states the 2.0.0 ceiling"

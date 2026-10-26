@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -9,52 +10,172 @@ import (
 	"irrlicht/core/pkg/cliversion"
 )
 
-// The upstream-CLI version gate (#1365, ceiling #2105), in its own file for the
-// reason permission_shared_config_gate.go gives for its own: it is refused from
-// the same call site (runClosureEffect) but answers an unrelated question, and
-// permission_service.go is the package's largest unit. Its tests are
-// permission_version_gate_test.go and permission_version_ceiling_test.go.
+// The upstream-CLI version gate (#1365, ceiling #2105, per-major variants
+// #2108), in its own file for the reason permission_shared_config_gate.go gives
+// for its own: it is refused from the same call site (runClosureEffect) but
+// answers an unrelated question, and permission_service.go is the package's
+// largest unit. Its tests are permission_version_gate_test.go,
+// permission_version_ceiling_test.go and permission_version_variant_test.go.
 
 // hookVersionRefusal resolves the installed upstream CLI version for a
 // permission that declares a version bound — a floor, a ceiling (#2105), or
-// both — and returns a non-nil error when the install must not proceed, with
-// the bound that refused it: runClosureEffect removes an earlier install on a
-// ceiling refusal and never on a floor refusal. It returns nil for every
-// permission that declares neither bound, which is every non-hook permission
-// and any hook adapter that has not opted in.
+// per-major variants (#2108) — and decides what its install does.
 //
-// Resolution prefers the adapter's own passive signal over running anything:
-// Codex reads cli_version out of the transcript it is already tailing, which
-// costs nothing and works when the binary is not on the daemon's PATH. The
-// probe is the fallback for adapters with no such signal.
-func (s *PermissionService) hookVersionRefusal(p agent.Permission) (agent.VersionBound, error) {
-	if p.Writes == nil || !p.Writes.Version.Bounded() {
-		return agent.WithinBounds, nil
+// It returns the variant to install for a variant declaration, and nil for a
+// single-artifact one, whose own Apply is the install. On a refusal it returns
+// a non-nil error with the bound that refused: runClosureEffect removes an
+// earlier install on a ceiling refusal and never on any other. It returns
+// (nil, WithinBounds, nil) for every permission that declares no bound, which
+// is every non-hook permission and any hook adapter that has not opted in.
+//
+// The version is resolved ONCE here, and the variant's Apply receives the
+// answer by being the closure that runs: the adapter never asks the CLI again.
+func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permission) (*agent.HookVariant, agent.VersionBound, error) {
+	if !versionGated(p.Writes) {
+		return nil, agent.WithinBounds, nil
 	}
-	gate := p.Writes.Version
+	installed, probeErr := resolveInstalledVersion(s.effectContext(), s.Granted, agentName, p.Writes)
+	if probeErr != nil {
+		// A probe that could not run is the state most likely to be misread
+		// later as "the gate checked and approved", so it is said out loud. What
+		// follows from it differs by shape: a single artifact fails open, and a
+		// variant declaration cannot pick its artifact without a version.
+		consequence := "installing anyway — an unreadable version is not an old one"
+		if len(p.Writes.Variants) > 0 {
+			consequence = "the artifact is chosen by the version, so an unreadable one writes nothing new"
+		}
+		s.log.LogInfo("permissions", "", fmt.Sprintf(
+			"%s: version probe failed (%v); %s", p.Key, probeErr, consequence))
+	}
 
-	installed := ""
-	if gate.Observed != nil {
-		installed = gate.Observed()
-	}
-	if s.shouldConfirmByProbe(gate, installed) {
-		probed, err := cliprobe.Probe(s.effectContext(), gate.Probe)
+	variant, bound, why := p.Writes.SelectVariant(installed)
+	if bound == agent.VersionUnknown {
+		// An unknown version changes nothing that is already right: a
+		// variant's artifact that is installed and current is kept — its
+		// Apply finds the file current and writes nothing — rather than
+		// refused into an effect error no later intact pass would clear.
+		kept, err := currentVariant(p.Writes)
 		if err != nil {
-			// Unknown version: fail open, but say so. A probe that could not
-			// run is the state most likely to be misread later as "the gate
-			// checked and approved".
+			// Could not look at what is installed: say so, rather than
+			// refuse as if nothing were there.
+			return nil, bound, fmt.Errorf("%s; reading the installed hook file also failed: %w", why, err)
+		}
+		if kept != nil {
 			s.log.LogInfo("permissions", "", fmt.Sprintf(
-				"%s: version probe failed (%v); installing anyway — an unreadable version is not an old one", p.Key, err))
-		} else {
-			installed = probed
+				"%s: the installed CLI's version is unknown; keeping the hook artifact for %s, which is installed and current",
+				p.Key, kept.Range()))
+			return kept, agent.WithinBounds, nil
 		}
 	}
-
-	bound, why := gate.Check(installed)
 	if bound == agent.WithinBounds {
-		return bound, nil
+		return variant, bound, nil
 	}
-	return bound, errors.New(why)
+	return nil, bound, errors.New(why)
+}
+
+// currentVariant returns the variant whose artifact is installed and current
+// — its own Verify reads intact — or nil. Read-only: Verify writes nothing. A
+// Verify that fails is returned as the error, never read as "not current":
+// not being able to look is not the same finding as nothing being there.
+func currentVariant(w *agent.ManagedUserFile) (*agent.HookVariant, error) {
+	return firstVariantReading(w, agent.HookEntryStatus.Intact)
+}
+
+// oursPresent reports whether some variant reads a file of ours at the path,
+// current or not: its Verify reports no event Missing (Missing is what an
+// absent or foreign file reads as; Stale is ours, not current). A failing
+// Verify is returned as the error, as in currentVariant.
+func oursPresent(w *agent.ManagedUserFile) (bool, error) {
+	v, err := firstVariantReading(w, func(s agent.HookEntryStatus) bool { return len(s.Missing) == 0 })
+	return v != nil, err
+}
+
+// firstVariantReading returns the first variant whose own Verify reads as
+// match says, the first Verify error, or neither.
+func firstVariantReading(w *agent.ManagedUserFile, match func(agent.HookEntryStatus) bool) (*agent.HookVariant, error) {
+	for i := range w.Variants {
+		v := &w.Variants[i]
+		if v.Verify == nil {
+			continue
+		}
+		status, err := v.Verify()
+		if err != nil {
+			return nil, err
+		}
+		if match(status) {
+			return v, nil
+		}
+	}
+	return nil, nil
+}
+
+// versionGated reports whether a managed file's install depends on the
+// upstream CLI version at all: it declares a floor or a ceiling, or per-major
+// variants. A variant declaration is gated even with no envelope declared —
+// its artifact cannot be chosen without a version, so it must never fall
+// through to the permission's own Apply.
+func versionGated(w *agent.ManagedUserFile) bool {
+	return w != nil && (w.Version.Bounded() || len(w.Variants) > 0)
+}
+
+// resolveInstalledVersion is the ONE place the installed upstream CLI version
+// is learnt, for the install (hookVersionRefusal) and for the #1372
+// re-verification of a variant declaration (HookEntryVerifier) alike, so the
+// two cannot disagree about which artifact is current.
+//
+// It prefers the adapter's own passive signal over running anything: Codex
+// reads cli_version out of the transcript it is already tailing, which costs
+// nothing and works when the binary is not on the daemon's PATH. That signal is
+// consulted only while the permission it reads behind is granted
+// (VersionGate.ObservedRequires, #2108): opencode's reads the session database,
+// which only its `database` permission discloses. The probe is the fallback,
+// for the cases shouldConfirmByProbe names.
+//
+// probeErr reports a probe that ran and failed; installed is then whatever the
+// passive signal said, which is what the gate grades. The caller decides
+// whether a failed probe is worth a log line.
+func resolveInstalledVersion(ctx context.Context, granted func(agentName, key string) bool, agentName string, w *agent.ManagedUserFile) (installed string, probeErr error) {
+	gate := w.Version
+	if gate == nil {
+		return "", nil
+	}
+	if gate.Observed != nil && observedAllowed(granted, agentName, gate.ObservedRequires) {
+		installed = gate.Observed()
+	}
+	if !shouldConfirmByProbe(w, installed) {
+		return installed, nil
+	}
+	probed, err := cliprobe.Probe(ctx, gate.Probe)
+	if err != nil {
+		return installed, err
+	}
+	if len(w.Variants) > 0 && cliversion.Less(probed, installed) {
+		// A variant declaration takes the probe only UPWARD — a deliberate
+		// trade-off, not a claim that the store cannot be ahead. The passive
+		// answer is the version that last wrote the user's own store: stale
+		// DOWNWARD after an upgrade, which the probe corrects here, and stale
+		// UPWARD after a downgrade, until the downgraded CLI writes its first
+		// session and the #1372 loop follows it within one pass. A probe
+		// naming an OLDER version cannot be told apart from another install
+		// cliprobe resolved first — /opt/homebrew/bin, where a brew 1.x can sit
+		// beside an npm 2.x (#2105 correction 1) — and taking that answer
+		// writes the artifact the CLI that wrote the store rejects (#2104 item
+		// 10). The downgrade lag is the cheaper error; it was measured as
+		// impossible only for 2.x→1.x (#2104 item 3: 1.x hangs on a store 2.x
+		// migrated), not for a future major.
+		return installed, nil
+	}
+	return probed, nil
+}
+
+// observedAllowed reports whether a passive version source may be read: it
+// declares no permission it reads behind, or that permission is granted. A nil
+// granted reads as "nothing is granted" — the safe direction for a gate.
+func observedAllowed(granted func(agentName, key string) bool, agentName, requires string) bool {
+	if requires == "" {
+		return true
+	}
+	return granted != nil && granted(agentName, requires)
 }
 
 // removeAfterCeilingRefusal removes the file an earlier install left behind,
@@ -69,6 +190,12 @@ func (s *PermissionService) hookVersionRefusal(p agent.Permission) (agent.Versio
 // earlier install is the 1.x artifact the new major rejects on every load
 // (opencode 2.x logs `failed to load plugin` for it), and leaving it is the
 // harm.
+//
+// For a variant declaration (#2108) the ceiling is the envelope's — the
+// highest variant's — or a lower variant's when the version sits between two
+// variants (agent.ManagedUserFile.SelectVariant). Inside a variant's range
+// nothing is refused, so nothing is removed: the variant's own Apply rewrites
+// another variant's file in place.
 //
 // Runs on every path that re-runs a granted effect — PermissionService.Start at
 // daemon start, a wizard re-grant, and the #1372 repair through
@@ -96,7 +223,8 @@ func (s *PermissionService) removeAfterCeilingRefusal(e pendingEffect, refused e
 
 // shouldConfirmByProbe decides whether to spend a process on confirming the
 // version. It returns false only for the case that needs no help: a passive
-// signal that parses and already clears every declared bound.
+// signal that parses and already selects an install — clears every declared
+// bound, and for a variant declaration lands inside a variant.
 //
 // The two cases it does probe are the ones where the passive answer cannot be
 // relied on:
@@ -111,15 +239,25 @@ func (s *PermissionService) removeAfterCeilingRefusal(e pendingEffect, refused e
 //     would otherwise be refused on a version they no longer run, with nothing
 //     installed and the permission still showing green. A false refusal is the
 //     one direction this gate must never produce quietly, so it is worth a
-//     process to be sure. At or above a ceiling (#2105) the same probe is what
-//     catches a user who downgraded back below it.
-func (s *PermissionService) shouldConfirmByProbe(gate *agent.VersionGate, installed string) bool {
-	if len(gate.Probe) == 0 {
+//     process to be sure. For a single artifact at or above a ceiling (#2105)
+//     the same probe catches a user who downgraded back below it.
+//
+// For a variant declaration (#2108) a passive answer that parses and selects
+// an artifact is never confirmed by a probe, and a refused one is confirmed
+// only UPWARD (resolveInstalledVersion): opencode's store reading 2.1.4 selects
+// the 2.x artifact even where cliprobe would resolve a brew 1.19.4 first
+// (#2105 correction 1), and a store reading 3.0.0 is not lowered to it — at
+// the cost of lagging a real downgrade until its first session (see
+// resolveInstalledVersion). For 2.x over 1.x the direction is measured safe:
+// opencode 1.x hangs on a store 2.x has migrated (#2104 item 3), so a store
+// 2.x wrote is not one a 1.x CLI is running against.
+func shouldConfirmByProbe(w *agent.ManagedUserFile, installed string) bool {
+	if len(w.Version.Probe) == 0 {
 		return false
 	}
 	if _, parsed := cliversion.Parse(installed); !parsed {
 		return true
 	}
-	allowed, _ := gate.Permits(installed)
-	return !allowed
+	_, bound, _ := w.SelectVariant(installed)
+	return bound != agent.WithinBounds
 }

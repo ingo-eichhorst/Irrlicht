@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
 	"irrlicht/core/pkg/hookbeacon"
@@ -296,5 +297,87 @@ func TestUninstallHooks_LeavesThePluginDirectoryBehind(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(path)); err != nil {
 		t.Errorf("the plugin directory was removed too: %v", err)
+	}
+}
+
+// variantAt returns the artifact the real declaration selects at version,
+// failing when it selects none.
+func variantAt(t *testing.T, version string) *agent.HookVariant {
+	t.Helper()
+	v, bound, why := hooksWrites(t).SelectVariant(version)
+	if v == nil {
+		t.Fatalf("opencode %s selects no hook artifact (bound %d: %q)", version, bound, why)
+	}
+	return v
+}
+
+// renderedNow is what renders for the irrlichd running this test.
+func renderedNow(t *testing.T, render func(string) ([]byte, error)) []byte {
+	t.Helper()
+	command, err := hookbeacon.InstalledCommand(AdapterName)
+	if err != nil {
+		t.Fatalf("beacon command: %v", err)
+	}
+	want, err := render(command)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return want
+}
+
+// TestVariants_TwoXWritesTheTwoXArtifact is #2108's adapter-level test: the
+// artifact selected at 2.1.4 writes plugin_v2.js's rendering at PluginPath, and
+// the one selected at 1.19.4 writes plugin.js's byte for byte (that half a LOCK:
+// it is what 1.x always got).
+func TestVariants_TwoXWritesTheTwoXArtifact(t *testing.T) {
+	for version, render := range map[string]func(string) ([]byte, error){
+		"2.1.4":  renderPluginV2,
+		"1.19.4": renderPlugin,
+	} {
+		t.Run(version, func(t *testing.T) {
+			opencodeHome(t)
+			if err := variantAt(t, version).Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			path, _ := PluginPath()
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("nothing at %s: %v", path, err)
+			}
+			if want := renderedNow(t, render); string(got) != string(want) {
+				t.Errorf("opencode %s installed %d bytes at %s, want the %d its artifact renders", version, len(got), path, len(want))
+			}
+		})
+	}
+}
+
+// TestVariants_UpgradeReadsStaleThenRewritesInPlace is the read-only half of the
+// upgrade: under 2.1.4 the 1.x file reads Stale — ours, not current — which is
+// what makes the #1372 loop repair it, and the 2.x Apply then rewrites it in
+// place, after which it reads Intact. A 1.x file read as foreign instead would
+// be reported Missing and never overwritten.
+func TestVariants_UpgradeReadsStaleThenRewritesInPlace(t *testing.T) {
+	opencodeHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("seed the 1.x plugin: %v", err)
+	}
+	v2 := variantAt(t, "2.1.4")
+
+	status, err := v2.Verify()
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(status.Stale) != len(installedHookEventsV2) || len(status.Missing) != 0 {
+		t.Fatalf("the 1.x plugin under 2.1.4 reads %+v, want every 2.x event Stale", status)
+	}
+	if err := v2.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if status, err = v2.Verify(); err != nil || !status.Intact() {
+		t.Errorf("after the 2.x Apply the install reads %+v (err %v), want intact", status, err)
+	}
+	path, _ := PluginPath()
+	if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 1 {
+		t.Errorf("the plugin directory holds %d files after the rewrite, want 1 — an upgrade is a rewrite in place", len(entries))
 	}
 }

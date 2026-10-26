@@ -110,3 +110,43 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 		},
 	})
 }
+
+// TestHookEndpointFollowsBindAddr_V2 grades the opencode 2.x artifact (#2108)
+// the same way: it carries the beacon command and nothing address-shaped, and a
+// copy naming a different irrlichd is rewritten in place rather than
+// duplicated. Same path, same sentinel, same beacon line — only the rendering
+// and the event list differ.
+func TestHookEndpointFollowsBindAddr_V2(t *testing.T) {
+	if _, err := hookbeacon.InstalledCommand(AdapterName); err != nil {
+		t.Fatalf("resolving the beacon command: %v", err)
+	}
+
+	contracttesting.AssertHookEndpointFollowsBindAddr(t, contracttesting.HookInstaller{
+		Delivery: contracttesting.DeliveryAddressFree,
+		SettingsPath: func(t *testing.T) string {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv(configHomeEnvVar, "")
+			path, err := PluginPath()
+			if err != nil {
+				t.Fatalf("resolving the plugin path: %v", err)
+			}
+			return path
+		},
+		Sentinel:        hookbeacon.Sentinel(AdapterName),
+		Events:          installedHookEventsV2,
+		Entry:           openCodeEntryNow,
+		EndpointOf:      openCodeEndpointOfMap,
+		ReadEntries:     openCodeReadEntries,
+		EndpointOfRaw:   openCodeEndpointOfRaw,
+		EnsureInstalled: EnsureHooksInstalledV2,
+		Uninstall:       UninstallHooks,
+		ForeignInstall: func() (bool, error) {
+			command, err := hookbeacon.Command(foreignBinaryPath, AdapterName)
+			if err != nil {
+				return false, err
+			}
+			return ensureInstalledV2WithCommand(command)
+		},
+	})
+}

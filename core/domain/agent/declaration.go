@@ -222,7 +222,35 @@ type ManagedUserFile struct {
 	// Permissions that patch a config file irrlicht owns end-to-end — the
 	// CLAUDE.md instruction blocks, the kitty remote-control block — depend on
 	// no upstream CLI feature and leave it nil.
+	//
+	// With Variants declared, Version is the ENVELOPE: Min is the lowest
+	// variant's floor, Max the highest variant's ceiling, and Probe, Observed
+	// and ObservedRequires say how the installed version is learnt, once for
+	// every variant.
 	Version *VersionGate
+
+	// Variants declares one artifact per upstream major for a hook install
+	// whose upstream changed its extension format between majors (#2108):
+	// opencode 2.x refuses the 1.x plugin file on every load (measured, #2104
+	// item 10), and 1.x's loader rejects an export that is neither a function
+	// nor an object carrying server() (read out of the 1.14.50 bundle — see
+	// opencode's TestShippedPluginExportsOnlyAFunction), which the 2.x shape
+	// is, so a single file can no longer serve both. Each variant
+	// has its own version range, its own event list, and the closures that
+	// install and verify it; every variant writes the same Path, so an upgrade
+	// is a rewrite in place and Uninstall stays one rule.
+	//
+	// Empty is the single-artifact shape every other adapter declares, and
+	// nothing about it changes: Apply, Verify and Version describe the one
+	// install. Non-empty, PermissionService resolves the installed version
+	// once, selects the variant whose range holds it (SelectVariant), and runs
+	// THAT variant's Apply; the #1372 re-verification checks THAT variant's
+	// Verify. The permission's own Apply and Writes.Verify are still declared
+	// — the registry tripwires require them, and the managed-writes grader and
+	// the per-adapter gating contract run them directly — but PermissionService
+	// runs neither for a variant declaration (runClosureEffect,
+	// HookEntryVerifier.verifyTarget).
+	Variants []HookVariant
 
 	// Also resolves zero or more ADDITIONAL shared, user-owned files this
 	// permission's single Apply closure writes, beyond Path (issue #1718).
@@ -340,8 +368,10 @@ func (s HookEntryStatus) Damage() string {
 type VersionGate struct {
 	// Min is the lowest upstream CLI version at which EVERY event this
 	// permission installs is known to the CLI. It is a whole-install floor,
-	// not a per-event one: see the package comment on why the installed event
-	// set must not vary with the version.
+	// not a per-event one: the event set never varies WITHIN an artifact. A
+	// permission whose artifact differs by major declares one HookVariant per
+	// artifact (#2108), each with its own floor and event list, and this gate
+	// is then their envelope.
 	Min string
 
 	// Max is an EXCLUSIVE ceiling: the first upstream CLI version this
@@ -365,6 +395,16 @@ type VersionGate struct {
 	// consulted first; an empty return falls through to Probe. An adapter with
 	// no such signal leaves it nil and gets the probe.
 	Observed func() string
+
+	// ObservedRequires, when set, names a permission key of the same adapter
+	// that must be granted before Observed is consulted (#2108). An Observed
+	// that reads something only that permission discloses — opencode's reads
+	// the session database, which only its `database` permission covers —
+	// declares it here, and PermissionService skips Observed while that key is
+	// not granted, falling through to Probe as if Observed were nil. Empty
+	// means Observed reads nothing beyond what the gated permission itself
+	// discloses, which is every adapter that declared one before this field.
+	ObservedRequires string
 }
 
 // VersionBound names which side of a VersionGate refused an install.
@@ -376,8 +416,15 @@ const (
 	WithinBounds VersionBound = iota
 	// BelowFloor: the installed CLI is older than Min.
 	BelowFloor
-	// AtOrAboveCeiling: the installed CLI is at or above Max.
+	// AtOrAboveCeiling: the installed CLI is at or above Max — or, for a
+	// variant declaration, at or above one variant's ceiling and below the
+	// next one's floor (SelectVariant).
 	AtOrAboveCeiling
+	// VersionUnknown: a variant declaration (#2108) could not read the
+	// installed version, so it cannot tell which artifact to write. Only
+	// SelectVariant reports it: a single-artifact gate fails open on an
+	// unknown version instead (cliversion.AtLeast).
+	VersionUnknown
 )
 
 // Permits reports whether an install may proceed at the given installed
@@ -438,6 +485,167 @@ func unsupportedMajor(max string) string {
 		return ""
 	}
 	return fmt.Sprintf(" (%d.x is not supported yet)", v.Major)
+}
+
+// HookVariant is one per-major artifact of a hook install (#2108): the range
+// of upstream CLI versions it installs at, the events it subscribes to, and
+// the closures that install and verify it. See ManagedUserFile.Variants.
+type HookVariant struct {
+	// Min is the lowest CLI version this artifact installs at (inclusive) and
+	// Max the first one it does not (exclusive). The same convention as
+	// VersionGate's: Min is the version the artifact was measured against
+	// rather than one bisected backward, and Max is the first version known to
+	// reject it.
+	Min string
+	Max string
+
+	// Events is every hook event this artifact subscribes to — the installer's
+	// own slice, never a copy, so the consent copy and the contracts that
+	// grade it read the list the artifact is built from.
+	Events []string
+
+	// Since maps each of Events to the CLI version it is known to exist at.
+	// Min must cover every entry (contracttesting.AssertHookVersionGate).
+	Since map[string]string
+
+	// Apply writes this artifact at ManagedUserFile.Path, rewriting another
+	// variant's file there in place. Verify reports, read-only, whether the
+	// file there is THIS artifact as it would be written now: another
+	// variant's file reads Stale, which is what makes the #1372 re-verification
+	// rewrite it after an upgrade.
+	Apply  func() error
+	Verify func() (HookEntryStatus, error)
+}
+
+// gate is the variant's range as a VersionGate, so a variant's bounds are
+// compared by the one comparison every single-artifact gate uses.
+func (v *HookVariant) gate() *VersionGate {
+	return &VersionGate{Min: v.Min, Max: v.Max}
+}
+
+// SelectVariant decides what an install at the installed version does (#2108):
+// which variant it writes, or which bound refused it and why. A declaration
+// with no Variants answers exactly as VersionGate.Check does and selects
+// nothing — its own Apply is the install.
+//
+// For a variant declaration, in order:
+//
+//   - The envelope (Version) is checked first, with Check's own rules: below
+//     its floor is BelowFloor, at or above its ceiling is AtOrAboveCeiling.
+//   - An unreadable version is VersionUnknown. Check fails open on it, and a
+//     single artifact may: the one file it writes is the only one there is.
+//     Two artifacts cannot, because guessing the major wrong writes exactly
+//     the file the other major rejects — opencode 2.x's `failed to load
+//     plugin` on every load, measured in #2104 item 10.
+//   - A version inside a variant's range selects that variant.
+//   - A version between two variants — at or above one's ceiling, below the
+//     next one's floor — is AtOrAboveCeiling of the lower one: that lower
+//     artifact is the file an earlier install may have left, and its ceiling
+//     says the CLI rejects it, so the removal a ceiling refusal triggers is
+//     the one PermissionService already makes (#2105).
+//
+// The variants' order is irrelevant, and so is whether they are disjoint:
+// overlap is a declaration error contracttesting.AssertHookVersionGate
+// reports, and this returns the first match rather than deciding between two.
+func (f *ManagedUserFile) SelectVariant(installed string) (*HookVariant, VersionBound, string) {
+	if f == nil {
+		return nil, WithinBounds, ""
+	}
+	if bound, why := f.Version.Check(installed); bound != WithinBounds || len(f.Variants) == 0 {
+		return nil, bound, why
+	}
+	if _, ok := cliversion.Parse(installed); !ok {
+		return nil, VersionUnknown, fmt.Sprintf(
+			"the installed CLI's version %s, so which of the %d hook artifacts this permission "+
+				"installs (%s) it loads is unknown; nothing was written — a wrong guess writes the file "+
+				"the other major rejects",
+			unreadable(installed), len(f.Variants), f.variantRanges())
+	}
+	inside, lower, upper := f.placeAmongVariants(installed)
+	if inside != nil {
+		return inside, WithinBounds, ""
+	}
+	if lower == nil {
+		return nil, BelowFloor, fmt.Sprintf(
+			"installed CLI is %s, which is older than %s, the floor of the oldest hook artifact this "+
+				"permission installs; nothing was written — upgrade the CLI and grant again",
+			installed, upper.Min)
+	}
+	next := ""
+	if upper != nil {
+		next = fmt.Sprintf(", and older than %s, where the next one starts", upper.Min)
+	}
+	return nil, AtOrAboveCeiling, fmt.Sprintf(
+		"installed CLI is %s, which is at or above %s, the ceiling of the hook artifact for %s%s; "+
+			"nothing was written",
+		installed, lower.Max, lower.Range(), next)
+}
+
+// placeAmongVariants locates installed among the variants: the one whose range
+// holds it, or else its neighbours — the variant with the highest ceiling at or
+// below it (lower) and the one with the lowest floor above it (upper).
+func (f *ManagedUserFile) placeAmongVariants(installed string) (inside, lower, upper *HookVariant) {
+	for i := range f.Variants {
+		v := &f.Variants[i]
+		switch bound, _ := v.gate().Check(installed); bound {
+		case WithinBounds:
+			return v, nil, nil
+		case AtOrAboveCeiling:
+			if lower == nil || cliversion.Less(lower.Max, v.Max) {
+				lower = v
+			}
+		case BelowFloor:
+			if upper == nil || cliversion.Less(v.Min, upper.Min) {
+				upper = v
+			}
+		}
+	}
+	return nil, lower, upper
+}
+
+// variantRanges renders every variant's range, e.g. "1.14.50 up to 2.0.0,
+// 2.1.4 up to 3.0.0", for a refusal that has to name them all.
+func (f *ManagedUserFile) variantRanges() string {
+	ranges := make([]string, len(f.Variants))
+	for i := range f.Variants {
+		ranges[i] = f.Variants[i].Range()
+	}
+	return strings.Join(ranges, ", ")
+}
+
+// Range renders the variant's version range for a refusal or a log line,
+// e.g. "2.1.4 up to 3.0.0", or "2.1.4 or newer" with no ceiling.
+func (v *HookVariant) Range() string {
+	if v.Max == "" {
+		return v.Min + " or newer"
+	}
+	return v.Min + " up to " + v.Max
+}
+
+// VariantEvents is every variant's events, each once, in declaration order —
+// the union the consent copy must name and what a check that cannot tell
+// which variant applies reports.
+func (f *ManagedUserFile) VariantEvents() []string {
+	var events []string
+	seen := map[string]bool{}
+	for _, v := range f.Variants {
+		for _, e := range v.Events {
+			if !seen[e] {
+				seen[e] = true
+				events = append(events, e)
+			}
+		}
+	}
+	return events
+}
+
+// unreadable renders why a version could not be used, for VersionUnknown's
+// refusal: an empty one was never learnt, anything else did not parse.
+func unreadable(installed string) string {
+	if installed == "" {
+		return "could not be learnt"
+	}
+	return fmt.Sprintf("%q is not a version", installed)
 }
 
 // Identity is the always-required adapter metadata served via

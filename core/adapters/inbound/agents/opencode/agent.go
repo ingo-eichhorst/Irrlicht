@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"strconv"
+
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
@@ -103,51 +105,112 @@ func Agent() agent.Agent {
 				Kind:            permission.KindModify,
 				Title:           "Install status hooks",
 				FeatureUnlocked: "Blocked-on-user detection and authoritative turn-end detection",
-				// "3 hook entries" is what contracttesting's #1356 count arm
-				// reads, and it is the honest number: three event
-				// subscriptions. They live in ONE file, which is the unusual
-				// part, so Touches names the shape in the same breath rather
-				// than leaving it to Detail — the wizard row is what most users
-				// read.
-				Touches: "Writes 3 hook entries to " + displayPluginPath +
-					" — a small JavaScript file that opencode loads and runs",
-				Detail: "opencode has no hooks section in its config: its experimental " +
-					"settings carry no hook key, and the only way to observe its lifecycle " +
-					"is a plugin, so this permission installs one. That is a single " +
-					"JavaScript file at " + displayPluginPath + ", which opencode " +
-					"auto-discovers and executes inside every opencode session with your " +
-					"own permissions. It is code irrlicht ships in its own binary, not a " +
-					"package fetched from anywhere — no npm, no git, no build step — and " +
-					"opencode's own config file is not touched at all. The file imports " +
-					"only node:child_process, subscribes to exactly three opencode events " +
-					"(" + hookjson.EventList(installedHookEvents) + ") and does one thing " +
-					"with each: runs `irrlichd hook-post opencode`, a tiny command " +
-					"irrlicht ships, handing it the session id. That command reads the " +
-					"daemon's own published address at the moment the event fires, so " +
-					"nothing in the file names a host or a port and it cannot go stale; it " +
-					"also never blocks opencode, even when the daemon is not running. The " +
-					"file deliberately registers only opencode's read-only event tap, " +
-					"never a hook that could answer a permission prompt for you or change " +
-					"what opencode does. " +
-					hookjson.RequiresVersionRange("opencode", minOpenCodeVersion, maxOpenCodeVersion) +
-					" Toggling off deletes the file (also available via " +
-					"`irrlichd --uninstall-hooks`); nothing else in your opencode " +
-					"installation was changed, so there is nothing else to undo.",
-				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				// "N hook entries" twice is what contracttesting's #1356 count
+				// arm reads — one count per artifact, each derived from the
+				// event list that artifact subscribes to (#2108). They live in ONE file, which is the
+				// unusual part, so Touches names the shape in the same breath
+				// rather than leaving it to Detail — the wizard row is what
+				// most users read.
+				Touches: "Writes " + strconv.Itoa(len(installedHookEvents)) + " hook entries (opencode 1.x) or " +
+					strconv.Itoa(len(installedHookEventsV2)) + " hook entries (opencode 2.x) to " +
+					displayPluginPath + " — a small JavaScript file that opencode loads and runs",
+				Detail: hooksDetail(),
+				// Apply and Verify are the 1.x artifact's. PermissionService
+				// never runs them for this declaration — it runs the variant
+				// the installed version selects (Writes.Variants, #2108) — but
+				// the registry tripwires require them, the managed-writes
+				// grader and the gating contract run them directly, and the 1.x
+				// artifact is the one whose shape every one of those predates.
+				Apply:  applyV1,
 				Remove: func() error { _, err := UninstallHooks(); return err },
 				Writes: &agent.ManagedUserFile{
 					Path:      PluginPath,
 					Uninstall: UninstallHooks,
 					Verify:    VerifyHooksInstalled,
+					// The envelope of the two variants below: the 1.x floor
+					// and the 2.x ceiling. Observed is the store, read only
+					// while the database permission is granted; the probe is
+					// the fallback.
 					Version: &agent.VersionGate{
-						Min:   minOpenCodeVersion,
-						Max:   maxOpenCodeVersion,
-						Probe: []string{"opencode", "--version"},
+						Min:              minOpenCodeVersion,
+						Max:              maxOpenCodeV2Version,
+						Probe:            []string{"opencode", "--version"},
+						Observed:         newestObservedCLIVersion,
+						ObservedRequires: PermissionKeyDatabase,
+					},
+					Variants: []agent.HookVariant{
+						{
+							Min:    minOpenCodeVersion,
+							Max:    maxOpenCodeVersion,
+							Events: installedHookEvents,
+							Since:  hookEventSince,
+							Apply:  applyV1,
+							Verify: VerifyHooksInstalled,
+						},
+						{
+							Min:    minOpenCodeV2Version,
+							Max:    maxOpenCodeV2Version,
+							Events: installedHookEventsV2,
+							Since:  hookEventSinceV2,
+							Apply:  func() error { _, err := EnsureHooksInstalledV2(); return err },
+							Verify: VerifyHooksInstalledV2,
+						},
 					},
 				},
 			},
 		},
 	}
+}
+
+// applyV1 installs the 1.x artifact: the permission's own Apply and the 1.x
+// variant's, one closure so the two cannot drift.
+func applyV1() error { _, err := EnsureHooksInstalled(); return err }
+
+// hooksDetail is the hooks permission's expanded consent copy. A function
+// because its version sentences are rendered from the same constants the gate
+// compares against (#1365, #2105, #2108), so the copy cannot drift from it.
+func hooksDetail() string {
+	return "opencode has no hooks section in its config: its experimental " +
+		"settings carry no hook key, and the only way to observe its lifecycle " +
+		"is a plugin, so this permission installs one. That is a single " +
+		"JavaScript file at " + displayPluginPath + ", which opencode " +
+		"auto-discovers and runs with your own permissions. It is code irrlicht " +
+		"ships in its own binary, not a package fetched from anywhere — no npm, " +
+		"no git, no build step — and opencode's own config file is not touched " +
+		"at all. opencode 1.x and 2.x load different plugin formats, so which " +
+		"file is written depends on the opencode you run, and an upgrade or a " +
+		"downgrade rewrites it in place: " +
+		"for opencode " + minOpenCodeVersion + " or newer and older than " + maxOpenCodeVersion +
+		" it is the 1.x plugin, which runs inside every opencode session and subscribes to " +
+		hookjson.EventList(installedHookEvents) + "; " +
+		"for opencode " + minOpenCodeV2Version + " or newer and older than " + maxOpenCodeV2Version +
+		" it is the 2.x plugin, which runs inside opencode's shared background service " +
+		"(`opencode serve --service`) rather than in each session, and subscribes to " +
+		hookjson.EventList(installedHookEventsV2) + ". " +
+		"Either file imports only node:child_process and does one thing with each " +
+		"event: runs `irrlichd hook-post opencode`, a tiny command irrlicht ships, " +
+		"handing it the session id — and, from the 2.x plugin, the event's own id, " +
+		"because the service delivers each event once per project it has open and " +
+		"the daemon keeps one. That command reads the daemon's own published " +
+		"address at the moment the event fires, so nothing in the file names a " +
+		"host or a port and it cannot go stale; it also never blocks opencode, " +
+		"even when the daemon is not running. Neither file registers anything but " +
+		"opencode's read-only event subscription — never a hook that could answer " +
+		"a permission prompt for you or change what opencode does. " +
+		"To tell which opencode you run, irrlicht reads the version opencode " +
+		"recorded on the newest session in its database — only while reading that " +
+		"database is granted — and runs `opencode --version` when that gives no " +
+		"answer or one no plugin here supports; that command can raise the version " +
+		"the database gave, never lower it. " +
+		"On a version older than " + minOpenCodeVersion + " nothing is written. On " +
+		maxOpenCodeV2Version + " or newer, or on a 2.x older than " + minOpenCodeV2Version +
+		", nothing is written and the file an earlier install left there is removed. " +
+		"When the version cannot be read at all, a plugin already installed and " +
+		"current is kept and otherwise nothing is written, because a wrong guess " +
+		"writes the file the other major rejects. Either way the daemon " +
+		"reports why. Toggling off deletes the file (also available via " +
+		"`irrlichd --uninstall-hooks`); nothing else in your opencode " +
+		"installation was changed, so there is nothing else to undo."
 }
 
 // metricsReader adapts the package-level ComputeMetrics function to the

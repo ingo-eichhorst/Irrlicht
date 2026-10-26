@@ -171,6 +171,55 @@ var hookEventSince = map[string]string{
 	HookEventSessionIdle:       minOpenCodeVersion,
 }
 
+// opencode 2.x's own wire names for the turn-end events the 2.x plugin
+// forwards (#2108). 2.x publishes no session.idle in any turn #2104 drove — a
+// plain run, a permission turn, an interrupt, a subagent (item 8) — and ends a
+// turn with one of these three instead. permission.asked and permission.replied
+// keep their 1.x names in 2.x, with the session id under `data` (item 9).
+const (
+	// HookEventExecutionSucceeded ends a turn that ran to completion.
+	// Observed live on 2.1.4 (#2104 item 8).
+	HookEventExecutionSucceeded = "session.execution.succeeded"
+
+	// HookEventExecutionFailed ends a turn that failed. NOT observed live —
+	// no #2104 run triggered a failure — but the name is in the 2.1.4 bundle:
+	// `grep -a -o 'session\.execution\.[a-z]*'` over
+	// @opencode/cli/bin/opencode.exe counts 14 occurrences of it beside 13 of
+	// .succeeded and 16 of .interrupted.
+	HookEventExecutionFailed = "session.execution.failed"
+
+	// HookEventExecutionInterrupted ends a turn the user interrupted.
+	// Observed live on 2.1.4, 2 s after `POST …/interrupt` (#2104 items 4, 8).
+	HookEventExecutionInterrupted = "session.execution.interrupted"
+)
+
+// installedHookEventsV2 is every opencode 2.x bus event the 2.x plugin
+// forwards (plugin_v2.js). The exclusions follow installedHookEvents' reasons,
+// plus two of 2.x's own:
+//
+//   - `session.execution.started` would open the turn, which the store's own
+//     rows already do — the 2.x watcher emits activity off new session_message
+//     rows — so it would buy a process spawn per turn and nothing else.
+//   - `form.*` is an unverified surface (#2108's scope), and no
+//     blocked-on-user claim is made from something nobody has watched fire.
+var installedHookEventsV2 = []string{
+	HookEventPermissionAsked,
+	HookEventPermissionReplied,
+	HookEventExecutionSucceeded,
+	HookEventExecutionFailed,
+	HookEventExecutionInterrupted,
+}
+
+// hookEventSinceV2 pins every 2.x event to the version the 2.x plugin was
+// measured against, for the reason hookEventSince pins the 1.x ones to theirs.
+var hookEventSinceV2 = map[string]string{
+	HookEventPermissionAsked:      minOpenCodeV2Version,
+	HookEventPermissionReplied:    minOpenCodeV2Version,
+	HookEventExecutionSucceeded:   minOpenCodeV2Version,
+	HookEventExecutionFailed:      minOpenCodeV2Version,
+	HookEventExecutionInterrupted: minOpenCodeV2Version,
+}
+
 // minOpenCodeVersion is the lowest opencode version this adapter's install
 // requires.
 //
@@ -186,18 +235,29 @@ var hookEventSince = map[string]string{
 // document).
 const minOpenCodeVersion = "1.14.50"
 
-// maxOpenCodeVersion is the exclusive ceiling of the plugin this installer
-// writes (issue #2105): the first opencode version known to reject it.
+// maxOpenCodeVersion is the exclusive ceiling of the 1.x plugin (issue
+// #2105): the first opencode version known to reject it.
 //
 // opencode 2.x (npm `@opencode/cli`, 2.1.4 when this was written) loads files
 // from `plugin/` but refuses this 1.x-shaped one on every location load — the
 // sandbox's V2 log carries `WARN failed to load plugin … Plugin must export a
 // default definition with an id and an effect or setup function` for it
-// (#2104's live verification). Installing it there is a granted permission whose
-// channel never fires plus a warning per load, so at or above this version
-// nothing is written and PermissionService removes an earlier install's file.
-// A V2-shaped plugin is #2104's P4.
+// (#2104's live verification). From 2.1.4 the 2.x plugin replaces it in place
+// (#2108); between the two, nothing is written and PermissionService removes
+// an earlier install's file, as it did at every 2.x before #2108.
 const maxOpenCodeVersion = "2.0.0"
+
+// minOpenCodeV2Version is the floor of the 2.x plugin (#2108): the version it
+// was measured against, by the same convention as minOpenCodeVersion. #2104
+// loaded a plugin of this shape from `plugin/` on 2.1.4 (comment 6398023633
+// item 4) and watched its events arrive (items 8–12); nothing older was run.
+const minOpenCodeV2Version = "2.1.4"
+
+// maxOpenCodeV2Version is the 2.x plugin's exclusive ceiling: the next major,
+// whose plugin format nobody has seen. At or above it nothing is written and
+// PermissionService removes an earlier install's file — #2105's rule, kept
+// above the highest artifact this adapter ships.
+const maxOpenCodeV2Version = "3.0.0"
 
 // HookEndpointPath is the daemon's opencode hook route. Exported so
 // registerHookRoutes (core/cmd/irrlichd/startup.go) and beaconroute_test.go's
@@ -230,6 +290,14 @@ const displayPluginPath = "~/.config/opencode/plugin/irrlicht.js"
 //go:embed plugin.js
 var pluginTemplate string // mutated by plugin_test.go's loud-failure guard, restored in t.Cleanup
 
+// pluginV2Template is the opencode 2.x artifact (#2108). It carries the same
+// placeholder, the same beacon line and the same sentinel as plugin.js, which
+// is what lets either installer recognize the other's file as ours — and so
+// rewrite it in place rather than refusing it as foreign.
+//
+//go:embed plugin_v2.js
+var pluginV2Template string // mutated by plugin_test.go's loud-failure guard, restored in t.Cleanup
+
 // beaconCommandPlaceholder is the token renderPlugin substitutes. It appears
 // exactly once in plugin.js, inside a JavaScript string literal, and
 // plugin_test.go fails if that stops being true — a template whose placeholder
@@ -252,16 +320,26 @@ var beaconLineRE = regexp.MustCompile(`(?m)^const IRRLICHT_BEACON = (".*");$`)
 // JavaScript string literal it lands in. Go's quoted-string escapes are a
 // subset of JavaScript's for every byte Quote can emit.
 func renderPlugin(command string) ([]byte, error) {
+	return renderTemplate(pluginTemplate, command)
+}
+
+// renderPluginV2 is renderPlugin for the opencode 2.x artifact (#2108).
+func renderPluginV2(command string) ([]byte, error) {
+	return renderTemplate(pluginV2Template, command)
+}
+
+// renderTemplate substitutes the beacon command into one embedded template.
+func renderTemplate(template, command string) ([]byte, error) {
 	if command == "" {
 		return nil, errors.New("opencode: refusing to render a plugin with an empty beacon command")
 	}
-	if !strings.Contains(pluginTemplate, beaconCommandPlaceholder) {
+	if !strings.Contains(template, beaconCommandPlaceholder) {
 		// The embedded template stopped carrying the token this function
 		// substitutes. Failing loudly here is the difference between "no
 		// install" and "an install that shells out to the placeholder".
 		return nil, fmt.Errorf("opencode: embedded plugin template no longer contains %s", beaconCommandPlaceholder)
 	}
-	return []byte(strings.Replace(pluginTemplate, beaconCommandPlaceholder, strconv.Quote(command), 1)), nil
+	return []byte(strings.Replace(template, beaconCommandPlaceholder, strconv.Quote(command), 1)), nil
 }
 
 // beaconCommandOf extracts the beacon command an installed file carries.
@@ -338,6 +416,18 @@ var installer = hookartifact.Installer{
 	Events: installedHookEvents,
 }
 
+// installerV2 is the opencode 2.x artifact's Installer (#2108): the same path,
+// sentinel and beacon command as installer, so the two are one install with
+// two renderings. Each one reads the other's file as ours-but-stale, which is
+// the in-place rewrite an upgrade (or a downgrade) needs, and Uninstall is the
+// same rule whichever one runs it.
+var installerV2 = func() hookartifact.Installer {
+	in := installer
+	in.Render = renderPluginV2
+	in.Events = installedHookEventsV2
+	return in
+}()
+
 // EnsureHooksInstalled writes irrlicht's opencode plugin for the irrlichd that
 // is running now, creating opencode's plugin directory if it does not exist.
 // Returns true if anything changed.
@@ -365,6 +455,26 @@ func ensureInstalledWithCommand(command string) (bool, error) {
 // every config directory all operate in the same tree.
 func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
 	return installer.VerifyInstalled()
+}
+
+// EnsureHooksInstalledV2 is EnsureHooksInstalled for the opencode 2.x artifact
+// (#2108). A 1.x plugin of ours at the same path is rewritten in place;
+// opencode 2.x hot-reloads the file (#2104 item 11).
+func EnsureHooksInstalledV2() (bool, error) {
+	return installerV2.EnsureInstalled()
+}
+
+// ensureInstalledV2WithCommand is EnsureHooksInstalledV2 with the beacon
+// command resolved by the caller — the #1178 contract's ForeignInstall seam.
+func ensureInstalledV2WithCommand(command string) (bool, error) {
+	return installerV2.EnsureInstalledWithCommand(command)
+}
+
+// VerifyHooksInstalledV2 is VerifyHooksInstalled for the opencode 2.x artifact
+// (#2108): a 1.x plugin of ours reads Stale, which is what makes the #1372
+// re-verification rewrite it after an upgrade.
+func VerifyHooksInstalledV2() (agent.HookEntryStatus, error) {
+	return installerV2.VerifyInstalled()
 }
 
 // UninstallHooks removes irrlicht's opencode plugin. Returns true if anything
