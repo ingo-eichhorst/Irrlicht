@@ -218,27 +218,46 @@ func TestVariantGate_ObservedIsNotConsultedWithoutItsPermission(t *testing.T) {
 	}
 }
 
-// TestVariantGate_AStoreAnswerWinsOverTheProbe is red-first, and it is the rule
-// the orchestration of #2108 asked to have stated: the store says 2.1.4, the
-// probe would say 1.19.4 (what cliprobe resolves first on a host whose brew
-// still links 1.x). A passive answer that parses and selects an artifact is not
-// confirmed by a probe (shouldConfirmByProbe), so the store wins and the 2.x
-// artifact is installed. That is the direction #2104 item 3 measured to be
-// right: 1.x hangs on a store 2.x has migrated, so a store 2.x wrote is not one
-// a 1.x CLI is running against. Before #2108 2.1.4 was refused, the probe ran
-// to double-check the refusal, and its 1.19.4 installed the 1.x file.
+// TestVariantGate_AStoreAnswerWinsOverTheProbe is the rule the orchestration of
+// #2108 asked to have stated: a passive answer that parses and selects an
+// artifact is not confirmed by a probe (shouldConfirmByProbe), so the store
+// decides in both directions.
+//
+//   - store 2.1.4, probe 1.19.4 (what cliprobe resolves first on a host whose
+//     brew still links 1.x): the 2.x artifact. Red-first: before #2108 2.1.4
+//     was refused, the probe ran to double-check the refusal, and its 1.19.4
+//     installed the 1.x file.
+//   - store 1.19.4, probe 2.1.4: the 1.x artifact. A LOCK — a 1.x answer was
+//     never re-probed — and the row that goes red if the probe is consulted
+//     for a selecting answer, which the probe-only-upward rule alone would not
+//     catch. The store is the CLI that last ran; a 2.x binary on PATH that has
+//     not yet opened the store has not migrated it, and the #1372 loop follows
+//     the store within one pass once it does.
+//
+// That is the direction #2104 item 3 makes safe: 1.x hangs on a store 2.x has
+// migrated, so a store 2.x wrote is not one a 1.x CLI is running against.
 func TestVariantGate_AStoreAnswerWinsOverTheProbe(t *testing.T) {
-	want := v2Rendering(t)
-	path := isolateOpenCodeConfig(t)
-	svc, log := newGateService()
-	p := opencodeHooksAt(t, "2.1.4")
-	p.Writes.Version.Probe = probeSaying("1.19.4")
+	for _, c := range []struct {
+		store, probe string
+		want         func(*testing.T) []byte
+	}{
+		{"2.1.4", "1.19.4", v2Rendering},
+		{"1.19.4", "2.1.4", v1Rendering},
+	} {
+		t.Run("store_"+c.store, func(t *testing.T) {
+			want := c.want(t)
+			path := isolateOpenCodeConfig(t)
+			svc, log := newGateService()
+			p := opencodeHooksAt(t, c.store)
+			p.Writes.Version.Probe = probeSaying(c.probe)
 
-	grant(svc, p)
+			grant(svc, p)
 
-	if got := installed(t, path); !bytes.Equal(got, want) {
-		t.Errorf("store 2.1.4 / probe 1.19.4 installed %d bytes, want the 2.x artifact's %d (errors %v)",
-			len(got), len(want), log.errors)
+			if got := installed(t, path); !bytes.Equal(got, want) {
+				t.Errorf("store %s / probe %s installed %d bytes, want the store's artifact's %d (errors %v)",
+					c.store, c.probe, len(got), len(want), log.errors)
+			}
+		})
 	}
 }
 

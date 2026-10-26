@@ -22,8 +22,8 @@
 #      selected variant's → a 1.x file survives a grant against 2.1.4.
 #   4. resolveInstalledVersion reading Observed without its permission → the
 #      store is read while `database` is denied.
-#   5. shouldConfirmByProbe always probing → a store answer of 2.1.4 is
-#      overridden by a probe's 1.19.4.
+#   5. shouldConfirmByProbe always probing → a store answer of 1.19.4 is
+#      overridden by a probe's 2.1.4 (the downward direction is held by #24).
 #   6. the #1372 loop verifying a variant target with the permission's own
 #      Verify → a 1.x file under 2.1.4 reads intact.
 #   7. the receiver without the dedupe → one event delivered twice dispatches
@@ -204,7 +204,7 @@ assert_go_test_goes_red \
   $'_, bound, _ := w.SelectVariant(installed)\n\treturn bound != agent.WithinBounds || true' \
   "$SERVICES" \
   '^TestVariantGate_AStoreAnswerWinsOverTheProbe$' \
-  "store 2.1.4 / probe 1.19.4 installed"
+  "store 1.19.4 / probe 2.1.4 installed"
 
 # ── 6. the #1372 loop verifying with the permission's own Verify ──
 assert_go_test_goes_red \
