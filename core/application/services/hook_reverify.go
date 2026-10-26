@@ -206,6 +206,11 @@ type reverifyTarget struct {
 	permKey    string
 	configPath string
 	verify     func() (agent.HookEntryStatus, error)
+	// variants is the declaration of a permission that writes a different
+	// artifact per upstream major (#2108), nil for every other target. Such a
+	// target is verified against the variant its installed version selects,
+	// never against verify — see verifyTarget.
+	variants *agent.ManagedUserFile
 }
 
 func (t reverifyTarget) id() string { return t.adapter + "/" + t.permKey }
@@ -261,6 +266,9 @@ type HookEntryVerifier struct {
 	// goroutine while SetConsent may still be writing them.
 	grantedFn func(agentName, key string) bool
 	repairFn  func(agentName, key string) (bool, error)
+
+	// runCtx is Run's context, read by probeContext; nil before Run.
+	runCtx context.Context
 }
 
 // SetConsent wires the permission service's gate and repair entry points. Until
@@ -285,7 +293,9 @@ func (v *HookEntryVerifier) consent() (func(string, string) bool, func(string, s
 }
 
 // NewHookEntryVerifier builds the loop and resolves its targets from the agent
-// registry: every modify-kind permission declaring a HookInstall with a Verify.
+// registry: every modify-kind permission declaring a HookInstall with a Verify,
+// or with per-major variants (#2108), which are verified through the variant
+// the installed version selects (verifyTarget).
 //
 // An adapter that declares a hook install but no Verify is SKIPPED rather than
 // faulted here — one adapter's missing declaration must not disable the loop
@@ -325,10 +335,13 @@ func NewHookEntryVerifier(cfg HookEntryReverifyConfig) *HookEntryVerifier {
 			// instruction-block and kitty permissions reach here too — they
 			// declare no Verify and drop out, which is the correct answer
 			// rather than a coincidence.
-			if p.Writes == nil || p.Writes.Verify == nil {
+			if p.Writes == nil || (p.Writes.Verify == nil && len(p.Writes.Variants) == 0) {
 				continue
 			}
 			t := reverifyTarget{adapter: a.Identity.Name, permKey: p.Key, verify: p.Writes.Verify}
+			if len(p.Writes.Variants) > 0 {
+				t.variants = p.Writes
+			}
 			if p.Writes.Path != nil {
 				// Best effort: an unresolvable path costs the row its
 				// actionability, not the loop its function.
@@ -353,6 +366,9 @@ func (v *HookEntryVerifier) Run(ctx context.Context) {
 	if v == nil || len(v.targets) == 0 {
 		return
 	}
+	v.mu.Lock()
+	v.runCtx = ctx
+	v.mu.Unlock()
 	// One pass immediately, before the first tick. Two reasons: a clobber that
 	// happened while the daemon was down is repaired at once rather than up to
 	// an Interval later, and — the reporting one — a bundle collected in the
@@ -428,7 +444,7 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 		return
 	}
 
-	status, err := t.verify()
+	status, err := v.verifyTarget(t, granted)
 	if err != nil {
 		v.recordUnreadable(t, err, now)
 		return
@@ -438,6 +454,51 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 		return
 	}
 	v.repair(t, status, now, repair)
+}
+
+// verifyTarget reads one target's install, without writing anything.
+//
+// A variant declaration (#2108) is checked against the variant its installed
+// version selects, and that version is resolved by the same function the
+// install resolves it with (resolveInstalledVersion) under the same consent this
+// pass already holds — so a 1.x plugin file under an opencode that has since
+// become 2.x reads Stale here and the repair below rewrites it, within one
+// pass rather than at the next daemon start. A version that selects no variant
+// reads as every variant's events Missing: the repair then re-runs the effect,
+// and the service records the refusal (and, at a ceiling, removes the file) —
+// the same repair-then-refuse path a single-artifact install takes when its
+// refusal left no file behind, which its own Verify reports Missing.
+func (v *HookEntryVerifier) verifyTarget(t reverifyTarget, granted func(string, string) bool) (agent.HookEntryStatus, error) {
+	if t.variants == nil {
+		return t.verify()
+	}
+	// A failed probe needs no line here: the repair it leads to runs the
+	// install's own resolution, which logs it.
+	installed, _ := resolveInstalledVersion(v.probeContext(), granted, t.adapter, t.variants)
+	variant, _, _ := t.variants.SelectVariant(installed)
+	if variant == nil {
+		var missing []string
+		for _, hv := range t.variants.Variants {
+			missing = append(missing, hv.Events...)
+		}
+		return agent.HookEntryStatus{Missing: missing}, nil
+	}
+	if variant.Verify == nil {
+		return agent.HookEntryStatus{}, fmt.Errorf("the selected hook artifact (%s up to %s) declares no Verify", variant.Min, variant.Max)
+	}
+	return variant.Verify()
+}
+
+// probeContext is the context a version probe on this loop runs under: Run's,
+// so a daemon shutdown cancels a probe in flight, or Background before Run
+// (RunPassForTest). cliprobe bounds every probe itself either way.
+func (v *HookEntryVerifier) probeContext() context.Context {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.runCtx != nil {
+		return v.runCtx
+	}
+	return context.Background()
 }
 
 func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error, now time.Time) {

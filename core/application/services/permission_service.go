@@ -938,6 +938,10 @@ func (s *PermissionService) runEffects(effects []pendingEffect) int {
 // place and refuses the same way, with one addition: a ceiling refusal also
 // removes the file an earlier install left behind (removeAfterCeilingRefusal).
 // A floor refusal removes nothing.
+//
+// A permission declaring per-major variants (ManagedUserFile.Variants, #2108)
+// runs the SELECTED variant's Apply instead of its own: the version gate
+// chooses the artifact as well as whether to write one.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
@@ -956,8 +960,17 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 			// Home guard before version gate: the version gate may shell out to
 			// probe the CLI, and there is no reason to pay for that on an
 			// install that is about to be refused anyway.
+			var variant *agent.HookVariant
 			if err = s.sharedConfigRefusal(e.perm); err == nil {
-				bound, err = s.hookVersionRefusal(e.perm)
+				variant, bound, err = s.hookVersionRefusal(e.agentName, e.perm)
+			}
+			if variant != nil {
+				if effect = variant.Apply; effect == nil {
+					// The registry tripwire refuses this declaration; failing
+					// the effect here keeps one that slipped through from
+					// panicking the consent path instead.
+					err = fmt.Errorf("the selected hook artifact (%s up to %s) declares no Apply", variant.Min, variant.Max)
+				}
 			}
 		}
 		if err == nil {

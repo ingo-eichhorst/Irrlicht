@@ -54,6 +54,16 @@ func TestEveryHookInstallDeclaresAVersionFloor(t *testing.T) {
 					"nor Probe), so the gate can never refuse anything",
 					a.Identity.Name, p.Key)
 			}
+			// A permission writing one artifact per upstream major (#2108)
+			// declares a floor per artifact: each must parse, or that artifact
+			// is selected at every version below its ceiling.
+			for _, v := range p.Writes.Variants {
+				if _, ok := cliversion.Parse(v.Min); !ok {
+					t.Errorf("%s/%s declares a hook artifact with floor %q, which is not a "+
+						"major.minor.patch triple; an unparseable floor selects it at every "+
+						"version below its ceiling", a.Identity.Name, p.Key, v.Min)
+				}
+			}
 		}
 	}
 }

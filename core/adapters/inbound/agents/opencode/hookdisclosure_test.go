@@ -1,7 +1,9 @@
 // hookdisclosure_test.go wires the opencode hooks permission into the shared
 // issue #1356 contract: the consent copy names every event the installer
 // subscribes to, states the right entry count, and names no event it does not
-// install.
+// install. The permission declares one artifact per opencode major (#2108), so
+// the contract reads each artifact's events off the declaration and holds the
+// copy to both counts and every artifact's version bounds.
 package opencode
 
 import (
@@ -14,7 +16,6 @@ func TestHooksPermission_DisclosureMatchesInstalled(t *testing.T) {
 	contracttesting.AssertHookDisclosureMatchesInstalled(t, contracttesting.HookDisclosure{
 		Agent:         Agent(),
 		PermissionKey: PermissionKeyHooks,
-		Installed:     installedHookEvents,
 		// "JavaScript" is a two-hump CamelCase word, so the over-promise arm
 		// reads it as an event-shaped token. It is exempted rather than avoided
 		// because naming the artifact's LANGUAGE is the single most load-bearing

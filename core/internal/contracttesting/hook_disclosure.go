@@ -11,6 +11,13 @@
 // a #570 consent violation, not a docs typo — the wizard's Touches/Detail text
 // *is* what the user consents to — and nothing bound the prose to the list, so
 // it drifted silently at N=2 adapters with one added event.
+//
+// A permission that writes a different artifact per upstream major (#2108,
+// agent.ManagedUserFile.Variants) has a different exact count per artifact, so
+// the copy states one count per artifact — each variant's stated, and no count
+// no variant writes — names the union of their events, and states every
+// variant's floor and ceiling. The exactness #1356 established is kept per
+// artifact rather than relaxed into a range.
 package contracttesting
 
 import (
@@ -88,7 +95,9 @@ type HookDisclosure struct {
 	Agent agent.Agent
 	// PermissionKey is the hooks permission's key within that registration.
 	PermissionKey string
-	// Installed is the installer's event list.
+	// Installed is the installer's event list. Leave it nil for a permission
+	// that declares Variants (#2108): the contract reads each variant's Events
+	// off the declaration, which is the installer's own slice.
 	Installed []string
 	// NonEventTerms are CamelCase terms the copy legitimately mentions that
 	// are not hook events — a tool name in a matcher, a type name. Usually
@@ -131,15 +140,23 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	// so a substring test on copy naming only the latter would read as
 	// disclosing both.
 	named := wordsIn(disclosure)
+	// The set every arm below reads as "installed": the wiring's own list, or
+	// for a variant declaration (#2108) the union of its variants' lists.
+	installed := d
+	installed.Installed = installedEventsOf(perm, d)
 
 	t.Run("names_every_installed_event", func(t *testing.T) {
-		assertNamesEveryInstalledEvent(t, d.Installed, named)
+		assertNamesEveryInstalledEvent(t, installed.Installed, named)
 	})
 	t.Run("states_the_installed_count", func(t *testing.T) {
+		if variants := declaredVariants(perm); len(variants) > 0 {
+			assertStatesEveryVariantCount(t, variants, disclosure)
+			return
+		}
 		assertStatesInstalledCount(t, d.Installed, disclosure)
 	})
 	t.Run("names_no_uninstalled_event", func(t *testing.T) {
-		assertNamesNoUninstalledEvent(t, d, named)
+		assertNamesNoUninstalledEvent(t, installed, named)
 	})
 	t.Run("states_the_version_floor", func(t *testing.T) {
 		assertStatesVersionFloor(t, perm, disclosure)
@@ -167,10 +184,98 @@ func disclosureUnderTest(d HookDisclosure) (agent.Permission, string) {
 		return agent.Permission{}, fmt.Sprintf("agent %q declares no permission with key %q",
 			d.Agent.Identity.Name, d.PermissionKey)
 	}
+	if variants := declaredVariants(perm); len(variants) > 0 {
+		if d.Installed != nil {
+			return agent.Permission{}, "HookDisclosure.Installed is set for a permission that declares " +
+				"per-major variants (#2108) — each variant carries its own Events, so pass none, or the " +
+				"contract grades a second list against the copy instead of the declaration"
+		}
+		for i := range variants {
+			if len(variants[i].Events) == 0 {
+				return agent.Permission{}, "the hook artifact for " + rangeName(&variants[i]) +
+					" declares no Events — there is nothing to hold its consent copy to"
+			}
+		}
+		return perm, ""
+	}
 	if len(d.Installed) == 0 {
 		return agent.Permission{}, "HookDisclosure.Installed is empty — pass the installer's event list"
 	}
 	return perm, ""
+}
+
+// declaredVariants returns the per-major variants a permission declares
+// (#2108), nil for the single-artifact shape.
+func declaredVariants(perm agent.Permission) []agent.HookVariant {
+	if perm.Writes == nil {
+		return nil
+	}
+	return perm.Writes.Variants
+}
+
+// installedEventsOf is what the arms read as "the events this permission
+// installs": the wiring's list, or the union of the variants' lists in
+// declaration order, each event once.
+func installedEventsOf(perm agent.Permission, d HookDisclosure) []string {
+	variants := declaredVariants(perm)
+	if len(variants) == 0 {
+		return d.Installed
+	}
+	var union []string
+	seen := map[string]bool{}
+	for _, v := range variants {
+		for _, event := range v.Events {
+			if !seen[event] {
+				seen[event] = true
+				union = append(union, event)
+			}
+		}
+	}
+	return union
+}
+
+// assertStatesEveryVariantCount is the count arm for a variant declaration
+// (#2108): every artifact's own count is stated, and every count stated is one
+// some artifact writes. Two exact counts, never a range — the user reads the
+// number for the version they run.
+func assertStatesEveryVariantCount(t reporter, variants []agent.HookVariant, disclosure string) {
+	t.Helper()
+	matches := entryCountPattern.FindAllStringSubmatch(disclosure, -1)
+	if len(matches) == 0 {
+		t.Fatalf("consent copy states no entry count; want one per hook artifact (%s)", variantCounts(variants))
+	}
+	stated := map[int]bool{}
+	for _, m := range matches {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("unparseable entry count %q: %v", m[1], err)
+		}
+		stated[n] = true
+	}
+	written := map[int]bool{}
+	for i := range variants {
+		n := len(variants[i].Events)
+		written[n] = true
+		if !stated[n] {
+			t.Errorf("consent copy never states %d hook entries, the count the hook artifact for %s "+
+				"writes — a user on that version reads a number that is not theirs", n, rangeName(&variants[i]))
+		}
+	}
+	for n := range stated {
+		if !written[n] {
+			t.Errorf("consent copy declares %d hook entries, but no hook artifact writes that many (%s)",
+				n, variantCounts(variants))
+		}
+	}
+}
+
+// variantCounts renders each variant's range and count for a message.
+func variantCounts(variants []agent.HookVariant) string {
+	parts := make([]string, len(variants))
+	for i := range variants {
+		parts[i] = fmt.Sprintf("%s: %d", rangeName(&variants[i]), len(variants[i].Events))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // assertModifyKind is the kind obligation, split out of the precondition block
@@ -222,6 +327,19 @@ func assertStatesVersionFloor(t reporter, perm agent.Permission, disclosure stri
 			"above it nothing is written and an earlier install's file is removed, and the "+
 			"copy gave no hint (#2105); render it with hookjson.RequiresVersionRange so it "+
 			"cannot drift from the gate", gate.Max)
+	}
+	// A variant declaration (#2108) writes a different file per range, so each
+	// range's bounds are a condition on WHICH file the user gets, and the copy
+	// states them all.
+	for i := range perm.Writes.Variants {
+		v := &perm.Writes.Variants[i]
+		for _, bound := range []struct{ name, value string }{{"floor", v.Min}, {"ceiling", v.Max}} {
+			if bound.value != "" && !strings.Contains(disclosure, bound.value) {
+				t.Errorf("consent copy never states the %s %s of the hook artifact for %s — which "+
+					"file is written depends on it, and the copy gave no hint (#2108)",
+					bound.value, bound.name, rangeName(v))
+			}
+		}
 	}
 }
 

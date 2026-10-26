@@ -211,6 +211,13 @@ below.
   "names no uninstalled event" arm checks against `session.AllHookEvents`, itself kept
   honest by `TestAllHookEvents_CoversEveryConstant`, which scans
   `hook_signal.go`'s source rather than trusting a second hand-kept list.
+  A permission that writes one artifact per upstream major
+  (`agent.ManagedUserFile.Variants`, #2108 — opencode's 1.x and 2.x plugins)
+  passes no `Installed` list: the contract reads each variant's `Events` off
+  the declaration, requires one exact count per artifact ("3 hook entries" and
+  "5 hook entries", never a range), names the union of their events, and
+  requires every variant's floor and ceiling in the copy. Its negative
+  self-tests are `hook_variant_selftest_test.go`.
 - Hook path confinement: `contracttesting.AssertHookPathConfined`
   (`core/internal/contracttesting/hook_path_confinement.go`) is the
   receiving-side counterpart to the two above — the `transcript_path` in an
@@ -377,6 +384,23 @@ below.
   under launchd with a minimal PATH and routinely cannot see the user's CLI, so
   only a version successfully read AND parsed AND found below the floor blocks
   an install.
+  The one exception is a permission that writes a different artifact per
+  upstream major (`agent.ManagedUserFile.Variants`, #2108): opencode declares
+  `[1.14.50, 2.0.0)` for its 1.x plugin and `[2.1.4, 3.0.0)` for its 2.x one,
+  both at the same path, and `PermissionService` resolves the version once and
+  runs the SELECTED variant's `Apply` (`ManagedUserFile.SelectVariant`); the
+  #1372 loop verifies against the same selection, so an upgrade under a running
+  daemon is a rewrite in place within one pass. There, an unknown version
+  writes nothing (`VersionUnknown`), because guessing the major writes exactly
+  the file the other one rejects. The gate is then the variants' envelope, and
+  the contract grades each variant like a single gate — its floor covers its
+  own events, it is selected across its range and refused one step outside —
+  plus the envelope spanning exactly the variants, the variants being disjoint,
+  and an unknown version selecting none. A passive version source that reads
+  something only another permission discloses names it in
+  `VersionGate.ObservedRequires` (opencode's store, behind `database`), and the
+  service skips it while that permission is not granted. The runtime half is
+  `core/application/services/permission_version_variant_test.go`.
 - Unrecognized hook events: `contracttesting.AssertUnknownHookEventObserved`
   (`core/internal/contracttesting/unknown_hook_event.go`) covers the other end of
   the same receiver — the event name it does *not* know. Before #1364 both
