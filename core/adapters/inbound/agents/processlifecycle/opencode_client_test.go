@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
@@ -197,5 +198,24 @@ func TestOpenCodeDiscoverPID_BindsNoServiceWhenItCannotTellWhich(t *testing.T) {
 				t.Errorf("DiscoverPID = (%d, %v), want (0, nil)", got, err)
 			}
 		})
+	}
+}
+
+// TestOpenCodeServicePIDs_AnUnreadableArgvIsNoService: a process pgrep lists
+// for opencode's pattern but whose argv cannot be read is not counted as the
+// 2.x service — the SessionHostArgv contract, through
+// PIDsByCmdlineKeepingArgv's inverted use of withoutExcludedArgv. Counted as
+// one, it would make DiscoverPID's `exactly one service` bind the wrong
+// process or none (review of #2114). Seen red with withoutExcludedArgv keeping
+// a nil argv (tools/lib/opencode-v2-service-mutations_test.sh, mutation 17).
+func TestOpenCodeServicePIDs_AnUnreadableArgvIsNoService(t *testing.T) {
+	home, project := canonicalTempDir(t), canonicalTempDir(t)
+	processlifecycle.SetFakeProcessesForTest(t, map[int]processlifecycle.FakeProcess{
+		44001: {Name: "opencode", CWD: home, Argv: []string{"/opt/homebrew/bin/opencode", "serve", "--service"}},
+		44002: {Name: "opencode", CWD: project, Cmdline: "/opt/homebrew/bin/opencode"},
+	})
+	got, err := opencode.ServicePIDs()
+	if err != nil || !slices.Equal(got, []int{44001}) {
+		t.Errorf("ServicePIDs() = (%v, %v), want ([44001], nil): pid 44002's argv is unreadable", got, err)
 	}
 }

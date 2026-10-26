@@ -43,6 +43,8 @@
 #      session takes the spawning client's terminal (review of #2114).
 #  16. the launcher skip ignores LauncherPID → a hosted codex root, whose
 #      LauncherPID names its TUI, loses its launcher (codex's lock).
+#  17. withoutExcludedArgv keeps a PID whose argv it cannot read → a process
+#      with an unreadable argv counts as the 2.x service.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -300,6 +302,16 @@ assert_go_test_goes_red \
   "$SERVICES" \
   '^TestHandlePIDAssigned_HostedCodexRootTakesItsTUIsLauncher$' \
   "want the TUI's {TermProgram:ghostty"
+
+# ── 17. an unreadable argv survives the filter ──
+assert_go_test_goes_red \
+  "withoutExcludedArgv keeping a PID whose argv is unreadable" \
+  "$DISCOVERY" \
+  $'if excludeArgv(argv) {\n\t\t\tcontinue\n\t\t}\n\t\tkept = append(kept, pid)' \
+  $'if argv != nil && excludeArgv(argv) {\n\t\t\tcontinue\n\t\t}\n\t\tkept = append(kept, pid)' \
+  "$PROCLIFE" \
+  '^TestOpenCodeServicePIDs_AnUnreadableArgvIsNoService$' \
+  "ServicePIDs() = ([44001 44002], <nil>), want ([44001], nil)"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-service-mutations: $fails FAILED"

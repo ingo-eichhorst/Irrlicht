@@ -587,9 +587,11 @@ func (d *SessionDetector) SetInfraReaper(excluders map[string]func([]string) boo
 	d.pidMgr.SetInfraReaper(excluders, readArgv)
 }
 
-// SetSessionHosts installs the presession-sweep seam that retires the
-// placeholder a hosted root's client left behind (#2082). Both args nil
-// disables it. Call before Run.
+// SetSessionHosts installs the seam that recognizes a root bound to its
+// adapter's session host: the presession sweep's pairing (#2082), the
+// launcher backfill/refresh skip (#2083), the ready-TTL host rule and the
+// launcher-capture skip (#2107); see PIDManager.SetSessionHosts. Both args nil
+// disables them. Call before Run, together with SetLauncherPIDs.
 func (d *SessionDetector) SetSessionHosts(hosts map[string]func([]string) bool, readArgv func(pid int) []string) {
 	d.pidMgr.SetSessionHosts(hosts, readArgv)
 }

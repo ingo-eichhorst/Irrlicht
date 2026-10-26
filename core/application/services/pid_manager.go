@@ -235,17 +235,22 @@ type PIDManager struct {
 
 	// sessionHosts maps adapter name → its Process.SessionHostArgv, and
 	// hostReadArgv reads a live PID's argv; together they recognize a root
-	// bound to its adapter's session host (onSessionHost): for the presession
-	// sweep's pairing, which also needs a LauncherPID (#2082), for the
-	// ready-TTL host rule (idlesOnHost) and for the launcher skip
-	// (hostedWithoutClient, #2107). Both nil disables all three; installed
-	// once at startup via SetSessionHosts.
+	// bound to its adapter's session host. The presession sweep's pairing
+	// reads them directly in hostGroups/pairHostedRoots, and needs a
+	// LauncherPID too (#2082); onSessionHost reads them for the launcher
+	// backfill/refresh skip (boundToSessionHost, #2083), the ready-TTL host
+	// rule (idlesOnHost, #2107) and the launcher-capture skip
+	// (hostedWithoutClient, #2107). Both nil disables every one of these;
+	// installed once at startup via SetSessionHosts.
 	sessionHosts map[string]func([]string) bool
 	hostReadArgv func(pid int) []string
 	// launcherPIDs maps adapter name → its Process.LauncherPID: for a root
 	// bound to a host process, the process whose env and tty feed the
-	// launcher instead (#2083). Nil disables it; installed once at startup
-	// via SetLauncherPIDs. Consulted only behind observe consent.
+	// launcher instead (#2083). Its absence for an adapter is read as "this
+	// adapter's hosts have no client" by the pairing gate (hostGroups) and the
+	// launcher-capture skip (hostedWithoutClient), so it is wired together with
+	// sessionHosts; see SetLauncherPIDs. Installed once at startup via
+	// SetLauncherPIDs. Consulted only behind observe consent.
 	launcherPIDs map[string]agent.LauncherPIDFunc
 	// launcherReadAllowed reports whether the launcher read the hook's answer
 	// feeds is granted. Nil allows it; installed via SetLauncherReadGate.
@@ -382,7 +387,9 @@ func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, r
 // still holds (idlesOnHost, #2107), and launcher capture to skip a root on a
 // host with no client (hostedWithoutClient). hosts maps adapter name →
 // Process.SessionHostArgv; readArgv reads a PID's argv. Both nil (the default,
-// and what tests/demo mode leave) disables all three. Called once at startup.
+// and what tests/demo mode leave) disables all of these, and the launcher
+// backfill/refresh skip of #2083 (boundToSessionHost) with them; see the
+// sessionHosts field. Called once at startup.
 func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, readArgv func(pid int) []string) {
 	pm.sessionHosts = hosts
 	pm.hostReadArgv = readArgv
@@ -391,8 +398,11 @@ func (pm *PIDManager) SetSessionHosts(hosts map[string]func([]string) bool, read
 // SetLauncherPIDs installs the seam launcher capture uses to read a hosted
 // root's launcher from the process the user talks to (#2083). hooks maps
 // adapter name → Process.LauncherPID. Nil (the default, and what tests/demo
-// mode leave) keeps every launcher read on the session's own PID. Called once
-// at startup.
+// mode leave) keeps every launcher read on the session's own PID — except
+// where SetSessionHosts is wired: there an adapter with no entry here is one
+// whose hosts have no client, so a root on its host captures no launcher
+// (hostedWithoutClient, #2107) and pairs with no placeholder (hostGroups).
+// Startup wires the two together. Called once at startup.
 func (pm *PIDManager) SetLauncherPIDs(hooks map[string]agent.LauncherPIDFunc) {
 	pm.launcherPIDs = hooks
 }

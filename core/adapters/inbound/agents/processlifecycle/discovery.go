@@ -100,7 +100,9 @@ func PIDsByCWDExcludingArgv(processName, cwd string, excludeArgv func([]string) 
 
 // withoutExcludedArgv drops the PIDs whose argv excludeArgv rejects. A nil
 // excludeArgv keeps every PID; an unreadable argv is passed to the predicate
-// as nil, which per the ExcludeArgv contract must not exclude on it.
+// as nil and the predicate decides. An ExcludeArgv predicate must not exclude
+// on it (its contract); PIDsByCmdlineKeepingArgv's inverted keep predicate
+// does, because a SessionHostArgv-style predicate never keeps nil.
 func withoutExcludedArgv(pids []int, excludeArgv func([]string) bool) []int {
 	if excludeArgv == nil {
 		return pids
