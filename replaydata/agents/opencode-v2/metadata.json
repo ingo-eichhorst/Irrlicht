@@ -1,0 +1,11 @@
+{
+  "id": "opencode-v2",
+  "name": "OpenCode 2",
+  "provider": "sst",
+  "prerequisites": [
+    "OpenCode 2.x (>= 2.0.0) running as exactly ONE 'opencode serve --service', and a model it can reach (this host: the sandbox service from /Users/factory/.oc2sb with the local Splash model at 127.0.0.1:8085). The rig never starts, stops or reconfigures the service — see replaydata/agents/opencode-v2/prerequisites.md",
+    "export XDG_CONFIG_HOME, XDG_DATA_HOME and XDG_STATE_HOME as the SERVICE's own values (sandbox: /Users/factory/.oc2sb/home/.config, /.local/share, /.local/state). Do NOT export HOME or source the sandbox env.sh, and leave OPENCODE_DB unset — the driver refuses on any difference from the service's environment",
+    "coexist mode: IRRLICHT_ONBOARD_HOME=<the service's HOME>/.local/share/irrlicht (sandbox: /Users/factory/.oc2sb/home/.local/share/irrlicht) and a non-7837 IRRLICHT_ONBOARD_BIND_ADDR — the plugin's beacon runs inside the service and reaches the daemon only through that directory's irrlichd.addr",
+    "exclusive use of the service while recording: one cell at a time, no other driver and no qa-run.sh on it; the rig refuses when a daemon already answers on that IRRLICHT_ONBOARD_HOME's socket"
+  ]
+}

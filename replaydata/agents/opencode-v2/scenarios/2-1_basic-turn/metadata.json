@@ -1,0 +1,82 @@
+{
+  "scenario_id": "basic-turn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-10-26T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nbasic-turn is the smallest round-trip: one plain-text prompt, one assistant reply, no tool. On OpenCode 2.x the API driver prompts a service-hosted session (POST /api/session/{id}/prompt) and waits for a NEW time_idle on its session_v2 row. The daemon's 2.x reader admits the session on its first activity, binds it to the service pid, drives ready/working from session_message activity, and ends the turn on the plugin's session.execution.succeeded hook (#2108) — the store's own idle row lands 60–460 ms later (#2115), which the daemon reads as a sub-second ready → working → ready bounce. P4's QA run measured this arc live on the sandbox service (S1: working → ready).\n\n## Spec choices\n\n- Birth is a transcript_new, not a ready state: P4 first sampled an API session as working.\n- The turn end is the plugin's Stop hook (hook_received) plus ready; the bounce after it is not asserted against, and no duration is asserted on the hook-ended ready (#2109 §Dwell and bounce, maintainer Q2 default: record and anchor).",
+      "caveats": [
+        "The bounce after a hook-ended turn is a known daemon behaviour (#2109 §6 Q2); the spec anchors past it rather than asserting it away.",
+        "Goldens replay the exported final rows only (transcript-only replay), so they never contain the bounce."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: session_v2/session_message; a session is admitted on its first activity while a service is up (#2107)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/pid.go",
+          "note": "servicePIDFor: a session no client runs binds to the one running service"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/pr2115-p4/summary.txt",
+          "note": "P4 QA run on the sandbox service: S1 working → ready, S2 working → waiting → ready, S3 interrupted → ready, all on the service pid"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Splash model at 127.0.0.1:8085); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "One send, wait for the store's new idle, then 6s so the daemon's final transitions flush"
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "a ses_… transcript_new for the API session",
+        "pid_discovered binds it to the service pid",
+        "working, then the plugin's Stop hook_received and ready on the same session",
+        "no waiting at any point (no tool, no ask)"
+      ]
+    }
+  }
+}

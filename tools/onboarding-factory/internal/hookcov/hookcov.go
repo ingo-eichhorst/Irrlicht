@@ -61,6 +61,7 @@ import (
 	"sort"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/tools/onboarding-factory/internal/replay"
 	"irrlicht/tools/onboarding-factory/internal/shard"
@@ -140,23 +141,36 @@ func (r Report) Gaps() []string {
 	return out
 }
 
-// Declared reports, per on-disk adapter slug, whether that adapter declares a
+// Declared reports, per on-disk slug, whether the adapter behind it declares a
 // hooks permission in the daemon's adapter registry. Every registry adapter
-// gets an entry, so a false is "asked and answered" rather than "absent".
+// gets an entry under its own slug, so a false is "asked and answered" rather
+// than "absent" — and so does every column whose directory is not its
+// adapter's name (shard.AliasedColumns), under the column's slug: the
+// opencode-v2 column (#2109) is the opencode adapter's second column, and a
+// projection keyed only by adapter would answer "declares nothing" for it,
+// which `of hookcheck` reads as "nothing to ask" about a hookless recording.
 func Declared() map[string]bool {
 	out := make(map[string]bool)
 	for _, a := range agents.All() {
-		slug := slug(a.Identity.Name)
-		declares := false
-		for _, p := range a.Permissions {
-			if p.Key == permissionKeyHooks {
-				declares = true
-				break
-			}
+		out[slug(a.Identity.Name)] = HooksPermission(a) != nil
+	}
+	for _, col := range shard.AliasedColumns() {
+		if declares, ok := out[slug(shard.DaemonAdapterForSlug(col))]; ok {
+			out[col] = declares
 		}
-		out[slug] = declares
 	}
 	return out
+}
+
+// HooksPermission returns the adapter's hooks permission — the one keyed
+// permissionKeyHooks — or nil when it declares none.
+func HooksPermission(a agent.Agent) *agent.Permission {
+	for i := range a.Permissions {
+		if a.Permissions[i].Key == permissionKeyHooks {
+			return &a.Permissions[i]
+		}
+	}
+	return nil
 }
 
 // slug is shard.SlugForAdapter, which owns the registry-name → on-disk-slug
@@ -292,33 +306,43 @@ func HasOwnHookEvent(eventsPath, adapterSlug string) bool {
 	return hasOwnHookEvent(eventsPath, adapterSlug)
 }
 
-// sessionAdapters maps session_id -> the on-disk slug of the adapter a
-// SIBLING event (never hook_received itself, which carries no Adapter)
-// tagged that session with. One pass over the whole recording, built once
-// regardless of how many hook_received events it holds.
+// sessionAdapters maps session_id -> the daemon adapter a SIBLING event
+// (never hook_received itself, which carries no Adapter) tagged that session
+// with, as owner() canonicalises it. One pass over the whole recording, built
+// once regardless of how many hook_received events it holds.
 func sessionAdapters(events []lifecycle.Event) map[string]string {
 	owners := make(map[string]string, len(events))
 	for _, e := range events {
 		if e.Adapter != "" {
-			owners[e.SessionID] = slug(e.Adapter)
+			owners[e.SessionID] = owner(e.Adapter)
 		}
 	}
 	return owners
 }
 
+// owner canonicalises an adapter spelling — a recording's adapter field
+// ("claude-code", or a pre-#319 "claudecode") or a column slug
+// ("opencode-v2") — to the daemon adapter that records it: the column map
+// takes every slug to its adapter and passes an identity name through.
+// Attribution compares adapters, not slugs: an opencode-v2 recording's events
+// say "opencode", and comparing that with the cell's "opencode-v2" never
+// matched (#2109).
+func owner(name string) string { return shard.DaemonAdapterForSlug(name) }
+
 // anyHookEventOwnedBy reports whether any hook_received event in events
-// belongs to adapterSlug, per owners (session_id -> adapter slug, from
-// sessionAdapters). Comma-ok on the lookup, not a plain map-read: an
+// belongs to adapterSlug's adapter, per owners (session_id -> daemon adapter,
+// from sessionAdapters). Comma-ok on the lookup, not a plain map-read: an
 // unattributed session_id must read as "no match" via absence, never
 // coincide with adapterSlug="" (which never occurs here — callers always
 // pass a real on-disk slug — but the explicit check keeps that an invariant
 // rather than a map zero-value accident).
 func anyHookEventOwnedBy(events []lifecycle.Event, owners map[string]string, adapterSlug string) bool {
+	want := owner(adapterSlug)
 	for _, e := range events {
 		if e.Kind != lifecycle.KindHookReceived {
 			continue
 		}
-		if owner, ok := owners[e.SessionID]; ok && owner == adapterSlug {
+		if got, ok := owners[e.SessionID]; ok && got == want {
 			return true
 		}
 	}

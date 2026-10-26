@@ -109,6 +109,28 @@ TMUX_TEARDOWN_REASON=""
 # shellcheck disable=SC2034  # see above
 TMUX_TEARDOWN_ELAPSED=0
 
+# driver_launches_tmux <driver-file> reports whether a driver can start a tmux
+# session at all. A driver that never invokes tmux has no session to leak, and
+# run-cell.sh's gate records `skipped` for it instead of asking tmux: the
+# opencode-v2 driver drives a running service over HTTP (#2109), on a host with
+# no tmux, where asking would read "unreadable" and fail every run.
+#
+# Deliberately broader than internal/driverteardown's static LaunchCount (a
+# literal `tmux new-session`): ANY `tmux` command word outside a comment counts,
+# so `tmux new …` or `tmux -L sock new-session …` — spellings no driver uses
+# today, which LaunchCount would miss — keep the run-time gate rather than
+# losing both gates at once (#2109 review finding 3). An unreadable driver file
+# answers "launches" (0), so a run whose driver cannot be read is still graded.
+driver_launches_tmux() {
+  local driver="${1:-}"
+  [[ -r "$driver" ]] || return 0
+  # Comments do not launch anything: a `#` at line start or after whitespace
+  # opens one. Read through a process substitution, not a pipe: `grep -q`
+  # stops at the first match, and under the caller's pipefail the SIGPIPE that
+  # leaves sed with would read as "no launch" (exit 141).
+  grep -qE '(^|[[:space:];&|(`])tmux([[:space:]]|$)' < <(sed -E 's/(^|[[:space:]])#.*$//' "$driver")
+}
+
 # tmux_teardown_look — the await_gone predicate (see that file's "The
 # predicate"). Takes no arguments; reports through AWAIT_GONE_LOOKED (was I able
 # to look at all) and AWAIT_GONE_ALIVE (what is still there, or why I could

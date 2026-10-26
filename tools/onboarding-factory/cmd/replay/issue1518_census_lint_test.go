@@ -136,16 +136,12 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	// suppressing nothing in the same run. Third direction of the #1388
 	// behaviour in this file: a figure walking OFF a row it had walked ONTO
 	// two commits earlier.
-	{
-		File:   "replay_sidecar.go",
-		Marker: "117 -> 88",
-		Reason: "the >5s half of #1478's second calibration table, a HISTORICAL " +
-			"measurement of what widening the absorb window did to the catalog at " +
-			"that time. The sentence quotes a before/after pair (171 -> 146, " +
-			"117 -> 88); refreshing either half to a current count would destroy " +
-			"the comparison the sentence exists to make. It coincides with " +
-			"PairedButUngraded.",
-	},
+	// The entry that used to sit here — replay_sidecar.go's historical
+	// before/after pair from #1478's second calibration table, shadowing
+	// PairedButUngraded — is deleted (#2109): the opencode-v2 column's first
+	// three recordings moved PairedButUngraded off that pair, and this check
+	// reported the entry as suppressing nothing in the same run. The table
+	// itself is unchanged and still historical.
 	{
 		File:   "timing_drift.go",
 		Marker: "<1ms       190   23.0%",

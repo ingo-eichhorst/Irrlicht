@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,11 +62,74 @@ const (
 	PolicyOptIn Policy = "optin"
 )
 
-// Row is one adapter's declaration.
+// Row is one column's declaration: the variables the rig exports for it.
+//
+// Adapter is the COLUMN slug (a replaydata/agents/<slug> directory), which
+// shard.DaemonAdapterForSlug routes to its daemon adapter; for every column
+// but the aliased ones the two are the same string. Keying by column is what
+// lets one adapter have a row for one column and an Unisolatable entry for
+// another: the opencode adapter's opencode-v2 column (OpenCode 2.x, #2109) is
+// rowed, its opencode column is not.
+//
+// Vars has one entry for most rows. A row whose adapter splits its home
+// across several variables names all of them, and the half-relocation the
+// split invites is graded by GradeRelocation rather than tolerated.
 type Row struct {
 	Adapter string
-	EnvVar  string
+	Vars    []Var
 	Policy  Policy
+}
+
+// Var is one variable a row exports. DriverOnly marks a variable only the
+// driver reads — opencode-v2's XDG_STATE_HOME, where the 2.x service writes
+// the service.json the driver authenticates with — so the relocation grade
+// does not demand that the daemon read it, and does demand that it not.
+type Var struct {
+	Name       string
+	DriverOnly bool
+}
+
+// driverOnlySuffix marks a DriverOnly variable in agent-home.sh's table.
+const driverOnlySuffix = ":driver"
+
+// DaemonVars are the variables the daemon must honour for the row to mean
+// anything: every Var that is not DriverOnly.
+func (r Row) DaemonVars() []string { return r.names(false) }
+
+// DriverVars are the DriverOnly variables.
+func (r Row) DriverVars() []string { return r.names(true) }
+
+// AllVars is every variable the row exports, in table order.
+func (r Row) AllVars() []string {
+	out := make([]string, 0, len(r.Vars))
+	for _, v := range r.Vars {
+		out = append(out, v.Name)
+	}
+	return out
+}
+
+func (r Row) names(driverOnly bool) []string {
+	var out []string
+	for _, v := range r.Vars {
+		if v.DriverOnly == driverOnly {
+			out = append(out, v.Name)
+		}
+	}
+	return out
+}
+
+// VarsField renders the row's variables as the table spells them, for
+// messages.
+func (r Row) VarsField() string {
+	parts := make([]string, 0, len(r.Vars))
+	for _, v := range r.Vars {
+		if v.DriverOnly {
+			parts = append(parts, v.Name+driverOnlySuffix)
+		} else {
+			parts = append(parts, v.Name)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // Unisolatable names every hooks-declaring adapter that has NO row, with the
@@ -74,11 +138,10 @@ type Row struct {
 // between an exemption list and a to-do list — if one of these ever became
 // "not done yet", it should move out of here and into agent-home.sh.
 //
-// opencode's entry (#1719) is the one that carries a named remainder rather
-// than being purely structural, and it says so out loud instead of reading as
-// settled: the SPLIT across two XDG variables is opencode's, and no
-// one-variable row can express it. Since #2106 StorePath honours
-// $XDG_DATA_HOME, so the remainder is the row shape alone.
+// opencode's entry is the one that is a choice rather than a structural
+// fact, and it says so out loud: since #2109 the table carries multi-variable
+// rows and the opencode-v2 column has one, so the opencode (1.x) column could
+// have one too. It stays exempt because nothing has needed it.
 //
 // The keys are existence-checked in both directions by
 // TestRigHomeTableMatchesTheAdapterRegistry: an entry naming an adapter that
@@ -107,7 +170,7 @@ var Unisolatable = map[string]string{
 		".claude/settings.json unconditionally. A row would move the session store while the " +
 		"install kept landing in the operator's real settings.json, i.e. claim an isolation " +
 		"it does not have.",
-	"opencode": "split across TWO XDG variables, which a one-variable row cannot express. opencode resolves its config dir (the plugin irrlicht installs) from $XDG_CONFIG_HOME and its DATA dir (the SQLite store the daemon watches) from $XDG_DATA_HOME (Global.Path: join(XDG_CONFIG_HOME || ~/.config, \"opencode\") and join(XDG_DATA_HOME || ~/.local/share, \"opencode\")). A row naming XDG_CONFIG_HOME would relocate the install while the store stayed real — claudecode's half-relocatable shape in mirror image — and one naming XDG_DATA_HOME would relocate the store while the install stayed real, the same shape the other way round. irrlicht follows both variables (opencodeConfigDir; StorePath since #2106), so what is missing is the table's two-variable row shape; until then, the managed-file snapshot is the whole of the protection, exactly as it is for gemini-cli.",
+	"opencode": "the opencode (1.x) column stays exempt BY CHOICE, not for want of a row shape. opencode splits its home across two XDG variables — the config dir (the plugin irrlicht installs) from $XDG_CONFIG_HOME and the data dir (the SQLite store the daemon watches) from $XDG_DATA_HOME — and since #2109 a row can name both: the opencode-v2 column (OpenCode 2.x, the same adapter) has exactly that row, and TestEveryRigHomeRowRelocatesBothHalves grades it. The 1.x column's driver launches the operator's own opencode against their real XDG tree and nothing has needed it isolated, so the managed-file snapshot is the whole of its protection, exactly as it is for gemini-cli; giving it a row is a change to that driver, not to this table.",
 	"gemini-cli": "no override exists at all: defaultRootDir is \".gemini/tmp\" under $HOME and " +
 		"geminiHome() is $HOME/.gemini, with no os.Getenv anywhere in " +
 		"core/adapters/inbound/agents/geminicli. Its hook recordings can only run against the " +
@@ -146,15 +209,11 @@ func Table(repoRoot string) ([]Row, error) {
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("%s: malformed row %q: want '<adapter> <ENV_VAR> <policy>'", TableScript, line)
+		row, err := parseRow(line)
+		if err != nil {
+			return nil, err
 		}
-		policy := Policy(fields[2])
-		if policy != PolicyDefault && policy != PolicyOptIn {
-			return nil, fmt.Errorf("%s: row %q declares unknown policy %q", TableScript, line, fields[2])
-		}
-		rows = append(rows, Row{Adapter: fields[0], EnvVar: fields[1], Policy: policy})
+		rows = append(rows, row)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading agent_home_table output: %w", err)
@@ -165,6 +224,63 @@ func Table(repoRoot string) ([]Row, error) {
 	}
 	return rows, nil
 }
+
+// parseRow reads one `<column> <VAR>[,<VAR>[:driver]]... <policy>` line.
+func parseRow(line string) (Row, error) {
+	fields := strings.Fields(line)
+	if len(fields) != 3 {
+		return Row{}, fmt.Errorf("%s: malformed row %q: want '<column> <VAR>[,<VAR>[%s]...] <policy>'",
+			TableScript, line, driverOnlySuffix)
+	}
+	vars, err := parseVars(fields[1])
+	if err != nil {
+		return Row{}, fmt.Errorf("%s: row %q: %w", TableScript, line, err)
+	}
+	policy := Policy(fields[2])
+	if policy != PolicyDefault && policy != PolicyOptIn {
+		return Row{}, fmt.Errorf("%s: row %q declares unknown policy %q", TableScript, line, fields[2])
+	}
+	if policy == PolicyDefault && len(vars) != 1 {
+		return Row{}, fmt.Errorf("%s: row %q: policy %q points ONE variable at a staging directory; "+
+			"a multi-variable row is %q", TableScript, line, PolicyDefault, PolicyOptIn)
+	}
+	return Row{Adapter: fields[0], Vars: vars, Policy: policy}, nil
+}
+
+// parseVars reads a row's variable field: comma-separated names, each
+// optionally suffixed driverOnlySuffix. It refuses a name that is not an
+// environment variable, a duplicate, an unknown suffix, and a row whose every
+// variable is DriverOnly — a row the daemon reads nothing of isolates nothing.
+func parseVars(field string) ([]Var, error) {
+	var vars []Var
+	seen := map[string]bool{}
+	daemonRead := 0
+	for _, item := range strings.Split(field, ",") {
+		name, driverOnly := strings.CutSuffix(item, driverOnlySuffix)
+		if !isEnvVarName(name) {
+			return nil, fmt.Errorf("%q is not an environment variable name (marker, if any, must be %q)",
+				item, driverOnlySuffix)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("names %s twice", name)
+		}
+		seen[name] = true
+		if !driverOnly {
+			daemonRead++
+		}
+		vars = append(vars, Var{Name: name, DriverOnly: driverOnly})
+	}
+	if daemonRead == 0 {
+		return nil, fmt.Errorf("every variable is marked %s, so the daemon reads none of them and the "+
+			"row relocates nothing it watches", driverOnlySuffix)
+	}
+	return vars, nil
+}
+
+// envVarName is the shape of an environment variable name the table accepts.
+var envVarName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+func isEnvVarName(s string) bool { return envVarName.MatchString(s) }
 
 // Reconcile reports every disagreement between the rig's table, the exemption
 // map, and the registry's view of which adapters declare hooks. An empty result
@@ -209,13 +325,13 @@ func checkRows(rows []Row, exempt map[string]string, declaresHooks map[string]bo
 			problems = append(problems, fmt.Sprintf(
 				"%s names adapter %q, which is not in the daemon's adapter registry — the rig "+
 					"would export %s for an adapter that does not exist",
-				TableScript, r.Adapter, r.EnvVar))
+				TableScript, r.Adapter, r.VarsField()))
 			continue
 		}
 		if prev, dup := rowFor[r.Adapter]; dup {
 			problems = append(problems, fmt.Sprintf(
 				"%s declares adapter %q twice (%s and %s) — which row wins is the order of a "+
-					"heredoc", TableScript, r.Adapter, prev.EnvVar, r.EnvVar))
+					"heredoc", TableScript, r.Adapter, prev.VarsField(), r.VarsField()))
 			continue
 		}
 		rowFor[r.Adapter] = r
@@ -223,7 +339,7 @@ func checkRows(rows []Row, exempt map[string]string, declaresHooks map[string]bo
 			problems = append(problems, fmt.Sprintf(
 				"adapter %q has BOTH a row in %s (%s) and an Unisolatable entry (%q) — one of "+
 					"the two is stale and a reader cannot tell which",
-				r.Adapter, TableScript, r.EnvVar, truncate(reason)))
+				r.Adapter, TableScript, r.VarsField(), truncate(reason)))
 		}
 	}
 	return rowFor, problems
@@ -288,6 +404,109 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// Resolved is what one relocation probe measured: with some of a row's
+// variables pointed under Home (and the rest unset), the paths the adapter's
+// daemon-side resolvers produced.
+type Resolved struct {
+	Home     string   // the scratch directory every set variable points under
+	Sessions []string // every session root the daemon would watch
+	Hooks    []string // every file the hooks install would write
+}
+
+// RelocationProbe sets exactly the named variables of a row under a scratch
+// home, unsets the row's others, and resolves the adapter's paths.
+type RelocationProbe func(set []string) (Resolved, error)
+
+// GradeRelocation reports every way a row fails to relocate what the daemon
+// reads. An empty result means the row is honest. Three questions, the first
+// the one #1719's two-variable shape exists for:
+//
+//  1. With every daemon-read variable set, do the session roots AND every
+//     hook write move? A row that moves one half and not the other is the
+//     worst shape there is, because it looks isolated: the store stays the
+//     operator's while the install lands in the scratch home, or the reverse.
+//  2. Does each daemon-read variable, set ALONE, move something? A variable
+//     the daemon does not read is a promise nothing keeps — mark it driver-only
+//     if only the driver reads it, or drop it.
+//  3. Does each driver-only variable, set alone, move NOTHING? A driver-only
+//     variable the daemon does read is a stale marker.
+//
+// Split out as a pure function for the same reason Reconcile is: the corpus
+// beside this file drives it with a fake probe to prove each check fires on
+// exactly the shape it names (a half row, an unread variable, an unmarked
+// driver variable), which mutating the real table could not show.
+func GradeRelocation(row Row, probe RelocationProbe) []string {
+	var problems []string
+	daemon := row.DaemonVars()
+	set := strings.Join(daemon, ",")
+	all, err := probe(daemon)
+	if err != nil {
+		return []string{fmt.Sprintf("column %q: resolving its paths with %s set: %v", row.Adapter, row.VarsField(), err)}
+	}
+	if len(all.Sessions) == 0 || len(all.Hooks) == 0 {
+		// A broken measurement, reported alone: every check below would grade
+		// the missing side as "moved nothing" and bury the cause.
+		return []string{fmt.Sprintf(
+			"column %q resolved %d session root(s) and %d hook write(s) — a relocation with nothing "+
+				"on one side was not measured, so this grade would pass having checked nothing",
+			row.Adapter, len(all.Sessions), len(all.Hooks))}
+	}
+	if stayed := outside(all.Home, all.Sessions); len(stayed) > 0 {
+		problems = append(problems, fmt.Sprintf(
+			"column %q: with %s set the session root still resolves to %s — a half relocation: the "+
+				"daemon would watch the operator's real store while the driver wrote to the scratch "+
+				"home, and the recording would contain their sessions and not the driver's",
+			row.Adapter, set, strings.Join(stayed, ", ")))
+	}
+	if stayed := outside(all.Home, all.Hooks); len(stayed) > 0 {
+		problems = append(problems, fmt.Sprintf(
+			"column %q: with %s set the hooks install still writes %s — a half relocation: the "+
+				"install would land in the operator's real config while everything else in the run "+
+				"claimed to be isolated", row.Adapter, set, strings.Join(stayed, ", ")))
+	}
+	// Each variable alone: a daemon-read one must move something, a
+	// driver-only one must move nothing.
+	for _, v := range row.Vars {
+		alone, err := probe([]string{v.Name})
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("column %q: resolving its paths with only %s set: %v", row.Adapter, v.Name, err))
+			continue
+		}
+		switch moved := movesAny(alone); {
+		case !v.DriverOnly && !moved:
+			problems = append(problems, fmt.Sprintf(
+				"column %q names %s as a variable the daemon reads, but setting it alone moves nothing "+
+					"the daemon resolves — mark it %s if only the driver reads it, or drop it",
+				row.Adapter, v.Name, driverOnlySuffix))
+		case v.DriverOnly && moved:
+			problems = append(problems, fmt.Sprintf(
+				"column %q marks %s%s, but the daemon reads it: setting it alone moved %s",
+				row.Adapter, v.Name, driverOnlySuffix,
+				strings.Join(append(inside(alone.Home, alone.Sessions), inside(alone.Home, alone.Hooks)...), ", ")))
+		}
+	}
+	return problems
+}
+
+func movesAny(r Resolved) bool {
+	return len(inside(r.Home, r.Sessions)) > 0 || len(inside(r.Home, r.Hooks)) > 0
+}
+
+// inside and outside split paths by whether they live under home.
+func inside(home string, paths []string) []string  { return splitUnder(home, paths, true) }
+func outside(home string, paths []string) []string { return splitUnder(home, paths, false) }
+
+func splitUnder(home string, paths []string, want bool) []string {
+	var out []string
+	for _, p := range paths {
+		under := home != "" && (p == home || strings.HasPrefix(p, home+string(filepath.Separator)))
+		if under == want {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // SourceVariantCoverage reports every disagreement between agent.Source's
@@ -756,4 +975,79 @@ func goSourcesIn(dir string) (map[string]string, error) {
 		files[e.Name()] = string(b)
 	}
 	return files, nil
+}
+
+// OpenCodeAdapterDir is the opencode adapter package, relative to the repo
+// root, whose production sources must never name the 2.x service's
+// service.json (see ServiceSecretFile).
+const OpenCodeAdapterDir = "core/adapters/inbound/agents/opencode"
+
+// ServiceSecretFile is the file the opencode 2.x service writes under
+// $XDG_STATE_HOME/opencode/: its pid, its URL — and its password. The
+// opencode-v2 rig's DRIVER reads it, because it is the only way to
+// authenticate to the service's API. The DAEMON must never open it: no
+// consent covers reading a credential, and pid.go's servicePIDFor finds the
+// service from its argv instead, saying so in a comment (#2109). This
+// constant and SecretFileLiterals are the tripwire that turns that comment
+// into a check.
+const ServiceSecretFile = "service.json"
+
+// LiteralHit is one string literal naming a forbidden file.
+type LiteralHit struct {
+	File  string
+	Line  int
+	Value string
+}
+
+// SecretFileLiterals returns every string literal in the PRODUCTION sources
+// among files (filename → source, the shape ScanBeaconPackage takes) whose
+// value contains needle. Comments do not count — pid.go explains in one why
+// the file is never read — and neither do _test.go files, which may build a
+// fixture by that name. It refuses rather than reporting "none" when there is
+// no production source to read: an empty scan and a clean one must not look
+// alike.
+func SecretFileLiterals(files map[string]string, needle string) ([]LiteralHit, error) {
+	prod := productionSources(files)
+	if len(prod) == 0 {
+		return nil, fmt.Errorf("no production Go source to scan — the scan is broken, not the package")
+	}
+	fset := token.NewFileSet()
+	var hits []LiteralHit
+	for name, src := range prod {
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			v, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				v = lit.Value
+			}
+			if strings.Contains(v, needle) {
+				hits = append(hits, LiteralHit{File: name, Line: fset.Position(lit.Pos()).Line, Value: v})
+			}
+			return true
+		})
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].File != hits[j].File {
+			return hits[i].File < hits[j].File
+		}
+		return hits[i].Line < hits[j].Line
+	})
+	return hits, nil
+}
+
+// OpenCodeServiceSecretLiterals is SecretFileLiterals over the real opencode
+// adapter package.
+func OpenCodeServiceSecretLiterals(repoRoot string) ([]LiteralHit, error) {
+	files, err := goSourcesIn(filepath.Join(repoRoot, OpenCodeAdapterDir))
+	if err != nil {
+		return nil, err
+	}
+	return SecretFileLiterals(files, ServiceSecretFile)
 }

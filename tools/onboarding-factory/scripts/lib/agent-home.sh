@@ -41,9 +41,20 @@
 #   source "$SCRIPT_DIR/lib/agent-home.sh"
 #   agent_home_isolate "$ADAPTER" "$STAGING/agent-home" || exit 1
 
-# agent_home_table prints the declaration, one row per adapter:
+# agent_home_table prints the declaration, one row per column:
 #
-#   <adapter> <ENV_VAR> <policy>
+#   <column> <VAR>[,<VAR>[:driver]]... <policy>
+#
+# <column> is the replaydata/agents/<slug> directory the rig records into
+# (the daemon adapter behind it is shard.DaemonAdapterForSlug's — the
+# opencode-v2 column records the opencode adapter, #2109). Most rows name one
+# variable. A row whose agent splits its home across several names all of
+# them, and agent_home_isolate exports all or none: a partially set row is the
+# half-relocated shape — daemon on one home, agent on another — and is a hard
+# failure. `:driver` marks a variable only the DRIVER reads (opencode-v2's
+# XDG_STATE_HOME, where the 2.x service writes the service.json the driver
+# authenticates with): it is exported like the rest, and righome's relocation
+# test demands that the daemon NOT read it rather than that it does.
 #
 # It is a heredoc rather than an array because macOS ships bash 3.2, where
 # `declare -A` is a hard runtime error (run-cell-multi.sh says the same at its
@@ -153,6 +164,17 @@
 #                  one. Defaulting it would also change the recording conditions
 #                  of all 28 existing kiro-cli recordings at once.
 #
+#   opencode-v2 OPT-IN, and the one multi-variable row (#2109). The column
+#              records OpenCode 2.x through a running `serve --service` the rig
+#              never starts, so the three values must be the SERVICE'S OWN —
+#              the driver reads the service's environment and refuses on any
+#              difference. XDG_CONFIG_HOME moves the plugin irrlicht installs,
+#              XDG_DATA_HOME the store the daemon watches (StorePath since
+#              #2106), XDG_STATE_HOME (driver-only) the service.json. HOME is
+#              deliberately NOT exported: a sandbox HOME would move every other
+#              adapter, and the Go build and module caches, with it.
+#              replaydata/agents/opencode-v2/prerequisites.md names the values.
+#
 #   hermes     OPT-IN, for kiro-cli's reason in a stronger form. HERMES_HOME is
 #              the one variable that moves EVERYTHING — config.yaml, the
 #              shell-hook allowlist and state.db all hang off it, and the
@@ -171,7 +193,8 @@
 #            an implicit read of their real home, and it cannot be tested here
 #            without a live CLI to prove the seeded home actually boots.
 #
-# NOT IN THE TABLE, and why — both are structural, neither is a to-do:
+# NOT IN THE TABLE, and why — the first two are structural, neither is a to-do;
+# the third is a choice:
 #
 #   claudecode   HALF-relocatable, which is worse than not at all. Its
 #                transcripts follow CLAUDE_CONFIG_DIR
@@ -186,17 +209,15 @@
 #                os.Getenv anywhere in core/adapters/inbound/agents/geminicli.
 #                Its hook recordings can only run against the real home, with
 #                the managed-file snapshot as the whole of the protection.
-#   opencode     SPLIT ACROSS TWO XDG VARIABLES, which a one-variable row
-#                cannot express. opencode resolves its config dir — where
-#                irrlicht installs its plugin — from $XDG_CONFIG_HOME, and its
-#                DATA dir — the SQLite store the daemon watches — from
-#                $XDG_DATA_HOME. A row naming the first relocates the install
-#                while the store stays real (claudecode's problem in mirror
-#                image); a row naming the second relocates the store while the
-#                install stays real, the same shape the other way round.
-#                irrlicht follows both variables (opencodeConfigDir; StorePath
-#                since #2106), so closing it needs only a two-variable row
-#                shape here (#1719).
+#   opencode     NOT IN THE TABLE BY CHOICE, unlike the two above. opencode
+#                splits its home across two XDG variables — the config dir
+#                (the plugin irrlicht installs) from $XDG_CONFIG_HOME, the data
+#                dir (the store the daemon watches) from $XDG_DATA_HOME — and
+#                since #2109 a row can name both: opencode-v2 above is that
+#                row, for the same adapter. The 1.x column's driver launches
+#                the operator's own opencode against their real XDG tree and
+#                nothing has needed it isolated; a row for it is a driver
+#                change, not a table one.
 #
 # Those three are named in righome.Unisolatable with the same reasons, and the
 # tripwire fails if a hooks-declaring adapter is in neither place.
@@ -208,6 +229,7 @@ kiro-cli KIRO_HOME optin
 mistral-vibe VIBE_HOME optin
 pi PI_CODING_AGENT_DIR optin
 hermes HERMES_HOME optin
+opencode-v2 XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver optin
 TABLE
   return 0
 }
@@ -220,13 +242,35 @@ agent_home_field() {
   return 0
 }
 
-# agent_home_var <adapter> prints the env var that relocates the adapter's home,
-# or nothing when it has no row.
+# agent_home_var <adapter> prints the row's variable FIELD as the table spells
+# it — one name for a one-variable row, the comma list (markers included) for
+# a multi-variable one — or nothing when it has no row. Callers that need the
+# names read agent_home_vars / agent_home_daemon_vars instead.
 agent_home_var() {
   local adapter="${1:-}"
   agent_home_field "$adapter" 2
   return 0
 }
+
+# agent_home_row_vars <adapter> <all|daemon|driver> prints the row's variables
+# of that kind, one per line, the `:driver` marker stripped: every one, the
+# unmarked ones the DAEMON reads, or the `:driver` ones only the driver reads.
+agent_home_row_vars() {
+  local adapter="${1:-}" kind="${2:-all}"
+  agent_home_var "$adapter" | tr ',' '\n' | awk -v k="$kind" '
+    $0 == "" { next }
+    { drv = sub(/:driver$/, "") }
+    k == "all" || (k == "daemon" && !drv) || (k == "driver" && drv) { print }'
+  return 0
+}
+
+# agent_home_vars <adapter> prints every variable the row exports.
+agent_home_vars() { agent_home_row_vars "${1:-}" all; return 0; }
+
+# agent_home_daemon_vars <adapter> prints the variables the DAEMON reads — the
+# row's unmarked ones — one per line. These are the homes a hook install lands
+# under, which is what lib/hook-install-wait.sh polls.
+agent_home_daemon_vars() { agent_home_row_vars "${1:-}" daemon; return 0; }
 
 # agent_home_policy <adapter> prints "default" or "optin", or nothing.
 agent_home_policy() {
@@ -251,53 +295,83 @@ agent_home_policy() {
 # daemon/CLI disagreement in a different disguise (#1388 recorded it for codex).
 agent_home_isolate() {
   local adapter="${1:-}" staging_default="${2:-}"
-  local var policy current
+  local field policy current var vars="" set_vars="" unset_vars="" report=""
 
   if [[ -z "$adapter" ]]; then
     echo "agent-home: usage: agent_home_isolate <adapter> <staging-default-dir>" >&2
     return 1
   fi
 
-  var="$(agent_home_var "$adapter")"
+  field="$(agent_home_var "$adapter")"
   policy="$(agent_home_policy "$adapter")"
 
-  if [[ -z "$var" ]]; then
+  if [[ -z "$field" ]]; then
     echo "agent-home: $adapter — no home override is wired (lib/agent-home.sh); the daemon and the CLI both use the real \$HOME"
     return 0
   fi
 
+  vars="$(agent_home_vars "$adapter")"
   # Indirect expansion rather than `${!var}` gymnastics at every use site; bash
-  # 3.2 supports it and it keeps the value read in one place.
-  current="${!var:-}"
+  # 3.2 supports it and it keeps each value read in one place.
+  while IFS= read -r var; do
+    [[ -n "$var" ]] || continue
+    if [[ -n "${!var:-}" ]]; then set_vars+="${set_vars:+ }$var"; else unset_vars+="${unset_vars:+ }$var"; fi
+  done <<< "$vars"
 
-  if [[ -z "$current" && "$policy" == "default" ]]; then
+  if [[ -n "$unset_vars" && "$policy" == "default" ]]; then
     if [[ -z "$staging_default" ]]; then
       echo "agent-home: $adapter declares policy 'default' but no staging directory was passed" >&2
       return 1
     fi
-    current="$staging_default"
+    # A 'default' row names ONE variable (righome.Table refuses any other), so
+    # the staging default stands for exactly that one.
+    printf -v "$unset_vars" '%s' "$staging_default"
+    set_vars="$unset_vars"; unset_vars=""
   fi
 
-  if [[ -z "$current" ]]; then
-    echo "agent-home: $adapter — NOT isolated; export $var=<absolute path> to keep this run off the real home"
+  if [[ -z "$set_vars" ]]; then
+    echo "agent-home: $adapter — NOT isolated; export ${field//,/ and } (absolute paths) to keep this run off the real home"
     return 0
   fi
 
-  if [[ "$current" != /* ]]; then
-    echo "agent-home: $var must be absolute (got '$current')" >&2
-    echo "            the daemon resolves it through agentpaths.FromEnv, which IGNORES a" >&2
-    echo "            relative value and falls back to \$HOME — so the daemon and the agent" >&2
-    echo "            CLI would watch and write two different homes, and the fixture would" >&2
-    echo "            come back empty with nothing saying why" >&2
+  # A row is all or nothing. Half of a multi-variable row set is the
+  # half-relocated shape this table exists to rule out — for opencode-v2,
+  # XDG_CONFIG_HOME alone would install the plugin into the scratch config
+  # while the daemon watched the operator's real store.
+  if [[ -n "$unset_vars" ]]; then
+    echo "agent-home: $adapter — HALF-relocated: $set_vars set but $unset_vars not; a row is exported" >&2
+    echo "            all or nothing, because a partial one points the daemon at one home and" >&2
+    echo "            the agent at another, and the fixture comes back with nothing saying why" >&2
     return 1
   fi
 
-  if ! mkdir -p "$current"; then
-    echo "agent-home: cannot create $var=$current" >&2
-    return 1
-  fi
+  while IFS= read -r var; do
+    [[ -n "$var" ]] || continue
+    current="${!var:-}"
+    if [[ "$current" != /* ]]; then
+      echo "agent-home: $var must be absolute (got '$current')" >&2
+      echo "            the daemon resolves it through agentpaths.FromEnv, which IGNORES a" >&2
+      echo "            relative value and falls back to \$HOME — so the daemon and the agent" >&2
+      echo "            CLI would watch and write two different homes, and the fixture would" >&2
+      echo "            come back empty with nothing saying why" >&2
+      return 1
+    fi
+  done <<< "$vars"
 
-  export "$var=$current"
-  echo "agent-home: $adapter — $var=$current (daemon + driver share this home)"
+  while IFS= read -r var; do
+    [[ -n "$var" ]] || continue
+    current="${!var:-}"
+    if ! mkdir -p "$current"; then
+      echo "agent-home: cannot create $var=$current" >&2
+      return 1
+    fi
+    export "$var=$current"
+    report+="${report:+, }$var=$current"
+  done <<< "$vars"
+  if [[ "$field" != *,* ]]; then
+    echo "agent-home: $adapter — $report (daemon + driver share this home)"
+  else
+    echo "agent-home: $adapter — $report (daemon + driver share these homes; driver-only: $(agent_home_row_vars "$adapter" driver | tr '\n' ' ' | sed 's/ $//'))"
+  fi
   return 0
 }

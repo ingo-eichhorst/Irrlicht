@@ -202,5 +202,8 @@ CLEAN
 === driver/opencode ===
 CLEAN
 
+=== driver/opencode-v2 ===
+CLEAN
+
 === driver/pi ===
 CLEAN

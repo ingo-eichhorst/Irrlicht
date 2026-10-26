@@ -31,6 +31,16 @@ func TestHookCheckDeclaresAndHasEvent(t *testing.T) {
 	write(t, othersHook, `{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"s","adapter":"claudecode"}`+"\n"+
 		`{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"s","hook_name":"Stop"}`+"\n")
 
+	// #2109: an opencode-v2 recording's events are tagged with the DAEMON
+	// adapter, "opencode", while the column is "opencode-v2". Both halves of
+	// the check must reach through the column → adapter map, or a hookless
+	// opencode-v2 recording promotes without the question being asked.
+	v2WithHook := filepath.Join(root, "v2-with-hook", "events.jsonl")
+	write(t, v2WithHook, `{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"ses_a","adapter":"opencode"}`+"\n"+
+		`{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"ses_a","hook_name":"PermissionRequest"}`+"\n")
+	v2NoHook := filepath.Join(root, "v2-no-hook", "events.jsonl")
+	write(t, v2NoHook, `{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"ses_a","adapter":"opencode"}`+"\n")
+
 	cases := []struct {
 		name         string
 		agent        string
@@ -39,6 +49,8 @@ func TestHookCheckDeclaresAndHasEvent(t *testing.T) {
 		wantHasHook  bool
 	}{
 		{"declares hooks, has one", "codex", withHook, true, true},
+		{"opencode-v2 column: declares hooks, has one", "opencode-v2", v2WithHook, true, true},
+		{"opencode-v2 column: declares hooks, has none — promote must ask", "opencode-v2", v2NoHook, true, false},
 		{"declares hooks, has none — the GAP promote must ask about", "codex", noHook, true, false},
 		{"declares hooks, hook belongs to a co-resident adapter", "codex", othersHook, true, false},
 		{"declares no hooks, has none", "aider", noHook, false, false},

@@ -238,7 +238,10 @@ func TestResolveParser_mapsSlugToCanonical(t *testing.T) {
 		"pi":         "pi",
 		"aider":      "aider",
 		"opencode":   "opencode",
-		"unknown":    "claude-code", // fallback
+		// #2109: columns whose directory is not their adapter's name.
+		"opencode-v2":      "opencode",
+		"deepseek-harness": "dsh",
+		"unknown":          "claude-code", // fallback
 	}
 	for slug, wantCanonical := range cases {
 		got, parser := resolveParser(slug)

@@ -41,6 +41,10 @@
 #   check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" ["$PERM_JSON"] || exit 1  # attach: daemon has been up for a while, Start() is long done
 #   wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1        # spawn: daemon just started, Start() may still be mid-flight
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=adapter-slug.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapter-slug.sh"
+
 # check_unapplied_grants <bind> <adapter> [<perm_json>] queries the daemon's
 # permission snapshot ONCE and refuses (prints why, returns 1) if IT names an
 # unapplied grant for adapter. A daemon too old to expose the field, or an
@@ -72,7 +76,10 @@ check_unapplied_grants() {
   # annotation only suppresses the line it sits on, and Sonar's taint tracking
   # carries S5332 from the curl above into every reader of $perm_json.
   local filter='[.unapplied_grants // [] | .[] | select(.agent == $a) | "\(.agent)/\(.key): \(.reason)"] | join("; ")'
-  unapplied="$(jq -r --arg a "$adapter" "$filter" <<<"$perm_json" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
+  # .agent is the daemon's agent.Identity.Name, never a column slug — matching
+  # the slug finds nothing for claudecode, deepseek-harness or opencode-v2 and
+  # passes the very refusal this check exists to catch (#2109).
+  unapplied="$(jq -r --arg a "$(adapter_slug_to_daemon_name "$adapter")" "$filter" <<<"$perm_json" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
   [[ -n "$unapplied" ]] || return 0
   echo "unapplied-grants-check: daemon at $bind has grants that were NOT applied for $adapter" >&2 # NOSONAR (shell:S5332) — names the loopback daemon above
   echo "unapplied-grants-check:   $unapplied" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above

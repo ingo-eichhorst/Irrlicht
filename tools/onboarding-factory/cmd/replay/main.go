@@ -69,6 +69,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/tailer"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // allAgents lists every inbound agent adapter the replay CLI knows about.
@@ -119,55 +120,68 @@ func detectAdapter(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A fixture under replaydata/agents/<column>/ resolves through the one
+	// column → adapter map, so a column not named after its adapter needs no
+	// path literal of its own: claudecode → claude-code, deepseek-harness →
+	// dsh, and opencode-v2 (#2109), which records OpenCode 2.x through the
+	// opencode adapter. A column whose adapter has no parser here falls through
+	// to the session-root switch below and errors.
+	if col := replaydataColumn(abs); col != "" {
+		if a := shard.DaemonAdapterForSlug(col); parserFactories[a] != nil {
+			return a, nil
+		}
+	}
 	switch {
-	case strings.Contains(abs, "/.claude/projects/"),
-		strings.Contains(abs, "/replaydata/agents/claudecode/"):
+	case strings.Contains(abs, "/.claude/projects/"):
 		return claudecode.AdapterName, nil
-	case strings.Contains(abs, "/.codex/sessions/"),
-		strings.Contains(abs, "/replaydata/agents/codex/"):
+	case strings.Contains(abs, "/.codex/sessions/"):
 		return codex.AdapterName, nil
 	case strings.Contains(abs, "/.pi/agent/sessions/"),
-		strings.Contains(abs, "/.pi/sessions/"),
-		strings.Contains(abs, "/replaydata/agents/pi/"):
+		strings.Contains(abs, "/.pi/sessions/"):
 		return pi.AdapterName, nil
-	case strings.Contains(abs, "/replaydata/agents/aider/"),
-		strings.HasSuffix(abs, "/.aider.chat.history.md"):
+	case strings.HasSuffix(abs, "/.aider.chat.history.md"):
 		return aider.AdapterName, nil
-	case strings.Contains(abs, "/.local/share/opencode/"),
-		strings.Contains(abs, "/replaydata/agents/opencode/"):
+	case strings.Contains(abs, "/.local/share/opencode/"):
 		return opencode.AdapterName, nil
-	case strings.Contains(abs, "/.kiro/sessions/cli/"),
-		strings.Contains(abs, "/replaydata/agents/kiro-cli/"):
+	case strings.Contains(abs, "/.kiro/sessions/cli/"):
 		return kirocli.AdapterName, nil
 	case strings.Contains(abs, "/.gemini/antigravity-cli/"),
-		strings.Contains(abs, "/.gemini/antigravity/brain/"),
-		strings.Contains(abs, "/replaydata/agents/antigravity/"):
+		strings.Contains(abs, "/.gemini/antigravity/brain/"):
 		return antigravity.AdapterName, nil
-	case strings.Contains(abs, "/.gemini/tmp/"),
-		strings.Contains(abs, "/replaydata/agents/gemini-cli/"):
+	case strings.Contains(abs, "/.gemini/tmp/"):
 		return geminicli.AdapterName, nil
-	case strings.Contains(abs, "/.vibe/logs/session/"),
-		strings.Contains(abs, "/replaydata/agents/mistral-vibe/"):
+	case strings.Contains(abs, "/.vibe/logs/session/"):
 		return vibe.AdapterName, nil
-	case strings.Contains(abs, "/.copilot/session-state/"),
-		strings.Contains(abs, "/replaydata/agents/copilot/"):
+	case strings.Contains(abs, "/.copilot/session-state/"):
 		return copilot.AdapterName, nil
 	// Hermes' store is a single state.db under the Hermes home. The home is
-	// relocatable via HERMES_HOME, so the fixture path is the reliable
-	// discriminator and the live path matches the default location only.
-	case strings.Contains(abs, "/.hermes/state.db"),
-		strings.Contains(abs, "/replaydata/agents/hermes/"):
+	// relocatable via HERMES_HOME, so the live path matches the default
+	// location only; a fixture resolves by its column above.
+	case strings.Contains(abs, "/.hermes/state.db"):
 		return hermes.AdapterName, nil
 	// The live path is the XDG data-root default observed on disk
 	// (~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<uuid>/session.jsonl).
-	case strings.Contains(abs, "/.local/share/muse/sessions/"),
-		strings.Contains(abs, "/replaydata/agents/muse/"):
+	case strings.Contains(abs, "/.local/share/muse/sessions/"):
 		return muse.AdapterName, nil
-	case strings.Contains(abs, "/.dsh/sessions/"),
-		strings.Contains(abs, "/replaydata/agents/deepseek-harness/"):
+	case strings.Contains(abs, "/.dsh/sessions/"):
 		return dsh.AdapterName, nil
 	}
 	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse|dsh", abs)
+}
+
+// replaydataColumn returns the column slug of a path under
+// replaydata/agents/<slug>/, or "" for any other path.
+func replaydataColumn(abs string) string {
+	const marker = "/replaydata/agents/"
+	i := strings.Index(abs, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := abs[i+len(marker):]
+	if j := strings.IndexByte(rest, '/'); j > 0 {
+		return rest[:j]
+	}
+	return ""
 }
 
 // eventsSidecarExt is the legacy lifecycle-events sidecar file extension,

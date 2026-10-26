@@ -20,6 +20,7 @@
       "mistral-vibe": "2.19.0",
       "muse": "1.2.1",
       "opencode": "1.0.0",
+      "opencode-v2": "2.0.0",
       "pi": "0.70.0"
     },
     "transcript_extensions": {
@@ -28,6 +29,7 @@
       "codex": "jsonl",
       "deepseek-harness": "jsonl.zstd",
       "opencode": "jsonl",
+      "opencode-v2": "jsonl",
       "pi": "jsonl"
     }
   },

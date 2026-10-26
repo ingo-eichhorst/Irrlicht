@@ -393,6 +393,10 @@ run_gate() {
     # $1 is $STAGING. A case that wants to clobber the pid file gets its path
     # by name instead of guessing at a positional.
     printf 'PIDFILE=%s\n' "$staging/driver.pid"
+    # The stub stands in for a driver that launches tmux sessions (the fake
+    # tmux server lists them), so it must read as one to run-cell.sh's
+    # driver_launches_tmux exemption (#2109). The launch is never executed.
+    echo 'false && tmux new-session -d -s "stub-$$" true'
     printf '%s\n' "$CASE_DRIVER_BODY"
     echo 'exit 0'
   } > "$dir/driver.sh"
@@ -726,6 +730,12 @@ RC="$(cat "$RIG_DIR/run-cell.sh")"
 assert_contains "run-cell.sh folds the timings into its manifest" \
   'teardown_timings_json "$DRIVE_TEARDOWN_TIMINGS"' "$RC"
 assert_contains "...under a manifest key of its own" "teardown_timings: \$teardown_timings" "$RC"
+echo "== run-cell.sh exempts a driver that invokes no tmux (#2109) =="
+# driver_launches_tmux's own cases are driver-launches-tmux_test.sh, kept apart
+# so a mutation of it need not re-run this whole file.
+assert_contains "run-cell.sh consults the exemption before asking tmux" \
+  'if [[ -n "$SCRIPT_JSON" ]] && ! driver_launches_tmux "$DRIVER"; then' "$RC"
+
 if [[ "$fails" -eq 0 ]]; then
   echo "tmux-teardown-check_test: ALL PASS"
   exit 0

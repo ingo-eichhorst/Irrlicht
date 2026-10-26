@@ -265,6 +265,11 @@ type catalogCensus struct {
 // replayed transition was a ready→working decided on no transcript evidence,
 // which the no-evidence guard now refuses (see knownZeroTransition). The same
 // census command measured it; no other field moved.
+// #2109 adds three to PairedButUngraded: the opencode-v2 column's three
+// first recordings are paired but, like every opencode recording, not
+// sidecar-drivable (no file_size on the 2.x watcher's activity), so they are
+// graded transcript-only. The same census command measured it; no other
+// field moved.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                433,
 	Zero:                      2,
@@ -272,7 +277,7 @@ var censusOfTheCommittedCatalog = catalogCensus{
 	Divergent:                 191,
 	DivergentByCountsAndKinds: 190,
 	UnpairedSidecars:          0,
-	PairedButUngraded:         88,
+	PairedButUngraded:         91,
 }
 
 // literal renders the census as the Go source to paste over the declaration
