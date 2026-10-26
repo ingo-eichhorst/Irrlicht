@@ -1935,12 +1935,20 @@ func (pm *PIDManager) reapsIdleTopLevel(snap livenessSnapshot) bool {
 	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
 		return false
 	}
-	// Don't delete sessions whose process is still alive — unless that
-	// process is a host whose life says nothing about the session's.
-	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil && !pm.idlesOnHost(snap) {
+	if pm.livePIDKeeps(snap) {
 		return false
 	}
 	return snap.sessionState == session.StateReady || snap.pid == 0
+}
+
+// livePIDKeeps reports whether snap's process is still alive and so keeps the
+// session from the idle reap — unless that process is a host whose life says
+// nothing about the session's (idlesOnHost).
+func (pm *PIDManager) livePIDKeeps(snap livenessSnapshot) bool {
+	if snap.pid <= 0 || syscall.Kill(snap.pid, 0) != nil {
+		return false
+	}
+	return !pm.idlesOnHost(snap)
 }
 
 // idlesOnHost reports whether snap's root is bound to its adapter's session

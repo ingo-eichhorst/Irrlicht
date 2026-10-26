@@ -227,8 +227,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "the ready TTL without the host rule" \
   "$PM_FILE" \
-  'if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil && !pm.idlesOnHost(snap) {' \
-  'if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {' \
+  'return !pm.idlesOnHost(snap)' \
+  'return true' \
   "$SERVICES" \
   "$TTL" \
   "ready, idle past the TTL: idle opencode root on a live pid removed = false, want true"
