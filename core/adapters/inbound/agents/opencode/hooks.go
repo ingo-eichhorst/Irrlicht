@@ -174,6 +174,12 @@ func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger)
 // per turn. It is a memory bound, not a tuning knob.
 const recentEventIDCapacity = 1024
 
+// maxEventIDLen bounds an event id the receiver will remember. opencode 2.1.4's
+// ids are 30 bytes ("evt_175fc0687002Gb1i3eKhC48Ken", from the sandbox daemon
+// log of #2108's live run); 128 leaves room for a longer scheme without letting
+// the dedupe set grow with the request body.
+const maxEventIDLen = 128
+
 // recentEventIDs is a bounded set of the event ids most recently dispatched:
 // a map for the lookup and a ring for the eviction order, behind a mutex
 // because the HTTP server runs handlers concurrently.
@@ -244,6 +250,16 @@ func serveHookRequest(target HookTarget, seen *recentEventIDs, consent hookjson.
 	if !strings.HasPrefix(sessionID, sessionIDPrefix) {
 		// Not an id this adapter could have issued — drop rather than invent a
 		// session. The store watcher covers the state regardless.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// An event id longer than any opencode issues is not one our plugin
+	// forwarded. It is dropped rather than remembered: the set below holds
+	// every id it is handed until evicted, and a caller on this
+	// unauthenticated local endpoint could otherwise park up to the body
+	// bound (1 MiB) in each of its slots.
+	if len(payload.EventID) > maxEventIDLen {
 		w.WriteHeader(http.StatusOK)
 		return
 	}

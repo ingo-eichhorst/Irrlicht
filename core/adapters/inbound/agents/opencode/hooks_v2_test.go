@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,26 @@ func TestHookReceiver_TwoXTurnEndsReleaseAndReportTurnEnd(t *testing.T) {
 				t.Errorf("transcriptPath = %q, want the watcher's key %q", stops[0].transcriptPath, want)
 			}
 		})
+	}
+}
+
+// TestHookReceiver_AnOversizedEventIDIsDropped pins the memory bound on what
+// the dedupe set may be handed: an id longer than maxEventIDLen is not one
+// opencode issues, so the payload is dropped — not dispatched, not remembered.
+func TestHookReceiver_AnOversizedEventIDIsDropped(t *testing.T) {
+	opencodeStoreRoot(t)
+	h, target := newReceiver(t)
+	huge := strings.Repeat("e", maxEventIDLen+1)
+
+	if rec := post(t, h, v2Payload(HookEventPermissionAsked, huge)); rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+
+	if n := target.totalCalls(); n != 0 {
+		t.Errorf("a payload with a %d-byte event id dispatched %d times, want 0", len(huge), n)
+	}
+	if post(t, h, v2Payload(HookEventPermissionAsked, "evt_ok")); len(target.promptCalls()) != 1 {
+		t.Error("a well-formed id after the oversized one was not dispatched")
 	}
 }
 

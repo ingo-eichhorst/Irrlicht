@@ -46,6 +46,8 @@
 #      `database` is denied, through the real declaration.
 #  22. the store reader ordering by time_updated → an imported 1.x session
 #      touched last decides the major.
+#  23. the receiver without the event-id length bound → an oversized id is
+#      dispatched and remembered.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -362,6 +364,16 @@ assert_go_test_goes_red \
   "$OPENCODE" \
   '^TestNewestObservedCLIVersion_CreationNotUpdateDecides$' \
   "after the imported 1.x session was updated last, want 2.1.4"
+
+# ── 23. the receiver without the event-id length bound ──
+assert_go_test_goes_red \
+  "serveHookRequest without maxEventIDLen" \
+  "$HOOKS" \
+  'if len(payload.EventID) > maxEventIDLen {' \
+  'if false && len(payload.EventID) > maxEventIDLen {' \
+  "$OPENCODE" \
+  '^TestHookReceiver_AnOversizedEventIDIsDropped$' \
+  "event id dispatched 1 times, want 0"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-hooks-mutations: $fails FAILED"
