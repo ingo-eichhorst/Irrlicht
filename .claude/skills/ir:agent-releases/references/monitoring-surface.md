@@ -481,7 +481,7 @@ Again the two paths order by different columns: the watcher by `time_updated`, m
 | Repeats | none; no `event_id` sent | every event arrives **once per instance**; the plugin forwards opencode's own event id as `event_id` |
 
 - **Dispatch** (`hooks.go:282-313`): `permission.asked` → `HandlePermissionPromptHook` (waiting); `permission.replied` → `ReleasePermissionPromptHold`; `session.idle` or any `session.execution.*` → release the hold, then `HandleStopHook` (an authoritative turn end). Any other name goes to `IgnoreUnknownEvent`, counted and reported once.
-- **Dedupe by `event_id`** (`hooks.go:169-212`, `:257-277`): a ring-backed set of the **1024** most recent ids. An id longer than **128** bytes is dropped, not remembered (opencode 2.1.4's are 30). It applies only when `event_id` is set, so a 1.x payload is dispatched every time. It runs **before** dispatch, so a repeated `permission.asked` arriving after its reply cannot hold the session in waiting again.
+- **Dedupe by `event_id`** (`hooks.go:169-212`, `:257-277`): a ring-backed set of the **1024** most recent ids. A payload whose `event_id` is longer than **128** bytes is dropped **whole**, with no dispatch and no dedupe entry (`hooks.go:262-265`; opencode 2.1.4's ids are 30). It applies only when `event_id` is set, so a 1.x payload is dispatched every time. It runs **before** dispatch, so a repeated `permission.asked` arriving after its reply cannot hold the session in waiting again.
 - **Why the hook matters**: a pending permission request is held in memory and **never written to the store** (`hooks.go:34-42`, read from the 1.x bundle; for 2.x, measured in #2104 item 6 and not re-derived from code here). Without `hooks` granted there is **no waiting at all**, and a turn ends only on the store's own signal.
 - **Excluded on purpose** (`hookinstaller.go:126-154`, `:196-205`): the `permission.ask` *hook*, whose output can answer the prompt; `session.status`; `tool.execute.before`/`.after`; `message.part.updated`. For 2.x also `session.execution.started`, because the store's rows already open the turn, and **`form.*`**, an unverified surface.
 - `session.execution.failed` was **not observed live**; its name was read out of the 2.1.4 bundle (`hookinstaller.go:184-189`).
@@ -524,6 +524,7 @@ Declared as `ManagedUserFile.Variants`, one `[Min, Max)` range per artifact, ins
 - **2.x:** a second `serve --service` running beside the first → client-less sessions bind to no PID (`pid.go:46-55`).
 - **2.x:** a plugin-format change, or renamed bus events → the plugin loads nothing or forwards nothing, and waiting disappears silently, because the store has none. From 3.0.0 nothing is written, by design.
 - **2.x:** `session_v2.version` no longer written → plugin selection falls back to the `opencode --version` probe.
+- **2.x:** event ids longer than 128 bytes → every 2.x hook event is dropped (`hooks.go:262-265`) → no waiting, and no hook turn end.
 
 ### 8. Antigravity (`antigravity`)
 
