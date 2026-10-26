@@ -44,9 +44,9 @@ func probeSaying(version string) []string {
 func opencodeHooksProbing(t *testing.T, probed string) agent.Permission {
 	t.Helper()
 	p := opencodeHooksAt(t, "")
-	real := realOpenCodeGate(t)
-	p.Writes.Version.Observed = real.Observed
-	p.Writes.Version.ObservedRequires = real.ObservedRequires
+	declared := realOpenCodeGate(t)
+	p.Writes.Version.Observed = declared.Observed
+	p.Writes.Version.ObservedRequires = declared.ObservedRequires
 	p.Writes.Version.Probe = probeSaying(probed)
 	return p
 }
@@ -197,13 +197,13 @@ func TestVariantGate_ObservedIsNotConsultedWithoutItsPermission(t *testing.T) {
 
 	p := opencodeHooksProbing(t, "1.19.4")
 	calls := 0
-	real := p.Writes.Version.Observed
+	storeReader := p.Writes.Version.Observed
 	p.Writes.Version.Observed = func() string {
 		calls++
-		if real == nil { // a declaration with no store reader: nothing to read
+		if storeReader == nil { // a declaration with no store reader: nothing to read
 			return ""
 		}
-		return real()
+		return storeReader()
 	}
 
 	grant(svc, p)
@@ -325,5 +325,247 @@ func TestVariantGate_ReverifyRewritesAOneXFileAfterAnUpgrade(t *testing.T) {
 	}
 	if snap := v.Snapshot(); snap.Outcomes[ReverifyRepaired] != 1 {
 		t.Errorf("outcomes = %v, want one repair — the 1.x file under a 2.x opencode is damage", snap.Outcomes)
+	}
+}
+
+// TestVariantGate_AProbeCannotLowerARefusedStoreAnswer is review finding 1's
+// red-first test. The store says the user runs 3.0.0 — or a 2.x older than the
+// 2.x artifact's floor — and the gate refuses it. The probe then runs to
+// confirm the refusal, and on a host whose brew still links 1.x it answers
+// 1.19.4 (cliprobe resolves /opt/homebrew/bin first, #2105 correction 1).
+// Taking that answer installed the 1.x plugin for a 2.x or 3.x opencode, the
+// file #2104 item 10 measured being refused on every load. A passive answer is
+// the LAST-RUN version, so it can be stale only downward; a probe naming an
+// older version is reading another install than the one that wrote the store.
+func TestVariantGate_AProbeCannotLowerARefusedStoreAnswer(t *testing.T) {
+	for _, store := range []string{"3.0.0", "2.0.5"} {
+		t.Run(store, func(t *testing.T) {
+			path := isolateOpenCodeConfig(t)
+			svc, log := newGateService()
+			p := opencodeHooksAt(t, store)
+			p.Writes.Version.Probe = probeSaying("1.19.4")
+
+			grant(svc, p)
+
+			if got := installed(t, path); got != nil {
+				t.Errorf("store %s / probe 1.19.4 installed %d bytes — the probe lowered the version "+
+					"to a major the store says is not running (errors %v)", store, len(got), log.errors)
+			}
+			if !log.errorMentioning(store) {
+				t.Errorf("no logged refusal naming the store's %s; errors were %v", store, log.errors)
+			}
+		})
+	}
+}
+
+// TestVariantGate_AProbeCanRaiseAStaleStoreAnswer is a LOCK for the direction
+// the probe exists for: the store's newest session predates an upgrade, so the
+// probe's newer answer wins — below the floor (1.10.0 → 1.19.4) and between the
+// artifacts (2.0.5 → 2.1.4).
+func TestVariantGate_AProbeCanRaiseAStaleStoreAnswer(t *testing.T) {
+	for store, c := range map[string]struct {
+		probe string
+		want  func(*testing.T) []byte
+	}{
+		"1.10.0": {"1.19.4", v1Rendering},
+		"2.0.5":  {"2.1.4", v2Rendering},
+	} {
+		t.Run(store, func(t *testing.T) {
+			want := c.want(t)
+			path := isolateOpenCodeConfig(t)
+			svc, log := newGateService()
+			p := opencodeHooksAt(t, store)
+			p.Writes.Version.Probe = probeSaying(c.probe)
+
+			grant(svc, p)
+
+			if got := installed(t, path); !bytes.Equal(got, want) {
+				t.Errorf("store %s / probe %s installed %d bytes, want %d (errors %v)",
+					store, c.probe, len(got), len(want), log.errors)
+			}
+		})
+	}
+}
+
+// verifierFor builds a #1372 loop over decl wired to svc, with opencode's hooks
+// and database permissions granted.
+func verifierFor(t *testing.T, svc *PermissionService, decl agent.Agent, log *gateLog) *HookEntryVerifier {
+	t.Helper()
+	svc.agents = []agent.Agent{decl}
+	svc.mu.Lock()
+	svc.set.Put(opencode.AdapterName, opencode.PermissionKeyHooks, permission.StateGranted)
+	svc.set.Put(opencode.AdapterName, opencode.PermissionKeyDatabase, permission.StateGranted)
+	svc.mu.Unlock()
+	return NewHookEntryVerifier(HookEntryReverifyConfig{
+		Interval:    time.Minute,
+		BackoffBase: time.Minute,
+		BackoffMax:  time.Minute,
+		Agents:      []agent.Agent{decl},
+		Granted:     svc.Granted,
+		Repair:      svc.RepairGrantedHookInstall,
+		Log:         log,
+	})
+}
+
+// opencodeAgentObserving is opencode's registration with its hooks permission's
+// version source replaced by *observed (read at every resolution) and probe.
+func opencodeAgentObserving(t *testing.T, observed *string, probe []string) agent.Agent {
+	t.Helper()
+	decl := opencode.Agent()
+	for i := range decl.Permissions {
+		if decl.Permissions[i].Key == opencode.PermissionKeyHooks {
+			p := opencodeHooksAt(t, "")
+			p.Writes.Version.Observed = func() string { return *observed }
+			p.Writes.Version.Probe = probe
+			decl.Permissions[i] = p
+		}
+	}
+	return decl
+}
+
+// TestVariantGate_AnUnknownVersionKeepsACurrentInstall is review finding 2's
+// red-first test. The 2.x plugin is installed and current; for one pass the
+// version cannot be read (a probe that cannot run under launchd's PATH, a store
+// read that times out). Reporting that as damage ran a repair into the
+// unknown-version refusal and left it as the permission's effect error — the
+// wizard's "granted but NOT applied" and a disarmed #1368 watchdog — for an
+// install that is present and working, until a restart or a re-grant.
+func TestVariantGate_AnUnknownVersionKeepsACurrentInstall(t *testing.T) {
+	want := v2Rendering(t)
+	path := isolateOpenCodeConfig(t)
+	if _, err := opencode.EnsureHooksInstalledV2(); err != nil {
+		t.Fatalf("seed the 2.x plugin: %v", err)
+	}
+	observed := ""
+	decl := opencodeAgentObserving(t, &observed, probeSaying(""))
+	svc, log := newGateService()
+	v := verifierFor(t, svc, decl, log)
+
+	v.RunPassForTest(time.Unix(1_800_000_000, 0))
+	observed = "2.1.4"
+	v.RunPassForTest(time.Unix(1_800_000_000, 0).Add(2 * time.Hour))
+
+	if got := installed(t, path); !bytes.Equal(got, want) {
+		t.Errorf("the current 2.x plugin changed across an unknown-version pass (%d bytes, want %d)", len(got), len(want))
+	}
+	svc.mu.Lock()
+	reason := svc.effectErrs[effectKey(opencode.AdapterName, opencode.PermissionKeyHooks)]
+	svc.mu.Unlock()
+	if reason != "" || !svc.HookChannelReady(opencode.AdapterName) {
+		t.Errorf("after one unknown-version pass the permission reads effect error %q, channel ready %v — "+
+			"a present, current install is reported not applied", reason, svc.HookChannelReady(opencode.AdapterName))
+	}
+	if snap := v.Snapshot(); snap.Outcomes[ReverifyRepairFailed] != 0 || snap.Outcomes[ReverifyRepaired] != 0 {
+		t.Errorf("outcomes = %v, want no repair at all — nothing was damaged", snap.Outcomes)
+	}
+}
+
+// TestVariantGate_ReverifyAtTheNextMajorRemovesOnceThenRests is red-first, for
+// #2105's residue on the variant path: the installed opencode is now 3.0.0,
+// above every artifact, and the 2.x plugin is still there. One pass removes it
+// (a ceiling refusal, recorded once as the failed repair it is), and the next
+// pass finds nothing left to change. Before the review fix every later pass
+// read every event Missing and ran the same refusal again on each back-off.
+func TestVariantGate_ReverifyAtTheNextMajorRemovesOnceThenRests(t *testing.T) {
+	path := isolateOpenCodeConfig(t)
+	if _, err := opencode.EnsureHooksInstalledV2(); err != nil {
+		t.Fatalf("seed the 2.x plugin: %v", err)
+	}
+	observed := "3.0.0"
+	decl := opencodeAgentObserving(t, &observed, nil)
+	svc, log := newGateService()
+	v := verifierFor(t, svc, decl, log)
+
+	v.RunPassForTest(time.Unix(1_800_000_000, 0))
+	if got := installed(t, path); got != nil {
+		t.Fatalf("the 2.x plugin survived a pass under opencode 3.0.0 (%d bytes; errors %v)", len(got), log.errors)
+	}
+	v.RunPassForTest(time.Unix(1_800_000_000, 0).Add(3 * time.Hour))
+
+	snap := v.Snapshot()
+	if snap.Outcomes[ReverifyRepairFailed] != 1 || snap.Outcomes[ReverifyIntact] != 1 {
+		t.Errorf("outcomes = %v, want the removal once (repair_failed:1, its refusal recorded) and then "+
+			"intact:1 — with the file gone a repair can change nothing", snap.Outcomes)
+	}
+}
+
+// TestVariantGate_ReverifyBelowTheFloorLeavesTheFileAlone is red-first: below
+// every artifact's floor a refusal removes nothing (#2105), so a repair could
+// only record that refusal again on every back-off. The pass leaves the file
+// and attempts no repair.
+func TestVariantGate_ReverifyBelowTheFloorLeavesTheFileAlone(t *testing.T) {
+	want := v1Rendering(t)
+	path := isolateOpenCodeConfig(t)
+	if _, err := opencode.EnsureHooksInstalled(); err != nil {
+		t.Fatalf("seed the 1.x plugin: %v", err)
+	}
+	observed := "1.10.0"
+	decl := opencodeAgentObserving(t, &observed, nil)
+	svc, log := newGateService()
+	v := verifierFor(t, svc, decl, log)
+
+	v.RunPassForTest(time.Unix(1_800_000_000, 0))
+
+	if got := installed(t, path); !bytes.Equal(got, want) {
+		t.Errorf("a pass under opencode 1.10.0 changed the plugin (%d bytes, want %d)", len(got), len(want))
+	}
+	if snap := v.Snapshot(); snap.Outcomes[ReverifyRepairFailed] != 0 || snap.Outcomes[ReverifyRepaired] != 0 {
+		t.Errorf("outcomes = %v, want no repair — below the floor a repair can only record its refusal again (errors %v)",
+			snap.Outcomes, log.errors)
+	}
+}
+
+// TestVariantGate_AnUnknownVersionAtStartKeepsACurrentInstall is the apply-time
+// half of the same finding: PermissionService.Start re-runs the granted effect
+// while the version cannot be read, and the 2.x plugin on disk is current.
+// Refusing recorded an effect error no later intact pass clears; keeping the
+// installed artifact writes nothing and records nothing.
+func TestVariantGate_AnUnknownVersionAtStartKeepsACurrentInstall(t *testing.T) {
+	want := v2Rendering(t)
+	path := isolateOpenCodeConfig(t)
+	if _, err := opencode.EnsureHooksInstalledV2(); err != nil {
+		t.Fatalf("seed the 2.x plugin: %v", err)
+	}
+	svc, log := newGateService()
+	p := opencodeHooksAt(t, "")
+	p.Writes.Version.Probe = probeSaying("")
+
+	grant(svc, p)
+
+	if got := installed(t, path); !bytes.Equal(got, want) {
+		t.Errorf("the current 2.x plugin changed under an unknown version (%d bytes, want %d)", len(got), len(want))
+	}
+	svc.mu.Lock()
+	reason := svc.effectErrs[effectKey("test-agent", "hooks")]
+	svc.mu.Unlock()
+	if reason != "" {
+		t.Errorf("EffectError = %q with a current install on disk, want none (errors %v)", reason, log.errors)
+	}
+}
+
+// TestVariantGate_AnUpgradeIsNotReportedAsTampering is review finding 3's
+// red-first test. The #1372 rewrite of a current 1.x plugin after the installed
+// opencode became 2.x is the designed upgrade path, not damage: it must not be
+// logged as "Something outside irrlicht rewrote that file".
+func TestVariantGate_AnUpgradeIsNotReportedAsTampering(t *testing.T) {
+	isolateOpenCodeConfig(t)
+	if _, err := opencode.EnsureHooksInstalled(); err != nil {
+		t.Fatalf("seed the 1.x plugin: %v", err)
+	}
+	observed := "2.1.4"
+	decl := opencodeAgentObserving(t, &observed, nil)
+	svc, log := newGateService()
+	v := verifierFor(t, svc, decl, log)
+
+	v.RunPassForTest(time.Unix(1_800_000_000, 0))
+
+	if log.errorMentioning("Something outside irrlicht rewrote that file") {
+		t.Errorf("the 1.x → 2.x rewrite was logged as tampering: %v", log.errors)
+	}
+	log.mu.Lock()
+	infos := strings.Join(log.infos, "\n")
+	log.mu.Unlock()
+	if !strings.Contains(infos, "2.1.4") {
+		t.Errorf("no info line names the version the artifact was rewritten for; infos were %s", infos)
 	}
 }

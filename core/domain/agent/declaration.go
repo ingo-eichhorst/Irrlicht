@@ -561,21 +561,9 @@ func (f *ManagedUserFile) SelectVariant(installed string) (*HookVariant, Version
 				"the other major rejects",
 			unreadable(installed), len(f.Variants), f.variantRanges())
 	}
-	var lower, upper *HookVariant
-	for i := range f.Variants {
-		v := &f.Variants[i]
-		switch bound, _ := v.gate().Check(installed); bound {
-		case WithinBounds:
-			return v, WithinBounds, ""
-		case AtOrAboveCeiling:
-			if lower == nil || versionBelow(lower.Max, v.Max) {
-				lower = v
-			}
-		case BelowFloor:
-			if upper == nil || versionBelow(v.Min, upper.Min) {
-				upper = v
-			}
-		}
+	inside, lower, upper := f.placeAmongVariants(installed)
+	if inside != nil {
+		return inside, WithinBounds, ""
 	}
 	if lower == nil {
 		return nil, BelowFloor, fmt.Sprintf(
@@ -591,6 +579,28 @@ func (f *ManagedUserFile) SelectVariant(installed string) (*HookVariant, Version
 		"installed CLI is %s, which is at or above %s, the ceiling of the hook artifact for %s%s; "+
 			"nothing was written",
 		installed, lower.Max, rangeOf(lower), next)
+}
+
+// placeAmongVariants locates installed among the variants: the one whose range
+// holds it, or else its neighbours — the variant with the highest ceiling at or
+// below it (lower) and the one with the lowest floor above it (upper).
+func (f *ManagedUserFile) placeAmongVariants(installed string) (inside, lower, upper *HookVariant) {
+	for i := range f.Variants {
+		v := &f.Variants[i]
+		switch bound, _ := v.gate().Check(installed); bound {
+		case WithinBounds:
+			return v, nil, nil
+		case AtOrAboveCeiling:
+			if lower == nil || versionBelow(lower.Max, v.Max) {
+				lower = v
+			}
+		case BelowFloor:
+			if upper == nil || versionBelow(v.Min, upper.Min) {
+				upper = v
+			}
+		}
+	}
+	return nil, lower, upper
 }
 
 // variantRanges renders every variant's range, e.g. "1.14.50 up to 2.0.0,

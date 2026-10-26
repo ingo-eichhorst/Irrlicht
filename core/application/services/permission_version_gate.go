@@ -49,10 +49,74 @@ func (s *PermissionService) hookVersionRefusal(agentName string, p agent.Permiss
 	}
 
 	variant, bound, why := p.Writes.SelectVariant(installed)
+	if bound == agent.VersionUnknown {
+		// An unknown version changes nothing that is already right: a
+		// variant's artifact that is installed and current is kept — its
+		// Apply finds the file current and writes nothing — rather than
+		// refused into an effect error no later intact pass would clear.
+		if kept := currentVariant(p.Writes); kept != nil {
+			s.log.LogInfo("permissions", "", fmt.Sprintf(
+				"%s: the installed CLI's version is unknown; keeping the hook artifact for %s, which is installed and current",
+				p.Key, variantRange(kept)))
+			return kept, agent.WithinBounds, nil
+		}
+	}
 	if bound == agent.WithinBounds {
 		return variant, bound, nil
 	}
 	return nil, bound, errors.New(why)
+}
+
+// currentVariant returns the variant whose artifact is installed and current
+// — its own Verify reads intact — or nil. Read-only: Verify writes nothing.
+func currentVariant(w *agent.ManagedUserFile) *agent.HookVariant {
+	for i := range w.Variants {
+		v := &w.Variants[i]
+		if v.Verify == nil {
+			continue
+		}
+		if status, err := v.Verify(); err == nil && status.Intact() {
+			return v
+		}
+	}
+	return nil
+}
+
+// oursPresent reports whether some variant reads a file of ours at the path,
+// current or not: its Verify reports no event Missing (Missing is what an
+// absent or foreign file reads as; Stale is ours, not current).
+func oursPresent(w *agent.ManagedUserFile) bool {
+	for i := range w.Variants {
+		v := &w.Variants[i]
+		if v.Verify == nil {
+			continue
+		}
+		if status, err := v.Verify(); err == nil && len(status.Missing) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// variantEvents is every variant's events, each once, in declaration order —
+// what a variant target reports when no single variant's list applies.
+func variantEvents(w *agent.ManagedUserFile) []string {
+	var events []string
+	seen := map[string]bool{}
+	for _, v := range w.Variants {
+		for _, e := range v.Events {
+			if !seen[e] {
+				seen[e] = true
+				events = append(events, e)
+			}
+		}
+	}
+	return events
+}
+
+// variantRange names a variant by its range for a log line.
+func variantRange(v *agent.HookVariant) string {
+	return v.Min + " up to " + v.Max
 }
 
 // versionGated reports whether a managed file's install depends on the
@@ -95,7 +159,24 @@ func resolveInstalledVersion(ctx context.Context, granted func(agentName, key st
 	if err != nil {
 		return installed, err
 	}
+	if len(w.Variants) > 0 && versionOlder(probed, installed) {
+		// A variant declaration takes the probe only UPWARD. The passive
+		// answer is the version that last wrote the user's own store, so it
+		// can be stale only downward (an upgrade since); a probe naming an
+		// OLDER version is reading another install — cliprobe resolves
+		// /opt/homebrew/bin first (#2105 correction 1), where a brew 1.x can
+		// sit beside an npm 2.x. Taking it would write the artifact the CLI
+		// that wrote the store rejects (#2104 item 10).
+		return installed, nil
+	}
 	return probed, nil
+}
+
+// versionOlder reports a < b for two parseable versions, false when either
+// does not parse.
+func versionOlder(a, b string) bool {
+	ok, known := cliversion.AtLeast(a, b)
+	return known && !ok
 }
 
 // observedAllowed reports whether a passive version source may be read: it
@@ -169,16 +250,17 @@ func (s *PermissionService) removeAfterCeilingRefusal(e pendingEffect, refused e
 //     would otherwise be refused on a version they no longer run, with nothing
 //     installed and the permission still showing green. A false refusal is the
 //     one direction this gate must never produce quietly, so it is worth a
-//     process to be sure. At or above a ceiling (#2105), or between two
-//     variants (#2108), the same probe is what catches a user who downgraded
-//     back into a supported range.
+//     process to be sure. For a single artifact at or above a ceiling (#2105)
+//     the same probe catches a user who downgraded back below it.
 //
-// So for a variant declaration a passive answer that selects a variant WINS
-// over the probe, which is never run: opencode's store reading 2.1.4 selects
+// For a variant declaration (#2108) a passive answer that parses and selects
+// an artifact is never confirmed by a probe, and a refused one is confirmed
+// only UPWARD (resolveInstalledVersion): opencode's store reading 2.1.4 selects
 // the 2.x artifact even where cliprobe would resolve a brew 1.19.4 first
-// (#2105 correction 1). That is the direction #2104 item 3 measured to be
-// right — opencode 1.x hangs on a store 2.x has migrated, so a store that
-// 2.x wrote is not one a 1.x CLI is running against.
+// (#2105 correction 1), and a store reading 3.0.0 is not lowered to it. That
+// is the direction #2104 item 3 makes safe — opencode 1.x hangs on a store 2.x
+// has migrated, so a store a newer major wrote is not one an older CLI is
+// running against.
 func shouldConfirmByProbe(w *agent.ManagedUserFile, installed string) bool {
 	if len(w.Version.Probe) == 0 {
 		return false

@@ -391,8 +391,10 @@ below.
   runs the SELECTED variant's `Apply` (`ManagedUserFile.SelectVariant`); the
   #1372 loop verifies against the same selection, so an upgrade under a running
   daemon is a rewrite in place within one pass. There, an unknown version
-  writes nothing (`VersionUnknown`), because guessing the major writes exactly
-  the file the other one rejects. The gate is then the variants' envelope, and
+  writes nothing (`VersionUnknown`) — a variant's artifact already installed
+  and current is kept — because guessing the major writes exactly the file
+  the other one rejects, and a probe may raise a store's answer but never
+  lower it. The gate is then the variants' envelope, and
   the contract grades each variant like a single gate — its floor covers its
   own events, it is selected across its range and refused one step outside —
   plus the envelope spanning exactly the variants, the variants being disjoint,

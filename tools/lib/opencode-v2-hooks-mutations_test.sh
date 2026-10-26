@@ -48,6 +48,17 @@
 #      touched last decides the major.
 #  23. the receiver without the event-id length bound → an oversized id is
 #      dispatched and remembered.
+#  24. resolveInstalledVersion taking a probe that LOWERS a refused store
+#      answer → the 1.x plugin is written for a 3.x / 2.0.x opencode (review
+#      finding 1 of PR #2115).
+#  25. the install refusing an unknown version with a current artifact on
+#      disk → a working install is recorded as not applied (finding 2).
+#  26. the #1372 loop reading an unknown version as damage with a current
+#      artifact on disk → it repairs what nothing broke (finding 2).
+#  27. the #1372 loop not removing our file above every artifact → the 2.x
+#      plugin survives a 3.0.0 opencode.
+#  28. the #1372 loop reporting a major change as damage → the designed
+#      upgrade rewrite is logged as someone else's tampering (finding 3).
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -199,8 +210,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "verifyTarget ignoring the variant selection" \
   "$REVERIFY" \
-  $'if t.variants == nil {\n\t\treturn t.verify()' \
-  $'if true {\n\t\treturn t.verify()' \
+  $'if t.variants == nil {\n\t\tstatus, err = t.verify()' \
+  $'if true {\n\t\tstatus, err = t.verify()' \
   "$SERVICES" \
   '^TestVariantGate_ReverifyRewritesAOneXFileAfterAnUpgrade$' \
   "want one repair"
@@ -249,8 +260,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "plugin_v2.js reading ctx.permission" \
   "$PLUGIN_V2" \
-  $'\t\tforward(ctx);\n' \
-  $'\t\tforward(ctx);\n\t\tctx.permission;\n' \
+  $'\t\tvoid forward(ctx);\n' \
+  $'\t\tvoid forward(ctx);\n\t\tctx.permission;\n' \
   "$OPENCODE" \
   '^TestShippedV2PluginUsesOnlyTheEventBus$' \
   "want exactly [event]"
@@ -259,8 +270,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "plugin_v2.js passing the context elsewhere" \
   "$PLUGIN_V2" \
-  $'\t\tforward(ctx);\n' \
-  $'\t\tforward(ctx);\n\t\tglobalThis.irrlichtContext = ctx;\n' \
+  $'\t\tvoid forward(ctx);\n' \
+  $'\t\tvoid forward(ctx);\n\t\tglobalThis.irrlichtContext = ctx;\n' \
   "$OPENCODE" \
   '^TestShippedV2PluginUsesOnlyTheEventBus$' \
   "names the context outside the allowed hand-offs"
@@ -374,6 +385,56 @@ assert_go_test_goes_red \
   "$OPENCODE" \
   '^TestHookReceiver_AnOversizedEventIDIsDropped$' \
   "event id dispatched 1 times, want 0"
+
+# ── 24. a probe lowering a refused store answer ──
+assert_go_test_goes_red \
+  "resolveInstalledVersion taking a lower probe" \
+  "$GATE" \
+  'if len(w.Variants) > 0 && versionOlder(probed, installed) {' \
+  'if false && len(w.Variants) > 0 && versionOlder(probed, installed) {' \
+  "$SERVICES" \
+  '^TestVariantGate_AProbeCannotLowerARefusedStoreAnswer$' \
+  "the probe lowered the version to a major the store says is not running"
+
+# ── 25. the install refusing an unknown version over a current artifact ──
+assert_go_test_goes_red \
+  "hookVersionRefusal without keeping a current install" \
+  "$GATE" \
+  'if kept := currentVariant(p.Writes); kept != nil {' \
+  'if kept := currentVariant(p.Writes); false && kept != nil {' \
+  "$SERVICES" \
+  '^TestVariantGate_AnUnknownVersionAtStartKeepsACurrentInstall$' \
+  "with a current install on disk, want none"
+
+# ── 26. the loop reading an unknown version as damage ──
+assert_go_test_goes_red \
+  "unselectedStatus ignoring a current install" \
+  "$REVERIFY" \
+  $'case agent.VersionUnknown:\n\t\tif currentVariant(w) == nil {' \
+  $'case agent.VersionUnknown:\n\t\tif true {' \
+  "$SERVICES" \
+  '^TestVariantGate_AnUnknownVersionKeepsACurrentInstall$' \
+  "want no repair at all"
+
+# ── 27. the loop not removing our file above every artifact ──
+assert_go_test_goes_red \
+  "unselectedStatus without the ceiling removal" \
+  "$REVERIFY" \
+  'if oursPresent(w) {' \
+  'if false && oursPresent(w) {' \
+  "$SERVICES" \
+  '^TestVariantGate_ReverifyAtTheNextMajorRemovesOnceThenRests$' \
+  "the 2.x plugin survived a pass under opencode 3.0.0"
+
+# ── 28. a major change reported as damage ──
+assert_go_test_goes_red \
+  "verifyTarget without the upgrade note" \
+  "$REVERIFY" \
+  'if current := currentVariant(t.variants); current != nil && current != variant {' \
+  'if current := currentVariant(t.variants); false && current != nil && current != variant {' \
+  "$SERVICES" \
+  '^TestVariantGate_AnUpgradeIsNotReportedAsTampering$' \
+  "the 1.x → 2.x rewrite was logged as tampering"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-hooks-mutations: $fails FAILED"

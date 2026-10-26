@@ -197,12 +197,15 @@ func hooksDetail() string {
 		"a permission prompt for you or change what opencode does. " +
 		"To tell which opencode you run, irrlicht reads the version opencode " +
 		"recorded on the newest session in its database — only while reading that " +
-		"database is granted — and otherwise runs `opencode --version`. " +
+		"database is granted — and runs `opencode --version` when that gives no " +
+		"answer or one no plugin here supports; that command can raise the version " +
+		"the database gave, never lower it. " +
 		"On a version older than " + minOpenCodeVersion + " nothing is written. On " +
 		maxOpenCodeV2Version + " or newer, or on a 2.x older than " + minOpenCodeV2Version +
 		", nothing is written and the file an earlier install left there is removed. " +
-		"When the version cannot be read at all, nothing is written, because a wrong " +
-		"guess writes the file the other major rejects. Either way the daemon " +
+		"When the version cannot be read at all, a plugin already installed and " +
+		"current is kept and otherwise nothing is written, because a wrong guess " +
+		"writes the file the other major rejects. Either way the daemon " +
 		"reports why. Toggling off deletes the file (also available via " +
 		"`irrlichd --uninstall-hooks`); nothing else in your opencode " +
 		"installation was changed, so there is nothing else to undo."

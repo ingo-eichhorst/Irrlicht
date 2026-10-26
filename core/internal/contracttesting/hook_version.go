@@ -261,14 +261,14 @@ func assertUnknownSelectsNoVariant(t reporter, writes *agent.ManagedUserFile) {
 	}
 }
 
-// startsBeforeEnd reports whether a range starting at min begins before one
-// ending at max (exclusive; "" is unbounded). An unparseable bound is reported
+// startsBeforeEnd reports whether a range starting at start begins before one
+// ending at end (exclusive; "" is unbounded). An unparseable bound is reported
 // by the parse arms and treated here as not overlapping.
-func startsBeforeEnd(min, max string) bool {
-	if max == "" {
+func startsBeforeEnd(start, end string) bool {
+	if end == "" {
 		return true
 	}
-	return versionLess(min, max)
+	return versionLess(start, end)
 }
 
 // versionLess reports a < b for two parseable versions, false otherwise.

@@ -66,7 +66,9 @@ const IRRLICHT_EVENTS = new Set([
 export default {
 	id: "irrlicht",
 	setup: async function irrlichtSetup(ctx) {
-		forward(ctx);
+		// Not awaited, on purpose: the loop runs for the life of the
+		// project's instance, and forward never rejects.
+		void forward(ctx);
 	},
 };
 
