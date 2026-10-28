@@ -258,6 +258,20 @@ type SessionDetector struct {
 	// removed (onRemoved).
 	idleProjectRetryAttempts map[string]int // sessionID → attempts so far
 
+	// hookTurnMu guards hookTurnEnds. The event loop writes it
+	// (applyStateTransition, forceReadyToWorkingIfActive), and
+	// forgetSessionScopedState deletes from it on PIDManager's teardown paths,
+	// which run off the loop: SweepDeadPIDs in its own goroutine (Run) and the
+	// process watcher's exit edge (HandleProcessExit).
+	hookTurnMu sync.Mutex
+
+	// hookTurnEnds holds, per session, the marker of the hook verdict that put
+	// it in its current ready (#2109 P5-0). forceReadyToWorkingIfActive reads
+	// it to tell the tail of that turn from new activity; see IsHookTurnTail.
+	// In memory only: after a restart there is no entry and the force runs as
+	// it did before.
+	hookTurnEnds map[string]HookTurnEnd
+
 	// bgLiveProbe answers "does this session still have a live background
 	// process?" from its output-file paths. Defaults to anyLiveOutputWriter
 	// (lsof); tests override it. See issue #445.
@@ -316,7 +330,9 @@ type SessionDetectorDeps struct {
 // Three kinds of field live here, and only the first is what "nil maps" would
 // suggest (#1450, the sibling of #1400):
 //
-//   - The eight maps. A write to a nil map panics — and it panics in the
+//   - The maps, every one of which TestNewSessionDetectorInitialisesEveryOwnedMap
+//     finds by reflection (this line used to give a count, which went stale).
+//     A write to a nil map panics — and it panics in the
 //     writer, several frames from the literal that caused it: the reproduced
 //     stack for a bare literal bottoms out at removeFromProjectSessions, which
 //     tells you nothing about where the detector was built.
@@ -346,6 +362,7 @@ func newSessionDetector() *SessionDetector {
 		signals:                  session.NewSignalHolds(),
 		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
+		hookTurnEnds:             make(map[string]HookTurnEnd),
 		autonomyRecovered:        make(map[string]outbound.AutonomySpan),
 		bgLiveProbe:              anyLiveOutputWriter,
 		bgPIDProbe:               anyLivePID,

@@ -222,6 +222,13 @@ type SessionMetrics struct {
 	// the missing ready→working step.
 	SawMidPassTurnBoundary bool `json:"-"`
 
+	// UserTurns is how many events this tailer has read for which
+	// ParsedEvent.StartsNewUserTurn is true. Cumulative across passes; a
+	// transcript rewrite resets it with the other accumulators
+	// (resetAccumulatorsForRotation), and it is not in the ledger, so a daemon
+	// restart starts it at zero. See session.SessionMetrics.UserTurns (#2109).
+	UserTurns int `json:"-"`
+
 	// NoSubstantiveActivity is true when a TailAndProcess pass consumed new
 	// transcript content but every parsed line was Skip=true and produced no
 	// state-relevant change (no SubagentCompletions, no TaskSnapshot, no
@@ -387,6 +394,10 @@ type TranscriptTailer struct {
 	// Populated when adapters emit Contribution on ParsedEvent (Phase 2+).
 	cumByModel         map[string]*UsageBreakdown
 	cumProviderCostUSD float64 // sum of provider-reported per-turn costs (Pi)
+
+	// userTurns backs SessionMetrics.UserTurns: incremented in
+	// applyAssistantTextAndMarkers, zeroed by resetAccumulatorsForRotation.
+	userTurns int
 
 	// lastWasUserInterrupt tracks whether the most recent user event was
 	// an ESC cancellation (the exact "[Request interrupted by user]" text
@@ -652,6 +663,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = scan.sawUserBlockingClosed
 	t.metrics.SawMidPassTurnBoundary = scan.sawMidPassTurnBoundary
+	t.metrics.UserTurns = t.userTurns
 	// NoSubstantiveActivity is set only when at least one parsed line was seen
 	// AND none of them produced substantive output (no processParsedEvent
 	// call, no subagent completion, no task snapshot). An empty pass (zero
@@ -1464,6 +1476,9 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 		t.firstUserText = cleanSummaryText(parsed.UserText)
 	}
 	if parsed.StartsNewUserTurn() {
+		// Counted here, beside the resets below, so it uses the same
+		// definition of a user turn: a tool result does not count (#2109).
+		t.userTurns++
 		// A REAL user message (new prompt, ESC, answer) starts a new task or
 		// redirects the current one — the previous estimate no longer
 		// describes what the agent is doing, so reset it like

@@ -180,6 +180,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 		SawManualCompactBoundary:          m.SawManualCompactBoundary,
 		SawMidPassTurnBoundary:            m.SawMidPassTurnBoundary,
+		UserTurns:                         m.UserTurns,
 		SubagentCompletions:               convertSubagentCompletions(m.SubagentCompletions),
 		AppliedTaskDeltas:                 convertAppliedTaskDeltas(m.AppliedTaskDeltas),
 		Tasks:                             convertTasks(m.Tasks),

@@ -142,6 +142,9 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	// (TestTailer_ExecutionConfidenceResetsOnRewrite, #737).
 	t.executionConfidence = session.ExecutionConfidenceAccumulator{}
 	t.hedgeSeen = nil
+	// Re-reading from byte 0 counts every surviving user turn again, so the
+	// count restarts rather than adding them on top (#2109).
+	t.userTurns = 0
 	t.tasks = nil
 	t.taskSeq = 0
 	t.pendingTaskCreates = make(map[string]string)

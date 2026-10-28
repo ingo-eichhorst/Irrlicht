@@ -174,6 +174,12 @@ func (f *sessionFold) observe(raw map[string]interface{}) {
 		m.ModelName = tailer.NormalizeModelName(ev.ModelName)
 	}
 	applySessionError(ev, &f.sessionErr)
+	// The tailer's user-turn count (#2109), restated for the path that bypasses
+	// the tailer. A re-fold reads every row again, so the count is rebuilt in
+	// full on each pass, for 1.x parts and 2.x session_message rows alike.
+	if ev.StartsNewUserTurn() {
+		m.UserTurns++
+	}
 
 	applyToolTracking(ev, &f.openTools)
 	tailer.ApplyTaskDeltas(ev.TaskDeltas, &m.Tasks, f.taskByID)

@@ -10,21 +10,18 @@
   "summary": {
     "total_events": 4,
     "consumed_events": 4,
-    "total_transitions": 5,
+    "total_transitions": 3,
     "first_event_time": "2026-08-22T03:52:05.489298+02:00",
-    "last_event_time": "2026-08-22T03:52:08.18058+02:00",
-    "wall_clock_session_duration": 2691282000,
+    "last_event_time": "2026-08-22T03:52:06.190957+02:00",
+    "wall_clock_session_duration": 701659000,
     "state_durations": {
-      "ready": 1989623000,
       "working": 701659000
     },
-    "flicker_count": 2,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "ready_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
     "model_name": "qwen3-coder-next",
@@ -72,36 +69,6 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false
-    },
-    {
-      "index": 3,
-      "event_index": 3,
-      "virtual_time": "2026-08-22T03:52:08.18058+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
-    },
-    {
-      "index": 4,
-      "event_index": 3,
-      "virtual_time": "2026-08-22T03:52:08.18058+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
     }
   ],
   "sessions": [
@@ -142,20 +109,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 2,
-    "replayed_transition_count": 4,
+    "replayed_transition_count": 2,
     "ordered_matches": 2,
-    "ordered_mismatches": [
-      {
-        "index": 2,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 3,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      }
-    ],
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"

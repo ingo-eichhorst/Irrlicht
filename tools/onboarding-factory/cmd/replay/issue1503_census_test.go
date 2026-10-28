@@ -265,12 +265,27 @@ type catalogCensus struct {
 // replayed transition was a ready→working decided on no transcript evidence,
 // which the no-evidence guard now refuses (see knownZeroTransition). The same
 // census command measured it; no other field moved.
+// #2109 (phase P5-0) moves Divergent and DivergentByCountsAndKinds down by one
+// each, the net of three recordings. The sidecar replay now mirrors the
+// daemon's rule that the tail of a hook-ended turn is not new activity
+// (services.IsHookTurnTail), which removes a force/ready pair from eight
+// goldens. Two recordings leave both populations because their daemon never
+// logged that pair: claudecode 2-13 (…2026-08-19-19-59-30…) and kiro-cli 2-2
+// (…2026-08-22-03-52-01…) now replay the same two transitions their sidecars
+// hold. One joins both: codex 2-13 (…2026-08-18-00-42-27…), whose daemon did
+// log the bounce 2.02s after its Stop hook, before the rule existed, so the
+// replay now disagrees with the frozen sidecar; it resolves on re-record, as
+// #1799's did. Measured per golden from extended_check
+// (recorded_transition_count, replayed_transition_count, ordered_mismatches)
+// at origin/main against the working copy, and in total by `go test
+// ./tools/onboarding-factory/cmd/replay -run
+// TestCatalogCensusMatchesTheCommittedFigures -count=1`; no other field moved.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                433,
 	Zero:                      2,
 	Fabricated:                3,
-	Divergent:                 191,
-	DivergentByCountsAndKinds: 190,
+	Divergent:                 190,
+	DivergentByCountsAndKinds: 189,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         88,
 }
