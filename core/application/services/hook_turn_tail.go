@@ -23,7 +23,10 @@ type HookTurnEnd struct {
 // rule at TierHook (HookTurnDone, see tierAgentDone). A transcript-decided
 // ready, or any other state, returns nil, which drops an earlier marker.
 func HookTurnEndOf(newState string, v StateVerdict, m *session.SessionMetrics) *HookTurnEnd {
-	if newState != session.StateReady || v.Rule != ruleAgentDone || v.Tier != session.TierHook || m == nil {
+	if newState != session.StateReady || m == nil {
+		return nil
+	}
+	if v.Rule != ruleAgentDone || v.Tier != session.TierHook {
 		return nil
 	}
 	return &HookTurnEnd{UserTurns: m.UserTurns}

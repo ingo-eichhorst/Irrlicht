@@ -40,6 +40,9 @@
 #      count as user turns.
 #  13. the sidecar keeping the marker across a process teardown → the next
 #      lifetime's first done pass is read as the old turn's tail.
+#  14. forgetSessionScopedState not dropping the marker → a reaped session
+#      leaves it behind, and a session re-created under the same ID (the
+#      --continue branch) would read its first done pass as the old tail.
 #
 # Mutation 2 replaces the triage record's "drop condition 2 → goes red on
 # TestSessionDetector_ForceReadyToWorking_LogsTransition": that test starts a
@@ -130,6 +133,7 @@ assert_go_test_goes_red() {
 }
 
 RULE="core/application/services/hook_turn_tail.go"
+HELPERS="core/application/services/session_detector_helpers.go"
 SIDECAR="tools/onboarding-factory/cmd/replay/replay_sidecar.go"
 TAILER="core/pkg/tailer/tailer.go"
 ROTATION="core/pkg/tailer/rotation_detect.go"
@@ -154,8 +158,8 @@ assert_go_test_goes_red \
   "a PreToolUse hook after a hook stop forced 0 time(s), want 1"
 
 # ── 2. condition 2, where it is decided: only a hook's turn-done marks ──
-TIER_ANCHOR='if newState != session.StateReady || v.Rule != ruleAgentDone || v.Tier != session.TierHook || m == nil {'
-TIER_MUTANT='if newState != session.StateReady || m == nil {'
+TIER_ANCHOR='if v.Rule != ruleAgentDone || v.Tier != session.TierHook {'
+TIER_MUTANT='if false {'
 assert_go_test_goes_red \
   "HookTurnEndOf marking a transcript-decided ready" \
   "$RULE" "$TIER_ANCHOR" "$TIER_MUTANT" \
@@ -287,6 +291,16 @@ assert_go_test_goes_red \
   "$REPLAY" \
   '^TestSidecar_HookTurnTail_TeardownDropsTheMarker$' \
   "the next lifetime's first done pass forced 0 time(s), want 1"
+
+# ── 14. teardown drops the detector's marker ──
+assert_go_test_goes_red \
+  "forgetSessionScopedState keeping the marker" \
+  "$HELPERS" \
+  $'\totherwise skip its first force.\n\td.forgetHookTurnEnd(sessionID)\n' \
+  $'\totherwise skip its first force.\n\t_ = sessionID\n' \
+  "$SERVICES" \
+  '^TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds$' \
+  "a reaped session must not leave a hook-turn marker behind"
 
 if [[ $fails -gt 0 ]]; then
   echo "hook-turn-tail-mutations: $fails FAILED"

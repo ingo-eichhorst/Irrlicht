@@ -560,7 +560,10 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, c
 // for the tail of a turn a hook already ended (#2109), judged by the
 // predicate the daemon calls. A hook pass is this replayer's synthetic event.
 func (r *sidecarReplayer) shouldForceReadyToWorking(domainMetrics *session.SessionMetrics, ctx transitionCtx, grew bool) bool {
-	if r.state != session.StateReady || domainMetrics.LastEventType == "" || !grew {
+	if r.state != session.StateReady || !grew {
+		return false
+	}
+	if domainMetrics.LastEventType == "" {
 		return false
 	}
 	return !services.IsHookTurnTail(r.hookTurnEnd, ctx.cause == causeHook, domainMetrics)
