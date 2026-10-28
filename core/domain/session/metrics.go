@@ -163,6 +163,18 @@ type SessionMetrics struct {
 	// sessions.
 	CompletedTurns int `json:"completed_turns,omitempty"`
 
+	// UserTurns counts the genuine user turns the metrics source has read for
+	// this session: each event whose tailer.ParsedEvent.StartsNewUserTurn is
+	// true (#2109 P5-0). The tailer counts them as it reads, and the opencode
+	// store fold counts them on every re-fold. A tool result does not count, and
+	// neither does a turn opener the agent writes itself (claudecode's isMeta
+	// lines, #1858). Only a change in the value carries meaning, and only within
+	// one daemon process: the detector compares it with the value it stored when
+	// a hook ended the turn, to tell the tail of that turn from a new one.
+	// Zero means the source does not count user turns (hermes), or has not read
+	// one yet. Not persisted, like the marker it is compared with.
+	UserTurns int `json:"-"`
+
 	// CacheBloat is true when the cache-creation regression detector (issue
 	// #374) has found this working session's median cache-creation per turn
 	// exceeding the project's p25 baseline × threshold. Both UIs render it as
@@ -745,6 +757,7 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		CumCacheReadTokens:          newM.CumCacheReadTokens,
 		CumCacheCreationTokens:      newM.CumCacheCreationTokens,
 		CompletedTurns:              newM.CompletedTurns,
+		UserTurns:                   newM.UserTurns,
 		CacheBloat:                  newM.CacheBloat,
 		CacheBloatTooltip:           newM.CacheBloatTooltip,
 		CacheBloatExplanation:       newM.CacheBloatExplanation,
@@ -870,6 +883,13 @@ func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
 	// accumulated count forward or every pass would reset it to zero.
 	if merged.CompletedTurns == 0 && oldM.CompletedTurns > 0 {
 		merged.CompletedTurns = oldM.CompletedTurns
+	}
+	// UserTurns is cumulative in its source (the tailer, the opencode re-fold),
+	// so newM's value is current whenever it is non-zero. A zero is a source
+	// that has read no user turn, and the old value is kept, as for the
+	// token counters above.
+	if merged.UserTurns == 0 && oldM.UserTurns > 0 {
+		merged.UserTurns = oldM.UserTurns
 	}
 }
 

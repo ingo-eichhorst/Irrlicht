@@ -350,6 +350,15 @@ type sidecarReplayer struct {
 	// the no-evidence guard, so the replay must know it too (#2034, #889).
 	isChild bool
 
+	// hookTurnEnd mirrors the daemon's per-session marker of a hook-decided
+	// ready (#2109 P5-0). Every classifier transition this replayer commits
+	// overwrites it with services.HookTurnEndOf, which is nil unless a hook's
+	// turn-done decided a ready, and a process teardown drops it. Those are the
+	// only two ways r.state becomes ready after the initial state; the force
+	// and the synthesized waiting only ever leave it. shouldForceReadyToWorking
+	// reads it, and only for a ready session.
+	hookTurnEnd *services.HookTurnEnd
+
 	// fswatches is the primary session's recorded transcript_activity stream,
 	// kept so classifyAt can widen a clamped read to the next stat the daemon
 	// plausibly reached. See readBoundaryFor (#1342).
@@ -533,7 +542,7 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, c
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
-	if shouldForceReadyToWorking(r.state, domainMetrics, grew) {
+	if r.shouldForceReadyToWorking(domainMetrics, ctx, grew) {
 		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 		r.state = session.StateWorking
@@ -542,20 +551,31 @@ func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, c
 	// The shared function keeps a hook pass with no transcript evidence from
 	// deciding working on the ladder's default rung, as the daemon does (#2034).
 	v := services.ClassifyStateOnEvidence(r.state, domainMetrics, r.isChild)
-	r.applyParentHoldAndSynthesizedWaiting(v.State, v.Reason, domainMetrics, ctx)
+	r.applyParentHoldAndSynthesizedWaiting(v, domainMetrics, ctx)
 }
 
-// shouldForceReadyToWorking mirrors SessionDetector's force-r→w guard (issue
-// #905): a ready session only bounces back to working on real transcript
-// growth or a synthetic hook event, never a content-less touch.
-func shouldForceReadyToWorking(state string, domainMetrics *session.SessionMetrics, grew bool) bool {
-	return state == session.StateReady && domainMetrics.LastEventType != "" && grew
+// shouldForceReadyToWorking mirrors SessionDetector's force-r→w guards: a
+// ready session only bounces back to working on real transcript growth or a
+// synthetic hook event, never a content-less touch (issue #905), and never
+// for the tail of a turn a hook already ended (#2109), judged by the
+// predicate the daemon calls. A hook pass is this replayer's synthetic event.
+func (r *sidecarReplayer) shouldForceReadyToWorking(domainMetrics *session.SessionMetrics, ctx transitionCtx, grew bool) bool {
+	if r.state != session.StateReady || !grew {
+		return false
+	}
+	if domainMetrics.LastEventType == "" {
+		return false
+	}
+	return !services.IsHookTurnTail(r.hookTurnEnd, ctx.cause == causeHook, domainMetrics)
 }
 
 // applyParentHoldAndSynthesizedWaiting applies the parent-child hold and
-// synthesized-waiting adjustments to newState/reason, then commits whichever
-// state change (if any) results.
-func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason string, domainMetrics *session.SessionMetrics, ctx transitionCtx) {
+// synthesized-waiting adjustments to the classifier's verdict, then commits
+// whichever state change (if any) results. The verdict travels with the state
+// so the committed transition can leave the daemon's hook-turn marker
+// (services.HookTurnEndOf) exactly where applyStateTransition would.
+func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(v services.StateVerdict, domainMetrics *session.SessionMetrics, ctx transitionCtx) {
+	newState, reason := v.State, v.Reason
 	// Parent-child hold: if any child is still working/waiting, keep the
 	// parent in its current state rather than letting it transition to
 	// ready. Matches SessionDetector's behaviour when children are live.
@@ -570,7 +590,10 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
 		r.state = session.StateWaiting
-		newState, reason = services.ClassifyState(r.state, domainMetrics)
+		// ClassifyState is this call's State and Reason; the tiered form keeps
+		// the verdict, as the daemon's re-run after this synthesizer does.
+		v = services.ClassifyStateTiered(r.state, domainMetrics)
+		newState, reason = v.State, v.Reason
 	}
 	// Deliberately NOT mirroring the #1366 grace timer here, for the same
 	// reason #988 kept ShouldSynthesizeCollapsedTurnBoundary out of the
@@ -595,6 +618,7 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, newState, reason, domainMetrics))
 		r.state = newState
+		r.hookTurnEnd = services.HookTurnEndOf(newState, v, domainMetrics)
 	}
 }
 
@@ -1247,6 +1271,9 @@ func (r *sidecarReplayer) applyProcessTeardown(entry timelineEntry, d *debounceS
 	// debounce.
 	*d = debounceState{debounceDelay: d.debounceDelay}
 	r.state = session.StateReady
+	// A new lifetime has no hook-ended turn yet; the daemon's teardown drops
+	// the marker with the session (forgetSessionScopedState).
+	r.hookTurnEnd = nil
 	return nil
 }
 
