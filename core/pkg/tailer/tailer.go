@@ -395,8 +395,7 @@ type TranscriptTailer struct {
 	cumByModel         map[string]*UsageBreakdown
 	cumProviderCostUSD float64 // sum of provider-reported per-turn costs (Pi)
 
-	// userTurns backs SessionMetrics.UserTurns: incremented in
-	// applyAssistantTextAndMarkers, zeroed by resetAccumulatorsForRotation.
+	// userTurns backs SessionMetrics.UserTurns.
 	userTurns int
 
 	// lastWasUserInterrupt tracks whether the most recent user event was

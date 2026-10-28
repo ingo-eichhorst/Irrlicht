@@ -158,7 +158,7 @@ assert_go_test_goes_red \
   "a PreToolUse hook after a hook stop forced 0 time(s), want 1"
 
 # ── 2. condition 2, where it is decided: only a hook's turn-done marks ──
-TIER_ANCHOR='if v.Rule != ruleAgentDone || v.Tier != session.TierHook {'
+TIER_ANCHOR='if v.Rule != ruleAgentDone || v.Tier != session.TierOf(session.SignalTurnDone) {'
 TIER_MUTANT='if false {'
 assert_go_test_goes_red \
   "HookTurnEndOf marking a transcript-decided ready" \
@@ -296,8 +296,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "forgetSessionScopedState keeping the marker" \
   "$HELPERS" \
-  $'\totherwise skip its first force.\n\td.forgetHookTurnEnd(sessionID)\n' \
-  $'\totherwise skip its first force.\n\t_ = sessionID\n' \
+  $'\t// otherwise skip its first force.\n\td.forgetHookTurnEnd(sessionID)\n' \
+  $'\t// otherwise skip its first force.\n\t_ = sessionID\n' \
   "$SERVICES" \
   '^TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds$' \
   "a reaped session must not leave a hook-turn marker behind"

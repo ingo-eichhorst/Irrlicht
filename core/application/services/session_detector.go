@@ -331,8 +331,7 @@ type SessionDetectorDeps struct {
 // suggest (#1450, the sibling of #1400):
 //
 //   - The maps, every one of which TestNewSessionDetectorInitialisesEveryOwnedMap
-//     finds by reflection (this line used to give a count, which went stale).
-//     A write to a nil map panics — and it panics in the
+//     finds by reflection. A write to a nil map panics — and it panics in the
 //     writer, several frames from the literal that caused it: the reproduced
 //     stack for a bare literal bottoms out at removeFromProjectSessions, which
 //     tells you nothing about where the detector was built.

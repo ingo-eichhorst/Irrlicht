@@ -20,13 +20,14 @@ type HookTurnEnd struct {
 
 // HookTurnEndOf returns the marker a transition to newState leaves behind:
 // non-nil only when a hook's turn-done decided a ready, that is, the agent_done
-// rule at TierHook (HookTurnDone, see tierAgentDone). A transcript-decided
-// ready, or any other state, returns nil, which drops an earlier marker.
+// rule at the tier tierAgentDone gives it when HookTurnDone is set. A
+// transcript-decided ready, or any other state, returns nil, which drops an
+// earlier marker.
 func HookTurnEndOf(newState string, v StateVerdict, m *session.SessionMetrics) *HookTurnEnd {
 	if newState != session.StateReady || m == nil {
 		return nil
 	}
-	if v.Rule != ruleAgentDone || v.Tier != session.TierHook {
+	if v.Rule != ruleAgentDone || v.Tier != session.TierOf(session.SignalTurnDone) {
 		return nil
 	}
 	return &HookTurnEnd{UserTurns: m.UserTurns}
@@ -56,7 +57,7 @@ func HookTurnEndOf(newState string, v StateVerdict, m *session.SessionMetrics) *
 //
 // Called by SessionDetector.forceReadyToWorkingIfActive and by the sidecar
 // replay's mirror of it (tools/onboarding-factory/cmd/replay), so the two
-// cannot drift apart.
+// apply one rule. Each keeps its own marker, set from HookTurnEndOf.
 func IsHookTurnTail(end *HookTurnEnd, synthetic bool, m *session.SessionMetrics) bool {
 	if synthetic {
 		return false
@@ -97,9 +98,7 @@ func (d *SessionDetector) hookTurnEnd(sessionID string) *HookTurnEnd {
 }
 
 // forgetHookTurnEnd drops the session's marker. Called wherever a session
-// leaves ready: the force, any transition applyStateTransition applies (via
-// noteHookTurnEnd), the two parent-child moves that write a parent's state
-// directly, and session teardown (forgetSessionScopedState).
+// leaves ready, and on session teardown.
 func (d *SessionDetector) forgetHookTurnEnd(sessionID string) {
 	d.hookTurnMu.Lock()
 	delete(d.hookTurnEnds, sessionID)

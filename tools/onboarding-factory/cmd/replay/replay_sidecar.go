@@ -578,14 +578,12 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(v services.StateV
 	newState, reason := v.State, v.Reason
 	// Parent-child hold: if any child is still working/waiting, keep the
 	// parent in its current state rather than letting it transition to
-	// ready. Matches SessionDetector's behaviour when children are live,
-	// including recording no verdict for the held transition.
+	// ready. Matches SessionDetector's behaviour when children are live.
 	parentHeldWorking := false
 	if newState == session.StateReady && r.anyChildActive() {
 		newState = r.state
 		reason = ""
 		parentHeldWorking = true
-		v = services.StateVerdict{}
 	}
 
 	if !parentHeldWorking && services.ShouldSynthesizeCollapsedWaiting(r.state, newState, domainMetrics) {

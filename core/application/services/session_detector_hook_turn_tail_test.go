@@ -1,7 +1,6 @@
 package services_test
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -82,31 +81,22 @@ func newHookTailFixture(t *testing.T, start session.SessionMetrics) *hookTailFix
 		return true, true
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- f.det.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	runDetector(t, f.det)
 
 	// seedFromDisk re-persists the session once. Waiting for that save keeps
 	// it out of the first pass's count.
-	f.awaitSaves(1, "the startup seed")
+	f.await("the startup seed", func() bool { return f.repo.savesCount() >= 1 })
 	return f
 }
 
-func (f *hookTailFixture) saves() int {
-	f.repo.mu.Lock()
-	defer f.repo.mu.Unlock()
-	return f.repo.saves
-}
-
-// awaitSaves polls until the repo has seen at least n saves, failing with the
-// elapsed time if it never does.
-func (f *hookTailFixture) awaitSaves(n int, what string) {
+// await polls cond until it holds, failing with the elapsed time if it never
+// does within 3s.
+func (f *hookTailFixture) await(what string, cond func() bool) {
 	f.t.Helper()
 	start := time.Now()
-	for f.saves() < n {
+	for !cond() {
 		if time.Since(start) > 3*time.Second {
-			f.t.Fatalf("%s never ran: %d save(s) after %v, want %d", what, f.saves(), time.Since(start), n)
+			f.t.Fatalf("%s never happened after %v", what, time.Since(start))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -122,18 +112,20 @@ func (f *hookTailFixture) set(m session.SessionMetrics) {
 // pass runs send and waits for the pass it triggers to be saved.
 func (f *hookTailFixture) pass(what string, send func()) {
 	f.t.Helper()
-	before := f.saves()
+	before := f.repo.savesCount()
 	send()
-	f.awaitSaves(before+1, what)
+	f.await(what, func() bool { return f.repo.savesCount() > before })
 }
 
-// stopHook delivers a Stop hook and requires the hook to end the turn.
-func (f *hookTailFixture) stopHook() {
+// stopHook delivers a Stop hook, requires the hook to end the turn, and
+// returns how many transitions were recorded by then.
+func (f *hookTailFixture) stopHook() int {
 	f.t.Helper()
 	f.pass("the Stop hook's pass", func() {
 		f.det.HandleStopHook(hookTailSID, hookTailPath, "Done.", false)
 	})
 	f.requireState(session.StateReady, "after the Stop hook")
+	return len(f.transitions())
 }
 
 // activity sends one watcher pass. terminal is set the way opencode's store
@@ -155,13 +147,7 @@ func (f *hookTailFixture) activity(what string, synthetic, terminal bool) {
 
 // transitions returns the recorded state transitions for the session.
 func (f *hookTailFixture) transitions() []lifecycle.Event {
-	var out []lifecycle.Event
-	for _, ev := range f.rec.snapshot() {
-		if ev.SessionID == hookTailSID && ev.Kind == lifecycle.KindStateTransition {
-			out = append(out, ev)
-		}
-	}
-	return out
+	return transitionsFor(f.rec, hookTailSID)
 }
 
 // forcesSince counts the force-bounces recorded after the first mark transitions.
@@ -229,8 +215,7 @@ func TestSessionDetector_HookTurnTail_DoesNotBounce(t *testing.T) {
 			// Not done on the transcript side ("assistant_message" is outside
 			// IsAgentDone's fallback), so the ready below is the hook's.
 			f := newHookTailFixture(t, session.SessionMetrics{LastEventType: "assistant_message", UserTurns: 1})
-			f.stopHook()
-			mark := len(f.transitions())
+			mark := f.stopHook()
 
 			f.set(session.SessionMetrics{LastEventType: "turn_done", UserTurns: 1})
 			f.activity("the tail pass", false, tc.terminal)
@@ -256,8 +241,7 @@ func TestSessionDetector_HookTurnTail_DoesNotBounce(t *testing.T) {
 // hook-ended ready. That is a real new turn, so its bounce stays.
 func TestSessionDetector_HookTurnTail_NewUserTurnStillBounces(t *testing.T) {
 	f := newHookTailFixture(t, session.SessionMetrics{LastEventType: "assistant_message", UserTurns: 1})
-	f.stopHook()
-	mark := len(f.transitions())
+	mark := f.stopHook()
 
 	f.set(session.SessionMetrics{LastEventType: "turn_done", UserTurns: 2})
 	f.activity("a collapsed new turn", false, true)
@@ -284,8 +268,7 @@ func TestSessionDetector_HookTurnTail_NewUserTurnGoesWorking(t *testing.T) {
 // keeps the force (#307/#657), however the metrics read.
 func TestSessionDetector_HookTurnTail_SyntheticHookStillForces(t *testing.T) {
 	f := newHookTailFixture(t, session.SessionMetrics{LastEventType: "assistant_message", UserTurns: 1})
-	f.stopHook()
-	mark := len(f.transitions())
+	mark := f.stopHook()
 
 	f.set(session.SessionMetrics{LastEventType: "turn_done", UserTurns: 1})
 	f.pass("the PreToolUse hook's pass", func() {
@@ -301,8 +284,7 @@ func TestSessionDetector_HookTurnTail_SyntheticHookStillForces(t *testing.T) {
 // that counts no user turns (hermes) gets today's behaviour.
 func TestSessionDetector_HookTurnTail_ZeroCountForcesAsToday(t *testing.T) {
 	f := newHookTailFixture(t, session.SessionMetrics{LastEventType: "assistant_message"})
-	f.stopHook()
-	mark := len(f.transitions())
+	mark := f.stopHook()
 
 	f.set(session.SessionMetrics{LastEventType: "turn_done"})
 	f.activity("a tail with no user-turn count", false, true)
@@ -329,13 +311,7 @@ func TestSessionDetector_HookTurnTail_LiveBackgroundProcessStaysWorking(t *testi
 	f.activity("a done pass with a background process", false, true)
 
 	f.requireState(session.StateWorking, "with a live background process")
-	start := time.Now()
-	for f.probes.Load() == 0 {
-		if time.Since(start) > 2*time.Second {
-			t.Fatalf("the background probe never ran after %v — the session never reached working with its process", time.Since(start))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	f.await("the background probe", func() bool { return f.probes.Load() > 0 })
 }
 
 // TestSessionDetector_HookTurnTail_StaleMarkerForces: the marker describes the
