@@ -275,6 +275,16 @@ func TestRefusals(t *testing.T) {
 			wantLine: 1, wantWord: "not a key",
 		},
 		{
+			name:     "a column-0 sequence entry after a scalar value",
+			src:      "model: x\n- one\n",
+			wantLine: 2, wantWord: "not a key",
+		},
+		{
+			name:     "the hooks block is a column-0 sequence",
+			src:      "hooks:\n- command: \"x\"\n",
+			wantLine: 2, wantWord: "sequence, not a mapping",
+		},
+		{
 			name:     "the hooks block is a sequence",
 			src:      "hooks:\n  - command: \"x\"\n",
 			wantLine: 2, wantWord: "sequence, not a mapping",
@@ -327,6 +337,29 @@ func TestRefusals(t *testing.T) {
 				t.Errorf("a refused document was still modified:\n%s", got)
 			}
 		})
+	}
+}
+
+// TestColumnZeroSequenceUnderAnotherKey pins #2123: hermes' own config writer
+// emits a top-level key's block sequence at the key's column (`toolsets:` then
+// `- hermes-cli`), which is valid YAML. Refusing it made both install AND
+// uninstall fail on a stock hermes config, leaving the revoke un-undoable.
+func TestColumnZeroSequenceUnderAnotherKey(t *testing.T) {
+	const src = "model:\n  default: x\ntoolsets:\n- hermes-cli\n# between entries\n- name: two\n  nested: true\nagent:\n  max_turns: 90\n"
+	path := writeTemp(t, src)
+	cfg := testConfig(path)
+
+	if _, err := EnsureInstalled(cfg); err != nil {
+		t.Fatalf("EnsureInstalled refused valid YAML: %v", err)
+	}
+	if got := read(t, path); !strings.HasPrefix(got, src) {
+		t.Fatalf("the original is not a byte-identical prefix:\n%s", got)
+	}
+	if _, err := Uninstall(cfg); err != nil {
+		t.Fatalf("Uninstall refused valid YAML: %v", err)
+	}
+	if got := read(t, path); got != src {
+		t.Errorf("install then uninstall did not round-trip:\n%s", got)
 	}
 }
 

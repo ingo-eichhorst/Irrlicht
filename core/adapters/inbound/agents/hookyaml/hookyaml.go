@@ -19,8 +19,9 @@
 // Everything below follows from a single property of a LOADABLE YAML file
 // whose root is a block mapping:
 //
-//	a non-blank line starting at column 0 is a key, a comment, or a
-//	document marker — it can never be the continuation of a scalar.
+//	a non-blank line starting at column 0 is a key, a comment, a
+//	document marker, or an entry of a block sequence that is the value of
+//	the key above it — it can never be the continuation of a scalar.
 //
 // YAML requires the continuation lines of a multi-line flow scalar, and the
 // content lines of a block scalar, to be indented MORE than the node they
@@ -29,8 +30,15 @@
 // never text inside somebody's description string. The same argument one
 // level down is what lets the block's own event keys be found by indent.
 //
+// The fourth shape is the "compact" block sequence: a key with no inline value
+// whose `- ` entries sit at the key's own column. It is valid YAML and the one
+// hermes' own config writer emits (`toolsets:` then `- hermes-cli`), so
+// refusing it refused every stock hermes config (#2123). An entry's own
+// content and continuation lines are indented past its `- `, so they stay at
+// indent >= 1 and the argument above holds unchanged.
+//
 // The scanner asserts that invariant rather than assuming it: a column-0 line
-// that is none of those three shapes means the file is not the document this
+// that is none of those four shapes means the file is not the document this
 // package models, and the whole document is REFUSED. Refusing is the only
 // safe fallback here, exactly as in hooktoml — there is no lossy-but-correct
 // encoder to fall back to, and an install that corrupts a user's config is
@@ -45,7 +53,8 @@
 //
 // Refused, each with the line number: a tab in a line's indentation; a `---`
 // or `...` document marker (multi-document files); the target key appearing
-// twice at the root; the target key carrying an inline value of any kind (a
+// twice at the root; a column-0 `- ` entry with no value-less key above it
+// (a root sequence, or one following a scalar); the target key carrying an inline value of any kind (a
 // flow mapping `hooks: {}`, a flow sequence, a scalar, an anchor `&x`, an
 // alias `*x`, or a block-scalar indicator `|`/`>`); the target block being a
 // SEQUENCE rather than a mapping; and an anchor, alias or merge key (`<<:`)
@@ -710,6 +719,10 @@ type topLevelWalk struct {
 	doc                        *document
 	cfg                        Config
 	ownedStart, ownedStartLine int
+	// seqKey is the key the column-0 sequence entries that follow belong to
+	// (#2123): the last top-level key, if it has no inline value. Empty when
+	// a column-0 `- ` line here could not be part of a valid document.
+	seqKey string
 }
 
 // marker handles a column-0 region marker, reporting whether the line was one.
@@ -746,9 +759,19 @@ func (w *topLevelWalk) key(i int, l lineSpan) error {
 	if isDocumentMarker(l.text) {
 		return w.refuse(i, "a YAML document marker — this package models a single-document file and will not guess which document to edit")
 	}
+	if isSequenceEntry(l.text) && w.seqKey != "" {
+		if w.seqKey == w.cfg.BlockKey {
+			return w.refuse(i, fmt.Sprintf("the %s block is a sequence, not a mapping of event names", w.cfg.BlockKey))
+		}
+		return nil // an entry of the previous key's compact block sequence
+	}
 	key, rest, ok := splitKey(l.text)
 	if !ok {
-		return w.refuse(i, "a line at column 0 that is not a key, a comment or a document marker — the file is not a plain block mapping and will not be edited")
+		return w.refuse(i, "a line at column 0 that is not a key, a comment, a document marker or an entry of the sequence under the key above it — the file is not a plain block mapping and will not be edited")
+	}
+	w.seqKey = ""
+	if strings.TrimSpace(stripComment(rest)) == "" {
+		w.seqKey = key
 	}
 	if key != w.cfg.BlockKey {
 		return nil
@@ -961,6 +984,12 @@ func refuseTabIndent(cfg Config, i int, l lineSpan) error {
 			Message: "a tab in the line's indentation — YAML forbids it, so this file does not load and will not be edited"}
 	}
 	return nil
+}
+
+// isSequenceEntry reports a block-sequence entry indicator: `-` followed by a
+// space or the end of the line. `-x` is a plain scalar, not an entry.
+func isSequenceEntry(text string) bool {
+	return text == "-" || strings.HasPrefix(text, "- ")
 }
 
 func isDocumentMarker(text string) bool {

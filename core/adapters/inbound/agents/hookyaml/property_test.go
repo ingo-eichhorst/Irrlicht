@@ -784,14 +784,15 @@ func pickUnused(rng *rand.Rand, pool []string, used map[string]bool) string {
 	return ""
 }
 
-// filler renders one non-block top-level section. Between them the six shapes
+// filler renders one non-block top-level section. Between them the seven shapes
 // cover the surrounding-content axis: scalars, nested mappings, block
-// sequences, dotted keys, quoted values carrying `#` and `:`, standalone
-// comments at column 0 and inside a nested mapping, trailing comments, and
-// blank lines.
+// sequences (indented, and at the key's own column as hermes' own writer
+// emits them, #2123), dotted keys, quoted values carrying `#` and `:`,
+// standalone comments at column 0 and inside a nested mapping, trailing
+// comments, and blank lines.
 func filler(rng *rand.Rand, nl string, s int) string {
 	var b strings.Builder
-	switch rng.Intn(6) {
+	switch rng.Intn(7) {
 	case 0:
 		b.WriteString("# section comment: with a colon" + nl)
 		b.WriteString(fmt.Sprintf("scalar%d: %d"+nl, s, rng.Intn(100)))
@@ -805,6 +806,12 @@ func filler(rng *rand.Rand, nl string, s int) string {
 		b.WriteString(fmt.Sprintf("seq%d:"+nl, s))
 		b.WriteString("  - one" + nl)
 		b.WriteString("  - two" + nl)
+	case 6:
+		b.WriteString(fmt.Sprintf("compactseq%d:"+nl, s))
+		b.WriteString("- one" + nl)
+		b.WriteString("# a comment between entries" + nl)
+		b.WriteString("- name: two" + nl)
+		b.WriteString("  nested: true" + nl)
 	case 3:
 		b.WriteString(fmt.Sprintf("dotted.key%d: value"+nl, s))
 		b.WriteString(nl)
