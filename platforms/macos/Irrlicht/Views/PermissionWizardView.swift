@@ -99,6 +99,19 @@ struct PermissionWizardView: View {
                     Button("Decide Later") { onClose() }
                         .disabled(submitting)
                         .tooltip("Keep everything paused; the wizard returns from Settings or when the agent is seen again")
+                } else {
+                    // Review mode's only other exit is a clean Apply, and
+                    // Apply re-sends every failed effect as a retry
+                    // (`shouldSubmit`), so one effect that keeps failing —
+                    // a missing binary, a config the daemon refuses to edit
+                    // — pinned the whole panel to this view (#2123). Closing
+                    // hides nothing: the failure is still listed here on the
+                    // next review, and a failed grant is also on the panel's
+                    // "granted but not applied" banner (#1385).
+                    Button("Close") { onClose() }
+                        .disabled(submitting)
+                        .keyboardShortcut(.cancelAction)
+                        .tooltip("Leave without applying changes; anything that failed stays listed here")
                 }
                 Button("Apply") { apply() }
                     .disabled(submitting)
@@ -234,6 +247,9 @@ struct PermissionWizardView: View {
     /// Builds the answer batch: in auto mode every displayed pending item
     /// is answered explicitly (off = deny); in review mode only changes
     /// against the current state are submitted.
+    ///
+    /// Review mode closes on a clean Apply; when an effect failed it stays
+    /// up to show why, and "Close" is the way out (#2123).
     ///
     /// Auto mode does NOT close on Apply — the daemon's response snapshot
     /// resolves the locked agents' pending items and SessionListView's
