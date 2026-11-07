@@ -1,14 +1,14 @@
 package opencode
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"irrlicht/core/domain/agent"
+
+	"irrlicht/core/internal/fakeproc"
 )
 
 // matchesArgv answers what Agent().Process.Match would for argv: the
@@ -64,19 +64,15 @@ func TestProcessMatch_ClientArgvShapes(t *testing.T) {
 
 // TestDiscoverPID_FindsAnOpencode2ClientOnThisHost runs the real process
 // observer — `pgrep -f` on macOS, /proc on Linux — against a live process
-// whose argv[0] is `…/opencode2`: the system sleep behind a symlink of that
-// name (a symlink, so macOS code signing still holds; junie's fakeJunieProcess
-// does the same). A table of strings cannot catch a pattern the host's matcher
+// whose argv[0] is `…/opencode2`: a fakeproc stand-in of that name (junie's
+// fakeJunieProcess uses the same). A table of strings cannot catch a pattern the host's matcher
 // reads differently from Go's regexp: macOS pgrep's ERE has no `\s` —
 // `pgrep -lf '(^|/)zsh(\s|$)'` printed nothing on this host while
 // `pgrep -lf '(^|/)zsh( |$)'` listed three zsh processes.
 func TestDiscoverPID_FindsAnOpencode2ClientOnThisHost(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "opencode2")
-	if err := os.Symlink("/bin/sleep", bin); err != nil {
-		t.Fatal(err)
-	}
 	project := t.TempDir()
-	cmd := exec.Command(bin, "60")
+	cmd := fakeproc.Command(t, bin, "60")
 	cmd.Dir = project
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
