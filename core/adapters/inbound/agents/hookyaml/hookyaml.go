@@ -759,20 +759,14 @@ func (w *topLevelWalk) key(i int, l lineSpan) error {
 	if isDocumentMarker(l.text) {
 		return w.refuse(i, "a YAML document marker — this package models a single-document file and will not guess which document to edit")
 	}
-	if isSequenceEntry(l.text) && w.seqKey != "" {
-		if w.seqKey == w.cfg.BlockKey {
-			return w.refuse(i, fmt.Sprintf("the %s block is a sequence, not a mapping of event names", w.cfg.BlockKey))
-		}
-		return nil // an entry of the previous key's compact block sequence
+	if handled, err := w.compactSequenceEntry(i, l); handled {
+		return err
 	}
 	key, rest, ok := splitKey(l.text)
 	if !ok {
 		return w.refuse(i, "a line at column 0 that is not a key, a comment, a document marker or an entry of the sequence under the key above it — the file is not a plain block mapping and will not be edited")
 	}
-	w.seqKey = ""
-	if strings.TrimSpace(stripComment(rest)) == "" {
-		w.seqKey = key
-	}
+	w.noteSequenceOwner(key, rest)
 	if key != w.cfg.BlockKey {
 		return nil
 	}
@@ -984,6 +978,30 @@ func refuseTabIndent(cfg Config, i int, l lineSpan) error {
 			Message: "a tab in the line's indentation — YAML forbids it, so this file does not load and will not be edited"}
 	}
 	return nil
+}
+
+// compactSequenceEntry handles a column-0 `- ` line that belongs to the
+// previous key's compact block sequence (#2123), reporting whether the line
+// was one. Under the target key it is refused — the block must be a mapping.
+// A `- ` line with no value-less key above it is NOT handled here; it falls
+// through to splitKey and is refused as "not a key".
+func (w *topLevelWalk) compactSequenceEntry(i int, l lineSpan) (bool, error) {
+	if w.seqKey == "" || !isSequenceEntry(l.text) {
+		return false, nil
+	}
+	if w.seqKey == w.cfg.BlockKey {
+		return true, w.refuse(i, fmt.Sprintf("the %s block is a sequence, not a mapping of event names", w.cfg.BlockKey))
+	}
+	return true, nil
+}
+
+// noteSequenceOwner records which top-level key the column-0 `- ` lines that
+// follow may belong to: key, when it carries no inline value; none otherwise.
+func (w *topLevelWalk) noteSequenceOwner(key, rest string) {
+	w.seqKey = ""
+	if strings.TrimSpace(stripComment(rest)) == "" {
+		w.seqKey = key
+	}
 }
 
 // isSequenceEntry reports a block-sequence entry indicator: `-` followed by a
