@@ -18,6 +18,8 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
+
+	"irrlicht/core/internal/fakeproc"
 )
 
 // TestMain redirects the metrics ledger away from the developer's real
@@ -93,8 +95,8 @@ func fakeProcessName() string {
 	return fmt.Sprintf("irrlicht-e2e-%d", os.Getpid())
 }
 
-// startFakeClaudeProcess symlinks /bin/sleep under a unique name so pgrep -x
-// sees our test-controlled "claude" stand-in, starts it with a controlled
+// startFakeClaudeProcess starts a fakeproc stand-in under a unique name so
+// pgrep -x sees our test-controlled "claude" stand-in, starts it with a controlled
 // CWD, and registers a t.Cleanup to kill and reap it. Returns the running
 // command and its CWD.
 func startFakeClaudeProcess(t *testing.T) (*exec.Cmd, string) {
@@ -109,11 +111,8 @@ func startFakeClaudeProcessNamed(t *testing.T, name string) (*exec.Cmd, string) 
 	t.Helper()
 	binDir := realTempDir(t)
 	binPath := filepath.Join(binDir, name)
-	if err := os.Symlink("/bin/sleep", binPath); err != nil {
-		t.Fatalf("symlink /bin/sleep → %s: %v", binPath, err)
-	}
 	fakeCWD := realTempDir(t)
-	cmd := exec.Command(binPath, "60")
+	cmd := fakeproc.Command(t, binPath, "60")
 	cmd.Dir = fakeCWD
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start fake process: %v", err)
