@@ -2,11 +2,12 @@ package junie
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"irrlicht/core/internal/fakeproc"
 )
 
 // deadPID is above any real macOS/Linux PID range (macOS pid_max is 99999;
@@ -87,17 +88,13 @@ func TestLiveJuniePID_GatesStalePIDs(t *testing.T) {
 }
 
 // fakeJunieProcess starts a live process whose argv[0] path token matches
-// processCmdPattern — the system `sleep` binary behind a symlink named
-// `junie` (a symlink, not a copy, so macOS code-signing still holds) — so
+// processCmdPattern — a fakeproc stand-in named `junie` — so
 // liveJuniePID accepts it exactly like a real IDE-spawned junie process
 // (alive AND command-pattern match), with workDir as its working directory.
 func fakeJunieProcess(t *testing.T, workDir string) int {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "junie")
-	if err := os.Symlink("/bin/sleep", bin); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(bin, "60")
+	cmd := fakeproc.Command(t, bin, "60")
 	cmd.Dir = workDir
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
