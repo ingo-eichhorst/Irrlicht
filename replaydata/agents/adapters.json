@@ -233,6 +233,7 @@
     "opencode-v2": {
       "maturity": "planned",
       "capabilities": {
+        "background_process": "untraced",
         "cloud_agent": "absent",
         "file_transcript": "absent"
       }
