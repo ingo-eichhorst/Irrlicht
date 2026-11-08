@@ -231,11 +231,14 @@
       }
     },
     "opencode-v2": {
-      "maturity": "planned",
+      "maturity": "stable",
       "capabilities": {
         "background_process": "untraced",
         "cloud_agent": "absent",
-        "file_transcript": "absent"
+        "context_compaction": "untraced",
+        "file_transcript": "absent",
+        "plan_mode": "absent",
+        "structured_question": "untraced"
       }
     },
     "pi": {

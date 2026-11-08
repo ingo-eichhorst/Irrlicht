@@ -37,6 +37,8 @@
 #  12. Watch scans at once when it can and keeps a separate trailing timer
 #      (this PR's first fix, c32186fc5) → a write after an immediate scan,
 #      with a timer armed earlier, is never scanned.
+#  13. the 2.x tool fold without its todowrite call site (#2109 P5b-2, the
+#      maintainer's Q3) → a 2.1.4 session's todowrite items fold to no task.
 #
 # tools/mutate.sh owns the mechanics this file must not re-improvise: the
 # stale/ambiguous-anchor guards, and the byte-for-byte restore that never
@@ -252,6 +254,16 @@ assert_go_test_goes_red \
   "$OPENCODE" \
   '^TestWatch_AWriteAfterAnImmediateScanIsStillScanned$' \
   "the idle row written after an immediate scan was never scanned"
+
+# ── 13. the 2.x todowrite fold removed ──
+assert_go_test_goes_red \
+  "the 2.x tool fold without its todowrite call site" \
+  "core/adapters/inbound/agents/opencode/parser_v2.go" \
+  $'\tif name == "todowrite" {\n\t\tp.appendTodowriteDeltas(state, ev)\n\t}\n' \
+  '' \
+  "$OPENCODE" \
+  '^TestComputeMetrics_V2TodowriteTasks$' \
+  "the 2.x todowrite items were not folded"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-reader-mutations: $fails FAILED"

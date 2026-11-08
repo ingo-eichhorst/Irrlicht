@@ -1,0 +1,48 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:tui_slash_command",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:tui_slash_command"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:tui_slash_command",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:tui_slash_command\n\n## Reasoning\n\nThe scenario sends slash commands that do NOT call the model (claudecode `/cost`, `/help`), and asserts the session stays ready through them. On OpenCode 2.x those commands are the TUI's own: the service's command registry holds only model-calling templates.\n\n- **Probed, per location** (the record's untried case): `GET /api/command?location[directory]=<a probe location>` answered exactly two commands, `init` (\"guided AGENTS.md setup\") and `review` (\"review changes [commit|branch|pr], defaults to uncommitted\") — `/Users/factory/.oc2sb/qa/p5b2-work/probe/2-5-commands.json`. Both are prompts the agent runs, so `POST /api/session/{id}/command` with either one is a model turn: the opposite of this scenario.\n- The synchronous commands (`/help` and friends) are therefore client-side in the TUI. This host has no TUI driver (no tmux; the opencode-v2 driver is API-only), so the cell cannot be driven.\n\n## daemon_capability: full, read from code\n\nThe 2.x reader's only activity source is `session_message` rows (watcher_v2.go). A client-side command writes none, so there is nothing for the detector to read and the session stays ready — the V1 column's recorded outcome for the same scenario. This is a code reading, not a recording.\n\n## What would flip this\n\nA TUI driver for 2.x on a host with tmux, or a non-model command in the service registry.",
+      "caveats": [
+        "The record measured `GET /api/command` without a location as listing no command; with a location it lists two (init, review), both model-calling. That corrects the record's 'no command' without changing its verdict.",
+        "daemon_capability: full is read from code (watcher_v2.go reads only session_message rows), not recorded."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-5-commands.json",
+          "note": "GET /api/command for one location on the sandbox 2.1.4 service: init and review only"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: lists session_v2 rows with time_archived IS NULL; a session is admitted on its first session_message activity while a service is up (#2107); an archived or missing row emits EventRemoved (v2SessionGone)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-5_synchronous-slash-command/metadata.json",
+          "note": "the V1 column's recorded arc: the session stays ready through /help"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "driver_capability=gap:tui_slash_command — OpenCode 2.x's synchronous slash commands are TUI-local; the service registry for a location lists only init and review, both model-calling (probe/2-5-commands.json). No API form of this scenario exists, and this host has no TUI driver."
+    }
+  }
+}

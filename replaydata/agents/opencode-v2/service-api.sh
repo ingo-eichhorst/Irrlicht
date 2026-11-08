@@ -306,6 +306,37 @@ oc2_running_tool() {
   jq -r --arg t "$tool" 'if any(.content[]?; .type == "tool" and .name == $t and .state.status == "running") then "running" else empty end' <<<"$data" 2>/dev/null || true
 }
 
+# oc2_valid_shell_command <cmd> accepts only a harmless user shell escape:
+# one of echo, date, pwd or true, then plain words (letters, digits and
+# `._=:-`), with no `..`. POST /api/session/{id}/shell runs the command INSIDE
+# the shared service, on the host, in the session's directory (2.1.4 openapi:
+# "Execute one shell command in the session's working directory") — so no `/`,
+# no shell metacharacter and no parent reference can leave RUN_CWD or do
+# anything a recipe's escape does not need (#2109 P5b-2).
+oc2_valid_shell_command() {
+  [[ "${1:-}" =~ ^(echo|date|pwd|true)(\ [A-Za-z0-9._=:-]+)*$ ]] && [[ "$1" != *..* ]]
+}
+
+# oc2_shell_rows_done <db> <sid> prints how many of the session's `shell` rows
+# have left `running` (2.1.4 Session.Message.Shell status: running, exited,
+# timeout, killed — read off the sandbox store's row for `echo hello`).
+# Read-only; a failed read returns 1.
+oc2_shell_rows_done() {
+  oc2_valid_sid "$2" || return 1
+  oc2_store_read "$1" "$2's shell rows" \
+    "SELECT count(*) FROM session_message WHERE session_id='$2' AND type='shell' AND json_extract(data,'\$.status') <> 'running'"
+}
+
+# oc2_turn_in_flight <db> <sid> prints "yes" while the session has a user row
+# newer than its last idle — a turn is running — and nothing otherwise.
+# Read-only; a failed read returns 1.
+oc2_turn_in_flight() {
+  oc2_valid_sid "$2" || return 1
+  oc2_store_read "$1" "$2's turn" \
+    "SELECT 'yes' FROM session_message m JOIN session_v2 s ON s.id = m.session_id
+      WHERE m.session_id='$2' AND m.type='user' AND m.time_created > coalesce(s.time_idle,0) LIMIT 1"
+}
+
 # oc2_idle_mark <db> <sid> prints "<time_idle>|<idle_outcome>" for a session —
 # 0 and empty while it has never gone idle. Read-only. A failed read prints
 # nothing and returns 1: "could not look" is never "not idle yet".

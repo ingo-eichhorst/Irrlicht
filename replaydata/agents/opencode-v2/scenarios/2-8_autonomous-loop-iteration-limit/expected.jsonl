@@ -1,0 +1,1 @@
+{"notes":"OpenCode 2.x (#2109 P5b-2): FROZEN, as the V1 column. No agent-native autonomous loop exists in 2.1.4 (strings scan), so there is no arc to specify.","scenario_id":"autonomous-loop-iteration-limit","schema_version":1,"source":".claude/skills/ir:onboard-agent/scenario-meanings.md → autonomous-loop-iteration-limit"}

@@ -1,0 +1,47 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a\n\n## Reasoning\n\nThe scenario stresses a LINE-oriented transcript reader with one oversized line. OpenCode 2.x keeps no transcript file: the service writes `session_message` rows into its SQLite store, and the daemon reads each row's `data` column whole (watcher_v2.go, metrics_v2.go) — a TEXT value has no line-buffer ceiling to stress. The column's capability model already declares `file_transcript: absent` (adapters.json), which derives this cell to n/a. Same verdict as the V1 column's 2-16, for the same structural reason.",
+      "caveats": [
+        "The committed transcript.jsonl is the driver's export of those rows, one line each; it is a fixture format, not something the agent writes."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: lists session_v2 rows with time_archived IS NULL; a session is admitted on its first session_message activity while a service is up (#2107); an archived or missing row emits EventRemoved (v2SessionGone)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics_v2.go",
+          "note": "queryV2SessionMetrics re-folds every session_message row in seq order; cumulative tokens/cost come from the session_v2 columns"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-16_oversized-transcript-line/metadata.json",
+          "note": "the V1 column's frozen n/a verdict"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — OpenCode 2.x writes no line-oriented transcript (store rows, read whole); adapters.json file_transcript: absent. Frozen, as the V1 column."
+    }
+  }
+}

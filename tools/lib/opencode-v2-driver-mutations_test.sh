@@ -32,6 +32,19 @@
 #  15. reset_session archiving the old session before the new one exists
 #      (review F2).
 #
+# P5b-2's steps (#2109), each guard mutated and its case gone red:
+#  16. compact ignoring the service's refusal → a refused compaction is
+#      recorded as a run (it ends `timeout` instead of being refused);
+#  17. shell without its command check → `rm -rf x` is POSTed to the shared
+#      service;
+#  18. shell's command check without its `..` clause → `echo ..` is sent;
+#  19. shell not waiting for its row to leave running → a stuck shell row
+#      ends the run `ok`;
+#  20. mid_turn_send without its in-flight check → a send after the turn
+#      ended is recorded as a mid-turn one;
+#  21. mid_turn_send without its delivery check → a delivery the API does
+#      not take is sent.
+#
 # Mutation 1 runs until the test's watchdog (the cell deadline + 8s); the
 # driver's readiness waits run on the test's short knobs. Kept apart from
 # opencode-v2-rig-mutations_test.sh because it drives the stub service.
@@ -182,6 +195,36 @@ assert_red "a slot switch without saving the idle mark" "$DRIVER" \
 assert_red "reset_session archiving before the new session exists" "$DRIVER" \
   $'  new_session || return 1\n  step_set_archived true "$old" || return 1\n' $'  step_set_archived true "$old" || return 1\n  new_session || return 1\n' \
   "FAIL: …after the new one existed" reset
+
+# ── 16. compact ignoring a refusal ──
+assert_red "a refused compaction recorded as a run" "$DRIVER" \
+  $'  if ! oc2_api POST "/api/session/$SESSION_ID/compact" \'{}\' > /dev/null; then' $'  if ! oc2_api POST "/api/session/$SESSION_ID/compact" \'{}\' > /dev/null && false; then' \
+  "FAIL: a compaction the service refuses: not recorded as ok" compact
+
+# ── 17. shell without its command check ──
+assert_red "an unchecked shell command sent" "$DRIVER" \
+  '  if ! oc2_valid_shell_command "$cmd"; then' '  if false; then' \
+  "FAIL: shell 'rm -rf x': refused" shell
+
+# ── 18. shell's check without its parent-reference clause ──
+assert_red "a shell command with '..' sent" "$SERVICE_API" \
+  ' && [[ "$1" != *..* ]]' '' \
+  "FAIL: shell 'echo ..': refused" shell
+
+# ── 19. shell not waiting for its row ──
+assert_red "a shell step that does not wait for its row" "$DRIVER" \
+  '    if (( now > before )); then' '    if true; then' \
+  "FAIL: a shell row that never leaves running: timeout" shell
+
+# ── 20. mid_turn_send without its in-flight check ──
+assert_red "a mid-turn send after the turn ended accepted" "$DRIVER" \
+  '  if [[ "$running" != "yes" ]]; then' '  if false; then' \
+  "FAIL: a mid-turn send after the turn ended: refused" midturn
+
+# ── 21. mid_turn_send without its delivery check ──
+assert_red "an unchecked delivery sent" "$DRIVER" \
+  '  if [[ "$delivery" != "queue" && "$delivery" != "steer" ]]; then' '  if false; then' \
+  "FAIL: a delivery the API does not take: refused" midturn
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-driver-mutations: $fails FAILED"

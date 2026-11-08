@@ -143,23 +143,25 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	// reported the entry as suppressing nothing in the same run. The table
 	// itself is unchanged and still historical.
 	// #2109 P5b-1's fifteen opencode-v2 recordings moved PairedButUngraded ONTO
-	// the two entries below, both historical. (No value stated, per the note
-	// above.)
+	// two historical entries here; P5b-2's twelve moved it OFF both (this check
+	// reported each as suppressing nothing, so they are deleted) and ONTO the
+	// two below, both historical too. (No value stated, per the note above.)
 	{
 		File:   "issue1480_timing_test.go",
-		Marker: "#1699 moved it 105 -> 106",
-		Reason: "a historical note that #1699 moved this file's timing bound, " +
-			"a different measurement from the catalog census; the sentence " +
-			"records that move and is not refreshed as the catalog grows. It " +
-			"collides only because PairedButUngraded reached the same integer.",
+		Marker: "#1980's final DSH fixture tree moves the aggregate bounds",
+		Reason: "a historical note that #1980 moved this file's aggregate " +
+			"timing bounds, a different measurement from the catalog census; " +
+			"the sentence records that move and is not refreshed as the " +
+			"catalog grows. It collides only because PairedButUngraded " +
+			"reached the same integer.",
 	},
 	{
 		File:   "replay_sidecar.go",
-		Marker: "+ 28ms cluster (rejected)    1           2        141       106    826",
-		Reason: "a row of #1478's historical calibration table (the 28ms " +
-			"cluster window, rejected), whose drift>1s column is not a live " +
-			"catalog census. The surrounding comment presents the table as " +
-			"that calibration's measurement. It collides only because " +
+		Marker: "+ 2ms cluster window         4           1        143       118    821",
+		Reason: "a row of #1478's historical calibration table (the 2ms " +
+			"cluster window), whose drift>1s column is not a live catalog " +
+			"census. The surrounding comment presents the table as that " +
+			"calibration's measurement. It collides only because " +
 			"PairedButUngraded reached the same integer.",
 	},
 	{

@@ -1,0 +1,94 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nOpenCode 2.x queues a prompt sent while a turn runs: `POST …/prompt` with `delivery: \"queue\"` (2.1.4 openapi Session.Inbox.Delivery: steer, queue). Probed on the sandbox service (/Users/factory/.oc2sb/qa/p5b2-work/probe/2-10-queue.log): the queued prompt waited in the session inbox (`GET …/inbox` listed it) while turn 1 streamed; when turn 1's step finished, the service wrote the queued user row and the agent answered it in the SAME execution — one idle row at the very end, no idle between the two answers, and no `synthetic` row.\n\n## What the daemon has to do\n\nOne contiguous working span: no ready when turn 1's step finishes (no idle row lands there), no flicker when the queued user row lands, and ready once everything is consumed (the single idle row / Stop hook).",
+      "caveats": [
+        "The probe showed no synthetic row on this path, so #2127's finding 2 (no parser branch for `synthetic`) is not in play; the recording checks it again."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_v2.go",
+          "note": "each assistant row's model.id is the step's ModelName; text items feed applyAssistantText (task-estimate scan)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: lists session_v2 rows with time_archived IS NULL; a session is admitted on its first session_message activity while a service is up (#2107); an archived or missing row emits EventRemoved (v2SessionGone)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-10-queue.log",
+          "note": "probe: a queued prompt joined the running execution; one idle row at the end"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "settings deny the shell tool in RUN_CWD/opencode.json (a backstop: the local model reached for it in a no-tool turn once)",
+        "a slow first prompt; 5s later, while it runs, a second prompt with delivery queue (the driver refuses unless the store shows the turn still in flight)"
+      ],
+      "settings": {
+        "permission": {
+          "bash": "deny"
+        }
+      },
+      "timeout_seconds": 420,
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a 400-word explanation of how TCP works, covering the three-way handshake, sequence numbers, acknowledgements, and flow control. Use full paragraphs. Do not use any tools."
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "mid_turn_send",
+          "text": "Now also list three fun facts about giraffes. Do not use any tools.",
+          "delivery": "queue"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "working from the first prompt, with no ready or waiting in its first 12s",
+        "both prompts answered (two user rows in the transcript)",
+        "ready once, at the end, and no working after it — no flicker at the step boundary or the queued row's landing"
+      ]
+    }
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nMany turns of file-tool work on one session. On 2.x every turn is the same shape — a user row, assistant steps with tool items, an idle row, and the plugin's Stop hook — so each turn must read working → ready on the SAME ses_… id, with no waiting (the per-cell config allows the file tools) and no drift: the session stays bound to the one service pid throughout (pid.go servicePIDFor).\n\n## Spec choices\n\n- Six turns, each start at least 1s after the previous ready (the record's rule for anchoring past a hook-ended turn; since #2120 no bounce is expected, and none is anchored).\n- The work is deliberately small (three tiny files, a summary, a note, a glob listing), so the shared local model's context stays small.",
+      "caveats": [
+        "Smaller than V1's 2-6 (six files and longer prompts): the brief keeps the shared Kolibri context small; the stress here is turns and tool steps, not context size."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_v2.go",
+          "note": "each assistant row's model.id is the step's ModelName; text items feed applyAssistantText (task-estimate scan)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/pid.go",
+          "note": "servicePIDFor: a session no client runs binds to the one running service; OwnsSharedPID answers false for an archived row"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "settings allow the edit and read tools and deny the shell in RUN_CWD/opencode.json, so no permission ask can hold a file-tool turn",
+        "six turns, 6s apart"
+      ],
+      "settings": {
+        "permission": {
+          "bash": "deny",
+          "edit": "allow",
+          "read": "allow"
+        }
+      },
+      "timeout_seconds": 900,
+      "script": [
+        {
+          "type": "send",
+          "text": "Using your write tool, create three files: step1.txt containing 1, step2.txt containing 2 and step3.txt containing 3. Do not ask me anything. Then reply with exactly: created"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Using your read tool, read step1.txt, step2.txt and step3.txt back and tell me the number each one contains. Then reply with exactly: read-back-done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Using your write tool, create summary.md listing step1.txt 1, step2.txt 2 and step3.txt 3, one per line. Then reply with exactly: summary-written"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Using your edit tool, append a new line total=6 to summary.md, then read summary.md back and show me its full contents. Then reply with exactly: total-appended"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Using your write tool, create notes1.txt containing a single line: notes1. Then read it back. Then reply with exactly: notes-done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Using your glob tool, list the .txt and .md files in the current directory and tell me how many there are. Then reply with exactly: all-done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "six working → ready arcs on one ses_… session, each ended by its own Stop hook",
+        "never waiting",
+        "one pid binding for the whole session"
+      ]
+    }
+  }
+}
