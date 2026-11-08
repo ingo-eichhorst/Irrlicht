@@ -305,6 +305,26 @@ done
 # cross-adapter cell no longer auto-grants — and never Applies — every OTHER
 # adapter's hook installer too (claudecode chief among them: #1769).
 ADAPTERS_CSV="$(IFS=,; echo "${ADAPTERS[*]}")"
+# The opencode-v2 column (#2109) records into a SHARED home — the OpenCode
+# service's own $HOME/.local/share/irrlicht, where its plugin's beacon finds the
+# daemon — so a session an earlier daemon persisted there would be restored
+# into this recording. run-cell.sh asks spawn_record_daemon to wipe the stores
+# this daemon will own (record_daemon_wipe_state_stores, after its socket
+# guards and never in the production home); this rig asks the same way when
+# any adapter of the pair is that column.
+# BEGIN multi_wipes_state_stores — extracted by lib/run-cell-multi-opencode-v2_test.sh
+multi_wipes_state_stores() {
+  local a
+  for a in "$@"; do
+    [[ "$a" == "opencode-v2" ]] && return 0
+  done
+  return 1
+}
+# END multi_wipes_state_stores
+if multi_wipes_state_stores "${ADAPTERS[@]}"; then
+  # shellcheck disable=SC2034  # read by the sourced spawn-record-daemon.sh (spawn_record_daemon)
+  RECORD_DAEMON_WIPE_STATE_STORES=1
+fi
 spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTERS_CSV" \
   || { write_error_manifest "daemon_socket_missing"; exit 1; }
 
@@ -316,7 +336,9 @@ spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPT
 # the upper bound on how long the session it asks about could have lived. It is
 # per-ADAPTER, not per-run — the two agents in a cross-adapter cell routinely
 # declare different timeouts — so it cannot be re-derived after this loop.
-declare -a DRV_PIDS=() DRV_ADAPTERS=() DRV_TIMEOUTS=()
+# DRV_DRIVERS (#2109 P5b-1) is the fourth: the driver file, so the teardown gate
+# can tell a driver that never starts tmux from one whose sessions it must ask about.
+declare -a DRV_PIDS=() DRV_ADAPTERS=() DRV_TIMEOUTS=() DRV_DRIVERS=()
 for a in "${ADAPTERS[@]}"; do
   sub="$STAGING/$a"
   mkdir -p "$sub"
@@ -354,6 +376,7 @@ for a in "${ADAPTERS[@]}"; do
   DRV_PIDS+=($!)
   DRV_ADAPTERS+=("$a")
   DRV_TIMEOUTS+=("$timeout_s")
+  DRV_DRIVERS+=("$driver")
 done
 
 # --- Did each driver's tmux sessions actually die? (#1825 / AC4) --------
@@ -375,8 +398,24 @@ TMUX_UNREADABLE=""        # space-joined adapters whose check could not be made
 # BEGIN record_driver_teardown — extracted verbatim and executed against a
 # shadowed tmux by lib/run-cell-multi-teardown_test.sh. Keep the markers.
 record_driver_teardown() {
-  local a="$1" pid="$2" lifetime="$3"
+  local a="$1" pid="$2" lifetime="$3" driver="${4:-}"
   local deadline status detail rc=0
+  # A driver that never invokes tmux has no session to leak — the opencode-v2
+  # driver drives a running OpenCode service over HTTP (#2109), and its
+  # recording host has no tmux at all. Asking tmux anyway reads that host as
+  # "unreadable" and fails the whole run, so the exemption is the one run-cell.sh
+  # applies (driver_launches_tmux, lib/tmux-teardown-check.sh). It is per
+  # DRIVER: a tmux-launching partner in the same run is still asked.
+  if [[ -n "$driver" ]] && ! driver_launches_tmux "$driver"; then
+    status="skipped"
+    detail="$driver invokes no tmux command, so there is no session to leak"
+    TMUX_TEARDOWN_JSON="$(jq -n \
+      --argjson o "$TMUX_TEARDOWN_JSON" \
+      --arg k "$a" --arg status "$status" --arg detail "$detail" --arg pid "$pid" \
+      '$o + {($k): {status: $status, detail: $detail, driver_pid: $pid}}')"
+    echo "tmux teardown [$a]: $status — $detail"
+    return 0
+  fi
   # The deadline/lifetime pair await_gone_bound checks (rule 3 in
   # lib/tmux-teardown-check.sh's header). Computed by tmux_teardown_deadline_for
   # — shared with run-cell.sh (#1828) so the two rigs cannot drift apart on the
@@ -468,7 +507,7 @@ for i in "${!DRV_PIDS[@]}"; do
   # Measured HERE, one statement after this driver returned — see the block
   # comment above. A driver that FAILED is measured too: a crashed driver is
   # the likeliest one to have skipped its own teardown.
-  record_driver_teardown "${DRV_ADAPTERS[$i]}" "${DRV_PIDS[$i]}" "${DRV_TIMEOUTS[$i]}"
+  record_driver_teardown "${DRV_ADAPTERS[$i]}" "${DRV_PIDS[$i]}" "${DRV_TIMEOUTS[$i]}" "${DRV_DRIVERS[$i]}"
 done
 
 # --- Drain the daemon ---------------------------------------------------

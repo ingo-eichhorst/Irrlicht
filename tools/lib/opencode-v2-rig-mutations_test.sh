@@ -38,6 +38,9 @@
 #   18. driver_launches_tmux claiming every driver launches tmux;
 #   19. spawn_record_daemon without the live-socket refusal;
 #   20. the XDG hook wait polling the whole shared base again.
+#   The cross-adapter rig (#2109 P5b-1, cell 4-2):
+#   25. run-cell-multi.sh never asking for the opencode-v2 store wipe;
+#   26. run-cell-multi.sh's teardown gate without its no-tmux exemption.
 #   21. agent_home_isolate without its half-relocation refusal → the half-set
 #       run still exits 1 (the absolute-path check refuses the unset
 #       variable's empty value, measured), but no longer names the half
@@ -256,6 +259,17 @@ OPENCODE_DB=/nonexistent/2109-mutation.db assert_go_red "relocation probe keepin
 assert_sh_red "state-store wipe without the home-shape refusal" "$SPAWN" \
   '  if [[ "$real" != */.local/share/irrlicht ]]; then' '  if false; then' \
   "$LIB/spawn-record-daemon_test.sh" "FAIL: …and its decoy sessions/ cost/ instances/ survive"
+
+# ── 25. run-cell-multi.sh never asking for the opencode-v2 store wipe ──
+RCM="tools/onboarding-factory/scripts/run-cell-multi.sh"
+assert_sh_red "run-cell-multi never wiping for opencode-v2" "$RCM" \
+  '    [[ "$a" == "opencode-v2" ]] && return 0' '    [[ "$a" == "opencode-v2-never" ]] && return 0' \
+  "$LIB/run-cell-multi-opencode-v2_test.sh" "FAIL: opencode-v2 + claudecode: wipe"
+
+# ── 26. run-cell-multi.sh's teardown gate without its no-tmux exemption ──
+assert_sh_red "run-cell-multi asking tmux about a driver that launches none" "$RCM" \
+  '  if [[ -n "$driver" ]] && ! driver_launches_tmux "$driver"; then' '  if false; then' \
+  "$LIB/run-cell-multi-teardown_test.sh" "FAIL: a no-tmux driver on a host tmux cannot be asked about: the run passes"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-rig-mutations: $fails FAILED"

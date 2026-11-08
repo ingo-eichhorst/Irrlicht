@@ -280,6 +280,33 @@ run_verdict
 assert_eq "verdict" "fail-the-run" "$VERDICT"
 assert_eq "under the unreadable code" "driver_tmux_teardown_unreadable" "$MANIFEST_CODE"
 
+echo "== a driver that launches no tmux has no session to leak (#2109 P5b-1) =="
+# The opencode-v2 driver drives a running OpenCode 2.x service over HTTP and
+# never starts tmux, and the recording host has none (`command -v tmux` finds
+# nothing). Asking tmux anyway reads that host as "unreadable" and fails every
+# such run — run-cell.sh learned the exemption in P5a (driver_launches_tmux);
+# this is the cross-adapter rig's copy. `broken` models "tmux cannot be asked".
+NOTMUX_DRIVER="$TMP/api-driver.sh"
+printf '#!/bin/bash\n# drives a service over HTTP — tmux appears only in this comment\ncurl -s http://127.0.0.1/\n' > "$NOTMUX_DRIVER"
+TMUX_DRIVER="$TMP/tmux-driver.sh"
+printf '#!/bin/bash\ntmux new-session -d -s "drv-$$"\n' > "$TMUX_DRIVER"
+reset_run
+fake_tmux broken
+record_driver_teardown opencode-v2 "$PID_A" "$LIFETIME" "$NOTMUX_DRIVER" >/dev/null 2>&1
+run_verdict
+assert_eq "a no-tmux driver on a host tmux cannot be asked about: the run passes" "pass" "$VERDICT"
+assert_eq "…its teardown reads skipped" "skipped" "$(jq -r '."opencode-v2".status' <<< "$TMUX_TEARDOWN_JSON")"
+assert_contains "…saying why" "invokes no tmux command" "$(jq -r '."opencode-v2".detail' <<< "$TMUX_TEARDOWN_JSON")"
+# Lock: the exemption is the DRIVER's, not the run's — a tmux-launching partner
+# in the same run is still asked, and still fails the run when it cannot be.
+reset_run
+fake_tmux broken
+record_driver_teardown opencode-v2 "$PID_A" "$LIFETIME" "$NOTMUX_DRIVER" >/dev/null 2>&1
+record_driver_teardown claudecode "$PID_B" "$LIFETIME" "$TMUX_DRIVER" >/dev/null 2>&1
+run_verdict
+assert_eq "…but its tmux-launching partner is still asked: the run fails" "fail-the-run" "$VERDICT"
+assert_eq "…under the unreadable code, naming the partner" "claudecode" "$TMUX_UNREADABLE"
+
 unset -f tmux
 
 # --- The gate is WIRED into the script's control flow ----------------------
