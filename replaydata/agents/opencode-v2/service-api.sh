@@ -244,6 +244,60 @@ oc2_valid_sid() { [[ "${1:-}" =~ ^ses_[A-Za-z0-9]+$ ]]; }
 # per_1730b57c2001jmLgKMBeVTW1uA); the same alphabet as oc2_valid_sid.
 oc2_valid_permission_id() { [[ "${1:-}" =~ ^per_[A-Za-z0-9]+$ ]]; }
 
+# oc2_valid_message_id <id> accepts only an opencode message id — the shape
+# session_message.id has in the sandbox 2.1.4 store (msg_1ba7ed0a2001fYWWKs0OECkkvW,
+# read with sqlite3 -readonly) and the revert/stage body's messageID pattern
+# (^msg_ in the 2.1.4 openapi.json).
+oc2_valid_message_id() { [[ "${1:-}" =~ ^msg_[A-Za-z0-9]+$ ]]; }
+
+# oc2_valid_model_ref <provider> <model> accepts a provider id and a model id
+# as an opencode config names them (`kolibri` / `kolibri-1-4bit`; a model id
+# may carry a `/`, as `qwen/qwen3-4b` does): a leading alphanumeric, then
+# alphanumerics and `._-` (and `/` in the model). Nothing else is sent.
+oc2_valid_model_ref() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ "$2" != *..* ]]
+}
+
+# oc2_nth_last_user_message <db> <sid> <n> prints the id of the session's
+# n-th last `user` row (n=1: the latest). Read-only; a failed read or no such
+# row returns 1 — "could not look" is never an id.
+oc2_nth_last_user_message() {
+  local db="$1" sid="$2" n="$3" out
+  oc2_valid_sid "$sid" || return 1
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || return 1
+  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
+    "SELECT id FROM session_message WHERE session_id='$sid' AND type='user' ORDER BY seq DESC LIMIT 1 OFFSET $((n - 1))" 2>&1)" || {
+    echo "[driver] reading $sid's user messages from $db failed: $out" >&2; return 1; }
+  [[ -n "$out" ]] || { echo "[driver] $sid has fewer than $n user message(s) in $db" >&2; return 1; }
+  printf '%s\n' "$out"
+}
+
+# oc2_child_session <db> <sid> prints the id of the session's oldest child —
+# a session_v2 row whose parent_id is <sid> — or nothing while it has none.
+# Read-only; a failed read returns 1.
+oc2_child_session() {
+  local db="$1" sid="$2" out
+  oc2_valid_sid "$sid" || return 1
+  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
+    "SELECT id FROM session_v2 WHERE parent_id='$sid' ORDER BY time_created LIMIT 1" 2>&1)" || {
+    echo "[driver] reading $sid's children from $db failed: $out" >&2; return 1; }
+  printf '%s' "$out"
+}
+
+# oc2_running_tool <db> <sid> <tool> prints "running" when the session's latest
+# assistant row has a tool item named <tool> whose state is running (the shape
+# a 2.1.4 assistant row carries: content[] {type:"tool", name, state:{status}}),
+# and nothing otherwise. Read-only; a failed read returns 1.
+oc2_running_tool() {
+  local db="$1" sid="$2" tool="$3" data
+  oc2_valid_sid "$sid" || return 1
+  data="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
+    "SELECT data FROM session_message WHERE session_id='$sid' AND type='assistant' ORDER BY seq DESC LIMIT 1" 2>&1)" || {
+    echo "[driver] reading $sid's latest step from $db failed: $data" >&2; return 1; }
+  [[ -n "$data" ]] || return 0
+  jq -r --arg t "$tool" 'if any(.content[]?; .type == "tool" and .name == $t and .state.status == "running") then "running" else empty end' <<<"$data" 2>/dev/null || true
+}
+
 # oc2_idle_mark <db> <sid> prints "<time_idle>|<idle_outcome>" for a session —
 # 0 and empty while it has never gone idle. Read-only. A failed read prints
 # nothing and returns 1: "could not look" is never "not idle yet".
