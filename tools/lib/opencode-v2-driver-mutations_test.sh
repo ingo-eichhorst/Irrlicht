@@ -17,6 +17,17 @@
 #   4. the plugin-load check ignoring "failed to load plugin" → a run with a
 #      plugin the service rejected is driven.
 #
+# P5b-1's steps (#2109), each guard mutated and its refusal case gone red:
+#   5. a {"session": N} target for a slot that does not exist accepted;
+#   6. a session step with no slot accepted;
+#   7. the model step sending an unchecked provider/model;
+#   8. revert staging an id that is not a message id;
+#   9. revert's turn count unchecked;
+#  10. "fewer user messages than asked" read as an id;
+#  11. await_child using a child id that is not a session id;
+#  12. sigkill without the service-window opt-in (OC2_SERVICE_WINDOW=1);
+#  13. sigkill without re-checking that the pid is still the service.
+#
 # Mutation 1 runs until the test's watchdog (the cell deadline + 8s); the
 # driver's readiness waits run on the test's short knobs. Kept apart from
 # opencode-v2-rig-mutations_test.sh because it drives the stub service.
@@ -98,6 +109,51 @@ assert_red "no location boot before the plugin wait" "$DRIVER" \
 assert_red "a failed plugin load ignored" "$SERVICE_API" \
   $'  grep -qF "failed to load plugin\\" target=$plugin " <<<"$tail_lines" && return 2\n' "" \
   "FAIL: exit reason nonzero(2) — expected [nonzero(2)] got [ok]"
+
+# ── 5. an unknown slot accepted ──
+assert_red "an unknown session slot accepted" "$DRIVER" \
+  '  if [[ ! "$n" =~ ^[1-9][0-9]*$ ]] || (( n > ${#SLOT_SID[@]} )); then' '  if false; then' \
+  "wanted to find [invalid session slot '3' (have 1)]"
+
+# ── 6. a session step with no slot accepted ──
+assert_red "a session step with no slot accepted" "$DRIVER" \
+  '    session)          [[ -n "$tgt" ]] || {' '    session)          true || {' \
+  "FAIL: a session step with no slot: refused"
+
+# ── 7. the model step unchecked ──
+assert_red "an unchecked model ref sent" "$DRIVER" \
+  '  if ! oc2_valid_model_ref "$provider" "$model"; then' '  if false; then' \
+  "FAIL: a malformed model id: refused"
+
+# ── 8. revert staging a non-message id ──
+assert_red "a revert target that is not a message id staged" "$DRIVER" \
+  '  if ! oc2_valid_message_id "$mid"; then' '  if false; then' \
+  "FAIL: a revert target that is not a message id: refused"
+
+# ── 9. revert's turn count unchecked ──
+assert_red "revert's turn count unchecked" "$DRIVER" \
+  '  if [[ ! "$turns" =~ ^[1-9][0-9]*$ ]]; then' '  if false; then' \
+  "wanted to find [turns must be a positive integer]"
+
+# ── 10. no such user message read as an id ──
+assert_red "too few user messages read as an id" "$SERVICE_API" \
+  $'  [[ -n "$out" ]] || { echo "[driver] $sid has fewer than $n user message(s) in $db" >&2; return 1; }\n' "" \
+  "wanted to find [has fewer than 2 user message(s)]"
+
+# ── 11. await_child using a non-session child id ──
+assert_red "a child id that is not a session id used" "$DRIVER" \
+  '      if ! oc2_valid_sid "$child"; then' '      if false; then' \
+  "wanted to find [not a session id]"
+
+# ── 12. sigkill without the service-window opt-in ──
+assert_red "the service signalled without a service window" "$DRIVER" \
+  '  if [[ "${OC2_SERVICE_WINDOW:-}" != "1" ]]; then' '  if false; then' \
+  "FAIL: …and the service was not signalled"
+
+# ── 13. sigkill without re-checking the pid ──
+assert_red "the service pid not re-checked before the signal" "$DRIVER" \
+  $'  if ! oc2_is_service_args $args; then\n    log "$sig: refusing' $'  if false; then\n    log "$sig: refusing' \
+  "FAIL: …and it was not signalled"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-driver-mutations: $fails FAILED"
