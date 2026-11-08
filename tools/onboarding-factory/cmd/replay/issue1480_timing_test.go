@@ -458,8 +458,27 @@ const (
 // ./tools/onboarding-factory/cmd/replay -run
 // 'TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog' -count=1` measured
 // 1093 pairs over 365 recordings.
+//
+// #2109 (phase P5-0) lowers the pair floor by two, 1093 -> 1091, and the whole
+// drop is one golden:
+//
+//	codex 2-13 (…2026-08-18-00-42-27…)  ordered_matches 4 -> 2
+//
+// measured with `git show origin/main:<golden> | jq '.extended_check.ordered_matches'`
+// against the same expression over the working copy, for each of the eight
+// goldens the change rewrote; the other seven did not move. The daemon that
+// recorded that sidecar forced its Stop hook's turn-end tail ready → working →
+// ready 2.02s after the hook, and the replay reproduced the pair. The sidecar
+// replay now mirrors the daemon's rule that such a tail is not new activity
+// (services.IsHookTurnTail), so the pair is gone from the replay and its two
+// kind-matched pairs leave the population. The recording count does not move.
+// Same frozen-sidecar cost as #1799's and #1800's: it resolves when codex 2-13
+// is re-recorded on a daemon with the rule. `go test
+// ./tools/onboarding-factory/cmd/replay -run
+// 'TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog' -count=1 -v`
+// measured 1091 pairs over 365 recordings.
 const (
-	minKindMatchedPairs   = 1093
+	minKindMatchedPairs   = 1091
 	minMeasuredRecordings = 365
 )
 

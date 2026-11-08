@@ -10,7 +10,7 @@
   "summary": {
     "total_events": 10,
     "consumed_events": 10,
-    "total_transitions": 5,
+    "total_transitions": 3,
     "first_event_time": "2026-09-06T05:16:46.037533+02:00",
     "last_event_time": "2026-09-06T05:16:57.444381+02:00",
     "wall_clock_session_duration": 11406848000,
@@ -18,13 +18,11 @@
       "ready": 6488249000,
       "working": 4918599000
     },
-    "flicker_count": 2,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "ready_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
     "cum_input_tokens": 4,
@@ -76,36 +74,6 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false
-    },
-    {
-      "index": 3,
-      "event_index": 7,
-      "virtual_time": "2026-09-06T05:16:51.845048+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
-    },
-    {
-      "index": 4,
-      "event_index": 7,
-      "virtual_time": "2026-09-06T05:16:51.845048+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
     }
   ],
   "sessions": [
@@ -130,7 +98,7 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 1,
-    "replayed_transition_count": 4,
+    "replayed_transition_count": 2,
     "ordered_matches": 0,
     "ordered_mismatches": [
       {
@@ -141,16 +109,6 @@
       },
       {
         "index": 1,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 2,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 3,
         "kind": "extra_in_replay",
         "replayed": "working→ready"
       }

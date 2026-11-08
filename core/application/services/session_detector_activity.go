@@ -1233,6 +1233,15 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
+	// The tail of a turn a hook already ended — the store's or transcript's own
+	// record of that turn end, read after the hook — is not new activity, and
+	// forcing it would record a ready → working → ready bounce (#2109). See
+	// IsHookTurnTail for the four conditions.
+	if IsHookTurnTail(d.hookTurnEnd(state.SessionID), ev.Synthetic, state.Metrics) {
+		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, HookTurnTailReason)
+		return
+	}
+	d.forgetHookTurnEnd(state.SessionID)
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, ForceReadyToWorkingReason)
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
 	state.State = session.StateWorking
@@ -1386,6 +1395,8 @@ func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev a
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: withProvenance(classifierInputs(state.Metrics), update.Verdict)})
 	state.State = newState
 	state.UpdatedAt = now
+	// A hook-decided ready leaves a marker; every other transition drops it.
+	d.noteHookTurnEnd(state.SessionID, HookTurnEndOf(newState, update.Verdict, state.Metrics))
 
 	// Autonomy spans (#1905) open and close on this same edge, and read the
 	// state BEFORE the per-target-state switch below rewrites it — see

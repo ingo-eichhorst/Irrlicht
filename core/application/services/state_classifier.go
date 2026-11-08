@@ -316,7 +316,7 @@ var stateRules = []stateRule{
 		// This is the one rule whose tier is genuinely dynamic — the same
 		// verdict is authoritative when a hook delivered it and inferred when
 		// the transcript tail did.
-		id:     "agent_done",
+		id:     ruleAgentDone,
 		tierOf: tierAgentDone,
 		when:   func(_ string, m *session.SessionMetrics) bool { return m.IsAgentDone() },
 		decide: classifyAgentDone,
@@ -356,6 +356,10 @@ var stateRules = []stateRule{
 
 // ruleTranscriptActivity is the id of the ladder's total last rung.
 const ruleTranscriptActivity = "transcript_activity"
+
+// ruleAgentDone is the id of the turn-done rung, the one rule whose tier is
+// dynamic. HookTurnEndOf reads it to tell a hook's ready from a transcript's.
+const ruleAgentDone = "agent_done"
 
 // tierAgentDone reports the tier the agent-done verdict rests on: TierHook
 // when a Stop hook delivered it, TierTranscript when it was inferred from the
