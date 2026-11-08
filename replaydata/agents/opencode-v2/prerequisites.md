@@ -24,7 +24,8 @@ hosts. The rig drives that service over its HTTP API
 
 On the development host the service is the sandbox's, under
 `/Users/factory/.oc2sb/` (one shared service on the fixed port 49374, the local
-Splash model at `127.0.0.1:8085`).
+Kolibri-1 4-bit model served by mlx_lm at `127.0.0.1:8087`, which other
+projects share: send one turn at a time).
 
 ## The exports
 

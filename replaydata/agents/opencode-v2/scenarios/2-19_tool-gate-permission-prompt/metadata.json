@@ -48,7 +48,7 @@
     "recipe": {
       "applicable": true,
       "preconditions": [
-        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Splash model at 127.0.0.1:8085); the rig never starts, stops or reconfigures it",
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
         "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
       ],
       "setup": [
