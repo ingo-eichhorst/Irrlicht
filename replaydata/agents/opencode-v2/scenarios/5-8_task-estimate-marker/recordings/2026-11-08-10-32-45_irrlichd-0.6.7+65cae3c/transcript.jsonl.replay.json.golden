@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "opencode",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 9,
+    "consumed_events": 9,
+    "total_transitions": 7,
+    "first_event_time": "2026-11-08T09:32:58.5Z",
+    "last_event_time": "2026-11-08T09:33:45.875Z",
+    "wall_clock_session_duration": 47375000000,
+    "state_durations": {
+      "ready": 12761000000,
+      "working": 34614000000
+    },
+    "flicker_count": 4,
+    "flickers_by_category": {
+      "ready_between_working": 2,
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 2,
+      "force ready→working on first activity": 2
+    },
+    "cum_input_tokens": 14581,
+    "cum_output_tokens": 2033,
+    "cum_cache_read_tokens": 26466,
+    "model_name": "kolibri-1-4bit",
+    "execution_confidence": 97
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-11-08T09:32:58.5Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-11-08T09:32:58.5Z",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 2,
+      "virtual_time": "2026-11-08T09:33:17.536Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…n this phase—only add the validation checks. Once this phase is complete, t…"
+    },
+    {
+      "index": 3,
+      "event_index": 3,
+      "virtual_time": "2026-11-08T09:33:23.941Z",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 5,
+      "virtual_time": "2026-11-08T09:33:29.792Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…alid inputs and get the correct result. Once this extraction is complete, the…"
+    },
+    {
+      "index": 5,
+      "event_index": 6,
+      "virtual_time": "2026-11-08T09:33:36.148Z",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 8,
+      "virtual_time": "2026-11-08T09:33:45.875Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…puts produce the correct final result. Once all tests pass, the refactor is c…"
+    }
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e457f0989ffetNv0kdCBsqJSxg"
+}

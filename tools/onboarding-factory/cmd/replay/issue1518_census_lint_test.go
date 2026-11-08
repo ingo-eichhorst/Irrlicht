@@ -142,6 +142,26 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	// three recordings moved PairedButUngraded off that pair, and this check
 	// reported the entry as suppressing nothing in the same run. The table
 	// itself is unchanged and still historical.
+	// #2109 P5b-1's fifteen opencode-v2 recordings moved PairedButUngraded ONTO
+	// the two entries below, both historical. (No value stated, per the note
+	// above.)
+	{
+		File:   "issue1480_timing_test.go",
+		Marker: "#1699 moved it 105 -> 106",
+		Reason: "a historical note that #1699 moved this file's timing bound, " +
+			"a different measurement from the catalog census; the sentence " +
+			"records that move and is not refreshed as the catalog grows. It " +
+			"collides only because PairedButUngraded reached the same integer.",
+	},
+	{
+		File:   "replay_sidecar.go",
+		Marker: "+ 28ms cluster (rejected)    1           2        141       106    826",
+		Reason: "a row of #1478's historical calibration table (the 28ms " +
+			"cluster window, rejected), whose drift>1s column is not a live " +
+			"catalog census. The surrounding comment presents the table as " +
+			"that calibration's measurement. It collides only because " +
+			"PairedButUngraded reached the same integer.",
+	},
 	{
 		File:   "timing_drift.go",
 		Marker: "<1ms       190   23.0%",

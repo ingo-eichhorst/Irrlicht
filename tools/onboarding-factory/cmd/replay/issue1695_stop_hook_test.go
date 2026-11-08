@@ -178,11 +178,40 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_fd69f27acffePoG9lVtPjn9640",
 	},
-	// #2109: the opencode-v2 column's first recordings (OpenCode 2.x through
-	// the service API). Like every opencode recording, the 2.x watcher emits
-	// activity with no file_size, so the sidecar cannot drive the replay and
-	// each Stop — the 2.x plugin's session.execution.* turn end — is graded
-	// transcript-only.
+	// #2109: the opencode-v2 column (OpenCode 2.x through the service API) —
+	// P5a's three smoke cells and P5b-1's cells 1-*, 3-*, 4-*, 5-*. Like every
+	// opencode recording, the 2.x watcher emits activity with no file_size, so
+	// the sidecar cannot drive the replay and each Stop — the 2.x plugin's
+	// session.execution.* turn end — is graded transcript-only. 3-4 is absent:
+	// its turn is killed with the service, so no Stop fires.
+	"opencode-v2/scenarios/1-1_session-start/recordings/2026-11-08-10-19-29_irrlichd-0.6.7+3c9015d/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e458b3370ffehdxLJib5HUMN9K",
+	},
+	"opencode-v2/scenarios/1-2_session-end/recordings/2026-11-08-11-12-27_irrlichd-0.6.7+11d6faa/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e455ab333ffeAItY0NVgf8ldN0",
+	},
+	"opencode-v2/scenarios/1-3_long-idle-live-session/recordings/2026-11-08-10-20-32_irrlichd-0.6.7+9ba95b2/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e458a3c46ffedZ8Uj1tNj9vNfk",
+	},
+	"opencode-v2/scenarios/1-4_session-resume/recordings/2026-11-08-10-58-48_irrlichd-0.6.7+654418a/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e456732b3ffejLTkE55Kdf5Xyz",
+	},
+	"opencode-v2/scenarios/1-5_session-reset/recordings/2026-11-08-10-57-36_irrlichd-0.6.7+40ba2f0/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e45684d50ffeYLQ8XjWrIw22dK",
+	},
+	"opencode-v2/scenarios/1-6_checkpoint-rewind/recordings/2026-11-08-11-01-11_irrlichd-0.6.7+7526222/transcript.jsonl": {
+		Stops: 3, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e456501e3ffe9v2HHs9jbre74i",
+	},
+	"opencode-v2/scenarios/1-8_model-context-display/recordings/2026-11-08-10-26-31_irrlichd-0.6.7+0907390.dirty/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e4584c131ffe2xjSX2gBXkfv1D",
+	},
 	"opencode-v2/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-11-08-01-48-42_irrlichd-0.6.7+dc1fdce/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475ed2c5ffeJfSEv1V9umg51m",
@@ -194,6 +223,34 @@ var stopHookCensus = map[string]stopRecording{
 	"opencode-v2/scenarios/2-20_user-esc-interrupt/recordings/2026-11-08-01-50-20_irrlichd-0.6.7+aa12987/transcript.jsonl": {
 		Stops: 2, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475d55b9ffeCz8SRfSn02Idsu",
+	},
+	"opencode-v2/scenarios/3-1_foreground-subagent/recordings/2026-11-08-10-35-26_irrlichd-0.6.7+742df6c/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e457c9598ffe2EgAmbm0aEBp3x",
+	},
+	"opencode-v2/scenarios/3-2_background-subagent/recordings/2026-11-08-11-04-22_irrlichd-0.6.7+e968be4/transcript.jsonl": {
+		Stops: 3, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e45621bf4ffenRVsKCbDYO9u6S",
+	},
+	"opencode-v2/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-11-08-10-45-14_irrlichd-0.6.7+a221738/transcript.jsonl": {
+		Stops: 3, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e45739d2bffeAkOPGlzdDyfVMy",
+	},
+	"opencode-v2/scenarios/5-1_token-accounting/recordings/2026-11-08-10-27-38_irrlichd-0.6.7+c409505.dirty/transcript.jsonl": {
+		Stops: 3, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e4583ba32ffek2CxFzTNtayYZ3",
+	},
+	"opencode-v2/scenarios/5-2_model-identification/recordings/2026-11-08-11-02-14_irrlichd-0.6.7+77576bf/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e45640ddfffesBALpNnNZh9BY0",
+	},
+	"opencode-v2/scenarios/5-3_model-switch-midsession/recordings/2026-11-08-11-03-00_irrlichd-0.6.7+b1189a9/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e45635b50ffeiGOyiQj5Z6qFLx",
+	},
+	"opencode-v2/scenarios/5-8_task-estimate-marker/recordings/2026-11-08-10-32-45_irrlichd-0.6.7+65cae3c/transcript.jsonl": {
+		Stops: 3, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e457f0989ffetNv0kdCBsqJSxg",
 	},
 	"pi/scenarios/1-1_session-start/recordings/2026-08-22-14-14-18_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,

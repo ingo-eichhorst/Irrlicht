@@ -31,14 +31,44 @@
 #   permission_reply wait for the session's pending permission ask, hold it
 #                    {"hold_seconds": N}, then answer it {"decision": "once"}
 #   seed_instruction write {"path","text"} into RUN_CWD (AGENTS.md-shaped)
-# `keys`, `live`, `restart`, `sigkill` have no API form here (there is no
-# per-session process to signal), and multi-session steps are not ported yet;
-# a recipe naming one is refused by recipe-lint before anything runs.
+# Sessions (#2109 P5b-1) — every session is a 1-based "slot", as in the tmux
+# drivers' contract; the first is slot 1:
+#   start_session    POST /api/session at the same location; the new slot
+#                    becomes active and the previous one stays live
+#   session          {"session": N} switches the active slot; ANY step may
+#                    carry "session": N to switch before it runs
+#   reset_session    a new session at the same location, then the previously
+#                    active one is archived (PATCH {"archived": true}) — the
+#                    API form of the TUI's /new
+#   archive          PATCH the active session {"archived": true}
+#   unarchive        PATCH the active session {"archived": false}
+#   model            POST /api/session/{id}/model {"provider","model"}
+#   revert           rewind the active session to before its Nth-last user
+#                    message ({"turns": N}, default 1): POST revert/stage
+#                    {messageID, files: true}, then POST revert/commit
+#   background       POST /api/session/{id}/background — move the session's
+#                    running backgroundable tools into background observation
+#   await_tool       wait until the active session's tool {"tool": NAME} runs
+#   await_child      wait for a child session of the active one — a
+#                    session_v2 row whose parent_id is it — and, with
+#                    {"tool": NAME}, until a tool NAME of that child is running
+# The service window (#2109 Q1: approved for 3-4 and 1-2's service-exit
+# variant only):
+#   exit_clean       SIGTERM the service; sigkill — SIGKILL it. Both refuse
+#                    unless the operator exported OC2_SERVICE_WINDOW=1, and
+#                    re-check that the pid is still a `serve --service`.
+#                    Every slot is exported BEFORE the signal, and that is its
+#                    transcript: the store's writer is gone afterwards. The
+#                    driver never starts a service; restoring it is the
+#                    operator's, outside the run.
+# `keys`, `live` and `restart` have no API form here; a recipe naming one is
+# refused by recipe-lint before anything runs.
 #
 # Staging contract (identical across drivers): driver.log, driver.exit-reason
-# (ok | timeout | nonzero(N)), session.uuid[s], transcript.path[s]. The
-# transcript is the session's session_message rows exported read-only from the
-# store (service-api.sh oc2_export_session), one opencode.Parser line each.
+# (ok | timeout | nonzero(N)), session.uuid[s], transcript.path[s] — one line
+# per slot, in slot order; session.uuid is slot 1. Each transcript is the
+# slot's session_message rows exported read-only from the store (service-api.sh
+# oc2_export_session), one opencode.Parser line each.
 #
 # Usage:
 #   driver-interactive.sh <staging-dir> <session-uuid> <timeout-seconds> <settings-path> <script-json>
@@ -71,7 +101,7 @@ source "$_HERE/../../_lib/drive/contracts.sh"
 # recipe-lint contract (#508 #4): the step types this driver genuinely elicits,
 # scraped from this file by tools/onboarding-factory/scripts/lib/recipe-lint.sh.
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh, never expanded in shell
-DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction"
+DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction start_session session reset_session archive unarchive model revert background await_tool await_child exit_clean sigkill"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh
 DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 
@@ -93,9 +123,16 @@ REACHED_EPILOGUE=0
 NONZERO_2='nonzero(2)'
 TIMEOUT_REASON='timeout'
 
-# The run's one session (multi-session steps are not ported yet).
+# Session slots: SLOT_SID[n-1] / SLOT_IDLE[n-1] hold slot n's id and idle
+# mark; SESSION_ID / IDLE_MARK are the ACTIVE slot's (ACTIVE is 1-based, 0
+# while no session exists). Indexed arrays only — macOS bash 3.2 has no
+# `declare -A`.
+SLOT_SID=()
+SLOT_IDLE=()
+ACTIVE=0
 SESSION_ID=""
-IDLE_MARK=0   # the session's time_idle before its last send
+IDLE_MARK=0           # the active session's time_idle before its last send
+SERVICE_SIGNALLED=0   # 1 once a service-window step has signalled the service
 
 # Readiness timings, read at call time. The defaults ARE the production
 # timings; they are overridable only so the stub-service test need not spend
@@ -125,6 +162,13 @@ refuse_and_exit() { EXIT_REASON="$NONZERO_2"; exit 2; }
 
 # --- Preflight: everything the rig must not change -------------------------
 oc2_preflight || refuse_and_exit
+# The service window's steps signal the shared service. Without the operator's
+# opt-in they are refused here, before a session exists or a model turn runs —
+# not when the step is reached, after the recipe has already used the service.
+if [[ "${OC2_SERVICE_WINDOW:-}" != "1" ]] && jq -e 'any(.[]; .type == "exit_clean" or .type == "sigkill")' <<<"$SCRIPT_JSON" > /dev/null; then
+  log "refusing: this recipe signals the service (exit_clean/sigkill) — it is shared, and only an operator-approved service window (OC2_SERVICE_WINDOW=1) may stop it"
+  refuse_and_exit
+fi
 log "service pid $OC2_SVC_PID at $OC2_URL; store $(oc2_store); RUN_CWD $RUN_CWD"
 
 DB="$(oc2_store)"
@@ -178,18 +222,10 @@ done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 # the location is the cheapest one, it changes nothing, and the boot it caused
 # was logged within the same second.
 create_session() {
-  local mark body sid created waited=0 rc
+  local mark waited=0 rc
   mark="$(wc -c < "$SERVICE_LOG" 2>/dev/null | tr -d ' ' || echo 0)"
   [[ "$mark" =~ ^[0-9]+$ ]] || mark=0
-  body="$(jq -nc --arg d "$RUN_CWD" '{location:{directory:$d}}')"
-  sid="$(oc2_api POST /api/session "$body" | jq -r '(.data // .).id // empty')" || true
-  if ! oc2_valid_sid "$sid"; then
-    log "the service did not create a session (got '$sid')"
-    EXIT_REASON="$NONZERO_2"; return 1
-  fi
-  created="$(oc2_now)"
-  SESSION_ID="$sid"
-  log "session: $sid"
+  new_session || return 1
   if ! oc2_api GET "/api/command?location%5Bdirectory%5D=$(jq -rn --arg d "$RUN_CWD" '$d|@uri')" > /dev/null; then
     log "booting the service's location for $RUN_CWD failed"
     EXIT_REASON="$NONZERO_2"; return 1
@@ -218,17 +254,231 @@ create_session() {
     fi
     sleep 1; waited=$((waited + 1))
   done
-  log "plugin loaded for $sid after ${waited}s ($PLUGIN)"
+  log "plugin loaded for $SESSION_ID after ${waited}s ($PLUGIN)"
+  settle_new_session
+}
 
-  # The daemon's 2.x reader seeds a session's cursor the FIRST time it sees it
-  # and reads only later rows as activity (watcher_v2.go scanV2Session), and it
-  # scans at most once per 500ms (watcher.go defaultMinScanGap). Letting
-  # OC2_SEED_SETTLE_S (2s) pass between the session's creation and its first
-  # prompt is intended to keep the first turn out of that seed; it is a bound,
-  # not an observation — the daemon exposes no signal for "seeded".
-  while (( $(oc2_now) - created < OC2_SEED_SETTLE_S )); do sleep 0.5; done
-  IDLE_MARK=0
+# new_session opens one more session at RUN_CWD and makes it the active slot
+# (the previous active slot is saved, and stays live). The location is booted
+# once, by create_session; a later session at the same location joins it.
+NEW_SESSION_AT=0
+new_session() {
+  local body sid
+  body="$(jq -nc --arg d "$RUN_CWD" '{location:{directory:$d}}')"
+  sid="$(oc2_api POST /api/session "$body" | jq -r '(.data // .).id // empty')" || true
+  if ! oc2_valid_sid "$sid"; then
+    log "the service did not create a session (got '$sid')"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  NEW_SESSION_AT="$(oc2_now)"
+  save_active
+  SLOT_SID+=("$sid"); SLOT_IDLE+=(0)
+  load_slot "${#SLOT_SID[@]}"
+  log "session: $sid (slot $ACTIVE)"
+}
+
+# The daemon's 2.x reader seeds a session's cursor the FIRST time it sees it
+# and reads only later rows as activity (watcher_v2.go scanV2Session), and it
+# scans at most once per 500ms (watcher.go defaultMinScanGap). Letting
+# OC2_SEED_SETTLE_S (2s) pass between a session's creation and its first
+# prompt is intended to keep the first turn out of that seed; it is a bound,
+# not an observation — the daemon exposes no signal for "seeded".
+settle_new_session() {
+  while (( $(oc2_now) - NEW_SESSION_AT < OC2_SEED_SETTLE_S )); do sleep 0.5; done
   return 0
+}
+
+save_active() { # writes the active slot's idle mark back to its slot
+  (( ACTIVE > 0 )) || return 0
+  SLOT_IDLE[ACTIVE-1]="$IDLE_MARK"
+  return 0
+}
+load_slot() { # <n> — makes slot n (1-based, existing) the active one
+  ACTIVE="$1"; SESSION_ID="${SLOT_SID[ACTIVE-1]}"; IDLE_MARK="${SLOT_IDLE[ACTIVE-1]}"
+  return 0
+}
+
+# switch_slot <n> switches the active session to slot n. Only a slot that
+# exists is accepted: an unknown slot is a recipe bug, and driving the wrong
+# session would record a different scenario.
+switch_slot() {
+  local n="$1"
+  if [[ ! "$n" =~ ^[1-9][0-9]*$ ]] || (( n > ${#SLOT_SID[@]} )); then
+    log "invalid session slot '$n' (have ${#SLOT_SID[@]}) — refusing to drive a session the recipe did not create"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  (( n == ACTIVE )) && return 0
+  save_active
+  load_slot "$n"
+  log "switch -> session slot $n ($SESSION_ID)"
+}
+
+step_start_session() {
+  new_session || return 1
+  settle_new_session
+}
+
+# step_set_archived <true|false> [<sid>] archives or unarchives a session
+# (the active one by default). The id came from the service and passed
+# oc2_valid_sid when its slot was made, so it is safe in the URL path.
+step_set_archived() {
+  local flag="$1" sid="${2:-$SESSION_ID}"
+  if ! oc2_api PATCH "/api/session/$sid" "$(jq -nc --argjson a "$flag" '{archived:$a}')" > /dev/null; then
+    log "setting archived=$flag on $sid failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "archived=$flag on $sid"
+}
+
+step_reset_session() {
+  local old="$SESSION_ID"
+  new_session || return 1
+  step_set_archived true "$old" || return 1
+  settle_new_session
+}
+
+# step_model <provider> <model> switches the active session's model. Both go
+# into a JSON body (built by jq, so quoting is not the risk); they are still
+# held to a model id's shape, so a recipe typo is refused rather than sent.
+step_model() {
+  local provider="$1" model="$2"
+  if ! oc2_valid_model_ref "$provider" "$model"; then
+    log "model: refusing provider '$provider' / model '$model' — not a provider/model id"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if ! oc2_api POST "/api/session/$SESSION_ID/model" "$(jq -nc --arg p "$provider" --arg m "$model" '{model:{id:$m, providerID:$p}}')" > /dev/null; then
+    log "switching $SESSION_ID to $provider/$model failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "model of $SESSION_ID -> $provider/$model"
+}
+
+# step_revert <turns> rewinds the active session to before its Nth-last user
+# message. The message id is read from the store (read-only) and goes into a
+# request body; it must be a message id (oc2_valid_message_id).
+step_revert() {
+  local turns="$1" mid
+  if [[ ! "$turns" =~ ^[1-9][0-9]*$ ]]; then
+    log "revert: turns must be a positive integer, got '$turns'"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  mid="$(oc2_nth_last_user_message "$DB" "$SESSION_ID" "$turns")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  if ! oc2_valid_message_id "$mid"; then
+    log "revert: refusing '$mid' — not a message id (msg_…)"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if ! oc2_api POST "/api/session/$SESSION_ID/revert/stage" "$(jq -nc --arg m "$mid" '{messageID:$m, files:true}')" > /dev/null \
+     || ! oc2_api POST "/api/session/$SESSION_ID/revert/commit" > /dev/null; then
+    log "revert of $SESSION_ID to before $mid failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "reverted $SESSION_ID to before $mid ($turns user turn(s))"
+}
+
+step_background() {
+  if ! oc2_api POST "/api/session/$SESSION_ID/background" > /dev/null; then
+    log "backgrounding $SESSION_ID's tools failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "background sent to $SESSION_ID"
+}
+
+# await_running_tool <sid> <tool> <label> polls, to the run's deadline, until a
+# tool <tool> of session <sid> is running (oc2_running_tool) — the moment a
+# recipe acts on a running tool, observed rather than slept for. <label> names
+# what is awaited in the log.
+await_running_tool() {
+  local sid="$1" tool="$2" label="$3" state
+  while :; do
+    state="$(oc2_running_tool "$DB" "$sid" "$tool")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+    if [[ -n "$state" ]]; then
+      log "$label is running its $tool tool"; return 0
+    fi
+    if (( $(remaining_seconds) <= 0 )); then
+      log "$label ran no $tool tool by the deadline"
+      EXIT_REASON="$TIMEOUT_REASON"; return 1
+    fi
+    sleep 1
+  done
+}
+
+step_await_tool() { # <tool> — a tool of the active session
+  if [[ -z "$1" ]]; then
+    log "await_tool needs {\"tool\": NAME}"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  await_running_tool "$SESSION_ID" "$1" "$SESSION_ID"
+}
+
+# step_await_child [<tool>] waits, to the run's deadline, for a child session
+# of the active one, and with <tool> until one of that child's tools named
+# <tool> is running.
+step_await_child() {
+  local tool="$1" child=""
+  until [[ -n "$child" ]]; do
+    child="$(oc2_child_session "$DB" "$SESSION_ID")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+    [[ -n "$child" ]] && break
+    if (( $(remaining_seconds) <= 0 )); then
+      log "await_child: no child of $SESSION_ID by the deadline"
+      EXIT_REASON="$TIMEOUT_REASON"; return 1
+    fi
+    sleep 1
+  done
+  if ! oc2_valid_sid "$child"; then
+    log "await_child: refusing child '$child' — not a session id"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if [[ -z "$tool" ]]; then
+    log "child session $child of $SESSION_ID is up"; return 0
+  fi
+  await_running_tool "$child" "$tool" "child session $child of $SESSION_ID"
+}
+
+# export_slots [<note>] writes every slot's transcript (slot order) and lists
+# them. Used by the epilogue, and by a service-window step right BEFORE its
+# signal: after it the store's writer is gone, so what the store held then is
+# the transcript.
+export_slots() {
+  local n sid out ok=0
+  : > "$STAGING/transcript.paths"
+  for (( n = 1; n <= ${#SLOT_SID[@]}; n++ )); do
+    sid="${SLOT_SID[n-1]}"
+    if (( n == 1 )); then out="$STAGING/opencode-v2-transcript.jsonl"; else out="$STAGING/opencode-v2-transcript-$n.jsonl"; fi
+    if ! oc2_export_session "$DB" "$sid" "$out"; then
+      log "export of $sid from $DB failed"; ok=1
+    fi
+    echo "$out" >> "$STAGING/transcript.paths"
+    log "$sid -> $out ($(wc -l < "$out" | tr -d ' ') rows)${1:+ — $1}"
+  done
+  return "$ok"
+}
+
+# step_signal_service <SIGTERM|SIGKILL> — the service window's two steps.
+step_signal_service() {
+  local sig="$1" args signalled_at
+  # The window opt-in was checked before the session existed (after preflight).
+  args="$(ps -o args= -p "$OC2_SVC_PID" 2>/dev/null || true)"
+  # shellcheck disable=SC2086  # word-splitting the argv string is the point
+  if ! oc2_is_service_args $args; then
+    log "$sig: refusing — pid $OC2_SVC_PID is no longer an opencode 'serve --service' (args: $args)"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  export_slots "exported before $sig" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  if ! kill -s "${sig#SIG}" "$OC2_SVC_PID"; then
+    log "$sig to service pid $OC2_SVC_PID failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  SERVICE_SIGNALLED=1
+  signalled_at="$(oc2_now)"
+  log "$sig sent to service pid $OC2_SVC_PID"
+  while kill -0 "$OC2_SVC_PID" 2>/dev/null; do
+    if (( $(remaining_seconds) <= 0 )); then
+      log "$sig: service pid $OC2_SVC_PID still alive at the deadline ($(( $(oc2_now) - signalled_at ))s after the signal)"
+      EXIT_REASON="$TIMEOUT_REASON"; return 1
+    fi
+    sleep 0.5
+  done
+  log "service pid $OC2_SVC_PID is gone after $(( $(oc2_now) - signalled_at ))s"
 }
 
 current_idle() { # prints the active session's time_idle (0 when never idle)
@@ -312,6 +562,11 @@ create_session || exit 2
 
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
+  # Optional inline target: switch to slot N before the step runs.
+  tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$tgt" && "$type" != "start_session" ]]; then
+    switch_slot "$tgt" || break
+  fi
   case "$type" in
     send)             step_send "$(jq -r '.text' <<<"$step")" || break ;;
     wait_turn)        step_wait_turn || break ;;
@@ -319,6 +574,18 @@ while IFS= read -r step; do
     interrupt)        step_interrupt || break ;;
     permission_reply) step_permission_reply "$(jq -r '.decision // "once"' <<<"$step")" "$(jq -r '.hold_seconds // 0' <<<"$step")" || break ;;
     seed_instruction) step_seed_instruction "$(jq -r '.path' <<<"$step")" "$(jq -r '.text' <<<"$step")" || break ;;
+    start_session)    step_start_session || break ;;
+    session)          [[ -n "$tgt" ]] || { log "a session step needs {\"session\": N}"; EXIT_REASON="$NONZERO_2"; break; } ;;
+    reset_session)    step_reset_session || break ;;
+    archive)          step_set_archived true || break ;;
+    unarchive)        step_set_archived false || break ;;
+    model)            step_model "$(jq -r '.provider // empty' <<<"$step")" "$(jq -r '.model // empty' <<<"$step")" || break ;;
+    revert)           step_revert "$(jq -r '.turns // 1' <<<"$step")" || break ;;
+    background)       step_background || break ;;
+    await_tool)       step_await_tool "$(jq -r '.tool // empty' <<<"$step")" || break ;;
+    await_child)      step_await_child "$(jq -r '.tool // empty' <<<"$step")" || break ;;
+    exit_clean)       step_signal_service SIGTERM || break ;;
+    sigkill)          step_signal_service SIGKILL || break ;;
     *)                log "unknown step type: $type"; EXIT_REASON="$NONZERO_2"; break ;;
   esac
   if [[ "$EXIT_REASON" == "ok" ]] && (( $(remaining_seconds) <= 0 )); then
@@ -327,16 +594,18 @@ while IFS= read -r step; do
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Epilogue: export the session, write the contract ----------------------
-TRANSCRIPT_OUT="$STAGING/opencode-v2-transcript.jsonl"
-if ! oc2_export_session "$DB" "$SESSION_ID" "$TRANSCRIPT_OUT"; then
-  log "export of $SESSION_ID from $DB failed"
-  [[ "$EXIT_REASON" == "ok" ]] && EXIT_REASON="$NONZERO_2"
+# A signalled service already had every slot exported right before its signal
+# (step_signal_service sets SERVICE_SIGNALLED only after that export); its
+# store's writer is gone, so that export stands.
+if (( SERVICE_SIGNALLED == 0 )); then
+  if ! export_slots; then
+    [[ "$EXIT_REASON" == "ok" ]] && EXIT_REASON="$NONZERO_2"
+  fi
 fi
-echo "$SESSION_ID" > "$STAGING/session.uuid"
-echo "$SESSION_ID" > "$STAGING/session.uuids"
-echo "$TRANSCRIPT_OUT" > "$STAGING/transcript.path"
-echo "$TRANSCRIPT_OUT" > "$STAGING/transcript.paths"
-log "$SESSION_ID -> $TRANSCRIPT_OUT ($(wc -l < "$TRANSCRIPT_OUT" | tr -d ' ') rows); exit reason: $EXIT_REASON"
+printf '%s\n' "${SLOT_SID[@]}" > "$STAGING/session.uuids"
+head -n1 "$STAGING/session.uuids" > "$STAGING/session.uuid"
+head -n1 "$STAGING/transcript.paths" > "$STAGING/transcript.path"
+log "${#SLOT_SID[@]} session(s): $(tr '\n' ' ' < "$STAGING/session.uuids"); exit reason: $EXIT_REASON"
 
 REACHED_EPILOGUE=1
 echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
