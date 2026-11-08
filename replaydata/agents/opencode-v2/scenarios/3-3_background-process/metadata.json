@@ -4,7 +4,7 @@
     "agent_supports": "yes",
     "daemon_capability": "incapable",
     "driver_capability": "ready",
-    "confidence": 0.5,
+    "confidence": 0.8,
     "notes": "agent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready"
   },
   "details": {
@@ -16,10 +16,11 @@
       "agent_supports": "yes",
       "daemon_capability": "incapable",
       "driver_capability": "ready",
-      "confidence": 0.5,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Reasoning (a probe)\n\nThe scenario needs the session to stay working past its turn's own end while a backgrounded shell process lives. Agent side: OpenCode 2.x can move a running shell tool into background observation (POST /api/session/{id}/background, 2.1.4 openapi.json). Daemon side, read from code: BackgroundProcessCount is set only by the shared tailer (tailer_metrics.go) and the muse/geminicli parsers; the opencode fold (metrics.go, metrics_v2.go) bypasses the tailer and never sets it, so nothing holds a 2.x session working after its turn ends. The probe records the shape to confirm that.\n\n## Spec choices\n\nThe scenario's: the session's ready comes well after the turn's own Stop hook (held while the process lives).",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario needs the session to stay working past its turn's own end while a backgrounded shell process lives. Agent side: OpenCode 2.x can move a running shell tool into background observation (POST /api/session/{id}/background, 2.1.4 openapi.json). Daemon side, read from code: BackgroundProcessCount is set only by the shared tailer (tailer_metrics.go) and the muse/geminicli parsers; the opencode fold (metrics.go, metrics_v2.go) bypasses the tailer and never sets it, so nothing holds a 2.x session working after its turn ends.\n\n## Probe (2026-11-08 11:06, not promoted; evidence in /Users/factory/.oc2sb/qa/p5b1-work/probe-3-3/)\n\n- Agent side confirmed: POST /background moved the running `sleep 25` into background (a `synthetic` row, 'User requested that active blocking work be moved to the background'), and the turn ended (idle succeeded, Stop hook 11:06:51.770) while the process ran.\n- Daemon side confirmed: the session went ready at that Stop hook — not held for the live process. When the process finished the service injected a `synthetic` `<shell … state=\"completed\">` row and ran one more turn; the daemon showed it only as instant ready → working → ready blips (11:07:15.146/.147, and the Stop at 16.427/.429).\n- A daemon finding beside the freeze: right after the hook-ended ready at 11:06:51.770 the session bounced ready → working → ready twice (+18ms, +440ms), and the P5-0 tail skip (#2120) did not fire for that turn — it did for the follow-up turn (11:07:16.865). Not root-caused here; read as unverified hypotheses: the backgrounded tool still `running` in the stored step at that moment (IsAgentDone false), or the 2.x parser's missing branch for `synthetic` rows (parseV2Message returns false for them).\n\n## Spec choices\n\nThe scenario's: the session's ready comes well after the turn's own Stop hook (held while the process lives).",
       "caveats": [
-        "Expected to fail (daemon incapable, by code); the probe recording is the evidence for the freeze."
+        "Frozen: daemon incapable, by code (the opencode fold never sets BackgroundProcessCount) and by the probe (ready at the turn's own Stop hook while the process lived). The probe recording was not promoted: its spec fails by design, and it carries the bounce finding above.",
+        "The probe's session is ses_e456033afffetBAtO93x62DTkz in the sandbox store."
       ],
       "sources": [
         {
