@@ -4,7 +4,7 @@
     "agent_supports": "yes",
     "daemon_capability": "full",
     "driver_capability": "ready",
-    "confidence": 0.4,
+    "confidence": 0.75,
     "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
   },
   "details": {
@@ -16,10 +16,11 @@
       "agent_supports": "yes",
       "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.4,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning (a probe)\n\nThe record left this cell to a P5b probe of POST /api/session/{id}/background — 'Move active foreground backgroundable tools for this session into background observation' (2.1.4 openapi.json). The probe: the parent starts a task-tool child that runs a shell `sleep 20`; once the child's tool runs (await_child), the driver backgrounds the parent's running tools, waits for the parent's own turn end, and then for the child to drain. Daemon side, read from code: the child is linked (parent_linked) and is exempt from the TTL and same-pid sweeps; whether the parent is held working on a live child after its own hook-ended turn is what the recording shows.\n\n## Spec choices (the scenario's unified rule)\n\n- The parent's own Stop hook lands while the child still runs (the child's ready comes AFTER it).\n- The parent is held working until the child drains: its ready comes after the child's.",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe record left this cell to a P5b probe of POST /api/session/{id}/background — 'Move active foreground backgroundable tools for this session into background observation' (2.1.4 openapi.json). The probe: the parent starts a task-tool child that runs a shell `sleep 20`; once the child's tool runs (await_child), the driver backgrounds the parent's running tools, waits for the parent's own turn end, and then for the child to drain. Daemon side, read from code: the child is linked (parent_linked) and is exempt from the TTL and same-pid sweeps; whether the parent is held working on a live child after its own hook-ended turn is what the recording shows.\n\n## Measured (this cell's recording)\n\n- The service backgrounded the parent's running task tool: it wrote a `synthetic` row ('User requested that active blocking work be moved to the background') and ended the parent's turn (idle succeeded) while the child's `sleep 20` ran.\n- The daemon received the parent's Stop hook and kept the parent working — held on its live child — until the child's own Stop hook and ready; the parent went ready 19ms after the child.\n- When the child completed, the service injected a `synthetic` `<subagent … state=\"completed\">` row into the parent and ran one more parent turn (its own working → Stop hook → ready) — new activity, not a bounce.\n\n## Spec choices (the scenario's unified rule)\n\n- The parent's own Stop hook lands while the child still runs (the child's ready comes AFTER it).\n- The parent is held working until the child drains: its ready comes after the child's.",
       "caveats": [
-        "A probe: if the task tool is not backgroundable, or the daemon releases the parent at its own turn end, the recording refutes this assessment and the cell is corrected from it."
+        "After the child drains, OpenCode runs one more parent turn to deliver the child's result (a `synthetic` row), so the parent shows working → ready once more; the spec ends at the parent's first post-drain ready.",
+        "The 2.x parser has no branch for `synthetic` rows; the transcript-only golden replays the user/assistant/idle rows around them."
       ],
       "sources": [
         {
