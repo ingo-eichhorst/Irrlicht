@@ -1,0 +1,20 @@
+[
+ {
+  "sha": "93ef40c7732e8a99d86eb607245c4800c0899589",
+  "filename": "core/pkg/example/blob.go",
+  "status": "added",
+  "additions": 1,
+  "deletions": 0,
+  "changes": 1,
+  "patch": "@@ -0,0 +1 @@\n+var b = \"QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD\"\n"
+ },
+ {
+  "sha": "550fe7f819c9df3c2a5468af5e356bd44f207612",
+  "filename": "core/pkg/example/zw.go",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-var s = \"ab\"\n+var s = \"a​b\"\n"
+ }
+]

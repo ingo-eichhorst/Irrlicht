@@ -584,6 +584,11 @@ if want tools; then
   # import, so a session pays for every line whether or not the task at hand
   # needs it), and a commit editing only AGENTS.md is exactly the one that
   # would otherwise regrow it past that budget unnoticed under `--changed`.
+  # .claude/skills/ir:pr-merge/ joins for a ninth (#2128): pr-merge-contract_test.sh
+  # pins that skill's never-list, merge-command shape and dry-run bound, and a
+  # commit editing only the SKILL.md is exactly the one that could drop a rule.
+  # It sits before ir:test-mac/ so test-mac-script-mutations_test.sh's anchor,
+  # which spans ir:test-mac/ and the workflow list after it, still matches.
   # .claude/skills/ir:test-mac/ joins the trigger for an eighth reason (#1855):
   # test-mac-script_test.sh DRIVES test-mac.sh end to end against stubs, and
   # test-mac-script-mutations_test.sh breaks each of its gates in turn — gates
@@ -591,7 +596,7 @@ if want tools; then
   # backup that was never refreshed, a bundle overwritten while its process was
   # still alive). Same story, eighth entry: a commit editing only that script,
   # or only restore-prod.sh beside it, is exactly the one that breaks them.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/(install|relay)\.sh$|^AGENTS\.md$|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/(install|relay)\.sh$|^AGENTS\.md$|^\.claude/skills/ir:pr-merge/|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 
   # UNSCOPED, deliberately, and the only gate in this group that is (#1804).

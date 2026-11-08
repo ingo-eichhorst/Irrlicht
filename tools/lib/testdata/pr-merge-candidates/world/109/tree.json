@@ -1,0 +1,13 @@
+{
+ "sha": "8b6daef8dee9b74d856a6f124f9b8fd91a68d1ed",
+ "truncated": false,
+ "tree": [
+  {
+   "path": "core/pkg/example/example.go",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "704092f32bc91366ade6f374074d655544433ab9",
+   "size": 1234
+  }
+ ]
+}

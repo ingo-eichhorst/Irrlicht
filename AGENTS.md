@@ -8,6 +8,10 @@
   file scope, verifies each hand-back with a checker rather than a reading, and
   merges nothing. See [ci-gates.md](docs/ci-gates.md) for the wait and
   gate-scoping rules a concurrent run depends on.
+- Merge the open PRs that are safe with `/ir:pr-merge [--dry-run]`. It is the one
+  skill that merges. `tools/pr-merge-candidates.sh` decides whether a PR may
+  merge, and the LLM review can only veto. External authors and sensitive paths
+  always go to a human.
 - NEVER RUN: the Workflow tool (multi-agent orchestration) if not explicitly requested (too expensive)
 
 ## Process Rules

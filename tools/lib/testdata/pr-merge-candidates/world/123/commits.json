@@ -1,0 +1,16 @@
+[
+ {
+  "sha": "551a80718f45442ce5e0f9c8e8d960f76d3c40bc",
+  "author": {
+   "login": "dependabot[bot]",
+   "type": "Bot"
+  },
+  "commit": {
+   "message": "chore(deps): Bump undici\n\nBumps [undici](https://github.com/nodejs/undici) from 8.12.1 to 8.12.4.\n- [Release notes](https://github.com/nodejs/undici/releases)\n- [Commits](https://github.com/nodejs/undici/compare/v8.12.1...v8.12.4)\n\n---\nupdated-dependencies:\n- dependency-name: undici\n  dependency-version: 8.12.3\n  dependency-type: indirect\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+   "verification": {
+    "verified": true,
+    "reason": "valid"
+   }
+  }
+ }
+]

@@ -1,0 +1,20 @@
+[
+ {
+  "sha": "424037bb92e9b2d2b607c21b68b3864029c0567e",
+  "filename": "platforms/web/package-lock.json",
+  "status": "modified",
+  "additions": 108,
+  "deletions": 108,
+  "changes": 216,
+  "patch": "@@ -6,8 +6,8 @@\n     \"\": {\n       \"name\": \"irrlicht-web\",\n       \"devDependencies\": {\n-        \"jsdom\": \"^30.1.2\",\n-        \"vitest\": \"^5.0.4\"\n+        \"jsdom\": \"^30.1.3\",\n+        \"vitest\": \"^5.0.5\"\n       }\n     },\n     \"node_modules/@asamuzakjp/css-color\": {\n@@ -28,9 +28,9 @@\n       }\n     },"
+ },
+ {
+  "sha": "c14d866866692f6ab4c1dd6653e3f6d453ae4dea",
+  "filename": "platforms/web/package.json",
+  "status": "modified",
+  "additions": 2,
+  "deletions": 2,
+  "changes": 4,
+  "patch": "@@ -8,7 +8,7 @@\n     \"snapshot:png\": \"node snapshots/snapshot.png.mjs\"\n   },\n   \"devDependencies\": {\n-    \"vitest\": \"^5.0.4\",\n-    \"jsdom\": \"^30.1.2\"\n+    \"vitest\": \"^5.0.5\",\n+    \"jsdom\": \"^30.1.3\"\n   }\n }"
+ }
+]

@@ -1,0 +1,20 @@
+[
+ {
+  "sha": "5f6ff79b008aff3a2aba6ec02e53665a09d768ec",
+  "filename": "core/pkg/example/a.go",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1,3 +1,3 @@\n package x\n-var a = 1\n+var a = 2\n"
+ },
+ {
+  "sha": "643cb3642ddb6fbc4026b11e9d5b588978c27022",
+  "filename": "core/pkg/example/b.go",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1,3 +1,3 @@\n package x\n-var a = 1\n+var a = 2\n"
+ }
+]

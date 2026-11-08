@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "704092f32bc91366ade6f374074d655544433ab9",
+  "filename": "core/pkg/example/example.go",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1,3 +1,3 @@\n package x\n-var a = 1\n+var a = 2\n"
+ }
+]

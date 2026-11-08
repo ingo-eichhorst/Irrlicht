@@ -1,0 +1,20 @@
+{
+ "sha": "424f62bec4afbf792068848d0bdd6ada45e17b06",
+ "truncated": false,
+ "tree": [
+  {
+   "path": "platforms/macos/Tests/__Snapshots__/x.png",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "f11bdd439fff8158d5d33d7b328294f63a84ad52",
+   "size": 1234
+  },
+  {
+   "path": "replaydata/agents/x/big.jsonl",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "312c9ee5305e40a4edb1063ee55082905d6c2d2f",
+   "size": 2097152
+  }
+ ]
+}
