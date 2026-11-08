@@ -17,7 +17,7 @@
       "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.75,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nA turn's model call fails and the agent gives up. Probed with the repo's mock-openai-error at its defaults (HTTP 503 `server_error`/`overloaded`, every request — /Users/factory/.oc2sb/qa/p5b2-work/probe/2-14-mock.log): 2.x retried for about 80s (12 requests, the title's included), writing nothing to the store meanwhile but the user row, then wrote an assistant row with `finish: error` and an `idle` row, outcome `failed`, error `{type: provider.internal, status: 503, message: \"Provider overloaded (mock).\"}`. parser_v2.go turns the failed idle into SessionError, the plugin forwards `session.execution.failed` (a Stop hook), and the classifier routes a turn that ended in failure to the error state.\n\n## Wire check\n\nThe per-cell config, with every provider's baseURL pointed at a local capture stub (/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14.log): the title and the turn both named `mock-openai-error-model`; nothing named the Kolibri path, so no request reaches the local model.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nA turn's model call fails and the agent gives up. Probed with the repo's mock-openai-error at its defaults (HTTP 503 `server_error`/`overloaded`, every request — /Users/factory/.oc2sb/qa/p5b2-work/probe/2-14-mock.log): 2.x retried for about 80s (12 requests, the title's included), writing nothing to the store meanwhile but the user row, then wrote an assistant row with `finish: error` and an `idle` row, outcome `failed`, error `{type: provider.internal, status: 503, message: \"Provider overloaded (mock).\"}`. parser_v2.go turns the failed idle into SessionError, the plugin forwards `session.execution.failed` (a Stop hook), and the classifier routes a turn that ended in failure to the error state.\n\n## Wire check\n\nThe final per-cell config, with every provider's baseURL pointed at a local capture stub (/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14-final.log): the title and the turn both named `mock-openai-error-model`; nothing named the Kolibri path, so no request reaches the local model.",
       "caveats": [
         "The ~80s retry window is 2.x's own policy (the AI SDK alone retries twice); the spec gives the failure no upper bound beyond the cell deadline."
       ],
@@ -44,8 +44,8 @@
         },
         {
           "kind": "file",
-          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14.log",
-          "note": "wire check: every request named mock-openai-error-model"
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14-final.log",
+          "note": "wire check of the final config: every request named mock-openai-error-model"
         }
       ]
     },
@@ -80,8 +80,8 @@
                 "id": "mock-openai-error-model",
                 "name": "mock-openai-error-model",
                 "limit": {
-                  "context": 8192,
-                  "output": 1024
+                  "context": 131072,
+                  "output": 4096
                 }
               }
             }
