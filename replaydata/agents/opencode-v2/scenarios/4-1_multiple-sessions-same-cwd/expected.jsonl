@@ -1,0 +1,14 @@
+{"notes":"OpenCode 2.x through the service API (#2109 P5b-1). Two API sessions at one location: distinct ses_… ids, each bound to the one service pid, each with independent arcs; session 1 is driven again while session 2 is alive.","observations":{"model":"kolibri-1-4bit","tokens_nonzero":true},"scenario_id":"multiple-sessions-same-cwd","schema_version":1,"source":".claude/skills/ir:onboard-agent/scenario-meanings.md → multiple-sessions-same-cwd"}
+{"phase": "s1_birth", "kind": "transcript_new", "relative_to": "start", "session_id_prefix": "ses_", "text": "The API session is admitted when its first activity lands (P3, #2107): a ses_… transcript_new. Its first state is not pinned — an API session is first seen working (P4; P5a's smoke cells)"}
+{"phase": "pid_bind", "kind": "pid_discovered", "relative_to": "s1_birth", "same_session_as": "s1_birth", "text": "The session binds to the one running 2.x service (pid.go servicePIDFor) — there is no client process"}
+{"phase": "s1_turn1_start", "expected_state": "working", "relative_to": "s1_birth", "same_session_as": "s1_birth", "text": "Session 1's prompt drives it to working"}
+{"phase": "s1_turn1_end_hook", "kind": "hook_received", "relative_to": "s1_turn1_start", "same_session_as": "s1_birth", "text": "Session 1's Stop hook"}
+{"phase": "s1_turn1_done", "expected_state": "ready", "relative_to": "s1_turn1_start", "same_session_as": "s1_birth", "text": "Session 1's turn ends in ready"}
+{"phase": "s2_birth", "kind": "transcript_new", "relative_to": "s1_turn1_done", "new_session": true, "session_id_prefix": "ses_", "text": "Session 2 at the SAME location is a DISTINCT ses_… id"}
+{"phase": "s2_pid_bind", "kind": "pid_discovered", "relative_to": "s2_birth", "same_session_as": "s2_birth", "text": "Session 2 binds the service pid too — the one process hosts both"}
+{"phase": "s2_turn1_start", "expected_state": "working", "relative_to": "s2_birth", "same_session_as": "s2_birth", "text": "Session 2's prompt drives it to working, independently of session 1"}
+{"phase": "s2_turn1_end_hook", "kind": "hook_received", "relative_to": "s2_turn1_start", "same_session_as": "s2_birth", "text": "Session 2's Stop hook"}
+{"phase": "s2_turn1_done", "expected_state": "ready", "relative_to": "s2_turn1_start", "same_session_as": "s2_birth", "text": "Session 2's turn ends in ready"}
+{"phase": "s1_turn2_start", "expected_state": "working", "relative_to": "s2_turn1_done", "min_delay_ms": 1000, "same_session_as": "s1_birth", "text": "Session 1 is driven AGAIN while session 2 is alive — working on session 1's original id: the binding did not flap or merge"}
+{"phase": "s1_turn2_end_hook", "kind": "hook_received", "relative_to": "s1_turn2_start", "same_session_as": "s1_birth", "text": "Session 1's second Stop hook"}
+{"phase": "s1_turn2_done", "expected_state": "ready", "relative_to": "s1_turn2_start", "same_session_as": "s1_birth", "text": "Session 1's second turn ends in ready"}
