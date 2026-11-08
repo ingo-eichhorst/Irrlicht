@@ -95,7 +95,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 5
+          "seconds": 6
         },
         {
           "type": "model",
