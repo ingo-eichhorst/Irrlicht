@@ -191,9 +191,9 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e4761b88dffeHGB41U241wRyry",
 	},
-	"opencode-v2/scenarios/2-20_user-esc-interrupt/recordings/2026-10-26-07-03-36_irrlichd-0.6.7+32ca9db/transcript.jsonl": {
+	"opencode-v2/scenarios/2-20_user-esc-interrupt/recordings/2026-11-08-01-50-20_irrlichd-0.6.7+aa12987/transcript.jsonl": {
 		Stops: 2, Reproduced: 0,
-		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e89313ce4ffeQUDC0FLBspG1bS",
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475d55b9ffeCz8SRfSn02Idsu",
 	},
 	"pi/scenarios/1-1_session-start/recordings/2026-08-22-14-14-18_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
