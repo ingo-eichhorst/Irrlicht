@@ -116,10 +116,13 @@ TMUX_TEARDOWN_ELAPSED=0
 # no tmux, where asking would read "unreadable" and fail every run.
 #
 # Deliberately broader than internal/driverteardown's static LaunchCount (a
-# literal `tmux new-session`): ANY `tmux` command word outside a comment counts,
-# so `tmux new …` or `tmux -L sock new-session …` — spellings no driver uses
-# today, which LaunchCount would miss — keep the run-time gate rather than
-# losing both gates at once (#2109 review finding 3). An unreadable driver file
+# literal `tmux new-session`): a bare `tmux` word outside a comment, at line
+# start or after whitespace or one of ; & | ( ` counts, so `tmux new …` or
+# `tmux -L sock new-session …` — spellings no driver uses today, which
+# LaunchCount would miss — keep the run-time gate rather than losing both gates
+# at once (#2109 review finding 3). It is a text match, not a parse: a quoted
+# `"tmux"` or a tmux reached through a variable reads as no launch (probed in
+# PR #2117's second review), so a driver must spell the command plainly. An unreadable driver file
 # answers "launches" (0), so a run whose driver cannot be read is still graded.
 driver_launches_tmux() {
   local driver="${1:-}"

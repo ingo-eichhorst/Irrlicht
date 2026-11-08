@@ -680,6 +680,14 @@ assert_eq "…and the target's decoys survive" "3" "$(decoys_left "$LINK_TARGET"
 grep -Fq 'RECORD_DAEMON_WIPE_STATE_STORES=1' "$SCRIPTS_DIR/run-cell.sh" && got=wired || got=unwired
 assert_eq "run-cell.sh asks spawn to wipe for an opencode-v2 cell" "wired" "$got"
 
+echo "== an inherited RECORD_DAEMON_WIPE_STATE_STORES never arms the wipe (#2109, PR #2117 review) =="
+# The flag is a caller's per-run decision, set AFTER sourcing this lib
+# (run-cell.sh, for an opencode-v2 cell). Exported from an operator's shell it
+# would otherwise arm the wipe for every spawn — any column, run-cell-multi
+# included — so sourcing the lib must disarm it.
+got="$(RECORD_DAEMON_WIPE_STATE_STORES=1 bash -c 'source "$1/spawn-record-daemon.sh"; printf %s "${RECORD_DAEMON_WIPE_STATE_STORES:-unset}"' _ "$DIR")"
+assert_eq "sourcing the lib disarms an exported wipe flag" "0" "$got"
+
 # The desktop-local profile is the caller that used to trip this. Its daemon
 # home must be short enough to bind on any clone, including a linked worktree.
 # shellcheck source=desktop-profile.sh

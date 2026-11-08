@@ -36,6 +36,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapter-slug.sh"
 
 # State published for the caller (and read back by stop_record_daemon).
 RECORD_DAEMON_PID=""
+# The state-store wipe's switch (record_daemon_wipe_state_stores). Reset here,
+# on source, so a value exported from the operator's shell can never arm it:
+# only a caller that sets it AFTER sourcing this lib does — run-cell.sh, for an
+# opencode-v2 cell (#2109). spawn-record-daemon_test.sh asserts the reset.
+RECORD_DAEMON_WIPE_STATE_STORES=0
 RECORD_DAEMON_SOCK=""
 RECORD_DAEMON_STAGING=""
 RECORD_DAEMON_START_GATE=""

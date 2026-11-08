@@ -149,7 +149,13 @@ step_seed_instruction() { # <path> <text>
     log "seed_instruction: refusing path '$1' — a recipe writes only under RUN_CWD, so the path must be relative with no '..' component"
     EXIT_REASON="$NONZERO_2"; return 1
   fi
-  printf '%s' "$2" > "$RUN_CWD/$1"
+  # Checked explicitly: both call sites sit in `||` lists, where errexit is
+  # off inside this function, so an unchecked failed write would fall through
+  # to the log line and record a run without its instruction as ok.
+  if ! printf '%s' "$2" > "$RUN_CWD/$1"; then
+    log "seed_instruction: could not write $RUN_CWD/$1 — refusing to record without the recipe's instruction"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
   log "seed_instruction: wrote $(printf '%s' "$2" | wc -c | tr -d ' ') bytes to $RUN_CWD/$1"
 }
 

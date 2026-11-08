@@ -336,6 +336,19 @@ reset_store
 run_driver seedok 20 '[{"type":"seed_instruction","path":"AGENTS.md","text":"be brief"},{"type":"send","text":"x"},{"type":"wait_turn"}]'
 assert_eq "a plain relative path: exit reason ok" "ok" "$RUN_REASON"
 assert_eq "…written under RUN_CWD" "be brief" "$(cat "$RUN_STAGING/cwd/AGENTS.md" 2>/dev/null)"
+reset_store
+# A path that passes the guard but cannot be written — its directory does not
+# exist — must fail the run, not log "wrote N bytes" and record without the
+# instruction (#2109 review, PR #2117 second review finding 1: both call sites
+# sit in `||` lists, where errexit is off inside the function).
+run_driver seednodir 20 '[{"type":"seed_instruction","path":"missing/dir/AGENTS.md","text":"x"},{"type":"send","text":"x"},{"type":"wait_turn"}]'
+assert_eq "a leading write that fails: refused" "nonzero(2)" "$RUN_REASON"
+assert_has "…naming why" "could not write" "$RUN_OUT"
+assert_eq "…and no session was created" "0" "$(created_count)"
+reset_store
+run_driver seednodirmid 20 '[{"type":"send","text":"x"},{"type":"wait_turn"},{"type":"seed_instruction","path":"missing/dir/AGENTS.md","text":"x"}]'
+assert_eq "a mid-script write that fails: refused" "nonzero(2)" "$RUN_REASON"
+assert_has "…naming why" "could not write" "$RUN_OUT"
 
 echo "== the driver never traces itself =="
 if grep -nE '^[^#]*set -[a-z]*x|set -o xtrace' "$DRIVER" "$ROOT/replaydata/agents/opencode-v2/service-api.sh"; then

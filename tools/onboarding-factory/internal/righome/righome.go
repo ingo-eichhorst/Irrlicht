@@ -988,8 +988,11 @@ const OpenCodeAdapterDir = "core/adapters/inbound/agents/opencode"
 // authenticate to the service's API. The DAEMON must never open it: no
 // consent covers reading a credential, and pid.go's servicePIDFor finds the
 // service from its argv instead, saying so in a comment (#2109). This
-// constant and SecretFileLiterals are the tripwire that turns that comment
-// into a check.
+// constant and SecretFileLiterals are a literal tripwire behind that comment:
+// they catch a string literal naming the file in the opencode adapter's
+// production code, not a name assembled at run time ("service" + ".json"
+// passes, measured in PR #2117's second review) or code elsewhere — review
+// still owns those.
 const ServiceSecretFile = "service.json"
 
 // LiteralHit is one string literal naming a forbidden file.
