@@ -64,6 +64,54 @@ copy_web_files() {
     done
 }
 
+# ── 0. Signing preflight ─────────────────────────────────────────────
+# Fails in seconds, not after the ~5-minute build. A keychain is unlocked per
+# login session: on the factory build host, the release keychain unlocked in
+# an interactive `ssh -t` session still read as locked from another session.
+# So listing the identity is not enough; it has to sign something here.
+#
+# NOTARYTOOL_KEYCHAIN names the keychain that holds the notarytool profile
+# when it is not the default keychain. On the factory host that is the
+# dedicated release keychain; see the ir:release skill, Step 6.
+NOTARY_ARGS=()
+if [[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
+    NOTARY_ARGS=(--keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE")
+    if [[ -n "${NOTARYTOOL_KEYCHAIN:-}" ]]; then
+        NOTARY_ARGS+=(--keychain "$NOTARYTOOL_KEYCHAIN")
+    fi
+fi
+if [[ -n "${DEVELOPER_ID:-}" ]]; then
+    echo "Signing preflight..."
+    if [[ -z "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
+        echo "ERROR: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not." >&2
+        echo "       A Developer ID-signed DMG must be notarized — without it Gatekeeper blocks launch." >&2
+        echo "       Create a profile first: xcrun notarytool store-credentials <profile>" >&2
+        exit 1
+    fi
+    PREFLIGHT_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
+    if ! security find-identity -v -p codesigning | grep -qF "\"$PREFLIGHT_IDENTITY\""; then
+        echo "ERROR: no valid codesigning identity \"$PREFLIGHT_IDENTITY\" in the keychain search list." >&2
+        exit 1
+    fi
+    PREFLIGHT_DIR=$(mktemp -d)
+    cp /usr/bin/true "$PREFLIGHT_DIR/sign-probe"
+    if ! codesign --force --sign "$PREFLIGHT_IDENTITY" --options runtime --timestamp \
+            "$PREFLIGHT_DIR/sign-probe" 2>"$PREFLIGHT_DIR/codesign.err"; then
+        echo "ERROR: cannot sign with \"$PREFLIGHT_IDENTITY\". Is its keychain unlocked in THIS session?" >&2
+        cat "$PREFLIGHT_DIR/codesign.err" >&2
+        rm -rf "$PREFLIGHT_DIR"
+        exit 1
+    fi
+    if ! xcrun notarytool history "${NOTARY_ARGS[@]}" >/dev/null 2>"$PREFLIGHT_DIR/notarytool.err"; then
+        echo "ERROR: notarytool cannot use profile \"$NOTARYTOOL_KEYCHAIN_PROFILE\"${NOTARYTOOL_KEYCHAIN:+ in $NOTARYTOOL_KEYCHAIN}." >&2
+        cat "$PREFLIGHT_DIR/notarytool.err" >&2
+        rm -rf "$PREFLIGHT_DIR"
+        exit 1
+    fi
+    rm -rf "$PREFLIGHT_DIR"
+    echo "  Identity signs here; notarytool profile readable"
+fi
+
 # Clean build directory
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -179,23 +227,99 @@ build_relay_linux_tarball amd64
 build_relay_linux_tarball arm64
 
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
+# Universal (arm64 + x86_64), by one of two routes:
+#   · `swift build --arch arm64 --arch x86_64` needs XCBuild, which only Xcode
+#     ships. SwiftPM looks for it at the path XCBUILD below. On a host with
+#     only the Command Line Tools it fails with "xcbuild executable at
+#     '/Library/Developer/SharedFrameworks/XCBuild.framework/Versions/A/Support/xcbuild'
+#     does not exist or is not executable" (the factory build host, Swift 6.3.3).
+#   · Without XCBuild, each arch is built on SwiftPM's native build system and
+#     the two are joined with `lipo -create`, as the Go binaries above are.
+# Both routes then pass the same arch and freshness checks.
+#
+# The build's exit status is checked. It used to be piped into `tail`, which
+# discarded it, and a `find` fallback then picked up whatever older Release
+# binary was lying around.
 echo ""
 echo "Building macOS app..."
-cd platforms/macos
-swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -5
-cd "$ROOT_DIR"
+SWIFT_LOG="$ROOT_DIR/$BUILD_DIR/swift-build.log"
+XCBUILD="${DEVELOPER_DIR:-$(xcode-select -p)}/../SharedFrameworks/XCBuild.framework/Versions/A/Support/xcbuild"
 
-SWIFT_BIN="platforms/macos/.build/apple/Products/Release/Irrlicht"
-if [[ ! -f "$SWIFT_BIN" ]]; then
-    # Fallback path for single-arch or different swift build layouts
-    SWIFT_BIN=$(find platforms/macos/.build -name Irrlicht -type f -perm +111 | grep -i release | head -1)
+swift_build() {
+    if ! ( cd platforms/macos && swift build -c release "$@" ) >>"$SWIFT_LOG" 2>&1; then
+        echo "ERROR: swift build -c release $* failed. Last lines of $SWIFT_LOG:" >&2
+        tail -30 "$SWIFT_LOG" >&2
+        exit 1
+    fi
+}
+
+require_universal() {
+    local f="$1" archs a
+    archs=$(lipo -archs "$f") || { echo "ERROR: lipo cannot read $f" >&2; exit 1; }
+    for a in arm64 x86_64; do
+        if [[ " $archs " != *" $a "* ]]; then
+            echo "ERROR: $f lacks $a (has: $archs)" >&2
+            exit 1
+        fi
+    done
+}
+
+if [[ -x "$XCBUILD" ]]; then
+    echo "  Universal build via XCBuild"
+    swift_build --arch arm64 --arch x86_64
+    SWIFT_BIN="platforms/macos/.build/apple/Products/Release/Irrlicht"
+    SWIFT_INPUTS=("$SWIFT_BIN")
+    SPARKLE_SRC="platforms/macos/.build/apple/Products/Release/Sparkle.framework"
+    if [[ ! -d "$SPARKLE_SRC" ]]; then
+        SPARKLE_SRC=$(find platforms/macos/.build -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
+    fi
+else
+    echo "  No XCBuild (Command Line Tools only): building each arch, then lipo"
+    SWIFT_INPUTS=()
+    for arch in arm64 x86_64; do
+        swift_build --arch "$arch"
+        SWIFT_ARCH_DIR=$(cd platforms/macos && swift build -c release --arch "$arch" --show-bin-path)
+        SWIFT_INPUTS+=("$SWIFT_ARCH_DIR/Irrlicht")
+    done
+    for f in "${SWIFT_INPUTS[@]}"; do
+        [[ -f "$f" ]] || { echo "ERROR: Swift build output missing: $f" >&2; exit 1; }
+    done
+    SWIFT_BIN="$BUILD_DIR/Irrlicht-swift-universal"
+    lipo -create -output "$SWIFT_BIN" "${SWIFT_INPUTS[@]}"
+    # The native build adds an rpath into the build host's toolchain
+    # (/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx on the
+    # factory host). That directory doesn't exist on users' Macs, and nothing
+    # in the app is resolved through it: every Swift library is linked by its
+    # /usr/lib/swift path, and Sparkle, the only @rpath library, resolves
+    # through @executable_path/../Frameworks, added below. Shipping a
+    # build-host path is pointless, so drop it.
+    SWIFT_DEV_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
+    for rp in $(otool -l "$SWIFT_BIN" | awk '$1 == "path" { print $2 }' | sort -u); do
+        case "$rp" in
+            "$SWIFT_DEV_DIR"/*) install_name_tool -delete_rpath "$rp" "$SWIFT_BIN" ;;
+        esac
+    done
+    # Sparkle is a prebuilt binary framework, so each per-arch output holds
+    # the same copy. The arch check below confirms that copy is universal.
+    SPARKLE_SRC="$SWIFT_ARCH_DIR/Sparkle.framework"
 fi
 
-if [[ -z "$SWIFT_BIN" ]] || [[ ! -f "$SWIFT_BIN" ]]; then
-    echo "ERROR: Could not find built Irrlicht binary" >&2
+if [[ ! -f "$SWIFT_BIN" ]]; then
+    echo "ERROR: Could not find built Irrlicht binary at $SWIFT_BIN" >&2
     exit 1
 fi
-echo "  Built: $SWIFT_BIN"
+require_universal "$SWIFT_BIN"
+# Freshness: SwiftPM relinks whenever a source changed, so every binary the
+# app is made from must be newer than the newest app source. A binary older
+# than one is stale; v0.3.4 shipped a 10-day-old app this way.
+NEWEST_SRC=$(find platforms/macos/Irrlicht -name '*.swift' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | cut -d' ' -f2-)
+for f in "${SWIFT_INPUTS[@]}"; do
+    if [[ ! "$f" -nt "$NEWEST_SRC" ]]; then
+        echo "ERROR: $f is not newer than $NEWEST_SRC. Stale Swift binary." >&2
+        exit 1
+    fi
+done
+echo "  Built: $SWIFT_BIN ($(lipo -archs "$SWIFT_BIN"))"
 
 # Create .app bundle
 APP_BUNDLE="$BUILD_DIR/${APP_NAME}.app"
@@ -227,14 +351,12 @@ echo "  Embedded daemon, irrlicht-focus, and irrlicht-ls in app bundle"
 # copy it there and add an @executable_path/../Frameworks rpath to the main
 # binary (the SwiftPM-built executable only has @loader_path, which points
 # at Contents/MacOS/ inside the bundle).
-SPARKLE_SRC="platforms/macos/.build/apple/Products/Release/Sparkle.framework"
-if [[ ! -d "$SPARKLE_SRC" ]]; then
-    SPARKLE_SRC=$(find platforms/macos/.build -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
-fi
+# SPARKLE_SRC was resolved by the Swift build step above, per build route.
 if [[ -z "$SPARKLE_SRC" ]] || [[ ! -d "$SPARKLE_SRC" ]]; then
     echo "ERROR: Could not find Sparkle.framework in SwiftPM build output" >&2
     exit 1
 fi
+require_universal "$SPARKLE_SRC/Versions/Current/Sparkle"
 mkdir -p "$APP_CONTENTS/Frameworks"
 cp -R "$SPARKLE_SRC" "$APP_CONTENTS/Frameworks/Sparkle.framework"
 # Only add the rpath if it isn't already present — install_name_tool errors
@@ -406,18 +528,15 @@ if [[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
     echo ""
     echo "Notarizing DMG..."
     xcrun notarytool submit "$BUILD_DIR/$DMG_NAME" \
-        --keychain-profile "${NOTARYTOOL_KEYCHAIN_PROFILE}" \
+        "${NOTARY_ARGS[@]}" \
         --wait
     echo "  Stapling notarization ticket..."
     xcrun stapler staple "$BUILD_DIR/$DMG_NAME"
     xcrun stapler validate "$BUILD_DIR/$DMG_NAME"
     echo "  Notarized and stapled $DMG_NAME"
-elif [[ -n "${DEVELOPER_ID:-}" ]]; then
-    echo "ERROR: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not." >&2
-    echo "       A Developer ID-signed DMG must be notarized — without it Gatekeeper blocks launch."
-    echo "       Create a profile first: xcrun notarytool store-credentials <profile>"
-    exit 1
 fi
+# (DEVELOPER_ID without NOTARYTOOL_KEYCHAIN_PROFILE is refused by the
+# signing preflight at the top, before anything is built.)
 
 # ── 5. Create LaunchAgent plist (optional, for power users) ──────────
 echo ""

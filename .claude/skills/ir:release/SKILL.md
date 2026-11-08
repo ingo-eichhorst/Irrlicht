@@ -324,7 +324,7 @@ gap for good is the point.
 ## Step 5: Run Tests
 
 ```bash
-cd /Users/ingo/projects/irrlicht/core && go test ./... -count=1
+cd "$(git rev-parse --show-toplevel)/core" && go test ./... -count=1
 ```
 
 All tests must pass before proceeding.
@@ -377,6 +377,26 @@ from `gh api`, the token is missing the `security_events` scope:
 > tools/build-release.sh
 > ```
 >
+> **On the factory build host** (`ssh factory`: Command Line Tools only, no
+> Xcode), the credentials live in a dedicated keychain and a key file;
+> `~/.config/irrlicht-release/SETUP.md` there records the setup. Add
+> `NOTARYTOOL_KEYCHAIN="$HOME/Library/Keychains/irrlicht-release.keychain-db"`
+> to the command above, and set
+> `SPARKLE_ED_KEY_FILE="$HOME/.config/irrlicht-release/sparkle_ed25519_private.key"`
+> for the Sparkle step. Without Xcode the script builds the Swift app once per
+> arch and joins the two with `lipo`. A keychain is unlocked per login session:
+> an unlock in an `ssh -t factory` window does not reach an agent's session,
+> and the script's signing preflight then fails in seconds. Unlock it inside
+> the agent's session without the agent seeing the password through a pipe.
+> The agent runs, in the background,
+> `F=~/.config/irrlicht-release/unlock.fifo; mkfifo -m 600 "$F"; security unlock-keychain ~/Library/Keychains/irrlicht-release.keychain-db < "$F" >/dev/null 2>&1; rm -f "$F"`.
+> The maintainer then runs, in an `ssh -t factory` window,
+> `printf 'Keychain password: '; read -rs KCPW; echo; printf '%s\n' "$KCPW" > ~/.config/irrlicht-release/unlock.fifo; unset KCPW`.
+> The keychain locks again after an hour idle, so unlock it right before this
+> step. The launch tests in step 7 below and in Step 9 take
+> `IRRLICHT_SMOKE_PORT` and `IRRLICHT_CANARY_APP`: there, port 7839 is the
+> relay's and the production app runs from `~/Applications`.
+>
 > It builds the universal daemon + `irrlicht-focus` + `irrlicht-ls` (embedded
 > in the bundle; the PKG postinstall symlinks `irrlicht-ls` into
 > `/usr/local/bin` — #608), the Linux tarballs, assembles + DevID-signs the
@@ -411,12 +431,12 @@ from `gh api`, the token is missing the `security_events` scope:
 > a dev `core/bin/irrlichd --record` on port 7837. Launching the app on the
 > DEFAULT port triggers `DaemonManager.killStaleDaemons()` → a global
 > `pkill irrlichd` that kills that recording daemon. Launch-test on an isolated
-> port instead — `IRRLICHT_DAEMON_PORT=7839 IRRLICHT_HOME=/tmp/smoke-home
+> port instead — `IRRLICHT_DAEMON_PORT=7849 IRRLICHT_HOME=/tmp/smoke-home
 > /Applications/Irrlicht.app/Contents/MacOS/Irrlicht` — which makes
 > `killStaleDaemons` skip the pkill. The app's embedded daemon spawn can be
 > flaky under a bare exec; if so, validate the bundle's daemon directly:
-> `IRRLICHT_BIND_ADDR=127.0.0.1:7839 IRRLICHT_HOME=… .build/Irrlicht.app/Contents/MacOS/irrlichd`
-> then `curl 127.0.0.1:7839/ | grep '<title>'` (covers the v0.4.4 missing-web bug).
+> `IRRLICHT_BIND_ADDR=127.0.0.1:7849 IRRLICHT_HOME=… .build/Irrlicht.app/Contents/MacOS/irrlichd`
+> then `curl 127.0.0.1:7849/ | grep '<title>'` (covers the v0.4.4 missing-web bug). Port 7849, not 7839: the factory host's relay listens on 7839.
 
 ### Go daemon (universal binary + tarball)
 The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
@@ -427,7 +447,7 @@ entry module statically imports ten siblings and the Elfdans PWA four more.
 reads it instead of naming files.
 
 ```bash
-cd /Users/ingo/projects/irrlicht/core
+cd "$(git rev-parse --show-toplevel)/core"
 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=$NEW_VERSION" -o /tmp/irrlichd-arm64 ./cmd/irrlichd
 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$NEW_VERSION" -o /tmp/irrlichd-amd64 ./cmd/irrlichd
 lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwin-universal
@@ -435,7 +455,7 @@ lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwi
 # Tarball for the curl --daemon-only installer
 rm -rf /tmp/irrlichd-tarball && mkdir -p /tmp/irrlichd-tarball/web
 cp /tmp/irrlichd-darwin-universal /tmp/irrlichd-tarball/irrlichd
-( cd /Users/ingo/projects/irrlicht && \
+( cd "$(git rev-parse --show-toplevel)" && \
   sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
   while read -r f; do cp "platforms/web/$f" /tmp/irrlichd-tarball/web/; done )
 tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
@@ -457,13 +477,13 @@ fails when it falls behind — which is why the loop below reads it rather than
 repeating it.
 
 ```bash
-cd /Users/ingo/projects/irrlicht/core
+cd "$(git rev-parse --show-toplevel)/core"
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" go build -ldflags "-s -w -X main.Version=$NEW_VERSION" \
     -o "/tmp/irrlichd-linux-$arch" ./cmd/irrlichd
   rm -rf "/tmp/irrlichd-linux-tarball-$arch" && mkdir -p "/tmp/irrlichd-linux-tarball-$arch/web"
   cp "/tmp/irrlichd-linux-$arch" "/tmp/irrlichd-linux-tarball-$arch/irrlichd"
-  ( cd /Users/ingo/projects/irrlicht && \
+  ( cd "$(git rev-parse --show-toplevel)" && \
     sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
     while read -r f; do cp "platforms/web/$f" "/tmp/irrlichd-linux-tarball-$arch/web/"; done )
   tar -czf "/tmp/irrlichd-linux-$arch.tar.gz" -C "/tmp/irrlichd-linux-tarball-$arch" .
@@ -484,7 +504,7 @@ answers 503 on `/` (measured, both arches, in a container with an empty
 musl and distroless bases.
 
 ```bash
-cd /Users/ingo/projects/irrlicht/core
+cd "$(git rev-parse --show-toplevel)/core"
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
     -ldflags "-X main.Version=$NEW_VERSION" \
@@ -492,7 +512,7 @@ for arch in amd64 arm64; do
   rm -rf "/tmp/relay-tarball-$arch"
   mkdir -p "/tmp/relay-tarball-$arch/bin" "/tmp/relay-tarball-$arch/Resources/web"
   cp "/tmp/irrlichtrelay-linux-$arch" "/tmp/relay-tarball-$arch/bin/irrlichtrelay"
-  ( cd /Users/ingo/projects/irrlicht && \
+  ( cd "$(git rev-parse --show-toplevel)" && \
     sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
     while read -r f; do cp "platforms/web/$f" "/tmp/relay-tarball-$arch/Resources/web/"; done )
   tar -czf "/tmp/irrlichtrelay-linux-$arch.tar.gz" -C "/tmp/relay-tarball-$arch" .
@@ -507,7 +527,7 @@ stale Xcode universal binary from a previous session will silently get shipped
 instead of current code. This shipped a 10-day-old Swift app in v0.3.4.
 
 ```bash
-cd /Users/ingo/projects/irrlicht/platforms/macos && \
+cd "$(git rev-parse --show-toplevel)/platforms/macos" && \
   swift build -c release --arch arm64 --arch x86_64
 ```
 
@@ -515,11 +535,11 @@ The universal binary lands at `.build/apple/Products/Release/Irrlicht`.
 
 **Verify it's fresh before bundling:**
 ```bash
-SWIFT_BIN=/Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht
+SWIFT_BIN="$(git rev-parse --show-toplevel)/platforms/macos/.build/apple/Products/Release/Irrlicht"
 # Must be universal
 file "$SWIFT_BIN" | grep -q 'universal binary with 2 architectures' || { echo "NOT universal"; exit 1; }
 # Must be newer than the newest tracked Swift source
-NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '*.swift' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | awk '{print $2}')
+NEWEST_SRC=$(find "$(git rev-parse --show-toplevel)/platforms/macos/Irrlicht" -name '*.swift' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | awk '{print $2}')
 [ "$SWIFT_BIN" -nt "$NEWEST_SRC" ] || { echo "STALE Swift binary"; exit 1; }
 ```
 
@@ -576,7 +596,7 @@ during the v0.4.3 release. Assemble under `.build/release/` instead,
 which lives under `$HOME` and is gitignored:
 
 ```bash
-APP_STAGING=/Users/ingo/projects/irrlicht/.build/release/Irrlicht.app
+APP_STAGING="$(git rev-parse --show-toplevel)/.build/release/Irrlicht.app"
 rm -rf "$APP_STAGING"
 mkdir -p "$APP_STAGING/Contents/MacOS" "$APP_STAGING/Contents/Resources"
 ```
@@ -597,7 +617,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    The smoke test at step 7 asserts the dashboard responds; do not skip it.
    ```bash
    mkdir -p "$APP_STAGING/Contents/Resources/web"
-   ( cd /Users/ingo/projects/irrlicht && \
+   ( cd "$(git rev-parse --show-toplevel)" && \
      sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
      while read -r f; do cp "platforms/web/$f" "$APP_STAGING/Contents/Resources/web/"; done )
    ```
@@ -760,11 +780,17 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    `site/appcast.xml` so existing installs receive the update prompt.
    The private key lives in the maintainer's macOS Keychain (and is
    backed up at `~/Documents/better-be-great/projects/irrlicht/sparkle_ed25519_private.key`).
+   On the factory build host it is a file instead, named by
+   `SPARKLE_ED_KEY_FILE` (see the Step 6 banner).
    ```bash
    SIGN_UPDATE="platforms/macos/.build/artifacts/sparkle/Sparkle/bin/sign_update"
    # sign_update emits a single line like:
    #   sparkle:edSignature="…" length="…"
-   SIGN_OUTPUT=$("$SIGN_UPDATE" .build/Irrlicht-${NEW_VERSION}.dmg)
+   if [ -n "${SPARKLE_ED_KEY_FILE:-}" ]; then
+     SIGN_OUTPUT=$("$SIGN_UPDATE" --ed-key-file "$SPARKLE_ED_KEY_FILE" .build/Irrlicht-${NEW_VERSION}.dmg)
+   else
+     SIGN_OUTPUT=$("$SIGN_UPDATE" .build/Irrlicht-${NEW_VERSION}.dmg)
+   fi
    ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
    DMG_LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
    RFC822_DATE=$(LC_ALL=C date -u +'%a, %d %b %Y %H:%M:%S +0000')
@@ -814,6 +840,9 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    # for Notifications / Apple Events / Accessibility on the prod app. The
    # grants live in Apple's TCC db, not irrlicht state; there is no scoped
    # per-bundle-path reset. Acceptable cost; just don't be surprised.
+   # On a build host whose production app runs unattended (the factory
+   # host), skip this reset: nobody is there to answer the re-prompts. Run it
+   # there only if the smoke test below fails.
    tccutil reset All io.irrlicht.app 2>/dev/null || true
 
    # build-release.sh (the default) outputs the bundle at .build/Irrlicht.app.
@@ -822,7 +851,14 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    # `irrlichd --record` on the default 7837 (see the port-hazard banner at
    # the top of Step 6).
    APP=".build/Irrlicht.app"
-   SMOKE_PORT=7839
+   # A port nothing listens on. The app adopts whatever already answers
+   # /state on its port instead of spawning its own daemon
+   # (DaemonManager.start), so a busy port tests the wrong process. Not 7839:
+   # the factory host's relay listens there.
+   SMOKE_PORT=${IRRLICHT_SMOKE_PORT:-7849}
+   if lsof -nP -iTCP:"$SMOKE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+     echo "FAIL: port $SMOKE_PORT is in use; set IRRLICHT_SMOKE_PORT to a free one"; exit 1
+   fi
    SMOKE_HOME=/tmp/smoke-home; rm -rf "$SMOKE_HOME"; mkdir -p "$SMOKE_HOME"
    SMOKE_START=$(date +%s)
    IRRLICHT_DAEMON_PORT=$SMOKE_PORT IRRLICHT_HOME="$SMOKE_HOME" \
@@ -884,6 +920,10 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    echo "OK dashboard served on $SMOKE_PORT"
 
    pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null; sleep 0.3
+   # The app's daemon can outlive it. Stop only a listener that runs from this bundle.
+   for pid in $(lsof -ti tcp:"$SMOKE_PORT" -sTCP:LISTEN 2>/dev/null); do
+     case "$(ps -o command= -p "$pid")" in "$PWD/$APP/"*|"$APP/"*) kill "$pid" ;; esac
+   done
    ```
 
    **If the smoke test fails, debugging checklist** (in order — each
@@ -957,7 +997,7 @@ cd .build && shasum -a 256 \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
   > checksums.sha256
-cd /Users/ingo/projects/irrlicht
+cd ..
 ```
 
 ## Step 6.5: Update Homebrew Cask (in-repo only)
@@ -974,7 +1014,7 @@ file directly instead:
 
 ```bash
 DMG_SHA=$(shasum -a 256 ".build/Irrlicht-$NEW_VERSION.dmg" | awk '{print $1}')
-CASK=/Users/ingo/projects/irrlicht/tools/homebrew-tap/Casks/irrlicht.rb
+CASK="$(git rev-parse --show-toplevel)/tools/homebrew-tap/Casks/irrlicht.rb"
 sed -i '' -E "s/^  version \".*\"/  version \"$NEW_VERSION\"/" "$CASK"
 sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$DMG_SHA\"/" "$CASK"
 grep -E '^  (version|sha256) ' "$CASK"   # sanity check
@@ -1255,6 +1295,7 @@ without `--push`; the verification will report a mismatch you can ignore.
    The pre-upload checksum file can drift from the actual uploaded bytes
    (interrupted uploads, `--clobber` race, byte-counter bugs in `gh`):
    ```bash
+   REPO=$(git rev-parse --show-toplevel)
    rm -rf /tmp/verify && mkdir /tmp/verify && cd /tmp/verify
    curl -fsSL -o Irrlicht-${NEW_VERSION}.zip \
      "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.zip"
@@ -1263,7 +1304,7 @@ without `--push`; the verification will report a mismatch you can ignore.
    EXPECTED=$(awk -v f="Irrlicht-${NEW_VERSION}.zip" '$2==f{print $1}' shipped.sha256)
    [ "$ACTUAL" = "$EXPECTED" ] || { echo "FAIL: shipped zip sha mismatches checksums.sha256"; exit 1; }
    echo "OK shipped zip sha matches checksums.sha256"
-   cd /Users/ingo/projects/irrlicht
+   cd "$REPO"
    ```
 4. **End-to-end install canary — load-bearing, do not skip.** The pre-
    packaging smoke test (Step 6 step 7) checks the assembly-path bundle.
@@ -1285,12 +1326,27 @@ without `--push`; the verification will report a mismatch you can ignore.
    > ir:test-mac's restore-prod.sh.
 
    ```bash
+   # Where the canary installs. On the maintainer's Mac that is the production
+   # install, which the canary replaces with the new release. On a build host
+   # whose production app runs elsewhere and must keep running (the factory
+   # host: ~/Applications), point it at a scratch bundle under $HOME. Don't use
+   # /tmp, whose bundles TCC distrusts (#352):
+   #   IRRLICHT_CANARY_APP="$HOME/.cache/irrlicht-canary/Irrlicht.app"
+   CANARY_APP="${IRRLICHT_CANARY_APP:-/Applications/Irrlicht.app}"
+   CANARY_PORT=${IRRLICHT_SMOKE_PORT:-7849}   # not 7839, the factory relay's port (step 7 of Step 6)
+   REPO=$(git rev-parse --show-toplevel)
+   if lsof -nP -iTCP:"$CANARY_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+     echo "FAIL: port $CANARY_PORT is in use; set IRRLICHT_SMOKE_PORT to a free one"; exit 1
+   fi
+
    # Stop + back up the current install (probably the just-finished release if
    # you're on the build machine). rm the backup first so a leftover from a
-   # prior run can't make `mv` no-op and later corrupt the bundle.
-   pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null; sleep 0.5
+   # prior run can't make `mv` no-op and later corrupt the bundle. The pattern
+   # is anchored: unanchored, '/Applications/Irrlicht.app/…' also matches an
+   # app running from ~/Applications.
+   pkill -f "^$CANARY_APP/Contents/MacOS/Irrlicht" 2>/dev/null; sleep 0.5
    rm -rf /tmp/Irrlicht-canary-backup.app
-   mv /Applications/Irrlicht.app /tmp/Irrlicht-canary-backup.app 2>/dev/null
+   mv "$CANARY_APP" /tmp/Irrlicht-canary-backup.app 2>/dev/null
 
    # Download the SHIPPED zip + checksums and verify before installing.
    rm -rf /tmp/canary && mkdir /tmp/canary && cd /tmp/canary
@@ -1305,21 +1361,21 @@ without `--push`; the verification will report a mismatch you can ignore.
    # Clean-install (rm then ditto — never cp -R into an existing bundle, which
    # merges and corrupts it → spctl "unsealed contents present").
    ditto -x -k "Irrlicht-${NEW_VERSION}.zip" extracted
-   rm -rf /Applications/Irrlicht.app
-   ditto extracted/Irrlicht.app /Applications/Irrlicht.app
-   cd /Users/ingo/projects/irrlicht
+   rm -rf "$CANARY_APP"; mkdir -p "$(dirname "$CANARY_APP")"
+   ditto extracted/Irrlicht.app "$CANARY_APP"
+   cd "$REPO"
 
    # Gatekeeper assessment of the real shipping artifact.
-   spctl -a -vv /Applications/Irrlicht.app 2>&1 | grep -q "accepted" \
+   spctl -a -vv "$CANARY_APP" 2>&1 | grep -q "accepted" \
      || { echo "FAIL: spctl rejected the shipped app"; exit 1; }
 
-   INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
+   INSTALLED=$(defaults read "$CANARY_APP/Contents/Info" CFBundleShortVersionString)
    [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
 
    # get-task-allow must not be true (notarization should have rejected it).
    # The focus-status assertion was removed (stripped in v0.4.7; restore with
    # #357). Value-aware XPath so an explicit <false/> doesn't false-fail (#407).
-   CANARY_XML=$(codesign -d --entitlements - /Applications/Irrlicht.app 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
+   CANARY_XML=$(codesign -d --entitlements - "$CANARY_APP" 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
    GTA_TRUE=$(echo "$CANARY_XML" | xmllint --xpath \
      "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
      - 2>/dev/null)
@@ -1327,18 +1383,27 @@ without `--push`; the verification will report a mismatch you can ignore.
 
    # Launch-test on an isolated port so killStaleDaemons can't pkill a 7837 dev daemon.
    rm -rf /tmp/canary-home && mkdir -p /tmp/canary-home
-   IRRLICHT_DAEMON_PORT=7839 IRRLICHT_HOME=/tmp/canary-home \
-     /Applications/Irrlicht.app/Contents/MacOS/Irrlicht > /tmp/canary-launch.log 2>&1 &
+   IRRLICHT_DAEMON_PORT=$CANARY_PORT IRRLICHT_HOME=/tmp/canary-home \
+     "$CANARY_APP/Contents/MacOS/Irrlicht" > /tmp/canary-launch.log 2>&1 & CANARY_PID=$!
    sleep 4
-   if ! pgrep -fl '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' >/dev/null; then
+   if ! kill -0 "$CANARY_PID" 2>/dev/null; then
      echo "FAIL: app not running 4s after install — release is broken"
      LATEST_CRASH=$(ls -t ~/Library/Logs/DiagnosticReports/Irrlicht*.ips 2>/dev/null | head -1)
      [ -n "$LATEST_CRASH" ] && grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
      exit 1
    fi
-   curl -fsS --max-time 3 http://127.0.0.1:7839/ | grep -q '<title>' && echo "OK canary dashboard on 7839"
-   pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null; sleep 0.5
-   lsof -ti tcp:7839 | xargs kill 2>/dev/null
+   CANARY_DASH=0
+   for i in 1 2 3 4 5 6 7 8; do
+     curl -fsS --max-time 3 "http://127.0.0.1:$CANARY_PORT/" 2>/dev/null | grep -q '<title>' && { CANARY_DASH=1; break; }
+     sleep 1
+   done
+   kill "$CANARY_PID" 2>/dev/null; sleep 0.5
+   # The app's daemon can outlive it. Stop only a listener that runs from this
+   # bundle; never kill by port alone (on the factory host 7839 is the relay).
+   for pid in $(lsof -ti tcp:"$CANARY_PORT" -sTCP:LISTEN 2>/dev/null); do
+     case "$(ps -o command= -p "$pid")" in "$CANARY_APP/"*) kill "$pid" ;; esac
+   done
+   [ "$CANARY_DASH" -eq 1 ] || { echo "FAIL: canary dashboard not served on $CANARY_PORT"; exit 1; }
    echo "OK canary: v$INSTALLED installed, spctl accepted, get-task-allow not true, runs"
    ```
 5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
