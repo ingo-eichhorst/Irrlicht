@@ -11,7 +11,8 @@ The column records sessions that **one running `opencode serve --service`**
 hosts. The rig drives that service over its HTTP API
 (`driver-interactive.sh`) and never runs an OpenCode binary itself:
 
-- **It never starts, stops, restarts or reconfigures the service.** It refuses
+- **It never starts, restarts or reconfigures the service, and stops it only
+  inside a service window** (below). It refuses
   when `$XDG_STATE_HOME/opencode/service.json` is missing, when the pid in it
   is dead or is not `serve --service`, and when more than one
   `serve --service` runs (the daemon binds a service-hosted session only while
@@ -82,6 +83,26 @@ The service, the plugin file, and the addr slot are shared, so:
   home whose canonical path does not end in `/.local/share/irrlicht`, and the
   production home `~/.local/share/irrlicht`
   (`lib/spawn-record-daemon.sh` `record_daemon_wipe_state_stores`).
+
+## The service window (cells 1-2 and 3-4 only)
+
+Two cells are about the process that hosts a session going away: 1-2's
+service-exit variant (`exit_clean`, SIGTERM) and 3-4's orphan cleanup
+(`sigkill`). Under the shared service that process is the service itself, so
+the maintainer approved a window for those two cells only (#2109, Q1):
+
+- The driver signals the service only when the run exports
+  `OC2_SERVICE_WINDOW=1`; otherwise those steps refuse before signalling
+  anything. It re-checks that the pid is still a `serve --service` first, and
+  exports every session before the signal (the store's writer is gone after).
+- The driver never starts a service. The operator records the service's
+  identity before the cell and restores it right after with the service's
+  own start command, under the same `XDG_*` (on the development host:
+  `(source /Users/factory/.oc2sb/env.sh; cd /Users/factory/.oc2sb/work;
+  /Users/factory/.oc2sb/shim/opencode service start)`), then checks one
+  `serve --service`, a fresh `service.json` naming it, and the API answering.
+  The new pid replaces the old one; `service.json`'s password may change, and
+  the driver re-reads it every run.
 
 ## After a run
 

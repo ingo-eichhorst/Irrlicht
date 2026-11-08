@@ -6,7 +6,9 @@
 #
 # THE SERVICE IS NOT OURS. One `opencode serve --service` hosts every 2.x
 # session of its user, on a fixed port; the rig drives it over HTTP and never
-# starts, stops or reconfigures it. Everything below either reads (the
+# starts or reconfigures it (the driver stops it only inside an operator-
+# approved service window — driver-interactive.sh's exit_clean/sigkill, gated
+# on OC2_SERVICE_WINDOW=1). Everything below either reads (the
 # service's service.json, its environment, its log, its store — the store
 # read-only) or asks the service's API to act on a session the driver created.
 #
