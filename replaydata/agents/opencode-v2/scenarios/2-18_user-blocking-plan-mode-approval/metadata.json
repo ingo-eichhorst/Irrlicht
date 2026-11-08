@@ -1,0 +1,47 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial\ndaemon_capability: n/a\ndriver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: n/a\ndriver_capability: n/a\n\n## Reasoning\n\nThe scenario wants a plan proposed and then a PAUSE in waiting until the user approves it. OpenCode 2.1.4 has a Plan agent, but it is a read-only mode, not an approval gate. Its system reminder, read from the binary (strings scan, not run): \"You are in Plan mode. Discuss the plan with the user directly in the conversation\" and \"You remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\" There is no exit-plan tool (`plan_exit` / `ExitPlan`: 0 lines). A plan turn ends like any other turn, with an idle row; nothing pauses.\n\n## Why this differs from the V1 verdict (partial / incapable)\n\nV1 gave two reasons: (1) no approval gate exists, and (2) the 1.x adapter had no waiting path at all. Reason (2) is false on 2.x: the 2.x plugin's `permission.asked` drives waiting through the hook receiver (hooks.go; P5a's 2-19 recorded it). Only reason (1) remains, and with no gate there is nothing for the daemon to observe — `daemon_capability: n/a`, not `incapable`. The capability model says the same: `plan_mode: absent` (this agent holds no plan-approval gate).",
+      "caveats": [
+        "The strings scan reads the shipped prompt text; a plugin could still add an approval step, which would surface as a form (2-17's path) and be daemon-incapable for the same reason."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/strings-scan-2.1.4.txt",
+          "note": "strings scan of the OpenCode 2.1.4 binary (not run): the counts and lines this cell cites"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "the V1 column's partial / incapable verdict and its two reasons"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon_capability=n/a — OpenCode 2.1.4's Plan agent is a read-only mode with no approval gate (strings scan); a plan turn ends like any other. Frozen."
+    }
+  }
+}

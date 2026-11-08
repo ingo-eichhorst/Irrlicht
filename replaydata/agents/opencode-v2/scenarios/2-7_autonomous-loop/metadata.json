@@ -1,0 +1,42 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "unknown",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "confidence": 0.75,
+    "notes": "agent_supports: unknown\ndaemon_capability: n/a\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "unknown",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: unknown\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario needs an agent-native goal loop that self-prompts with no user message between iterations. The V1 column found no such primitive in stock OpenCode 1.x and froze the cell `unknown / n/a`. OpenCode 2.1.4 is the same on this axis, probed by a strings scan of its binary (not run; `probe/strings-scan-2.1.4.txt`):\n\n- `/goal`: 0 lines; `self-prompt`: 0; `full-auto`: 0;\n- `autonomous`: 2 lines, both unrelated data (an HTML entity table and an ASN field name);\n- `max_iterations`: 3 lines, a library's destructuring error and a summary prompt — no loop cap.\n\nThe service API (openapi) has no loop endpoint either: a turn ends with an idle row, and the next turn needs a new prompt. A third-party plugin could re-prompt on `session.execution.succeeded`, as oh-my-opencode does for 1.x, so `agent_supports` stays `unknown`, the V1 verdict, rather than `no`.\n\nWith no agent-native loop to observe, the daemon axis is `n/a`.",
+      "caveats": [
+        "A strings scan reads what the bundle contains; it cannot rule out a loop assembled at run time from other names. The verdict stays V1's `unknown` for that reason."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/strings-scan-2.1.4.txt",
+          "note": "strings scan of the OpenCode 2.1.4 binary (not run): the counts and lines this cell cites"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "the V1 column's frozen verdict (unknown / n/a / ready) for the same reason"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=unknown — stock OpenCode 2.1.4 ships no autonomous loop (strings scan, probe/strings-scan-2.1.4.txt); frozen as the V1 column's 2-7_autonomous-loop."
+    }
+  }
+}

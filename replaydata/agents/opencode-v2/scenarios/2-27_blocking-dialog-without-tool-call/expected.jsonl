@@ -1,0 +1,1 @@
+{"notes":"OpenCode 2.x (#2109 P5b-2): FROZEN daemon-incapable (Q4). The target arc: working → waiting with no tool call in flight → working after the answer → ready. The daemon never sees the form.","scenario_id":"blocking-dialog-without-tool-call","schema_version":1,"source":".claude/skills/ir:onboard-agent/scenario-meanings.md → blocking-dialog-without-tool-call"}

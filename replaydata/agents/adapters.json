@@ -235,7 +235,9 @@
       "capabilities": {
         "background_process": "untraced",
         "cloud_agent": "absent",
-        "file_transcript": "absent"
+        "file_transcript": "absent",
+        "plan_mode": "absent",
+        "structured_question": "untraced"
       }
     },
     "pi": {
