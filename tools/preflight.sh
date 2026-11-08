@@ -591,7 +591,13 @@ if want tools; then
   # backup that was never refreshed, a bundle overwritten while its process was
   # still alive). Same story, eighth entry: a commit editing only that script,
   # or only restore-prod.sh beside it, is exactly the one that breaks them.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/(install|relay)\.sh$|^AGENTS\.md$|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  # .claude/skills/ir:pr-merge/ joins the trigger for a ninth reason (#2128):
+  # pr-merge-contract_test.sh pins that skill's never-list, merge-command shape
+  # and dry-run bound, and a commit editing only the SKILL.md is exactly the one
+  # that could drop a rule. It sits before ir:test-mac/ so
+  # test-mac-script-mutations_test.sh's anchor, which spans ir:test-mac/ and the
+  # workflow list after it, still matches.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/(install|relay)\.sh$|^AGENTS\.md$|^\.claude/skills/ir:pr-merge/|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 
   # UNSCOPED, deliberately, and the only gate in this group that is (#1804).

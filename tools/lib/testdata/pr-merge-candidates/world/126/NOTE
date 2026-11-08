@@ -1,0 +1,2 @@
+a required check never reported (shape measured on fork PR #2118, whose
+workflows failed before creating jobs). Synthetic: CLEAN -> skip ci-missing.

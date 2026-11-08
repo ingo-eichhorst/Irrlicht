@@ -1,0 +1,16 @@
+[
+ {
+  "sha": "254a39f14c9b68d198cd7946e5a33435f25c2888",
+  "author": {
+   "login": "dependabot[bot]",
+   "type": "Bot"
+  },
+  "commit": {
+   "message": "chore(deps): Bump modernc.org/sqlite\n\nBumps the go-minor-patch group with 1 update in the /core directory: [modernc.org/sqlite](https://gitlab.com/cznic/sqlite).\n\n\nUpdates `modernc.org/sqlite` from 1.60.1 to 1.61.1\n- [Release notes](https://gitlab.com/cznic/sqlite/tags)\n- [Changelog](https://gitlab.com/cznic/sqlite/blob/master/CHANGELOG.md)\n- [Commits](https://gitlab.com/cznic/sqlite/compare/v1.60.1...v1.61.1)\n\n---\nupdated-dependencies:\n- dependency-name: modernc.org/sqlite\n  dependency-version: 1.61.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: go-minor-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+   "verification": {
+    "verified": true,
+    "reason": "valid"
+   }
+  }
+ }
+]

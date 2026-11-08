@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "d4f9b7921c63bd37335dec4724391d5f7f7ac881",
+  "filename": "core/go.mod",
+  "status": "modified",
+  "additions": 5,
+  "deletions": 1,
+  "changes": 6,
+  "patch": "@@ -4,6 +4,9 @@ go 1.26.0\n \n-require golang.org/x/sys v0.48.0 // indirect\n+require (\n+\tgithub.com/klauspost/compress v1.20.3 // indirect\n+\tgolang.org/x/sys v0.49.0 // indirect\n+)\n+replace example.com/x => ../x\n"
+ }
+]

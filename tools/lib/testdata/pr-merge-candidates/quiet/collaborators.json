@@ -1,0 +1,38 @@
+[
+ {
+  "login": "gimmebytes",
+  "type": "User",
+  "role_name": "write",
+  "permissions": {
+   "admin": false,
+   "maintain": false,
+   "push": true,
+   "triage": true,
+   "pull": true
+  }
+ },
+ {
+  "login": "ingo-eichhorst",
+  "type": "User",
+  "role_name": "admin",
+  "permissions": {
+   "admin": true,
+   "maintain": true,
+   "push": true,
+   "triage": true,
+   "pull": true
+  }
+ },
+ {
+  "login": "not-ingo",
+  "type": "User",
+  "role_name": "write",
+  "permissions": {
+   "admin": false,
+   "maintain": false,
+   "push": true,
+   "triage": true,
+   "pull": true
+  }
+ }
+]

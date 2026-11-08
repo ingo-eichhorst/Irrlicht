@@ -1,0 +1,24 @@
+[
+ {
+  "id": 900,
+  "user": {
+   "login": "sonarqubecloud[bot]",
+   "type": "Bot"
+  },
+  "author_association": "NONE",
+  "body": "## Quality Gate Passed",
+  "created_at": "2026-11-01T09:00:00Z",
+  "updated_at": "2026-11-01T09:00:00Z"
+ },
+ {
+  "id": 4001,
+  "user": {
+   "login": "not-ingo",
+   "type": "User"
+  },
+  "author_association": "COLLABORATOR",
+  "body": "<!-- ir:pr-merge sha=8b6daef8dee9b74d856a6f124f9b8fd91a68d1ed verdict=needs-human -->\n**ir:pr-merge:** needs-human",
+  "created_at": "2026-11-01T10:00:00Z",
+  "updated_at": "2026-11-01T10:00:00Z"
+ }
+]

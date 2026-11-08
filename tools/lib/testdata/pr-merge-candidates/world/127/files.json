@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "ab9566831522da6caa0b09af96f76eb820d4e4cb",
+  "filename": "tools/preflight.sh",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1,2 +1,2 @@\n #!/usr/bin/env bash\n-echo a\n+echo b\n"
+ }
+]

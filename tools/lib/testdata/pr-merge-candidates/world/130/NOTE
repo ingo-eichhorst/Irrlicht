@@ -1,0 +1,3 @@
+a non-collaborator whose head is (somehow) in this repository: only the
+collaborator rule can make it external. #107 cannot isolate that rule: its
+fork head is already external by the fork rule.

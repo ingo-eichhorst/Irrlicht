@@ -1,0 +1,2 @@
+CI failed: build-test FAILURE. Synthetic: CLEAN, so only the CI rule can
+skip it.

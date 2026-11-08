@@ -1,0 +1,2 @@
+dependabot Go minor: the recorded #2102 core/go.mod + core/go.sum (the
+tools/ half is dropped, it would hit sensitive:tools) -> review.

@@ -1,0 +1,2 @@
+CI pending: go-test still IN_PROGRESS. Synthetic: mergeStateStatus is left
+CLEAN so only the CI rule can skip it.

@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "72d6263e8a2daa81139e5f2c358b5b05a49a9c3b",
+  "filename": "tools/evil.sh\n",
+  "status": "added",
+  "additions": 1,
+  "deletions": 0,
+  "changes": 1,
+  "patch": "@@ -0,0 +1 @@\n+echo hi\n"
+ }
+]

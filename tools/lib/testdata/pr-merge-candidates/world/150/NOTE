@@ -1,0 +1,3 @@
+a skill file: every skill directory in this repository is `ir:<name>`,
+so `:` must pass the safe filter and the agent-config rule must name the path
+(found by the live dry-run on #2129, where the skill file read as <unusual>).

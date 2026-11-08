@@ -1,0 +1,2 @@
+draft. Synthetic in one field: otherwise CLEAN and green, so the draft
+rule is the ONLY thing that can skip it (real drafts also read BLOCKED, #2127).

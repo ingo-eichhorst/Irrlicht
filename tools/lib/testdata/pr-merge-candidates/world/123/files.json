@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "933b22d3d22113473e59fa7763d0a4ef797a5029",
+  "filename": "platforms/web/package-lock.json",
+  "status": "modified",
+  "additions": 3,
+  "deletions": 3,
+  "changes": 6,
+  "patch": "@@ -1401,9 +1401,9 @@\n       }\n     },\n     \"node_modules/undici\": {\n-      \"version\": \"8.12.1\",\n-      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-8.12.1.tgz\",\n-      \"integrity\": \"sha512-usz3OVQBeh1LxNn0DzU0voLXMgn5CU/WUdpBsY6Ti5afNao+vTkmn4H/NxoXolc10cOqe2+YIG0Hspq2rsl64w==\",\n+      \"version\": \"8.12.4\",\n+      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-8.12.4.tgz\",\n+      \"integrity\": \"sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==\",\n       \"dev\": true,\n       \"license\": \"MIT\",\n       \"engines\": {"
+ }
+]

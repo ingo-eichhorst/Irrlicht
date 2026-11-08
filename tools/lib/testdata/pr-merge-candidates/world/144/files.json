@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "328f21787c10edb1d19b27e8f9874dc10f3e0093",
+  "filename": "core/pkg/example/lrm.go",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-var s = \"ab\"\n+var s = \"a‎b\"\n"
+ }
+]

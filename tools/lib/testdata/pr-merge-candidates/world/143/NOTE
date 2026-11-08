@@ -1,0 +1,2 @@
+a failing check whose NAME is injection text (a PR can add a workflow job
+with any name) -> skip ci-failed:other, and the name never reaches the output.

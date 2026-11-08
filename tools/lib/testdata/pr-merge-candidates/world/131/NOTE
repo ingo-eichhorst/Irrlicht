@@ -1,0 +1,4 @@
+every remaining path rule, one file each; .Claude/ is upper-case so the
+case-insensitive match is what catches it. Synthetic: the .dll carries a patch
+so only the binary rule (not opaque) can hit it. The lock test pins the exact
+sensitive_hits paths, so deleting any single rule is red.

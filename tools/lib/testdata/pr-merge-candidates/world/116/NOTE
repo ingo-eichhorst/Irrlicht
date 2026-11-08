@@ -1,0 +1,2 @@
+file name with a space and a bidi override -> hold sensitive:unusual-path,
+and the raw name never reaches the output.

@@ -1,0 +1,13 @@
+[
+ {
+  "id": 4003,
+  "user": {
+   "login": "not-ingo",
+   "type": "User"
+  },
+  "author_association": "COLLABORATOR",
+  "body": "<!-- ir:pr-merge sha=b3629b7db0667e91f14748032501e816741f2027 verdict=needs-human -->\n**ir:pr-merge:** needs-human",
+  "created_at": "2026-11-01T10:00:00Z",
+  "updated_at": "2026-11-01T10:00:00Z"
+ }
+]

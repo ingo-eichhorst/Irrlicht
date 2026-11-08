@@ -1,0 +1,2 @@
+go.mod content: a new indirect module (the recorded #2102
+tools/eta-research/go.mod hunk, moved to core/) and a replace directive.

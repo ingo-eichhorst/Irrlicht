@@ -1,0 +1,3 @@
+a workflow renamed out of .github/ with no content change: no patch (the
+shape measured on #1880), so the renamed exemption must keep it from reading as
+opaque, and the previous name must still hit sensitive:github.

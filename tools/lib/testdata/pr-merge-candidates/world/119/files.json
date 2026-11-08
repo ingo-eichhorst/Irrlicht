@@ -1,0 +1,19 @@
+[
+ {
+  "sha": "f11bdd439fff8158d5d33d7b328294f63a84ad52",
+  "filename": "platforms/macos/Tests/__Snapshots__/x.png",
+  "status": "modified",
+  "additions": 0,
+  "deletions": 0,
+  "changes": 0
+ },
+ {
+  "sha": "312c9ee5305e40a4edb1063ee55082905d6c2d2f",
+  "filename": "replaydata/agents/x/big.jsonl",
+  "status": "added",
+  "additions": 1,
+  "deletions": 0,
+  "changes": 1,
+  "patch": "@@ -0,0 +1 @@\n+{}\n"
+ }
+]

@@ -1,0 +1,13 @@
+{
+ "sha": "c48dbe5f5fdda90d3174ad71e41036aca2aefbd2",
+ "truncated": false,
+ "tree": [
+  {
+   "path": "core/go.mod",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "d4f9b7921c63bd37335dec4724391d5f7f7ac881",
+   "size": 1234
+  }
+ ]
+}

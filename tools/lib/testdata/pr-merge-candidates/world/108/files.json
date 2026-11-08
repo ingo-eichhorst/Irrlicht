@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "e79817a8ab2753af1eeef465a7720ee953cf35b9",
+  "filename": ".github/workflows/test.yml",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1,2 +1,2 @@\n name: Tests\n-on: [push]\n+on: [push, pull_request]\n"
+ }
+]

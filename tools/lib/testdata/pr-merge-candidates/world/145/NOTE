@@ -1,0 +1,2 @@
+its files API answers an error (no fixture -> the stub's HTTP 404 body)
+-> hold unreadable:files, the rest of the run continues.

@@ -1,0 +1,20 @@
+{
+ "sha": "0b98d5ff1cf256b1563ede7f84b7333648fbfce1",
+ "truncated": false,
+ "tree": [
+  {
+   "path": "platforms/web/package-lock.json",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "424037bb92e9b2d2b607c21b68b3864029c0567e",
+   "size": 1234
+  },
+  {
+   "path": "README.md",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "cfce08b21a362cee916c30b6ca3abc176837ee7d",
+   "size": 1234
+  }
+ ]
+}

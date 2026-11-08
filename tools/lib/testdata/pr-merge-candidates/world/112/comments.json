@@ -1,0 +1,13 @@
+[
+ {
+  "id": 4004,
+  "user": {
+   "login": "dernerl",
+   "type": "User"
+  },
+  "author_association": "CONTRIBUTOR",
+  "body": "<!-- ir:pr-merge sha=871f7c61dd6b0bb2dfee9696e4a3f63fac9c0d2a verdict=needs-human -->\n**ir:pr-merge:** needs-human",
+  "created_at": "2026-11-01T10:00:00Z",
+  "updated_at": "2026-11-01T10:00:00Z"
+ }
+]
