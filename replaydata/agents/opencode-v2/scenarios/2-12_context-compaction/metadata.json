@@ -2,10 +2,10 @@
   "scenario_id": "context-compaction",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "full",
+    "daemon_capability": "incapable",
     "driver_capability": "ready",
-    "confidence": 0.6,
-    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready"
   },
   "details": {
     "assessment": {
@@ -14,12 +14,13 @@
       "agent": "opencode-v2",
       "assessed_at": "2026-11-08T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "full",
+      "daemon_capability": "incapable",
       "driver_capability": "ready",
-      "confidence": 0.6,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nOpenCode 2.x compacts in place on request: `POST /api/session/{id}/compact` (2.1.4 openapi: \"Durably admit a session compaction request\"). Probed on the sandbox service (/Users/factory/.oc2sb/qa/p5b2-work/probe/2-12-compact.log): after two turns the session got a `compaction` row (status completed, reason manual, the summary written by the session's model) and then an `idle` row, outcome succeeded — no new user or assistant row. The record's alternative, a low per-cell context limit to force an AUTOMATIC compaction, is not needed for a manual one, and keeps the shared model's context small.\n\n## What the daemon has to see\n\nThe scenario wants ready → working at compaction start, working throughout, working → ready at the end. On 2.x the only rows the compaction writes are a `compaction` row and an `idle` row. parser_v2.go has no `compaction` branch (it reads user, assistant and idle; a compaction row falls through to the 1.x switch and is skipped), and the plugin forwards no compaction-start event. Whether the daemon still shows the working span is what this recording measures; the spec is written from the scenario, not from that reading.",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\n## Reasoning\n\nOpenCode 2.x compacts in place on request: `POST /api/session/{id}/compact` (2.1.4 openapi: \"Durably admit a session compaction request\"). Probed on the sandbox service (/Users/factory/.oc2sb/qa/p5b2-work/probe/2-12-compact.log): after two turns the session got a `compaction` row (status completed, reason manual, the summary written by the session's model) and then an `idle` row, outcome succeeded — no new user or assistant row. The record's alternative, a low per-cell context limit to force an AUTOMATIC compaction, is not needed for a manual one, and keeps the shared model's context small.\n\n## What the daemon has to see\n\nThe scenario wants ready → working at compaction start, working throughout, working → ready at the end. On 2.x the only rows the compaction writes are a `compaction` row and an `idle` row. parser_v2.go has no `compaction` branch (it reads user, assistant and idle; a compaction row falls through to the 1.x switch and is skipped), and the plugin forwards no compaction-start event. Whether the daemon still shows the working span was measured by a probe recording.\n\n## Measured: the compaction is invisible (probe recording, not promoted)\n\n`/Users/factory/.oc2sb/qa/p5b2-work/2-12-probe-evidence.txt` — the rig's own recording of this recipe, by a daemon built from this branch:\n\n- Turns 1 and 2: working → ready on their Stop hooks, as everywhere else.\n- The compaction ran 18:44:19.5 → 25.86 (its `compaction` row landed at 19.5 and was rewritten to completed at 25.86, with the idle row). For those 6.4s the session stayed **ready**: the store pass at 19.510 was logged `turn-end tail after a hook turn end — not new activity` — parser_v2.go skips the compaction row, so the re-fold still read the previous turn as done, and #2120's rule took the pass for a tail.\n- The only transitions are the compaction's own Stop hook at 25.878 forcing `ready → working` at .879 and `working → ready` at .880: a 1 ms ready → working → ready on an already-ready session (bounce-check2: `order=on-ready … bounce=true`), the hook-after-store family the P5-0 addendum left out of scope.\n\nSo the daemon cannot show a 2.x compaction: no parser branch reads a running `compaction` row as activity, and the plugin forwards no compaction start. Frozen daemon-incapable; the recording is evidence, not a fixture (a 1 ms blip would have satisfied a working phase with no duration).",
       "caveats": [
-        "Predicted from code, not yet measured: the compaction may be invisible (no parser branch for a compaction row, and #2120 skips a turn-end tail after a hook-ended ready). If the recording shows no working span, the cell is frozen on that measurement."
+        "Frozen on a probe recording (2-12-probe-evidence.txt), which is not promoted: it carries a hook-forced 1 ms bounce, and a committed opencode-v2 recording must carry none.",
+        "compact_start requires the working span to hold at least 1s, so the 1 ms hook-forced blip at the compaction's end cannot satisfy it; on the probe recording it fails, which is the measurement."
       ],
       "sources": [
         {
@@ -41,6 +42,11 @@
           "kind": "file",
           "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-12-compact.log",
           "note": "probe: POST /compact wrote a compaction row (completed, manual) and an idle row (succeeded)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/2-12-probe-evidence.txt",
+          "note": "the probe recording: the session stayed ready through the 6.4s compaction; the compaction's Stop hook forced a 1 ms ready → working → ready"
         }
       ]
     },

@@ -235,6 +235,7 @@
       "capabilities": {
         "background_process": "untraced",
         "cloud_agent": "absent",
+        "context_compaction": "untraced",
         "file_transcript": "absent",
         "plan_mode": "absent",
         "structured_question": "untraced"
