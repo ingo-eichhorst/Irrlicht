@@ -48,6 +48,7 @@
 #                    {messageID, files: true}, then POST revert/commit
 #   background       POST /api/session/{id}/background — move the session's
 #                    running backgroundable tools into background observation
+#   await_tool       wait until the active session's tool {"tool": NAME} runs
 #   await_child      wait for a child session of the active one — a
 #                    session_v2 row whose parent_id is it — and, with
 #                    {"tool": NAME}, until a tool NAME of that child is running
@@ -100,7 +101,7 @@ source "$_HERE/../../_lib/drive/contracts.sh"
 # recipe-lint contract (#508 #4): the step types this driver genuinely elicits,
 # scraped from this file by tools/onboarding-factory/scripts/lib/recipe-lint.sh.
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh, never expanded in shell
-DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction start_session session reset_session archive unarchive model revert background await_child exit_clean sigkill"
+DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction start_session session reset_session archive unarchive model revert background await_tool await_child exit_clean sigkill"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh
 DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 
@@ -375,6 +376,28 @@ step_background() {
   log "background sent to $SESSION_ID"
 }
 
+# step_await_tool <tool> waits, to the run's deadline, until a tool <tool> of
+# the active session is running (oc2_running_tool) — the moment a recipe acts
+# on a running tool, observed rather than slept for.
+step_await_tool() {
+  local tool="$1" state
+  if [[ -z "$tool" ]]; then
+    log "await_tool needs {\"tool\": NAME}"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  while :; do
+    state="$(oc2_running_tool "$DB" "$SESSION_ID" "$tool")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+    if [[ -n "$state" ]]; then
+      log "$SESSION_ID is running its $tool tool"; return 0
+    fi
+    if (( $(remaining_seconds) <= 0 )); then
+      log "await_tool: $SESSION_ID ran no $tool tool by the deadline"
+      EXIT_REASON="$TIMEOUT_REASON"; return 1
+    fi
+    sleep 1
+  done
+}
+
 # step_await_child [<tool>] waits, to the run's deadline, for a child session
 # of the active one, and with <tool> until one of that child's tools named
 # <tool> is running — an observed condition to act on, not a sleep.
@@ -555,6 +578,7 @@ while IFS= read -r step; do
     model)            step_model "$(jq -r '.provider // empty' <<<"$step")" "$(jq -r '.model // empty' <<<"$step")" || break ;;
     revert)           step_revert "$(jq -r '.turns // 1' <<<"$step")" || break ;;
     background)       step_background || break ;;
+    await_tool)       step_await_tool "$(jq -r '.tool // empty' <<<"$step")" || break ;;
     await_child)      step_await_child "$(jq -r '.tool // empty' <<<"$step")" || break ;;
     exit_clean)       step_signal_service SIGTERM || break ;;
     sigkill)          step_signal_service SIGKILL || break ;;

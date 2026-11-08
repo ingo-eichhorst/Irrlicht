@@ -179,6 +179,10 @@ class H(BaseHTTPRequestHandler):
                                (mid, sid, typ, seq + i, now + i, now + i, json.dumps(data)))
                 db.execute("UPDATE session_v2 SET time_idle=?, idle_outcome='succeeded' WHERE id=?", (now + 3, sid))
                 db.commit()
+            if mode() == "tool":
+                db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
+                           ("msg_tool1", sid, "assistant", 0, now, now, json.dumps({"content": [{"type": "tool", "name": "shell", "state": {"status": "running"}}]})))
+                db.commit()
             if mode() in ("child", "badchild"):
                 # The task tool's shape: a child session_v2 row with parent_id,
                 # whose latest step runs a shell tool.
@@ -459,6 +463,18 @@ reset_store
 run_driver revertturns 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"revert","turns":"x"}]'
 assert_eq "a non-numeric turn count: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming why" "turns must be a positive integer" "$RUN_OUT"
+
+echo "== await_tool: the session's own running tool =="
+reset_store; echo tool > "$STUB_OUT/mode"
+run_driver tool 20 '[{"type":"send","text":"a"},{"type":"await_tool","tool":"shell"}]'
+assert_eq "exit reason ok" "ok" "$RUN_REASON"
+assert_has "…once its shell tool runs" "ses_stub1 is running its shell tool" "$RUN_OUT"
+reset_store; echo idle > "$STUB_OUT/mode"
+run_driver notool 5 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_tool","tool":"shell"}]'
+assert_eq "no such tool by the deadline: timeout" "timeout" "$RUN_REASON"
+reset_store
+run_driver toolname 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_tool"}]'
+assert_eq "await_tool without a tool name: refused" "nonzero(2)" "$RUN_REASON"
 
 echo "== background =="
 reset_store; echo idle > "$STUB_OUT/mode"
