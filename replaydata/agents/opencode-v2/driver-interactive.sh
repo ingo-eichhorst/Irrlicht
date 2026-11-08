@@ -142,7 +142,13 @@ if [[ -n "${SETTINGS_PATH:-}" && -f "$SETTINGS_PATH" ]] \
   log "seeded project config $RUN_CWD/opencode.json from recipe settings"
 fi
 
+# A recipe's path is confined to RUN_CWD: relative, non-empty, and with no
+# `..` component (#2109 review F3).
 step_seed_instruction() { # <path> <text>
+  if [[ -z "$1" || "$1" == /* || "/$1/" == */../* ]]; then
+    log "seed_instruction: refusing path '$1' — a recipe writes only under RUN_CWD, so the path must be relative with no '..' component"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
   printf '%s' "$2" > "$RUN_CWD/$1"
   log "seed_instruction: wrote $(printf '%s' "$2" | wc -c | tr -d ' ') bytes to $RUN_CWD/$1"
 }
@@ -151,7 +157,7 @@ step_seed_instruction() { # <path> <text>
 # service's location instance reads the file when it boots.
 while IFS= read -r _leading_step; do
   [[ "$(jq -r '.type' <<<"$_leading_step")" == "seed_instruction" ]] || break
-  step_seed_instruction "$(jq -r '.path' <<<"$_leading_step")" "$(jq -r '.text' <<<"$_leading_step")"
+  step_seed_instruction "$(jq -r '.path' <<<"$_leading_step")" "$(jq -r '.text' <<<"$_leading_step")" || refuse_and_exit
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Session + plugin readiness --------------------------------------------
@@ -273,6 +279,12 @@ step_permission_reply() { # <decision> <hold-seconds>
     fi
     sleep 1
   done
+  # The id comes from the API and goes into the reply URL's path (#2109 review
+  # F2): only a permission id's shape is answered.
+  if ! oc2_valid_permission_id "$rid"; then
+    log "permission_reply: refusing to answer '$rid' — not a permission id (per_…), and it would be put into the reply URL's path"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
   log "permission ask $rid pending on $SESSION_ID; holding ${hold}s"
   bounded_sleep "$hold"
   if ! oc2_api POST "/api/session/$SESSION_ID/permission/$rid/reply" "$(jq -nc --arg d "$decision" '{decision:$d}')" > /dev/null; then
@@ -300,7 +312,7 @@ while IFS= read -r step; do
     sleep)            bounded_sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)        step_interrupt || break ;;
     permission_reply) step_permission_reply "$(jq -r '.decision // "once"' <<<"$step")" "$(jq -r '.hold_seconds // 0' <<<"$step")" || break ;;
-    seed_instruction) step_seed_instruction "$(jq -r '.path' <<<"$step")" "$(jq -r '.text' <<<"$step")" ;;
+    seed_instruction) step_seed_instruction "$(jq -r '.path' <<<"$step")" "$(jq -r '.text' <<<"$step")" || break ;;
     *)                log "unknown step type: $type"; EXIT_REASON="$NONZERO_2"; break ;;
   esac
   if [[ "$EXIT_REASON" == "ok" ]] && (( $(remaining_seconds) <= 0 )); then

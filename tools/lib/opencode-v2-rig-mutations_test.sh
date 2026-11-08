@@ -47,6 +47,9 @@
 #   23. the live relocation probe without its outranking-override clear,
 #       under an exported OPENCODE_DB → the opencode-v2 row reads as a half
 #       relocation (review finding 4).
+#   24. the state-store wipe without its <HOME>/.local/share/irrlicht shape
+#       check → a HOME-like typo's decoy stores are removed (second review,
+#       F1).
 #
 # Corpus mutations live beside their subjects and are not repeated here:
 # righome_corpus_test.go's TestGradeRelocationNamesEveryWrongShape (a half
@@ -248,6 +251,11 @@ OPENCODE_DB=/nonexistent/2109-mutation.db assert_go_red "relocation probe keepin
   $'\toverrides := outrankingOverrides[shard.DaemonAdapterForSlug(row.Adapter)]' $'\toverrides := []string{}' \
   ./tools/onboarding-factory/internal/righome/ '^TestEveryRigHomeRowRelocatesBothHalves$' \
   "the session root still resolves"
+
+# ── 24. the wipe without its home-shape refusal ──
+assert_sh_red "state-store wipe without the home-shape refusal" "$SPAWN" \
+  '  if [[ "$real" != */.local/share/irrlicht ]]; then' '  if false; then' \
+  "$LIB/spawn-record-daemon_test.sh" "FAIL: …and its decoy sessions/ cost/ instances/ survive"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-rig-mutations: $fails FAILED"

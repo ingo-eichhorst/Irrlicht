@@ -125,12 +125,20 @@ record_daemon_refuse_live_sock() {
 # (OwnsSharedPID), so it reads as alive in the raw recording. Nothing else in
 # the home is touched: not the consent file, not the addr file, not the socket.
 #
-# It refuses an empty or relative home, and the PRODUCTION default home
-# ($HOME/.local/share/irrlicht): the production daemon (IRRLICHT_HOME unset)
-# keeps its per-session ledgers in that sessions/ (core/cmd/irrlichd/paths.go),
-# and an opencode-v2 run against a 2.x service under the operator's own HOME
-# would point IRRLICHT_ONBOARD_HOME exactly there. Review of #2109's P5a
-# traced that path; the refusal is the fix.
+# It refuses an empty or relative home, and any home whose canonical path does
+# not end in /.local/share/irrlicht — the only shape prerequisites.md documents
+# (<the service's HOME>/.local/share/irrlicht). The home is typed by hand, and
+# this runs inside spawn, before the driver's beacon preflight could notice a
+# wrong one: IRRLICHT_ONBOARD_HOME=$HOME would otherwise remove ~/sessions,
+# ~/cost and ~/instances (#2109 review F1). Canonical, so a correctly named
+# symlink to some other directory is refused too.
+#
+# It also refuses the PRODUCTION default home ($HOME/.local/share/irrlicht),
+# which has that shape: the production daemon (IRRLICHT_HOME unset) keeps its
+# per-session ledgers in that sessions/ (core/cmd/irrlichd/paths.go), and an
+# opencode-v2 run against a 2.x service under the operator's own HOME would
+# point IRRLICHT_ONBOARD_HOME exactly there. Review of #2109's P5a traced that
+# path; the refusal is the fix.
 record_daemon_wipe_state_stores() {
   local home="$1" d removed="" real prod
   if [[ "$home" != /* ]]; then
@@ -138,6 +146,12 @@ record_daemon_wipe_state_stores() {
     return 1
   fi
   real="$(cd "$home" 2>/dev/null && pwd -P || printf '%s' "$home")"
+  if [[ "$real" != */.local/share/irrlicht ]]; then
+    echo "spawn-record-daemon: refusing to wipe state stores under $home — its canonical path" >&2
+    echo "  ($real) does not end in /.local/share/irrlicht. The opencode-v2 home is the 2.x" >&2
+    echo "  service's \$HOME/.local/share/irrlicht (replaydata/agents/opencode-v2/prerequisites.md)" >&2
+    return 1
+  fi
   prod="$(cd "$HOME/.local/share/irrlicht" 2>/dev/null && pwd -P || printf '%s' "$HOME/.local/share/irrlicht")"
   if [[ "$real" == "$prod" ]]; then
     echo "spawn-record-daemon: refusing to wipe $home — it is the PRODUCTION daemon's home, whose" >&2
@@ -147,7 +161,7 @@ record_daemon_wipe_state_stores() {
   fi
   for d in instances sessions cost; do
     if [[ -e "$home/$d" ]]; then
-      rm -rf "${home:?}/$d" || { echo "spawn-record-daemon: could not remove $home/$d" >&2; return 1; }
+      rm -rf "${real:?}/$d" || { echo "spawn-record-daemon: could not remove $real/$d" >&2; return 1; }
       removed+="${removed:+ }$d/"
     fi
   done

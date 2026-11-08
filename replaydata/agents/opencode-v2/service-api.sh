@@ -237,6 +237,13 @@ oc2_store() { printf '%s\n' "$XDG_DATA_HOME/opencode/opencode.db"; }
 # inside an SQL literal and a URL path without quoting.
 oc2_valid_sid() { [[ "${1:-}" =~ ^ses_[A-Za-z0-9]+$ ]]; }
 
+# oc2_valid_permission_id <id> accepts only an opencode permission request id,
+# so the one the API hands back can be put inside the reply URL's path. The
+# shape is the one the sandbox 2.1.4 service answered GET
+# /api/session/{id}/permission with (#2109's triage probe:
+# per_1730b57c2001jmLgKMBeVTW1uA); the same alphabet as oc2_valid_sid.
+oc2_valid_permission_id() { [[ "${1:-}" =~ ^per_[A-Za-z0-9]+$ ]]; }
+
 # oc2_idle_mark <db> <sid> prints "<time_idle>|<idle_outcome>" for a session —
 # 0 and empty while it has never gone idle. Read-only. A failed read prints
 # nothing and returns 1: "could not look" is never "not idle yet".

@@ -77,7 +77,10 @@ The service, the plugin file, and the addr slot are shared, so:
   directory).
 - Before each cell it wipes the state stores the recording daemon owns under
   `$IRRLICHT_ONBOARD_HOME` (`instances/`, `sessions/`, `cost/`), so sessions an
-  earlier daemon persisted are not restored into the recording.
+  earlier daemon persisted are not restored into the recording. It refuses a
+  home whose canonical path does not end in `/.local/share/irrlicht`, and the
+  production home `~/.local/share/irrlicht`
+  (`lib/spawn-record-daemon.sh` `record_daemon_wipe_state_stores`).
 
 ## After a run
 

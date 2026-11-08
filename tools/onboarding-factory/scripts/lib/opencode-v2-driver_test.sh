@@ -17,7 +17,9 @@
 #   - it REFUSES, before creating any session, when two services run, when the
 #     service's environment differs from the run's, when the plugin's beacon
 #     would post to another daemon, when OPENCODE_DB is set, when service.json
-#     is missing — and after creating one, when the plugin fails to load.
+#     is missing — and after creating one, when the plugin fails to load;
+#   - it answers a permission ask only when the API's id is a permission id,
+#     and writes a seed_instruction only under RUN_CWD (#2109 review F2, F3).
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
@@ -113,7 +115,11 @@ class H(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
     def do_GET(self):
         if not self.authed(): return self.reply(401, {})
-        if re.fullmatch(r"/api/session/ses_\w+/permission", self.path): return self.reply(200, {"data": []})
+        if re.fullmatch(r"/api/session/ses_\w+/permission", self.path):
+            # PERM_ID is the id shape the sandbox 2.1.4 service answered this
+            # very GET with (#2109 triage probe, obs-apiperm/pending.json).
+            ask = {"perm": "per_1730b57c2001jmLgKMBeVTW1uA", "badperm": "per_x/../../interrupt"}.get(mode())
+            return self.reply(200, {"data": [{"id": ask}] if ask else []})
         if self.path.startswith("/api/command?location%5Bdirectory%5D="):
             # Like the real service: the location's first scoped request boots
             # it, and the boot loads (or fails to load) the installed plugin.
@@ -128,6 +134,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authed(): return self.reply(401, {})
         now = int(time.time() * 1000)
+        note("posted", self.path)
         db = sqlite3.connect(DB)
         if self.path == "/api/session":
             d = self.body()["location"]["directory"]
@@ -138,7 +145,7 @@ class H(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/session/(ses_\w+)/prompt", self.path)
         if m:
             text = self.body()["text"]
-            if mode() == "idle":
+            if mode() in ("idle", "perm", "badperm"):
                 sid = m.group(1)
                 rows = [("user", {"text": text}), ("assistant", {"content": [{"type": "text", "text": "ok"}], "tokens": {"input": 10, "output": 1}}), ("idle", {"outcome": "succeeded"})]
                 for i, (typ, data) in enumerate(rows):
@@ -148,6 +155,7 @@ class H(BaseHTTPRequestHandler):
                 db.commit()
             return self.reply(200, {"data": {}})
         if re.fullmatch(r"/api/session/ses_\w+/interrupt", self.path): return self.reply(200, {"data": {}})
+        if re.fullmatch(r"/api/session/ses_\w+/permission/[^/]+/reply", self.path): return self.reply(200, {"data": {}})
         self.reply(404, {})
 # socketserver.TCPServer, not http.server.HTTPServer: HTTPServer.server_bind
 # resolves the host with socket.getfqdn — a reverse DNS lookup that stalled
@@ -204,7 +212,7 @@ run_driver() {
   RUN_OUT="$(cat "$RUN_STAGING/out")"
   return 0
 }
-reset_store() { sqlite3 "$DB" "DELETE FROM session_message; DELETE FROM session_v2;"; : > "$STUB_OUT/created"; : > "$STUB_OUT/auth"; : > "$STUB_OUT/booted"; }
+reset_store() { sqlite3 "$DB" "DELETE FROM session_message; DELETE FROM session_v2;"; : > "$STUB_OUT/created"; : > "$STUB_OUT/auth"; : > "$STUB_OUT/booted"; : > "$STUB_OUT/posted"; }
 created_count() { grep -c . "$STUB_OUT/created" 2>/dev/null || true; }
 
 one_service; service_env; write_service_json
@@ -286,6 +294,48 @@ reset_store; echo badplugin > "$STUB_OUT/mode"
 run_driver badplugin 20 '[{"type":"send","text":"x"}]'
 assert_eq "exit reason nonzero(2)" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming the failed load" "failed to load plugin" "$RUN_OUT"
+
+echo "== a permission ask is answered only when its id is a permission id (#2109 review F2) =="
+# The id comes from the API and goes into the reply URL's path. A real one
+# (the shape the sandbox service answered with) is answered at exactly that
+# path — a lock on the pattern being loose enough; one carrying path segments
+# is refused before any reply is POSTed.
+reset_store; echo perm > "$STUB_OUT/mode"
+run_driver perm 20 '[{"type":"send","text":"x"},{"type":"permission_reply","decision":"once","hold_seconds":0},{"type":"wait_turn"}]'
+assert_eq "a per_… id: exit reason ok" "ok" "$RUN_REASON"
+assert_eq "…answered at exactly its own reply path" "/api/session/ses_stub1/permission/per_1730b57c2001jmLgKMBeVTW1uA/reply" "$(grep -F '/permission/' "$STUB_OUT/posted")"
+reset_store; echo badperm > "$STUB_OUT/mode"
+run_driver badperm 20 '[{"type":"send","text":"x"},{"type":"permission_reply","decision":"once","hold_seconds":0},{"type":"wait_turn"}]'
+assert_eq "an id carrying path segments: refused" "nonzero(2)" "$RUN_REASON"
+assert_has "…naming why" "not a permission id" "$RUN_OUT"
+assert_eq "…and nothing but the session and its prompt was POSTed" "/api/session /api/session/ses_stub1/prompt" "$(tr '\n' ' ' < "$STUB_OUT/posted" | sed 's/ $//')"
+assert_eq "…but the session is still exported (the epilogue ran)" "3" "$(grep -c . "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null)"
+
+echo "== a seed_instruction writes only under RUN_CWD (#2109 review F3) =="
+reset_store; echo idle > "$STUB_OUT/mode"
+run_driver seedup 20 '[{"type":"seed_instruction","path":"../escape.md","text":"x"},{"type":"send","text":"x"},{"type":"wait_turn"}]'
+assert_eq "a leading '..' path: refused" "nonzero(2)" "$RUN_REASON"
+assert_has "…naming why" "must be relative with no '..' component" "$RUN_OUT"
+[[ -e "$RUN_STAGING/escape.md" ]] && got=written || got=absent
+assert_eq "…and nothing was written outside RUN_CWD" "absent" "$got"
+assert_eq "…and no session was created" "0" "$(created_count)"
+reset_store
+run_driver seedabs 20 "$(jq -nc --arg p "$TMP/abs-escape.md" '[{"type":"seed_instruction","path":$p,"text":"x"},{"type":"send","text":"x"}]')"
+assert_eq "an absolute path: refused" "nonzero(2)" "$RUN_REASON"
+assert_has "…naming why" "must be relative with no '..' component" "$RUN_OUT"
+[[ -e "$TMP/abs-escape.md" ]] && got=written || got=absent
+assert_eq "…and nothing was written there" "absent" "$got"
+assert_eq "…and no session was created" "0" "$(created_count)"
+reset_store
+run_driver seedmid 20 '[{"type":"send","text":"x"},{"type":"wait_turn"},{"type":"seed_instruction","path":"../mid.md","text":"x"}]'
+assert_eq "a mid-script path with a '..' component: refused" "nonzero(2)" "$RUN_REASON"
+[[ -e "$RUN_STAGING/mid.md" ]] && got=written || got=absent
+assert_eq "…and nothing was written outside RUN_CWD" "absent" "$got"
+assert_eq "…but the session is still exported (the epilogue ran)" "3" "$(grep -c . "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null)"
+reset_store
+run_driver seedok 20 '[{"type":"seed_instruction","path":"AGENTS.md","text":"be brief"},{"type":"send","text":"x"},{"type":"wait_turn"}]'
+assert_eq "a plain relative path: exit reason ok" "ok" "$RUN_REASON"
+assert_eq "…written under RUN_CWD" "be brief" "$(cat "$RUN_STAGING/cwd/AGENTS.md" 2>/dev/null)"
 
 echo "== the driver never traces itself =="
 if grep -nE '^[^#]*set -[a-z]*x|set -o xtrace' "$DRIVER" "$ROOT/replaydata/agents/opencode-v2/service-api.sh"; then
