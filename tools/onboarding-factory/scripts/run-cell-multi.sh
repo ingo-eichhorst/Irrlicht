@@ -409,31 +409,26 @@ record_driver_teardown() {
   if [[ -n "$driver" ]] && ! driver_launches_tmux "$driver"; then
     status="skipped"
     detail="$driver invokes no tmux command, so there is no session to leak"
-    TMUX_TEARDOWN_JSON="$(jq -n \
-      --argjson o "$TMUX_TEARDOWN_JSON" \
-      --arg k "$a" --arg status "$status" --arg detail "$detail" --arg pid "$pid" \
-      '$o + {($k): {status: $status, detail: $detail, driver_pid: $pid}}')"
-    echo "tmux teardown [$a]: $status — $detail"
-    return 0
-  fi
-  # The deadline/lifetime pair await_gone_bound checks (rule 3 in
-  # lib/tmux-teardown-check.sh's header). Computed by tmux_teardown_deadline_for
-  # — shared with run-cell.sh (#1828) so the two rigs cannot drift apart on the
-  # arithmetic; see that function's header for why a tenth, capped at 5, floored
-  # at 1.
-  deadline="$(tmux_teardown_deadline_for "$lifetime")"
+  else
+    # The deadline/lifetime pair await_gone_bound checks (rule 3 in
+    # lib/tmux-teardown-check.sh's header). Computed by
+    # tmux_teardown_deadline_for — shared with run-cell.sh (#1828) so the two
+    # rigs cannot drift apart on the arithmetic; see that function's header for
+    # why a tenth, capped at 5, floored at 1.
+    deadline="$(tmux_teardown_deadline_for "$lifetime")"
 
-  check_tmux_teardown "$pid" "$deadline" "$lifetime" "the cell's own driver timeout" || rc=$?
-  case "$rc" in
-    0) status="clean"
-       detail="no tmux session carries driver pid ${pid:-<unrecorded>} (settled after ${TMUX_TEARDOWN_ELAPSED}s)" ;;
-    1) status="leaked"
-       detail="$TMUX_TEARDOWN_SURVIVORS"
-       TMUX_LEAKED="${TMUX_LEAKED:+$TMUX_LEAKED }$a" ;;
-    *) status="unreadable"
-       detail="$TMUX_TEARDOWN_REASON"
-       TMUX_UNREADABLE="${TMUX_UNREADABLE:+$TMUX_UNREADABLE }$a" ;;
-  esac
+    check_tmux_teardown "$pid" "$deadline" "$lifetime" "the cell's own driver timeout" || rc=$?
+    case "$rc" in
+      0) status="clean"
+         detail="no tmux session carries driver pid ${pid:-<unrecorded>} (settled after ${TMUX_TEARDOWN_ELAPSED}s)" ;;
+      1) status="leaked"
+         detail="$TMUX_TEARDOWN_SURVIVORS"
+         TMUX_LEAKED="${TMUX_LEAKED:+$TMUX_LEAKED }$a" ;;
+      *) status="unreadable"
+         detail="$TMUX_TEARDOWN_REASON"
+         TMUX_UNREADABLE="${TMUX_UNREADABLE:+$TMUX_UNREADABLE }$a" ;;
+    esac
+  fi
   TMUX_TEARDOWN_JSON="$(jq -n \
     --argjson o "$TMUX_TEARDOWN_JSON" \
     --arg k "$a" --arg status "$status" --arg detail "$detail" --arg pid "$pid" \

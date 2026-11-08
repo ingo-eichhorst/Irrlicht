@@ -162,6 +162,13 @@ refuse_and_exit() { EXIT_REASON="$NONZERO_2"; exit 2; }
 
 # --- Preflight: everything the rig must not change -------------------------
 oc2_preflight || refuse_and_exit
+# The service window's steps signal the shared service. Without the operator's
+# opt-in they are refused here, before a session exists or a model turn runs —
+# not when the step is reached, after the recipe has already used the service.
+if [[ "${OC2_SERVICE_WINDOW:-}" != "1" ]] && jq -e 'any(.[]; .type == "exit_clean" or .type == "sigkill")' <<<"$SCRIPT_JSON" > /dev/null; then
+  log "refusing: this recipe signals the service (exit_clean/sigkill) — it is shared, and only an operator-approved service window (OC2_SERVICE_WINDOW=1) may stop it"
+  refuse_and_exit
+fi
 log "service pid $OC2_SVC_PID at $OC2_URL; store $(oc2_store); RUN_CWD $RUN_CWD"
 
 DB="$(oc2_store)"
@@ -281,9 +288,9 @@ settle_new_session() {
   return 0
 }
 
-save_active() { # writes the active slot's id and idle mark back to its slot
+save_active() { # writes the active slot's idle mark back to its slot
   (( ACTIVE > 0 )) || return 0
-  SLOT_SID[ACTIVE-1]="$SESSION_ID"; SLOT_IDLE[ACTIVE-1]="$IDLE_MARK"
+  SLOT_IDLE[ACTIVE-1]="$IDLE_MARK"
   return 0
 }
 load_slot() { # <n> — makes slot n (1-based, existing) the active one
@@ -376,61 +383,61 @@ step_background() {
   log "background sent to $SESSION_ID"
 }
 
-# step_await_tool <tool> waits, to the run's deadline, until a tool <tool> of
-# the active session is running (oc2_running_tool) — the moment a recipe acts
-# on a running tool, observed rather than slept for.
-step_await_tool() {
-  local tool="$1" state
-  if [[ -z "$tool" ]]; then
-    log "await_tool needs {\"tool\": NAME}"
-    EXIT_REASON="$NONZERO_2"; return 1
-  fi
+# await_running_tool <sid> <tool> <label> polls, to the run's deadline, until a
+# tool <tool> of session <sid> is running (oc2_running_tool) — the moment a
+# recipe acts on a running tool, observed rather than slept for. <label> names
+# what is awaited in the log.
+await_running_tool() {
+  local sid="$1" tool="$2" label="$3" state
   while :; do
-    state="$(oc2_running_tool "$DB" "$SESSION_ID" "$tool")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+    state="$(oc2_running_tool "$DB" "$sid" "$tool")" || { EXIT_REASON="$NONZERO_2"; return 1; }
     if [[ -n "$state" ]]; then
-      log "$SESSION_ID is running its $tool tool"; return 0
+      log "$label is running its $tool tool"; return 0
     fi
     if (( $(remaining_seconds) <= 0 )); then
-      log "await_tool: $SESSION_ID ran no $tool tool by the deadline"
+      log "$label ran no $tool tool by the deadline"
       EXIT_REASON="$TIMEOUT_REASON"; return 1
     fi
     sleep 1
   done
 }
 
+step_await_tool() { # <tool> — a tool of the active session
+  if [[ -z "$1" ]]; then
+    log "await_tool needs {\"tool\": NAME}"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  await_running_tool "$SESSION_ID" "$1" "$SESSION_ID"
+}
+
 # step_await_child [<tool>] waits, to the run's deadline, for a child session
 # of the active one, and with <tool> until one of that child's tools named
-# <tool> is running — an observed condition to act on, not a sleep.
+# <tool> is running.
 step_await_child() {
-  local tool="$1" child="" state
-  while :; do
+  local tool="$1" child=""
+  until [[ -n "$child" ]]; do
     child="$(oc2_child_session "$DB" "$SESSION_ID")" || { EXIT_REASON="$NONZERO_2"; return 1; }
-    if [[ -n "$child" ]]; then
-      if ! oc2_valid_sid "$child"; then
-        log "await_child: refusing child '$child' — not a session id"
-        EXIT_REASON="$NONZERO_2"; return 1
-      fi
-      if [[ -z "$tool" ]]; then
-        log "child session $child of $SESSION_ID is up"; return 0
-      fi
-      state="$(oc2_running_tool "$DB" "$child" "$tool")" || { EXIT_REASON="$NONZERO_2"; return 1; }
-      if [[ -n "$state" ]]; then
-        log "child session $child of $SESSION_ID is running its $tool tool"; return 0
-      fi
-    fi
+    [[ -n "$child" ]] && break
     if (( $(remaining_seconds) <= 0 )); then
-      log "await_child: no child of $SESSION_ID${tool:+ running $tool} by the deadline (child '${child}')"
+      log "await_child: no child of $SESSION_ID by the deadline"
       EXIT_REASON="$TIMEOUT_REASON"; return 1
     fi
     sleep 1
   done
+  if ! oc2_valid_sid "$child"; then
+    log "await_child: refusing child '$child' — not a session id"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if [[ -z "$tool" ]]; then
+    log "child session $child of $SESSION_ID is up"; return 0
+  fi
+  await_running_tool "$child" "$tool" "child session $child of $SESSION_ID"
 }
 
 # export_slots [<note>] writes every slot's transcript (slot order) and lists
 # them. Used by the epilogue, and by a service-window step right BEFORE its
 # signal: after it the store's writer is gone, so what the store held then is
 # the transcript.
-EXPORTED=0
 export_slots() {
   local n sid out ok=0
   : > "$STAGING/transcript.paths"
@@ -443,17 +450,13 @@ export_slots() {
     echo "$out" >> "$STAGING/transcript.paths"
     log "$sid -> $out ($(wc -l < "$out" | tr -d ' ') rows)${1:+ — $1}"
   done
-  EXPORTED=1
   return "$ok"
 }
 
 # step_signal_service <SIGTERM|SIGKILL> — the service window's two steps.
 step_signal_service() {
   local sig="$1" args signalled_at
-  if [[ "${OC2_SERVICE_WINDOW:-}" != "1" ]]; then
-    log "$sig: refusing to signal the service — it is shared, and only an operator-approved service window (OC2_SERVICE_WINDOW=1) may stop it"
-    EXIT_REASON="$NONZERO_2"; return 1
-  fi
+  # The window opt-in was checked before the session existed (after preflight).
   args="$(ps -o args= -p "$OC2_SVC_PID" 2>/dev/null || true)"
   # shellcheck disable=SC2086  # word-splitting the argv string is the point
   if ! oc2_is_service_args $args; then
@@ -591,10 +594,10 @@ while IFS= read -r step; do
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Epilogue: export the session, write the contract ----------------------
-save_active
 # A signalled service already had every slot exported right before its signal
-# (step_signal_service); its store's writer is gone, so that export stands.
-if (( SERVICE_SIGNALLED == 0 || EXPORTED == 0 )); then
+# (step_signal_service sets SERVICE_SIGNALLED only after that export); its
+# store's writer is gone, so that export stands.
+if (( SERVICE_SIGNALLED == 0 )); then
   if ! export_slots; then
     [[ "$EXIT_REASON" == "ok" ]] && EXIT_REASON="$NONZERO_2"
   fi

@@ -260,6 +260,18 @@ oc2_valid_model_ref() {
   [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ "$2" != *..* ]]
 }
 
+# oc2_store_read <db> <what> <sql> runs one read-only query against the store
+# and prints its output. A failed read says so on stderr and returns 1: "could
+# not look" is never "found nothing". Every store read below goes through it,
+# so -readonly and the lock timeout live in one place. Callers validate any id
+# they put in <sql> first (oc2_valid_sid).
+oc2_store_read() {
+  local db="$1" what="$2" sql="$3" out
+  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" "$sql" 2>&1)" || {
+    echo "[driver] reading $what from $db failed: $out" >&2; return 1; }
+  printf '%s' "$out"
+}
+
 # oc2_nth_last_user_message <db> <sid> <n> prints the id of the session's
 # n-th last `user` row (n=1: the latest). Read-only; a failed read or no such
 # row returns 1 — "could not look" is never an id.
@@ -267,9 +279,8 @@ oc2_nth_last_user_message() {
   local db="$1" sid="$2" n="$3" out
   oc2_valid_sid "$sid" || return 1
   [[ "$n" =~ ^[1-9][0-9]*$ ]] || return 1
-  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
-    "SELECT id FROM session_message WHERE session_id='$sid' AND type='user' ORDER BY seq DESC LIMIT 1 OFFSET $((n - 1))" 2>&1)" || {
-    echo "[driver] reading $sid's user messages from $db failed: $out" >&2; return 1; }
+  out="$(oc2_store_read "$db" "$sid's user messages" \
+    "SELECT id FROM session_message WHERE session_id='$sid' AND type='user' ORDER BY seq DESC LIMIT 1 OFFSET $((n - 1))")" || return 1
   [[ -n "$out" ]] || { echo "[driver] $sid has fewer than $n user message(s) in $db" >&2; return 1; }
   printf '%s\n' "$out"
 }
@@ -278,12 +289,8 @@ oc2_nth_last_user_message() {
 # a session_v2 row whose parent_id is <sid> — or nothing while it has none.
 # Read-only; a failed read returns 1.
 oc2_child_session() {
-  local db="$1" sid="$2" out
-  oc2_valid_sid "$sid" || return 1
-  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
-    "SELECT id FROM session_v2 WHERE parent_id='$sid' ORDER BY time_created LIMIT 1" 2>&1)" || {
-    echo "[driver] reading $sid's children from $db failed: $out" >&2; return 1; }
-  printf '%s' "$out"
+  oc2_valid_sid "$2" || return 1
+  oc2_store_read "$1" "$2's children" "SELECT id FROM session_v2 WHERE parent_id='$2' ORDER BY time_created LIMIT 1"
 }
 
 # oc2_running_tool <db> <sid> <tool> prints "running" when the session's latest
@@ -293,9 +300,8 @@ oc2_child_session() {
 oc2_running_tool() {
   local db="$1" sid="$2" tool="$3" data
   oc2_valid_sid "$sid" || return 1
-  data="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
-    "SELECT data FROM session_message WHERE session_id='$sid' AND type='assistant' ORDER BY seq DESC LIMIT 1" 2>&1)" || {
-    echo "[driver] reading $sid's latest step from $db failed: $data" >&2; return 1; }
+  data="$(oc2_store_read "$db" "$sid's latest step" \
+    "SELECT data FROM session_message WHERE session_id='$sid' AND type='assistant' ORDER BY seq DESC LIMIT 1")" || return 1
   [[ -n "$data" ]] || return 0
   jq -r --arg t "$tool" 'if any(.content[]?; .type == "tool" and .name == $t and .state.status == "running") then "running" else empty end' <<<"$data" 2>/dev/null || true
 }
@@ -306,11 +312,8 @@ oc2_running_tool() {
 oc2_idle_mark() {
   local db="$1" sid="$2" out
   oc2_valid_sid "$sid" || return 1
-  out="$(sqlite3 -readonly -cmd '.timeout 5000' "$db" \
-    "SELECT coalesce(time_idle,0)||'|'||coalesce(idle_outcome,'') FROM session_v2 WHERE id='$sid'" 2>&1)" || {
-    echo "[driver] reading $sid's idle state from $db failed: $out" >&2
-    return 1
-  }
+  out="$(oc2_store_read "$db" "$sid's idle state" \
+    "SELECT coalesce(time_idle,0)||'|'||coalesce(idle_outcome,'') FROM session_v2 WHERE id='$sid'")" || return 1
   [[ "$out" =~ ^[0-9]+\| ]] || { echo "[driver] no session_v2 row for $sid in $db (got '$out')" >&2; return 1; }
   printf '%s\n' "$out"
 }

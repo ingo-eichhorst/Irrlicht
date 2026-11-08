@@ -36,8 +36,22 @@ DRIVER="$ROOT/replaydata/agents/opencode-v2/driver-interactive.sh"
 DDL="$ROOT/core/adapters/inbound/agents/opencode/testdata/v2-schema.sql"
 
 fails=0
-pass() { echo "  PASS: $1"; return 0; }
-fail() { echo "  FAIL: $1 — $2"; fails=$((fails + 1)); return 0; }
+# Section filter: OC2_DRIVER_TEST_ONLY=<key> runs one section's driver runs and
+# assertions. Every section's setup (store resets, stub modes, service
+# respawns) still runs — it is cheap, and later sections lean on it. The
+# mutation fixture (tools/lib/opencode-v2-driver-mutations_test.sh) uses it so
+# each mutation pays for its own section only. A key no section has fails the
+# run: a typo must not read as a pass.
+ONLY="${OC2_DRIVER_TEST_ONLY:-}"
+SKIPPING=0
+SECTIONS_RUN=0
+section() { # <key> <title>
+  if [[ -n "$ONLY" && "$1" != "$ONLY" ]]; then SKIPPING=1; return 0; fi
+  SKIPPING=0; SECTIONS_RUN=$((SECTIONS_RUN + 1))
+  echo "== $2 =="
+}
+pass() { (( SKIPPING )) && return 0; echo "  PASS: $1"; return 0; }
+fail() { (( SKIPPING )) && return 0; echo "  FAIL: $1 — $2"; fails=$((fails + 1)); return 0; }
 assert_eq() { if [[ "$3" == "$2" ]]; then pass "$1"; else fail "$1" "expected [$2] got [$3]"; fi; }
 assert_has() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "wanted to find [$2] in: ${3:0:600}" ;; esac; }
 
@@ -247,6 +261,10 @@ write_service_json() {
 # seconds; the production values are the driver's defaults.
 run_driver() {
   local name="$1" timeout="$2" script="$3"; shift 3
+  if (( SKIPPING )); then
+    RUN_RC=0; RUN_REASON="skipped"; RUN_OUT=""; RUN_ELAPSED=0; RUN_STAGING="$TMP/skipped"
+    return 0
+  fi
   RUN_STAGING="$TMP/staging-$name"; mkdir -p "$RUN_STAGING"
   local start; start=$(date +%s)
   env -u OPENCODE_DB -u IRRLICHT_ONBOARD_CWD PATH="$STUBS:$PATH" XDG_CONFIG_HOME="$CFG" XDG_DATA_HOME="$DATA" \
@@ -270,7 +288,7 @@ created_count() { grep -c . "$STUB_OUT/created" 2>/dev/null || true; }
 
 one_service; service_env; write_service_json
 
-echo "== a turn end to end: send, wait_turn, export, contract =="
+section turn "a turn end to end: send, wait_turn, export, contract"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver ok 30 '[{"type":"send","text":"Reply with exactly the word: ok"},{"type":"wait_turn"},{"type":"sleep","seconds":1}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -292,7 +310,7 @@ else
   pass "the password is nowhere in staging"
 fi
 
-echo "== a service that never goes idle: timeout, by the deadline =="
+section never "a service that never goes idle: timeout, by the deadline"
 reset_store; echo never > "$STUB_OUT/mode"
 run_driver never 6 '[{"type":"send","text":"x"},{"type":"wait_turn"}]'
 assert_eq "exit reason timeout" "timeout" "$RUN_REASON"
@@ -300,7 +318,7 @@ assert_has "…saying the turn never ended" "no new idle" "$RUN_OUT"
 if (( RUN_ELAPSED <= 6 + 4 )); then pass "…within the deadline (${RUN_ELAPSED}s for a 6s budget)"; else fail "…within the deadline" "${RUN_ELAPSED}s for a 6s budget"; fi
 assert_eq "the watchdog never had to kill it" "" "$(grep -F 'WATCHDOG' <<<"$RUN_OUT")"
 
-echo "== refusals, before any session exists =="
+section refusals "refusals, before any session exists"
 reset_store; two_services
 run_driver two 20 '[{"type":"send","text":"x"}]'
 assert_eq "two services: exit reason nonzero(2)" "nonzero(2)" "$RUN_REASON"
@@ -342,13 +360,13 @@ assert_has "…saying so" "is not running" "$RUN_OUT"
 SVC_SLEEP2=""; one_service 2>/dev/null; write_service_json
 printf '%s /opt/oc2/bin/opencode serve --service\n' "$SVC_SLEEP" > "$PS_LIST"
 
-echo "== a plugin the service fails to load: refused before driving =="
+section badplugin "a plugin the service fails to load: refused before driving"
 reset_store; echo badplugin > "$STUB_OUT/mode"
 run_driver badplugin 20 '[{"type":"send","text":"x"}]'
 assert_eq "exit reason nonzero(2)" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming the failed load" "failed to load plugin" "$RUN_OUT"
 
-echo "== a permission ask is answered only when its id is a permission id (#2109 review F2) =="
+section permission "a permission ask is answered only when its id is a permission id (#2109 review F2)"
 # The id comes from the API and goes into the reply URL's path. A real one
 # (the shape the sandbox service answered with) is answered at exactly that
 # path — a lock on the pattern being loose enough; one carrying path segments
@@ -364,7 +382,7 @@ assert_has "…naming why" "not a permission id" "$RUN_OUT"
 assert_eq "…and nothing but the session and its prompt was POSTed" "/api/session /api/session/ses_stub1/prompt" "$(tr '\n' ' ' < "$STUB_OUT/posted" | sed 's/ $//')"
 assert_eq "…but the session is still exported (the epilogue ran)" "3" "$(grep -c . "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null)"
 
-echo "== a seed_instruction writes only under RUN_CWD (#2109 review F3) =="
+section seed "a seed_instruction writes only under RUN_CWD (#2109 review F3)"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver seedup 20 '[{"type":"seed_instruction","path":"../escape.md","text":"x"},{"type":"send","text":"x"},{"type":"wait_turn"}]'
 assert_eq "a leading '..' path: refused" "nonzero(2)" "$RUN_REASON"
@@ -403,7 +421,7 @@ run_driver seednodirmid 20 '[{"type":"send","text":"x"},{"type":"wait_turn"},{"t
 assert_eq "a mid-script write that fails: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming why" "could not write" "$RUN_OUT"
 
-echo "== sessions as slots: start_session, {\"session\": N} (#2109 P5b-1) =="
+section slots "sessions as slots: start_session, {\"session\": N} (#2109 P5b-1)"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver slots 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"start_session"},{"type":"send","text":"b"},{"type":"wait_turn"},{"type":"send","text":"c","session":1},{"type":"wait_turn"},{"type":"session","session":2},{"type":"send","text":"d"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -436,7 +454,7 @@ reset_store
 run_driver noslot 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"session"}]'
 assert_eq "a session step with no slot: refused" "nonzero(2)" "$RUN_REASON"
 
-echo "== reset_session, archive and unarchive (PATCH) =="
+section reset "reset_session, archive and unarchive (PATCH)"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver reset 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"reset_session"},{"type":"send","text":"b"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -455,7 +473,7 @@ run_driver archive 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_eq "archive then unarchive, on the active session" $'ses_stub1 {"archived":true}\nses_stub1 {"archived":false}' "$(cat "$STUB_OUT/patched")"
 
-echo "== model: the provider/model is checked before it is sent =="
+section model "model: the provider/model is checked before it is sent"
 reset_store
 run_driver model 20 '[{"type":"model","provider":"kolibri","model":"kolibri-1-4bit-b"},{"type":"send","text":"a"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -466,7 +484,7 @@ assert_eq "a malformed model id: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming why" "not a provider/model id" "$RUN_OUT"
 assert_eq "…and no switch was sent" "" "$(cat "$STUB_OUT/model")"
 
-echo "== revert: the target is the Nth-last user message, and must be a message id =="
+section revert "revert: the target is the Nth-last user message, and must be a message id"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver revert 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"send","text":"b"},{"type":"wait_turn"},{"type":"revert"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -486,25 +504,26 @@ run_driver revertturns 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"ty
 assert_eq "a non-numeric turn count: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming why" "turns must be a positive integer" "$RUN_OUT"
 
-echo "== await_tool: the session's own running tool =="
+section await_tool "await_tool: the session's own running tool"
 reset_store; echo tool > "$STUB_OUT/mode"
 run_driver tool 20 '[{"type":"send","text":"a"},{"type":"await_tool","tool":"shell"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_has "…once its shell tool runs" "ses_stub1 is running its shell tool" "$RUN_OUT"
 reset_store; echo idle > "$STUB_OUT/mode"
-run_driver notool 5 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_tool","tool":"shell"}]'
+run_driver notool 3 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_tool","tool":"shell"}]'
 assert_eq "no such tool by the deadline: timeout" "timeout" "$RUN_REASON"
+assert_has "…from the await itself" "ses_stub1 ran no shell tool by the deadline" "$RUN_OUT"
 reset_store
 run_driver toolname 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_tool"}]'
 assert_eq "await_tool without a tool name: refused" "nonzero(2)" "$RUN_REASON"
 
-echo "== background =="
+section background "background"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver background 20 '[{"type":"send","text":"a"},{"type":"background"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_eq "…POSTed to the active session's background endpoint" "1" "$(grep -cx '/api/session/ses_stub1/background' "$STUB_OUT/posted")"
 
-echo "== await_child: an observed child, not a sleep =="
+section await_child "await_child: an observed child, not a sleep"
 reset_store; echo child > "$STUB_OUT/mode"
 run_driver child 20 '[{"type":"send","text":"a"},{"type":"await_child","tool":"shell"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
@@ -514,14 +533,16 @@ run_driver badchild 20 '[{"type":"send","text":"a"},{"type":"await_child","tool"
 assert_eq "a child id that is not a session id: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming why" "not a session id" "$RUN_OUT"
 reset_store; echo idle > "$STUB_OUT/mode"
-run_driver nochild 5 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_child"}]'
+run_driver nochild 3 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"await_child"}]'
 assert_eq "no child by the deadline: timeout" "timeout" "$RUN_REASON"
+assert_has "…from the await itself" "await_child: no child of ses_stub1 by the deadline" "$RUN_OUT"
 
-echo "== the service window: exit_clean / sigkill =="
+section window "the service window: exit_clean / sigkill"
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver nowindow 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"sigkill"}]'
 assert_eq "sigkill without a service window: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming the opt-in" "OC2_SERVICE_WINDOW=1" "$RUN_OUT"
+assert_eq "…before any session or turn" "0" "$(created_count)"
 kill -0 "$SVC_SLEEP" 2>/dev/null && got=alive || got=dead
 assert_eq "…and the service was not signalled" "alive" "$got"
 reset_store; touch "$TMP/ps.drift"
@@ -554,7 +575,7 @@ kill "$SVC_SLEEP" 2>/dev/null; wait "$SVC_SLEEP" 2>/dev/null
 sleep 600 & SVC_SLEEP=$!
 one_service; write_service_json
 
-echo "== the driver never traces itself =="
+section xtrace "the driver never traces itself"
 if grep -nE '^[^#]*set -[a-z]*x|set -o xtrace' "$DRIVER" "$ROOT/replaydata/agents/opencode-v2/service-api.sh"; then
   fail "no xtrace" "a traced driver echoes the credential's curl config"
 else
@@ -562,6 +583,10 @@ else
 fi
 
 echo ""
+if [[ -n "$ONLY" ]] && (( SECTIONS_RUN == 0 )); then
+  echo "opencode-v2-driver_test: no section named '$ONLY' (OC2_DRIVER_TEST_ONLY) — nothing was checked" >&2
+  exit 1
+fi
 if (( fails == 0 )); then
   echo "opencode-v2-driver_test: ALL PASS"
   exit 0
