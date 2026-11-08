@@ -183,9 +183,9 @@ var stopHookCensus = map[string]stopRecording{
 	// activity with no file_size, so the sidecar cannot drive the replay and
 	// each Stop — the 2.x plugin's session.execution.* turn end — is graded
 	// transcript-only.
-	"opencode-v2/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-10-26-07-01-01_irrlichd-0.6.7+d15cb2f/transcript.jsonl": {
+	"opencode-v2/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-11-08-01-48-42_irrlichd-0.6.7+dc1fdce/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
-		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e89339957ffemuf7dt0h3sBaLw",
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475ed2c5ffeJfSEv1V9umg51m",
 	},
 	"opencode-v2/scenarios/2-1_basic-turn/recordings/2026-11-08-01-45-32_irrlichd-0.6.7+901d7ba/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
