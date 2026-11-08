@@ -1,0 +1,108 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.6,
+    "notes": "agent_supports: partial\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.6,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe marker is parsed for opencode on both branches: the 2.x parser hands each assistant row's text items to applyAssistantText, which runs tailer.ScanTaskEstimate (parser_v2.go); the fold keeps the latest estimate and attaches TaskEstimate and the ETA while the session works (opencode metrics.go). The instruction reaches the model through the location's AGENTS.md, which the service watches (#2109 record: measured in the service log); the driver's seed_instruction step writes it under RUN_CWD before the session exists (P5a), which closes the V1 column's `gap:seed_instruction`.\n\n## agent_supports: partial\n\nOpenCode has no instruction installer for the marker (only Claude Code has one); whether the model emits it is the model's choice. Kept at V1's `partial`.\n\n## Spec choices\n\nThree turns on one session, each ending on its Stop hook; the marker itself is checked in the exported transcript by the PR, not asserted by a phase.",
+      "caveats": [
+        "Whether the local Kolibri model follows AGENTS.md and emits the marker is not under the rig's control; the PR reports whether the exported rows carry it.",
+        "A 2.x `user` row clears the estimate (ClearToolNames), so the estimate is visible only while each turn works, as the scenario expects."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_v2.go",
+          "note": "each assistant row's model.id is the step's ModelName; text items feed applyAssistantText (task-estimate scan)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics_v2.go",
+          "note": "queryV2SessionMetrics re-folds every session_message row in seq order; cumulative tokens/cost come from the session_v2 columns"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go",
+          "note": "ScanTaskEstimate: the shared marker scanner opencode's 2.x parser calls"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "seed_instruction writes the marker rule to RUN_CWD/AGENTS.md before the session exists",
+        "three phase prompts, one turn each, then 12s"
+      ],
+      "settings": {},
+      "timeout_seconds": 600,
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "## Task progress marker (irrlicht)\n\nWhile working a multi-phase task, emit a hidden progress marker in your own reply text on EVERY turn, exactly in this form (keep it as an HTML comment so it stays out of the rendered answer):\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the number of phases you plan. Emit it with completed_rounds=0 on your first reply, then INCREASE completed_rounds by 1 each turn as you finish a phase, until completed_rounds == total_rounds on the final turn."
+        },
+        {
+          "type": "send",
+          "text": "Plan a 3-phase refactor of a small calculator module: (1) add input validation, (2) extract the arithmetic into a helper, (3) add unit tests. Do ONE phase per reply and do not use any tools — describe the change in prose. On your VERY FIRST reply, before doing phase 1, emit the progress marker with total_rounds=3 and completed_rounds=0, then do phase 1 and update completed_rounds to 1. Remember to emit the marker on every reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Good. Now do phase 2 (extract the arithmetic helper) and update the progress marker to completed_rounds=2."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Now do phase 3 (add the unit tests). This is the final phase, so set the progress marker to completed_rounds=3 (== total_rounds) and confirm the task is done."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "three working → ready arcs on one session",
+        "the exported assistant rows carry the irrlicht-eta marker (checked by the PR)"
+      ]
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "confidence": 0.9,
+    "notes": "agent_supports: no\ndaemon_capability: n/a; driver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\nThe scenario needs an agent run in a cloud VM or container with no local PID, observed through a remote feed. OpenCode 2.x has no such run mode: every session is hosted by a LOCAL `opencode serve --service` process and stored in that user's local SQLite store (session_v2/session_message under $XDG_DATA_HOME/opencode). The daemon binds each session to that local service pid (pid.go servicePIDFor). There is no hosted, PID-less run to observe, so the cell is n/a on every axis — the same verdict as the V1 `opencode` column's 1-7 for the same reason, one layer earlier than irrlicht's missing remote transport.\n\n## What would flip this\n\nAn upstream OpenCode hosted/cloud run mode with its own control plane and no local process; the daemon would then also need a non-file, non-store Source variant.",
+      "caveats": [
+        "The 2.x service is long-lived and shared, but it is still a local process with a local store — do not mistake 'no per-session process' for 'PID-less'."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/pid.go",
+          "note": "servicePIDFor: a session no client runs binds to the one running service; OwnsSharedPID answers false for an archived row"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/watcher_v2.go",
+          "note": "2.x reader: lists session_v2 rows with time_archived IS NULL; a session is admitted on its first session_message activity while a service is up (#2107); an archived or missing row emits EventRemoved (v2SessionGone)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/1-7_cloud-background-agent/metadata.json",
+          "note": "the V1 column's frozen n/a verdict, for the same reason"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — OpenCode 2.x has no cloud/hosted run mode; every session is hosted by a local `serve --service` process over a local store, so there is nothing PID-less or remote to observe. No recipe; frozen at Stage 1, as the V1 opencode column is."
+    }
+  }
+}
