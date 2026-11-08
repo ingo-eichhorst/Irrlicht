@@ -231,7 +231,7 @@
       }
     },
     "opencode-v2": {
-      "maturity": "planned",
+      "maturity": "stable",
       "capabilities": {
         "background_process": "untraced",
         "cloud_agent": "absent",

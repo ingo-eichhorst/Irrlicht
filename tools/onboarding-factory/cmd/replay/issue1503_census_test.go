@@ -287,6 +287,8 @@ type catalogCensus struct {
 // merged with P5-0, beside P5-0's own Divergent move; no other field moved.
 // #2109 P5b-1 adds its fifteen opencode-v2 recordings to PairedButUngraded for
 // the same reason, measured by the same census command; no other field moved.
+// #2109 P5b-2 adds its twelve the same way, measured by the same command; no
+// other field moved.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                433,
 	Zero:                      2,
@@ -294,7 +296,7 @@ var censusOfTheCommittedCatalog = catalogCensus{
 	Divergent:                 190,
 	DivergentByCountsAndKinds: 189,
 	UnpairedSidecars:          0,
-	PairedButUngraded:         106,
+	PairedButUngraded:         118,
 }
 
 // literal renders the census as the Go source to paste over the declaration
