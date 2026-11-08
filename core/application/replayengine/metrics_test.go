@@ -244,3 +244,15 @@ func TestConvert_ExecutionConfidence(t *testing.T) {
 		t.Errorf("no scored message must leave low/tooltip empty, got %v %q", none.ExecutionConfidenceLow, none.ExecutionConfidenceTooltip)
 	}
 }
+
+// TestTailerToDomain_CopiesUserTurns: Convert is the one tailer → domain
+// conversion (the daemon's metrics adapter builds a MetricsConverter, and both
+// replays reach it through TailerToDomain), so a field it drops is lost on
+// every tailer-path agent. #2109's rule reads UserTurns to tell the tail of a
+// hook-ended turn from a new one; without the copy it reads 0 and the rule
+// never applies.
+func TestTailerToDomain_CopiesUserTurns(t *testing.T) {
+	if got := TailerToDomain(&tailer.SessionMetrics{UserTurns: 3}).UserTurns; got != 3 {
+		t.Errorf("UserTurns = %d, want 3", got)
+	}
+}

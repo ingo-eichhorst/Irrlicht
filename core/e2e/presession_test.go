@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -17,27 +16,26 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
+
+	"irrlicht/core/internal/fakeproc"
 )
 
-// TestPreSession_DetectedBeforeTranscript starts a real process (symlinked
-// from /bin/sleep so pgrep sees a unique name), wires up the full
+// TestPreSession_DetectedBeforeTranscript starts a real process (a fakeproc
+// stand-in, so pgrep sees a unique name), wires up the full
 // Scanner → SessionDetector pipeline, and asserts the session appears in
 // the repo as "ready" before any .jsonl transcript file is created.
 func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	// Unique process name so we never collide with real claude instances.
 	processName := fmt.Sprintf("irrlicht-e2e-%d", os.Getpid())
 
-	// Symlink /bin/sleep → <tmpdir>/<processName> so the OS reports our
-	// chosen name to pgrep -x.
+	// A stand-in at <tmpdir>/<processName> so the OS reports our chosen name
+	// to pgrep -x.
 	binDir := realTempDir(t)
 	binPath := filepath.Join(binDir, processName)
-	if err := os.Symlink("/bin/sleep", binPath); err != nil {
-		t.Fatalf("symlink /bin/sleep → %s: %v", binPath, err)
-	}
 
 	// Start the fake agent process with a controlled CWD.
 	fakeCWD := realTempDir(t)
-	cmd := exec.Command(binPath, "60")
+	cmd := fakeproc.Command(t, binPath, "60")
 	cmd.Dir = fakeCWD
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start fake process: %v", err)
@@ -96,12 +94,9 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 
 	binDir := realTempDir(t)
 	binPath := filepath.Join(binDir, processName)
-	if err := os.Symlink("/bin/sleep", binPath); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
 
 	fakeCWD := realTempDir(t)
-	cmd := exec.Command(binPath, "60")
+	cmd := fakeproc.Command(t, binPath, "60")
 	cmd.Dir = fakeCWD
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
@@ -277,12 +272,9 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 
 	binDir := realTempDir(t)
 	binPath := filepath.Join(binDir, processName)
-	if err := os.Symlink("/bin/sleep", binPath); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
 
 	fakeCWD := realTempDir(t)
-	cmd := exec.Command(binPath, "60")
+	cmd := fakeproc.Command(t, binPath, "60")
 	cmd.Dir = fakeCWD
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)

@@ -308,25 +308,68 @@ func TestRefusals(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := writeTemp(t, tc.src)
-			_, err := EnsureInstalled(testConfig(path))
-			if err == nil {
-				t.Fatalf("EnsureInstalled accepted a document it cannot model:\n%s", tc.src)
-			}
-			var unsafe *UnsafeConstructError
-			if !errors.As(err, &unsafe) {
-				t.Fatalf("error is %T (%v), want *UnsafeConstructError", err, err)
-			}
-			if unsafe.Line != tc.wantLine {
-				t.Errorf("reported line %d, want %d (%v)", unsafe.Line, tc.wantLine, err)
-			}
-			if !strings.Contains(unsafe.Message, tc.wantWord) {
-				t.Errorf("message %q does not mention %q", unsafe.Message, tc.wantWord)
-			}
-			if got := read(t, path); got != tc.src {
-				t.Errorf("a refused document was still modified:\n%s", got)
-			}
+			assertRefused(t, tc.src, tc.wantLine, tc.wantWord)
 		})
+	}
+}
+
+// assertRefused installs into src and requires a refusal naming wantLine and
+// mentioning wantWord, with the file left byte-identical.
+func assertRefused(t *testing.T, src string, wantLine int, wantWord string) {
+	t.Helper()
+	path := writeTemp(t, src)
+	_, err := EnsureInstalled(testConfig(path))
+	if err == nil {
+		t.Fatalf("EnsureInstalled accepted a document it cannot model:\n%s", src)
+	}
+	var unsafe *UnsafeConstructError
+	if !errors.As(err, &unsafe) {
+		t.Fatalf("error is %T (%v), want *UnsafeConstructError", err, err)
+	}
+	if unsafe.Line != wantLine {
+		t.Errorf("reported line %d, want %d (%v)", unsafe.Line, wantLine, err)
+	}
+	if !strings.Contains(unsafe.Message, wantWord) {
+		t.Errorf("message %q does not mention %q", unsafe.Message, wantWord)
+	}
+	if got := read(t, path); got != src {
+		t.Errorf("a refused document was still modified:\n%s", got)
+	}
+}
+
+// TestColumnZeroSequenceRefusals is the other side of #2123's acceptance: a
+// column-0 `- ` entry is only read as part of the key above it when that key
+// has no inline value, and never under the target key, whose block must be a
+// mapping of event names.
+func TestColumnZeroSequenceRefusals(t *testing.T) {
+	t.Run("after a scalar value", func(t *testing.T) {
+		assertRefused(t, "model: x\n- one\n", 2, "not a key")
+	})
+	t.Run("as the hooks block", func(t *testing.T) {
+		assertRefused(t, "hooks:\n- command: \"x\"\n", 2, "sequence, not a mapping")
+	})
+}
+
+// TestColumnZeroSequenceUnderAnotherKey pins #2123: hermes' own config writer
+// emits a top-level key's block sequence at the key's column (`toolsets:` then
+// `- hermes-cli`), which is valid YAML. Refusing it made both install AND
+// uninstall fail on a stock hermes config, leaving the revoke un-undoable.
+func TestColumnZeroSequenceUnderAnotherKey(t *testing.T) {
+	const src = "model:\n  default: x\ntoolsets:\n- hermes-cli\n# between entries\n- name: two\n  nested: true\nagent:\n  max_turns: 90\n"
+	path := writeTemp(t, src)
+	cfg := testConfig(path)
+
+	if _, err := EnsureInstalled(cfg); err != nil {
+		t.Fatalf("EnsureInstalled refused valid YAML: %v", err)
+	}
+	if got := read(t, path); !strings.HasPrefix(got, src) {
+		t.Fatalf("the original is not a byte-identical prefix:\n%s", got)
+	}
+	if _, err := Uninstall(cfg); err != nil {
+		t.Fatalf("Uninstall refused valid YAML: %v", err)
+	}
+	if got := read(t, path); got != src {
+		t.Errorf("install then uninstall did not round-trip:\n%s", got)
 	}
 }
 

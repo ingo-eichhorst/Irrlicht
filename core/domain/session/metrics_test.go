@@ -174,6 +174,20 @@ func TestMergeMetrics_CumFields(t *testing.T) {
 	}
 }
 
+// TestMergeMetrics_UserTurns pins the merge rule the #2109 rule depends on.
+// The new value must win when it is non-zero: keeping the old one would freeze
+// the count, and the detector would read every later pass as "no new user
+// turn". A zero is a source that read none, and the old count stands.
+func TestMergeMetrics_UserTurns(t *testing.T) {
+	oldM := &SessionMetrics{UserTurns: 3}
+	if got := MergeMetrics(&SessionMetrics{UserTurns: 4}, oldM).UserTurns; got != 4 {
+		t.Errorf("a fresh count: UserTurns = %d, want 4 (the new value)", got)
+	}
+	if got := MergeMetrics(&SessionMetrics{}, oldM).UserTurns; got != 3 {
+		t.Errorf("a source that read no user turn: UserTurns = %d, want 3 (the old value)", got)
+	}
+}
+
 // MergeMetrics task-list semantics: nil = "no data yet" (carry the old list),
 // non-nil empty = "no tasks" (clear it). The tailer emits the empty slice
 // after a prune-to-empty — without the distinction the stale pre-prune list

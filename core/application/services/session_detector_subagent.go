@@ -290,6 +290,7 @@ func (d *SessionDetector) holdParentWorkingForNewChild(parentID string) {
 		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: session.StateWorking, Reason: "new child discovered while ready — holding working"})
 		parent.State = session.StateWorking
 		parent.UpdatedAt = d.nowFn().Unix()
+		d.forgetHookTurnEnd(parentID)
 		d.refreshSubagentSummary(parent)
 		if err := d.repo.Save(parent); err != nil {
 			d.log.LogError(logComponentSessionDetector, parentID,
@@ -396,6 +397,9 @@ func (d *SessionDetector) transitionParentAfterChildrenDone(parent *session.Sess
 	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: newState, Reason: reason})
 	parent.State = newState
 	parent.UpdatedAt = now
+	// ClassifyState here reads no hook overlay, so whatever it decided is not
+	// a hook's turn end.
+	d.forgetHookTurnEnd(parentID)
 	if newState == session.StateWaiting {
 		parent.WaitingStartTime = &now
 	}

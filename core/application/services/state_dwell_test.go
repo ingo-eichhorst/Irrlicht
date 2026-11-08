@@ -385,8 +385,9 @@ func TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds(t *testing.T) {
 
 	d.dwell.Admit("s", session.StateWaiting, session.StateWorking, holdT0)
 	d.signals.Hold("s", session.SignalPermissionPrompt, session.SignalPayload{}, holdT0)
-	if !d.dwell.Pending("s") || !d.signals.HasAny("s") {
-		t.Fatal("precondition: both a dwell and a hold must be outstanding")
+	d.noteHookTurnEnd("s", &HookTurnEnd{UserTurns: 1})
+	if !d.dwell.Pending("s") || !d.signals.HasAny("s") || d.hookTurnEnd("s") == nil {
+		t.Fatal("precondition: a dwell, a hold and a hook-turn marker must be outstanding")
 	}
 
 	// The reap path — not onRemoved.
@@ -397,6 +398,13 @@ func TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds(t *testing.T) {
 	}
 	if d.signals.HasAny("s") {
 		t.Error("a reaped session must not leave a signal hold behind")
+	}
+	// #2109: a session re-created under the same ID (the --continue branch of
+	// processActivity) enters ready through buildNewSessionState, not
+	// applyStateTransition, so nothing else would overwrite a marker left here,
+	// and its first done pass would be read as the old turn's tail.
+	if d.hookTurnEnd("s") != nil {
+		t.Error("a reaped session must not leave a hook-turn marker behind")
 	}
 }
 

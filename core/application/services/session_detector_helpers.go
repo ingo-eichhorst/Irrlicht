@@ -100,6 +100,10 @@ func (d *SessionDetector) forgetSessionScopedState(sessionID string) {
 	// Nil-safe on its own receiver, so it needs no guard like signals above.
 	d.hookLiveness.Forget(sessionID)
 
+	// The marker of a hook-decided ready (#2109): a recycled session ID would
+	// otherwise skip its first force.
+	d.forgetHookTurnEnd(sessionID)
+
 	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, sessionID)
 	d.idleMu.Unlock()

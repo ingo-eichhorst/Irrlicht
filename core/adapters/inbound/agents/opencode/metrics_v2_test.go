@@ -120,3 +120,41 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		}
 	})
 }
+
+// TestComputeMetrics_V2CountsUserTurns pins SessionMetrics.UserTurns on the
+// 2.x store fold (#2109 P5-0). The detector compares it across the hook's pass
+// and the store pass that follows, so it must count user rows only — not the
+// assistant rows a step rewrites in place, not the idle row — and it must be a
+// re-fold: two reads of the same rows give the same count.
+func TestComputeMetrics_V2CountsUserTurns(t *testing.T) {
+	w, db := newV2Store(t)
+	loadV2Fixture(t, db, v2StoreRows)
+	userTurns := func(when string) int {
+		t.Helper()
+		m, err := ComputeMetrics(w.transcriptPathFor(sesToolTurn), "")
+		if err != nil || m == nil {
+			t.Fatalf("%s: ComputeMetrics = %v, %v; want the session's metrics", when, m, err)
+		}
+		return m.UserTurns
+	}
+
+	// One user row (seq 4), three assistant rows, one idle row.
+	if got := userTurns("the fixture turn"); got != 1 {
+		t.Fatalf("UserTurns = %d after one user row, three assistant rows and an idle row, want 1", got)
+	}
+	// An assistant row rewritten in place is the same turn.
+	execAll(t, db, `UPDATE session_message SET time_updated = time_updated + 1 WHERE session_id = '`+sesToolTurn+`' AND seq = 27`)
+	if got := userTurns("after an assistant rewrite"); got != 1 {
+		t.Fatalf("UserTurns = %d after an assistant row was rewritten, want 1", got)
+	}
+	// A second prompt is a second user turn, and reading again does not add.
+	execAll(t, db, `INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+		SELECT 'msg_second_prompt', session_id, type, 40, time_created + 200000, time_updated + 200000, data
+		FROM session_message WHERE session_id = '`+sesToolTurn+`' AND seq = 4`)
+	if got := userTurns("after a second user row"); got != 2 {
+		t.Fatalf("UserTurns = %d after a second user row, want 2", got)
+	}
+	if got := userTurns("on a second read"); got != 2 {
+		t.Fatalf("UserTurns = %d on a second read of the same rows, want 2 — the fold must start over each pass", got)
+	}
+}
