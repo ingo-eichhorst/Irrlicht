@@ -26,7 +26,10 @@
 #  10. "fewer user messages than asked" read as an id;
 #  11. await_child using a child id that is not a session id;
 #  12. sigkill without the service-window opt-in (OC2_SERVICE_WINDOW=1);
-#  13. sigkill without re-checking that the pid is still the service.
+#  13. sigkill without re-checking that the pid is still the service;
+#  14. a switch that does not save the active slot's idle mark (review F1);
+#  15. reset_session archiving the old session before the new one exists
+#      (review F2).
 #
 # Mutation 1 runs until the test's watchdog (the cell deadline + 8s); the
 # driver's readiness waits run on the test's short knobs. Kept apart from
@@ -154,6 +157,16 @@ assert_red "the service signalled without a service window" "$DRIVER" \
 assert_red "the service pid not re-checked before the signal" "$DRIVER" \
   $'  if ! oc2_is_service_args $args; then\n    log "$sig: refusing' $'  if false; then\n    log "$sig: refusing' \
   "FAIL: …and it was not signalled"
+
+# ── 14. a switch that loses the active slot's idle mark ──
+assert_red "a slot switch without saving the idle mark" "$DRIVER" \
+  $'  save_active\n  load_slot "$n"\n' $'  load_slot "$n"\n' \
+  "FAIL: slot 2's idle mark survived the switch to slot 1"
+
+# ── 15. reset_session archiving first ──
+assert_red "reset_session archiving before the new session exists" "$DRIVER" \
+  $'  new_session || return 1\n  step_set_archived true "$old" || return 1\n' $'  step_set_archived true "$old" || return 1\n  new_session || return 1\n' \
+  "FAIL: …after the new one existed"
 
 if [[ $fails -gt 0 ]]; then
   echo "opencode-v2-driver-mutations: $fails FAILED"

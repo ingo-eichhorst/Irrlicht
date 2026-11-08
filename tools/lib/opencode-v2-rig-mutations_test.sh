@@ -38,9 +38,6 @@
 #   18. driver_launches_tmux claiming every driver launches tmux;
 #   19. spawn_record_daemon without the live-socket refusal;
 #   20. the XDG hook wait polling the whole shared base again.
-#   The cross-adapter rig (#2109 P5b-1, cell 4-2):
-#   25. run-cell-multi.sh never asking for the opencode-v2 store wipe;
-#   26. run-cell-multi.sh's teardown gate without its no-tmux exemption.
 #   21. agent_home_isolate without its half-relocation refusal → the half-set
 #       run still exits 1 (the absolute-path check refuses the unset
 #       variable's empty value, measured), but no longer names the half
@@ -53,6 +50,9 @@
 #   24. the state-store wipe without its <HOME>/.local/share/irrlicht shape
 #       check → a HOME-like typo's decoy stores are removed (second review,
 #       F1).
+#   The cross-adapter rig (#2109 P5b-1, cell 4-2):
+#   25. run-cell-multi.sh never asking for the opencode-v2 store wipe;
+#   26. run-cell-multi.sh's teardown gate without its no-tmux exemption.
 #
 # Corpus mutations live beside their subjects and are not repeated here:
 # righome_corpus_test.go's TestGradeRelocationNamesEveryWrongShape (a half

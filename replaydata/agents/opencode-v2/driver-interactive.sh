@@ -449,7 +449,7 @@ export_slots() {
 
 # step_signal_service <SIGTERM|SIGKILL> — the service window's two steps.
 step_signal_service() {
-  local sig="$1" args waited=0
+  local sig="$1" args signalled_at
   if [[ "${OC2_SERVICE_WINDOW:-}" != "1" ]]; then
     log "$sig: refusing to signal the service — it is shared, and only an operator-approved service window (OC2_SERVICE_WINDOW=1) may stop it"
     EXIT_REASON="$NONZERO_2"; return 1
@@ -466,15 +466,16 @@ step_signal_service() {
     EXIT_REASON="$NONZERO_2"; return 1
   fi
   SERVICE_SIGNALLED=1
+  signalled_at="$(oc2_now)"
   log "$sig sent to service pid $OC2_SVC_PID"
   while kill -0 "$OC2_SVC_PID" 2>/dev/null; do
     if (( $(remaining_seconds) <= 0 )); then
-      log "$sig: service pid $OC2_SVC_PID still alive at the deadline (${waited}s)"
+      log "$sig: service pid $OC2_SVC_PID still alive at the deadline ($(( $(oc2_now) - signalled_at ))s after the signal)"
       EXIT_REASON="$TIMEOUT_REASON"; return 1
     fi
-    sleep 0.5; waited=$((waited + 1))
+    sleep 0.5
   done
-  log "service pid $OC2_SVC_PID is gone"
+  log "service pid $OC2_SVC_PID is gone after $(( $(oc2_now) - signalled_at ))s"
 }
 
 current_idle() { # prints the active session's time_idle (0 when never idle)

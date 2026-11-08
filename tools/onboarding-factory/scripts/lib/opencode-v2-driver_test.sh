@@ -111,6 +111,9 @@ def mode():
     except OSError: return "idle"
 def note(name, line):
     with open(os.path.join(OUT, name), "a") as f: f.write(line + "\n")
+    # One shared log in arrival order, so a test can check the ORDER of calls
+    # that land in different files (reset_session: create, then archive).
+    with open(os.path.join(OUT, "seq"), "a") as f: f.write(name + " " + line + "\n")
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def reply(self, code, obj):
@@ -261,7 +264,7 @@ run_driver() {
   RUN_OUT="$(cat "$RUN_STAGING/out")"
   return 0
 }
-reset_store() { sqlite3 "$DB" "DELETE FROM session_message; DELETE FROM session_v2;"; local f; for f in created auth booted posted patched model revert; do : > "$STUB_OUT/$f"; done; rm -f "$TMP/ps.drift" "$TMP/ps.argscount"; }
+reset_store() { sqlite3 "$DB" "DELETE FROM session_message; DELETE FROM session_v2;"; local f; for f in created auth booted posted patched model revert seq; do : > "$STUB_OUT/$f"; done; rm -f "$TMP/ps.drift" "$TMP/ps.argscount"; }
 prompts() { grep '/prompt$' "$STUB_OUT/posted" | tr '\n' ' ' | sed 's/ $//'; }
 created_count() { grep -c . "$STUB_OUT/created" 2>/dev/null || true; }
 
@@ -413,6 +416,18 @@ assert_eq "transcript.paths has one export per slot" "2" "$(grep -c . "$RUN_STAG
 assert_eq "…slot 1's holds its two turns" "6" "$(grep -c . "$(sed -n 1p "$RUN_STAGING/transcript.paths" 2>/dev/null)" 2>/dev/null)"
 assert_eq "…slot 2's its two" "6" "$(grep -c . "$(sed -n 2p "$RUN_STAGING/transcript.paths" 2>/dev/null)" 2>/dev/null)"
 reset_store
+# A slot's idle mark survives a switch away and back: slot 2's second turn is
+# sent, focus moves to slot 1, and the wait on slot 2 must compare against the
+# mark its send took — not the 0 a fresh slot starts with, which against a
+# real service would end the wait on the previous turn's idle.
+run_driver slotmark 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"start_session"},{"type":"send","text":"b"},{"type":"wait_turn"},{"type":"send","text":"c"},{"type":"session","session":1},{"type":"wait_turn","session":2}]'
+assert_eq "exit reason ok" "ok" "$RUN_REASON"
+mark_line="$(grep 'turn over on ses_stub2' <<<"$RUN_OUT" | tail -1)"
+case "$mark_line" in
+  *"> mark 0)"*|"") fail "slot 2's idle mark survived the switch to slot 1" "a non-zero mark" "${mark_line:-no turn-over line}" ;;
+  *) pass "slot 2's idle mark survived the switch to slot 1" ;;
+esac
+reset_store
 run_driver badslot 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"send","text":"b","session":3}]'
 assert_eq "an unknown slot: refused" "nonzero(2)" "$RUN_REASON"
 assert_has "…naming it" "invalid session slot '3' (have 1)" "$RUN_OUT"
@@ -425,7 +440,14 @@ echo "== reset_session, archive and unarchive (PATCH) =="
 reset_store; echo idle > "$STUB_OUT/mode"
 run_driver reset 30 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"reset_session"},{"type":"send","text":"b"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
-assert_eq "the old session was archived after the new one existed" 'ses_stub1 {"archived":true}' "$(cat "$STUB_OUT/patched")"
+assert_eq "the old session was archived" 'ses_stub1 {"archived":true}' "$(cat "$STUB_OUT/patched")"
+new_at="$(grep -n '^created ' "$STUB_OUT/seq" | sed -n 2p | cut -d: -f1)"
+archived_at="$(grep -n '^patched ses_stub1 ' "$STUB_OUT/seq" | head -1 | cut -d: -f1)"
+if [[ -n "$new_at" && -n "$archived_at" ]] && (( new_at < archived_at )); then
+  pass "…after the new one existed"
+else
+  fail "…after the new one existed" "the second create before the PATCH" "create line '${new_at}', patch line '${archived_at}'"
+fi
 assert_eq "…and the next prompt went to the new one" "/api/session/ses_stub1/prompt /api/session/ses_stub2/prompt" "$(prompts)"
 assert_eq "…both are in the staging contract" "ses_stub1 ses_stub2" "$(tr '\n' ' ' < "$RUN_STAGING/session.uuids" 2>/dev/null | sed 's/ $//')"
 reset_store
