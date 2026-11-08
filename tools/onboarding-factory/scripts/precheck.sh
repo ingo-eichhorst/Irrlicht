@@ -32,9 +32,13 @@ fail() {
   exit 1
 }
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib/cli-version.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/cli-version.sh"
+
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse|deepseek-harness) ;;
+  claudecode|codex|pi|aider|opencode|opencode-v2|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse|deepseek-harness) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -125,12 +129,16 @@ MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.meta.min_versions[$a] // empty' "$CATA
 # second "Run 'copilot update'..." line, so the caller takes the head line).
 # muse --version → "Muse Code 1.2.1 (1.2.1-R2847.1)" (verified against 1.2.1 —
 # the version is the 3rd field).
+# opencode-v2 → "@store": NO binary is run; the version is the newest
+# session_v2.version in the 2.x service's store (lib/cli-version.sh says why
+# running one here is a hazard, not just a wrong answer).
 case "$ADAPTER" in
   claudecode)  CLI_BIN="claude";   VER_FIELD=1 ;;
   codex)       CLI_BIN="codex";    VER_FIELD=2 ;;
   pi)          CLI_BIN="pi";       VER_FIELD=1 ;;
   aider)       CLI_BIN="aider";    VER_FIELD=2 ;;
   opencode)    CLI_BIN="opencode"; VER_FIELD=1 ;;
+  opencode-v2) CLI_BIN="@store"; VER_FIELD=0 ;;
   kiro-cli)    CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
   gemini-cli)  CLI_BIN="gemini";   VER_FIELD=1 ;;
   antigravity) CLI_BIN="agy";      VER_FIELD=1 ;;
@@ -156,20 +164,15 @@ if [[ "${EXECUTION_PROFILE:-cli-local}" == "desktop-local" ]]; then
   # "unknown", which is what "could not look" must read as.
   CLI_VER=""
 else
-  command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
-  # Merge stderr — `pi --version` writes to stderr, others to stdout.
-  # Trailing punctuation is stripped because `copilot --version` prints
-  # "GitHub Copilot CLI 1.0.77." — with a full stop that would otherwise ride
-  # into the sort -V comparison below. No other adapter's version field ends in
-  # punctuation, so this is a no-op for them.
-  CLI_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
-  # Strip a leading "v" (hermes prints "Hermes Agent v0.19.0 ..."). Without
-  # this the floor check below silently passes ANY version: `sort -V` orders
-  # a bare "0.19.0" ahead of a "v"-prefixed string whatever the numbers say,
-  # so LOWEST always equals MIN_VERSION and the comparison proves nothing.
-  # A no-op for the adapters whose --version has no prefix.
-  CLI_VER="${CLI_VER#v}"
-  [[ -n "$CLI_VER" ]] || fail "could not parse '$CLI_BIN --version' output"
+  # lib/cli-version.sh resolves the arm, shared with promote-recording.sh: it
+  # merges stderr (`pi --version` writes there), strips a trailing period
+  # (`copilot --version` prints "GitHub Copilot CLI 1.0.77." — a full stop that
+  # would otherwise ride into the sort -V comparison below) and a leading "v"
+  # (hermes prints "Hermes Agent v0.19.0 ..."; without the strip the floor check
+  # passes ANY version, because `sort -V` orders a bare "0.19.0" ahead of a
+  # "v"-prefixed string whatever the numbers say). An "@store" arm runs nothing.
+  CLI_VER="$(resolve_cli_version "$ADAPTER" "$CLI_BIN" "$VER_FIELD")" ||
+    fail "could not read the $ADAPTER version (see above)"
 
   if [[ -n "$MIN_VERSION" ]]; then
     LOWEST="$(printf '%s\n%s\n' "$MIN_VERSION" "$CLI_VER" | sort -V | head -n1)"

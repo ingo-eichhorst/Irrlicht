@@ -686,6 +686,11 @@ func TestDetectAdapter(t *testing.T) {
 		{"pi replaydata", "replaydata/agents/pi/scenarios/01/transcript.jsonl", "pi"},
 		{"dsh session root", "/Users/u/.dsh/sessions/--tmp--/session-00000000-0000-0000-0000-000000000001/session.v3.jsonl.zstd", "dsh"},
 		{"dsh replaydata", "replaydata/agents/deepseek-harness/scenarios/01/transcript.jsonl.zstd", "dsh"},
+		// #2109: the opencode-v2 column records OpenCode 2.x and replays through
+		// the opencode adapter. Its directory is not opencode/, so a match on
+		// "/replaydata/agents/opencode/" alone does not reach it.
+		{"opencode replaydata", "replaydata/agents/opencode/scenarios/2-1_basic-turn/recordings/r/transcript.jsonl", "opencode"},
+		{"opencode-v2 replaydata", "replaydata/agents/opencode-v2/scenarios/2-1_basic-turn/recordings/r/transcript.jsonl", "opencode"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -178,6 +178,23 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_fd69f27acffePoG9lVtPjn9640",
 	},
+	// #2109: the opencode-v2 column's first recordings (OpenCode 2.x through
+	// the service API). Like every opencode recording, the 2.x watcher emits
+	// activity with no file_size, so the sidecar cannot drive the replay and
+	// each Stop — the 2.x plugin's session.execution.* turn end — is graded
+	// transcript-only.
+	"opencode-v2/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-11-08-01-48-42_irrlichd-0.6.7+dc1fdce/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475ed2c5ffeJfSEv1V9umg51m",
+	},
+	"opencode-v2/scenarios/2-1_basic-turn/recordings/2026-11-08-01-45-32_irrlichd-0.6.7+901d7ba/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e4761b88dffeHGB41U241wRyry",
+	},
+	"opencode-v2/scenarios/2-20_user-esc-interrupt/recordings/2026-11-08-01-50-20_irrlichd-0.6.7+aa12987/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_e475d55b9ffeCz8SRfSn02Idsu",
+	},
 	"pi/scenarios/1-1_session-start/recordings/2026-08-22-14-14-18_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "every Stop names a session the replay does not drive",

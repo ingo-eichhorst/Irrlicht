@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/daemonaddr"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // TestEveryBeaconAdapterDriverPassesTheDaemonAddress is the beacon counterpart
@@ -31,6 +34,15 @@ import (
 // So the obligation is derived from the import graph rather than from a list
 // somebody remembers to extend: an adapter that adopts beacon delivery
 // tomorrow is graded by existing.
+//
+// It grades every COLUMN routed to a beacon adapter (shard.DaemonAdapterForSlug),
+// not one driver per adapter: the opencode adapter has two columns since #2109,
+// and the opencode-v2 one launches no agent process at all — it drives a 2.x
+// `serve --service` over HTTP, and the plugin's beacon runs INSIDE that
+// service, resolving the daemon from the service's own environment. There is
+// no pane to hand IRRLICHT_BIND_ADDR to, so such a driver must instead check
+// that the addr file the service's beacon falls back to names this daemon —
+// assertServiceDriverChecksTheBeacon below.
 func TestEveryBeaconAdapterDriverPassesTheDaemonAddress(t *testing.T) {
 	root := repoRoot(t)
 	adapters, err := BeaconAdapters(root)
@@ -39,27 +51,88 @@ func TestEveryBeaconAdapterDriverPassesTheDaemonAddress(t *testing.T) {
 	}
 
 	for _, adapter := range adapters {
-		t.Run(adapter, func(t *testing.T) {
-			path := filepath.Join(root, "replaydata", "agents", adapter, "driver-interactive.sh")
-			src, err := os.ReadFile(path) // #nosec G304 -- path built from the repo root and a scanned adapter slug
-			if err != nil {
-				t.Fatalf("reading %s's driver: %v — a beacon adapter with no driver cannot be "+
-					"checked, and a check that cannot run must say so", adapter, err)
-			}
-			for _, l := range tmuxLaunchesMissingEnv(string(src), DaemonAddrEnvVar) {
-				t.Errorf("%s:%d launches the agent under tmux without passing %s.\n%s\n"+
-					"%s's hooks are beacon-delivered, so the installed entry carries no address and "+
-					"the beacon — a child of this pane — resolves one at fire time. Without this the "+
-					"pane reads the production addr file and a coexisting recording daemon sees no "+
-					"hook at all, while the recording still comes back complete and healthy.",
-					path, l.line, DaemonAddrEnvVar, l.window, adapter)
-			}
-			// Vacuity guard: a driver with no tmux launch satisfies the loop
-			// above by having nothing to walk.
-			if countTmuxLaunches(string(src)) == 0 {
-				t.Errorf("%s contains no `tmux new-session` at all — this arm graded nothing", path)
-			}
-		})
+		for _, column := range columnsOf(root, adapter) {
+			t.Run(column, func(t *testing.T) {
+				path := filepath.Join(root, "replaydata", "agents", column, "driver-interactive.sh")
+				src, err := os.ReadFile(path) // #nosec G304 -- path built from the repo root and a scanned adapter slug
+				if err != nil {
+					t.Fatalf("reading %s's driver: %v — a beacon adapter with no driver cannot be "+
+						"checked, and a check that cannot run must say so", column, err)
+				}
+				if countTmuxLaunches(string(src)) == 0 {
+					assertServiceDriverChecksTheBeacon(t, path, string(src)+columnLibSources(t, filepath.Dir(path)))
+					return
+				}
+				for _, l := range tmuxLaunchesMissingEnv(string(src), DaemonAddrEnvVar) {
+					t.Errorf("%s:%d launches the agent under tmux without passing %s.\n%s\n"+
+						"%s's hooks are beacon-delivered, so the installed entry carries no address and "+
+						"the beacon — a child of this pane — resolves one at fire time. Without this the "+
+						"pane reads the production addr file and a coexisting recording daemon sees no "+
+						"hook at all, while the recording still comes back complete and healthy.",
+						path, l.line, DaemonAddrEnvVar, l.window, adapter)
+				}
+			})
+		}
+	}
+}
+
+// columnsOf returns the catalog columns routed to a registry adapter, or the
+// adapter's own name when the catalog has none (the shape this test graded
+// before columns could alias).
+func columnsOf(root, adapter string) []string {
+	if cols := shard.ColumnsFor(shard.Agents(root), adapter); len(cols) > 0 {
+		return cols
+	}
+	return []string{adapter}
+}
+
+// columnLibSources concatenates every non-test .sh beside a driver other than
+// the driver itself — the libraries a driver sources from its own column
+// directory (opencode-v2's service-api.sh), which is where an API driver's
+// checks live.
+func columnLibSources(t *testing.T, dir string) string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "*.sh"))
+	if err != nil {
+		t.Fatalf("listing %s: %v", dir, err)
+	}
+	var b strings.Builder
+	for _, m := range matches {
+		base := filepath.Base(m)
+		if base == "driver-interactive.sh" || strings.HasSuffix(base, "_test.sh") {
+			continue
+		}
+		src, err := os.ReadFile(m) // #nosec G304 -- a glob under the repo's replaydata tree
+		if err != nil {
+			t.Fatalf("reading %s: %v", m, err)
+		}
+		b.WriteString("\n")
+		b.Write(src)
+	}
+	return b.String()
+}
+
+// beaconAddrFile is the name of the file a beacon falls back to when its
+// process carries neither IRRLICHT_BIND_ADDR nor IRRLICHT_HOME — taken from
+// daemonaddr.AddrFilePath itself, so a rename there cannot leave this check
+// demanding the old name.
+var beaconAddrFile = filepath.Base(daemonaddr.AddrFilePath())
+
+// assertServiceDriverChecksTheBeacon is the no-launch arm: a driver that hands
+// no pane an address must read the addr file the service's beacon resolves and
+// compare it with the daemon's. This is a static proxy — it proves the driver
+// names both, not that it compares them correctly; the comparison's behaviour
+// is the driver's own shell test's subject (opencode-v2-driver_test.sh, which
+// refuses on an addr file naming another daemon).
+func assertServiceDriverChecksTheBeacon(t *testing.T, path, src string) {
+	t.Helper()
+	for _, want := range []string{DaemonAddrEnvVar, beaconAddrFile} {
+		if !strings.Contains(src, want) {
+			t.Errorf("%s (with the libraries beside it) launches no agent process and never names %s — its hooks fire inside a "+
+				"running service whose beacon resolves the daemon from the service's own "+
+				"environment, so the driver must check the addr file that beacon reads names this "+
+				"daemon, or a coexisting recording comes back hook-free and healthy", path, want)
+		}
 	}
 }
 

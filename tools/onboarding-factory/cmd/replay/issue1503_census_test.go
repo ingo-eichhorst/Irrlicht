@@ -280,6 +280,11 @@ type catalogCensus struct {
 // at origin/main against the working copy, and in total by `go test
 // ./tools/onboarding-factory/cmd/replay -run
 // TestCatalogCensusMatchesTheCommittedFigures -count=1`; no other field moved.
+// #2109 adds three to PairedButUngraded: the opencode-v2 column's three
+// first recordings are paired but, like every opencode recording, not
+// sidecar-drivable (no file_size on the 2.x watcher's activity), so they are
+// graded transcript-only. The same census command measured it on the tree
+// merged with P5-0, beside P5-0's own Divergent move; no other field moved.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                433,
 	Zero:                      2,
@@ -287,7 +292,7 @@ var censusOfTheCommittedCatalog = catalogCensus{
 	Divergent:                 190,
 	DivergentByCountsAndKinds: 189,
 	UnpairedSidecars:          0,
-	PairedButUngraded:         88,
+	PairedButUngraded:         91,
 }
 
 // literal renders the census as the Go source to paste over the declaration

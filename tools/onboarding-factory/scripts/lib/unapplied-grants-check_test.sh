@@ -46,6 +46,17 @@ case "$out" in
   *) fail "names the refusal" "mistral-vibe/hooks: hooktoml write refused" "$out" ;;
 esac
 
+echo "== a column slug that is not its adapter's name still finds the adapter's refusal (#2109) =="
+# The daemon writes .agent as its agent.Identity.Name. The opencode-v2 column
+# records the opencode adapter, so a filter keyed on the slug matched nothing
+# and passed a refused hooks install — a hookless fixture that looks healthy.
+FAKE_PERM_JSON='{"mode":"grant-all","unapplied_grants":[{"agent":"opencode","key":"hooks","reason":"version floor"}]}'
+out="$(check_unapplied_grants "127.0.0.1:7838" "opencode-v2" 2>&1 >/dev/null)"
+assert_eq "opencode-v2 column refuses on the opencode adapter's unapplied grant" "1" "$?"
+FAKE_PERM_JSON='{"mode":"grant-all","unapplied_grants":[{"agent":"claude-code","key":"hooks","reason":"shared-config refusal"}]}'
+check_unapplied_grants "127.0.0.1:7838" "claudecode" >/dev/null 2>&1
+assert_eq "claudecode column refuses on claude-code's unapplied grant" "1" "$?"
+
 echo "== unapplied grant for a DIFFERENT adapter: does not block this cell =="
 FAKE_PERM_JSON='{"mode":"grant-all","unapplied_grants":[{"agent":"codex","key":"hooks","reason":"version floor"}]}'
 check_unapplied_grants "127.0.0.1:7838" "mistral-vibe" >/dev/null 2>&1

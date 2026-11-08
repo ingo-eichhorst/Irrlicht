@@ -14,19 +14,23 @@
 # This file is a pure library: it defines functions only and MUST NOT call
 # `set` (that would leak options into the sourcing shell).
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=adapter-slug.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapter-slug.sh"
+
 # daemon_sid_for_transcript <transcript-path> <adapter-slug> <fallback-sid>
 #   → the session_id the daemon recorded for this transcript (matched by
 #     transcript_path AND adapter in the transcript_new event), else
 #     <fallback-sid>.
 #   The .adapter pin mirrors run-cell.sh: it disambiguates a shared
-#   transcript_path across adapters, and is a deliberate no-op for claudecode
-#   (its daemon adapter name is "claude-code" ≠ the "claudecode" slug, so the
-#   pin finds nothing and the fallback — claudecode's UUID, which already
-#   equals the daemon session_id — is preserved). Callers MUST then confirm
-#   the result actually appears in the recording (sid_in_recording) rather
-#   than trusting a silent fallback.
+#   transcript_path across adapters. The event carries the daemon's adapter
+#   name, so the column slug is translated first (lib/adapter-slug.sh) —
+#   claudecode → claude-code, opencode-v2 → opencode (#2109). Callers MUST
+#   then confirm the result actually appears in the recording
+#   (sid_in_recording) rather than trusting a silent fallback.
 daemon_sid_for_transcript() {
-  local path="$1" ad="$2" fallback="$3" sid
+  local path="$1" ad fallback="$3" sid
+  ad="$(adapter_slug_to_daemon_name "$2")"
   [[ -n "$path" ]] || { echo "$fallback"; return; }
   sid="$(jq -r --arg path "$path" --arg ad "$ad" '
     select(.adapter==$ad and .kind=="transcript_new" and .transcript_path==$path)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/domain/agent"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 )
@@ -66,18 +67,20 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 		return nil, "", fmt.Errorf("no scenarios in %s", shard.File(s.RepoRoot))
 	}
 
-	// Agents list from the daemon's adapter registry. normalizeAdapter maps
-	// hyphenated Identity.Name (e.g. "claude-code") to the on-disk slug
-	// (e.g. "claudecode") used as the shard's per-agent key.
+	// Columns, in the daemon registry's adapter order: each adapter's catalog
+	// columns (shard.Agents, routed back to it by shard.DaemonAdapterForSlug),
+	// else — an adapter not yet onboarded — its own slug, so the matrix stays
+	// registry-driven. An adapter can have more than one column: the opencode
+	// adapter has opencode and opencode-v2 (OpenCode 2.x, #2109), and the dsh
+	// adapter's column is deepseek-harness, not "dsh".
 	allAgents := agents.All()
 	agentEntries := make([]map[string]any, 0, len(allAgents))
 	agentSlugs := make([]string, 0, len(allAgents))
 	adapterCells := make(map[string]map[string]*shard.ShardAgent, len(allAgents))
-	for _, a := range allAgents {
-		slug := normalizeAdapter(a.Identity.Name)
+	for _, slug := range catalogColumns(allAgents, shard.Agents(s.RepoRoot)) {
 		agentEntries = append(agentEntries, map[string]any{"id": slug, "onboarded": true})
 		agentSlugs = append(agentSlugs, slug)
-		adapterCells[slug] = shard.LoadAdapterCells(s.RepoRoot, slug) // one scan per adapter
+		adapterCells[slug] = shard.LoadAdapterCells(s.RepoRoot, slug) // one scan per column
 	}
 
 	// The capability model supplies the axes for a declared-dead pair that has
@@ -123,6 +126,22 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 		return nil, "", err
 	}
 	return b, "shards", nil
+}
+
+// catalogColumns orders the viewer's columns: for each registry adapter, the
+// catalog columns that route to it (shard.ColumnsFor, in the catalog's sorted
+// order, so opencode precedes opencode-v2), or its normalized slug when the
+// catalog has none.
+func catalogColumns(registry []agent.Agent, columns []string) []string {
+	out := make([]string, 0, len(registry)+len(columns))
+	for _, a := range registry {
+		cols := shard.ColumnsFor(columns, a.Identity.Name)
+		if len(cols) == 0 {
+			cols = []string{normalizeAdapter(a.Identity.Name)}
+		}
+		out = append(out, cols...)
+	}
+	return out
 }
 
 // buildCellVerdict produces one coverage[agent] entry from the cell's Metadata

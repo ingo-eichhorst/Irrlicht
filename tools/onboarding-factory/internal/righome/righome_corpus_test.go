@@ -36,12 +36,21 @@ func registry() map[string]bool {
 	}
 }
 
+// daemonVars builds a row's Vars from daemon-read variable names.
+func daemonVars(names ...string) []Var {
+	out := make([]Var, 0, len(names))
+	for _, n := range names {
+		out = append(out, Var{Name: n})
+	}
+	return out
+}
+
 func goodRows() []Row {
 	return []Row{
-		{Adapter: "copilot", EnvVar: "COPILOT_HOME", Policy: PolicyDefault},
-		{Adapter: "codex", EnvVar: "CODEX_HOME", Policy: PolicyOptIn},
-		{Adapter: "kiro-cli", EnvVar: "KIRO_HOME", Policy: PolicyOptIn},
-		{Adapter: "mistral-vibe", EnvVar: "VIBE_HOME", Policy: PolicyOptIn},
+		{Adapter: "copilot", Vars: daemonVars("COPILOT_HOME"), Policy: PolicyDefault},
+		{Adapter: "codex", Vars: daemonVars("CODEX_HOME"), Policy: PolicyOptIn},
+		{Adapter: "kiro-cli", Vars: daemonVars("KIRO_HOME"), Policy: PolicyOptIn},
+		{Adapter: "mistral-vibe", Vars: daemonVars("VIBE_HOME"), Policy: PolicyOptIn},
 	}
 }
 
@@ -89,7 +98,7 @@ func TestReconcileNamesEveryWrongShape(t *testing.T) {
 			// This is the want:false case — the rule must not drift into
 			// "only hooks adapters may be isolated".
 			name:   "a row for a hookless adapter is fine",
-			rows:   append(goodRows(), Row{Adapter: "aider", EnvVar: "AIDER_HOME", Policy: PolicyOptIn}),
+			rows:   append(goodRows(), Row{Adapter: "aider", Vars: daemonVars("AIDER_HOME"), Policy: PolicyOptIn}),
 			exempt: goodExempt(),
 			reg:    registry(),
 		},
@@ -103,7 +112,7 @@ func TestReconcileNamesEveryWrongShape(t *testing.T) {
 		},
 		{
 			name:    "a row naming an adapter the registry does not have",
-			rows:    append(goodRows(), Row{Adapter: "kiro", EnvVar: "KIRO_HOME", Policy: PolicyOptIn}),
+			rows:    append(goodRows(), Row{Adapter: "kiro", Vars: daemonVars("KIRO_HOME"), Policy: PolicyOptIn}),
 			exempt:  goodExempt(),
 			reg:     registry(),
 			reports: []string{"not in the daemon's adapter registry — the rig"},
@@ -137,7 +146,7 @@ func TestReconcileNamesEveryWrongShape(t *testing.T) {
 		},
 		{
 			name:    "the same adapter declared twice",
-			rows:    append(goodRows(), Row{Adapter: "codex", EnvVar: "CODEX_DIR", Policy: PolicyOptIn}),
+			rows:    append(goodRows(), Row{Adapter: "codex", Vars: daemonVars("CODEX_DIR"), Policy: PolicyOptIn}),
 			exempt:  goodExempt(),
 			reg:     registry(),
 			reports: []string{"twice"},
@@ -455,6 +464,27 @@ func TestTableRefusesRatherThanReturningAShortList(t *testing.T) {
 			want: "running agent_home_table",
 		},
 		{
+			// #2109's grammar: a multi-variable row's marker is spelled exactly.
+			name: "a misspelled driver-only marker",
+			body: "agent_home_table() { printf '%s\\n' 'opencode-v2 XDG_CONFIG_HOME,XDG_STATE_HOME:drv optin'; }\n",
+			want: "is not an environment variable name",
+		},
+		{
+			name: "a row whose every variable is driver-only",
+			body: "agent_home_table() { printf '%s\\n' 'opencode-v2 XDG_STATE_HOME:driver optin'; }\n",
+			want: "every variable is marked",
+		},
+		{
+			name: "a row naming one variable twice",
+			body: "agent_home_table() { printf '%s\\n' 'opencode-v2 XDG_DATA_HOME,XDG_DATA_HOME optin'; }\n",
+			want: "names XDG_DATA_HOME twice",
+		},
+		{
+			name: "a multi-variable row on the 'default' policy",
+			body: "agent_home_table() { printf '%s\\n' 'opencode-v2 XDG_CONFIG_HOME,XDG_DATA_HOME default'; }\n",
+			want: "a multi-variable row is",
+		},
+		{
 			// The vacuity guard for this table: a well-formed stand-in must be
 			// READ, not merely not-refused, or every row above could be passing
 			// because the reader rejects everything.
@@ -485,6 +515,158 @@ func TestTableRefusesRatherThanReturningAShortList(t *testing.T) {
 	}
 }
 
+// TestTableReadsAMultiVariableRow is the multi-variable vacuity guard: the
+// row shape #2109 adds must be READ, with each variable's marker, not merely
+// not-refused.
+func TestTableReadsAMultiVariableRow(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, TableScript)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "#!/usr/bin/env bash\nagent_home_table() { printf '%s\\n' " +
+		"'opencode-v2 XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver optin'; }\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := Table(root)
+	if err != nil {
+		t.Fatalf("a well-formed multi-variable table was refused: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("read %d rows, want 1", len(rows))
+	}
+	r := rows[0]
+	if got := strings.Join(r.DaemonVars(), ","); got != "XDG_CONFIG_HOME,XDG_DATA_HOME" {
+		t.Errorf("DaemonVars = %s, want XDG_CONFIG_HOME,XDG_DATA_HOME", got)
+	}
+	if got := strings.Join(r.DriverVars(), ","); got != "XDG_STATE_HOME" {
+		t.Errorf("DriverVars = %s, want XDG_STATE_HOME", got)
+	}
+	if r.Adapter != "opencode-v2" || r.Policy != PolicyOptIn {
+		t.Errorf("read %+v, want the opencode-v2 optin row", r)
+	}
+}
+
+// relocationFragments is every distinguishing phrase GradeRelocation can
+// produce; as with allFragments, a case names the ones it expects and the
+// rest must be absent.
+var relocationFragments = []string{
+	"the session root still resolves",
+	"the hooks install still writes",
+	"setting it alone moves nothing",
+	"but the daemon reads it",
+	"was not measured",
+}
+
+// fakeProbe stands in for the real registry: reads names which half each
+// variable relocates ("session" or "hooks"); a variable it does not name
+// relocates nothing. Every unrelocated path stays under /real.
+func fakeProbe(reads map[string]string) RelocationProbe {
+	return func(set []string) (Resolved, error) {
+		const home = "/scratch"
+		r := Resolved{Home: home, Sessions: []string{"/real/opencode.db"}, Hooks: []string{"/real/plugin/irrlicht.js"}}
+		for _, v := range set {
+			switch reads[v] {
+			case "session":
+				r.Sessions = []string{home + "/" + v + "/opencode/opencode.db"}
+			case "hooks":
+				r.Hooks = []string{home + "/" + v + "/opencode/plugin/irrlicht.js"}
+			}
+		}
+		return r, nil
+	}
+}
+
+// TestGradeRelocationNamesEveryWrongShape is the committed mutation evidence
+// for #2109's relocation grade, in the record's three named shapes plus the
+// honest row and the measurement-broke case. opencode reads XDG_CONFIG_HOME
+// for its plugin and XDG_DATA_HOME for its store, and nothing of
+// XDG_STATE_HOME — the fake below says exactly that.
+func TestGradeRelocationNamesEveryWrongShape(t *testing.T) {
+	opencodeReads := map[string]string{"XDG_CONFIG_HOME": "hooks", "XDG_DATA_HOME": "session"}
+	row := func(field string) Row {
+		vars, err := parseVars(field)
+		if err != nil {
+			t.Fatalf("parseVars(%q): %v", field, err)
+		}
+		return Row{Adapter: "opencode-v2", Vars: vars, Policy: PolicyOptIn}
+	}
+	cases := []struct {
+		name    string
+		row     Row
+		probe   RelocationProbe
+		reports []string
+		names   string
+	}{
+		{
+			name:  "the honest row reports nothing",
+			row:   row("XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver"),
+			probe: fakeProbe(opencodeReads),
+		},
+		{
+			// Half a relocation: the plugin moves, the store does not.
+			name:    "a row naming only XDG_CONFIG_HOME",
+			row:     row("XDG_CONFIG_HOME"),
+			probe:   fakeProbe(opencodeReads),
+			reports: []string{"the session root still resolves"},
+		},
+		{
+			name:    "a row naming only XDG_DATA_HOME",
+			row:     row("XDG_DATA_HOME"),
+			probe:   fakeProbe(opencodeReads),
+			reports: []string{"the hooks install still writes"},
+		},
+		{
+			name:    "a daemon-read variable the daemon does not read",
+			row:     row("XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,XDG_STATE_HOME:driver"),
+			probe:   fakeProbe(opencodeReads),
+			reports: []string{"setting it alone moves nothing"},
+			names:   "XDG_CACHE_HOME",
+		},
+		{
+			name:    "an unmarked XDG_STATE_HOME",
+			row:     row("XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME"),
+			probe:   fakeProbe(opencodeReads),
+			reports: []string{"setting it alone moves nothing"},
+			names:   "XDG_STATE_HOME",
+		},
+		{
+			name: "a driver-only marker on a variable the daemon reads",
+			row:  row("XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver"),
+			probe: fakeProbe(map[string]string{
+				"XDG_CONFIG_HOME": "hooks", "XDG_DATA_HOME": "session", "XDG_STATE_HOME": "session",
+			}),
+			reports: []string{"but the daemon reads it"},
+			names:   "XDG_STATE_HOME",
+		},
+		{
+			name: "a probe that resolves no session root",
+			row:  row("XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME:driver"),
+			probe: func(set []string) (Resolved, error) {
+				r, _ := fakeProbe(opencodeReads)(set)
+				r.Sessions = nil
+				return r, nil
+			},
+			reports: []string{"was not measured"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(GradeRelocation(tc.row, tc.probe), "\n")
+			for _, w := range tc.reports {
+				if !strings.Contains(got, w) {
+					t.Errorf("report does not contain %q\nreport was:\n%s", w, got)
+				}
+			}
+			if tc.names != "" && !strings.Contains(got, tc.names) {
+				t.Errorf("report does not name %s\nreport was:\n%s", tc.names, got)
+			}
+			assertSilentOnFragmentsExcept(t, got, relocationFragments, tc.reports)
+		})
+	}
+}
+
 // assertTableWasRead is this corpus's vacuity guard: a well-formed stand-in
 // must be READ, not merely not-refused, or every refusal row above could be
 // passing because the reader rejects everything it is handed.
@@ -493,7 +675,7 @@ func assertTableWasRead(t *testing.T, rows []Row, err error) {
 	if err != nil {
 		t.Fatalf("a well-formed table was refused: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Adapter != "codex" || rows[0].EnvVar != "CODEX_HOME" {
+	if len(rows) != 1 || rows[0].Adapter != "codex" || rows[0].VarsField() != "CODEX_HOME" {
 		t.Fatalf("read %+v, want one codex/CODEX_HOME/optin row", rows)
 	}
 }

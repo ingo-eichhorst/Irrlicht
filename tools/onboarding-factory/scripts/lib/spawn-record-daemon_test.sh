@@ -176,6 +176,20 @@ assert_eq "claudecode translated as the SECOND half of a pair too" "IRRLICHT_REC
 assert_eq "an adapter whose slug already matches its identity passes through" "IRRLICHT_RECORD_ADAPTERS=codex" \
   "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" codex | grep RECORD_ADAPTERS)"
 
+echo "== every column whose directory is not its adapter's name is translated (#2109) =="
+# The same exact-string lookup scopes out opencode's OWN hooks grant when the
+# opencode-v2 column (OpenCode 2.x, routed to the opencode adapter) is recorded
+# under its slug: no plugin is written, and the recording comes back hookless
+# and healthy-looking. deepseek-harness → dsh is the same divergence, which this
+# shell copy had never carried (shard.DaemonAdapterForSlug is the Go original;
+# TestShellSlugMapMatchesTheGoMap keeps the two equal).
+assert_eq "bare opencode-v2 slug -> opencode" "IRRLICHT_RECORD_ADAPTERS=opencode" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" opencode-v2 | grep RECORD_ADAPTERS)"
+assert_eq "opencode-v2 translated as the second half of a pair" "IRRLICHT_RECORD_ADAPTERS=codex,opencode" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" codex,opencode-v2 | grep RECORD_ADAPTERS)"
+assert_eq "bare deepseek-harness slug -> dsh" "IRRLICHT_RECORD_ADAPTERS=dsh" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" deepseek-harness | grep RECORD_ADAPTERS)"
+
 echo "== a caller-set ready-session TTL is forwarded, absent otherwise =="
 # shellcheck disable=SC2034  # not read by this file: it is set so
 # record_daemon_env picks it out of the ENVIRONMENT and forwards it, which is
@@ -557,6 +571,122 @@ else
   got=silent
 fi
 assert_eq "the refusal names the limit" "named" "$got"
+
+echo "== a daemon already answering on this home's socket refuses the spawn (#2109) =="
+# A python3 stand-in answers HTTP on a unix socket the way irrlichd does. The
+# opencode-v2 column's home is the OpenCode sandbox's own, which a sandbox QA
+# daemon also uses; a second daemon there would split the run's hooks.
+# Shaped like every home the wipe accepts (<HOME>/.local/share/irrlicht), so
+# the kept ledger below is the live-socket guard's doing and not the wipe's
+# own shape refusal.
+LIVE_HOME="$TMP/live/.local/share/irrlicht"; mkdir -p "$LIVE_HOME"
+python3 -I -c '
+import os, sys, socket
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        self.send_response(200); self.send_header("content-length", "2"); self.end_headers(); self.wfile.write(b"{}")
+class S(HTTPServer):
+    address_family = socket.AF_UNIX
+    def server_bind(self):
+        self.socket.bind(self.server_address)
+    def get_request(self):
+        req, _ = self.socket.accept(); return req, ("local", 0)
+S(sys.argv[1], H).serve_forever()
+' "$LIVE_HOME/irrlichd.sock" &
+LIVE_PID=$!
+waited=0
+until [[ -S "$LIVE_HOME/irrlichd.sock" ]] || (( waited >= 100 )); do sleep 0.1; waited=$((waited + 1)); done
+fresh_staging livesock
+mkdir -p "$LIVE_HOME/sessions"; : > "$LIVE_HOME/sessions/ledger.json"
+rc=0
+RECORD_DAEMON_WIPE_STATE_STORES=1 spawn_record_daemon "$TMP/never-executed" "$STAGING" 127.0.0.1:7838 "$LIVE_HOME" 2>"$TMP/livesock.err" || rc=$?
+assert_eq "a live daemon on the home's socket refuses the spawn" "1" "$rc"
+[[ -e "$STAGING/managed-file-backup" ]] && got=touched || got=untouched
+assert_eq "the refusal lands before the managed-file snapshot" "untouched" "$got"
+[[ -e "$LIVE_HOME/sessions/ledger.json" ]] && got=kept || got=wiped
+assert_eq "…and before the state-store wipe: the live daemon's stores are kept" "kept" "$got"
+grep -q "already answers on $LIVE_HOME/irrlichd.sock" "$TMP/livesock.err" && got=named || got=silent
+assert_eq "the refusal names the socket" "named" "$got"
+kill "$LIVE_PID" 2>/dev/null; wait "$LIVE_PID" 2>/dev/null
+# The server is gone but its socket FILE stays: a stale socket is not a daemon.
+[[ -S "$LIVE_HOME/irrlichd.sock" ]] && got=present || got=absent
+assert_eq "the stand-in left a stale socket file behind (the case below needs one)" "present" "$got"
+record_daemon_refuse_live_sock "$LIVE_HOME/irrlichd.sock" 2>/dev/null
+assert_eq "a stale socket nobody answers on is not refused" "0" "$?"
+
+echo "== the opencode-v2 state-store wipe removes exactly the three stores (#2109) =="
+WIPE_HOME="$TMP/wipe/.local/share/irrlicht"
+mkdir -p "$WIPE_HOME/instances" "$WIPE_HOME/sessions" "$WIPE_HOME/cost" "$WIPE_HOME/logs"
+: > "$WIPE_HOME/instances/ses_old.json"; : > "$WIPE_HOME/permissions.json"; : > "$WIPE_HOME/irrlichd.addr"
+record_daemon_wipe_state_stores "$WIPE_HOME" >/dev/null
+left=0; for d in instances sessions cost; do [[ -e "$WIPE_HOME/$d" ]] && left=$((left + 1)); done
+assert_eq "instances/ sessions/ cost/ are gone" "0" "$left"
+assert_eq "everything else stays" "irrlichd.addr logs permissions.json" "$(ls "$WIPE_HOME" | tr '\n' ' ' | sed 's/ $//')"
+record_daemon_wipe_state_stores "relative/home" 2>/dev/null
+assert_eq "a relative home is refused" "1" "$?"
+# The production daemon's own home holds its session ledgers in sessions/; an
+# opencode-v2 run against a 2.x service under the operator's HOME would name
+# exactly that directory as IRRLICHT_ONBOARD_HOME (#2109 review finding 1).
+PROD_HOME="$HOME/.local/share/irrlicht"
+mkdir -p "$PROD_HOME/sessions"; : > "$PROD_HOME/sessions/ledger.json"
+out="$(record_daemon_wipe_state_stores "$PROD_HOME" 2>&1)"
+assert_eq "the production default home is refused" "1" "$?"
+[[ -e "$PROD_HOME/sessions/ledger.json" ]] && got=kept || got=wiped
+assert_eq "…and its session ledgers are kept" "kept" "$got"
+case "$out" in *"PRODUCTION daemon's home"*) got=named ;; *) got=silent ;; esac
+assert_eq "…and the refusal says why" "named" "$got"
+
+echo "== the wipe refuses any home that is not <HOME>/.local/share/irrlicht (#2109 review F1) =="
+# IRRLICHT_ONBOARD_HOME is typed by hand (prerequisites.md), and the wipe runs
+# inside spawn, BEFORE the driver's beacon preflight could notice a wrong home.
+# A typo naming a HOME-shaped directory would rm -rf that directory's own
+# sessions/ cost/ instances/. Each case below plants decoys there and requires
+# the refusal AND their survival.
+decoy_home() { # <dir>: a directory holding decoy copies of the three store names
+  mkdir -p "$1/sessions" "$1/cost" "$1/instances"
+  : > "$1/sessions/decoy"; : > "$1/cost/decoy"; : > "$1/instances/decoy"
+}
+decoys_left() { local n=0 d; for d in sessions cost instances; do [[ -e "$1/$d/decoy" ]] && n=$((n + 1)); done; echo "$n"; }
+TYPO_HOME="$TMP/typohome"; decoy_home "$TYPO_HOME"
+out="$(record_daemon_wipe_state_stores "$TYPO_HOME" 2>&1)"
+assert_eq "a HOME-like dir (IRRLICHT_ONBOARD_HOME=\$HOME) is refused" "1" "$?"
+assert_eq "…and its decoy sessions/ cost/ instances/ survive" "3" "$(decoys_left "$TYPO_HOME")"
+case "$out" in *"does not end in /.local/share/irrlicht"*) got=named ;; *) got=silent ;; esac
+assert_eq "…and the refusal names the shape it wanted" "named" "$got"
+decoy_home "$TYPO_HOME"   # re-planted: the spawn case must not lean on the one above
+fresh_staging typohome
+rc=0
+RECORD_DAEMON_WIPE_STATE_STORES=1 spawn_record_daemon "$TMP/never-executed" "$STAGING" 127.0.0.1:7838 "$TYPO_HOME" 2>/dev/null || rc=$?
+assert_eq "spawn with that home refuses" "1" "$rc"
+assert_eq "…and the decoys survive the spawn too" "3" "$(decoys_left "$TYPO_HOME")"
+[[ -e "$STAGING/managed-file-backup" ]] && got=touched || got=untouched
+assert_eq "…which refuses before the managed-file snapshot" "untouched" "$got"
+for other in "$TMP/elsewhere/share/irrlicht" "$TMP/elsewhere/.local/share/irrlicht-qa"; do
+  decoy_home "$other"
+  record_daemon_wipe_state_stores "$other" >/dev/null 2>&1
+  assert_eq "a home not ending in /.local/share/irrlicht is refused (${other#"$TMP"/})" "1" "$?"
+  assert_eq "…and its decoys survive" "3" "$(decoys_left "$other")"
+done
+# The name is right, but it is a symlink: what would be removed is the
+# target's stores, and the target is not an irrlicht home.
+LINK_TARGET="$TMP/linktarget"; decoy_home "$LINK_TARGET"
+LINK_HOME="$TMP/linked/.local/share/irrlicht"; mkdir -p "$(dirname "$LINK_HOME")"
+ln -s "$LINK_TARGET" "$LINK_HOME"
+record_daemon_wipe_state_stores "$LINK_HOME" >/dev/null 2>&1
+assert_eq "a correctly named symlink to a non-irrlicht dir is refused" "1" "$?"
+assert_eq "…and the target's decoys survive" "3" "$(decoys_left "$LINK_TARGET")"
+grep -Fq 'RECORD_DAEMON_WIPE_STATE_STORES=1' "$SCRIPTS_DIR/run-cell.sh" && got=wired || got=unwired
+assert_eq "run-cell.sh asks spawn to wipe for an opencode-v2 cell" "wired" "$got"
+
+echo "== an inherited RECORD_DAEMON_WIPE_STATE_STORES never arms the wipe (#2109, PR #2117 review) =="
+# The flag is a caller's per-run decision, set AFTER sourcing this lib
+# (run-cell.sh, for an opencode-v2 cell). Exported from an operator's shell it
+# would otherwise arm the wipe for every spawn — any column, run-cell-multi
+# included — so sourcing the lib must disarm it.
+got="$(RECORD_DAEMON_WIPE_STATE_STORES=1 bash -c 'source "$1/spawn-record-daemon.sh"; printf %s "${RECORD_DAEMON_WIPE_STATE_STORES:-unset}"' _ "$DIR")"
+assert_eq "sourcing the lib disarms an exported wipe flag" "0" "$got"
 
 # The desktop-local profile is the caller that used to trip this. Its daemon
 # home must be short enough to bind on any clone, including a linked worktree.

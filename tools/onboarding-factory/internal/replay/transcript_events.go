@@ -11,10 +11,10 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/pkg/tailer"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // SynthesizeEventsFromTranscript builds a lifecycle event stream from a
@@ -132,12 +132,14 @@ func synthesizeViaEngine(path, adapter string) []lifecycle.Event {
 // daemon and viewer metrics collector use. Unknown/empty slugs fall back
 // to Claude Code, matching the replay CLI's parserFor.
 func resolveParser(adapter string) (string, tailer.TranscriptParser) {
-	canonical := adapter
-	switch adapter {
-	case "", "claudecode":
+	// "" is a pre-#319 recording with no adapter field. Every other column
+	// that is not named after its adapter — claudecode, deepseek-harness, and
+	// opencode-v2 (OpenCode 2.x, replayed by the opencode parser, #2109) —
+	// goes through the one map, so an alias cannot fall silently to the
+	// Claude Code parser below.
+	canonical := shard.DaemonAdapterForSlug(adapter)
+	if adapter == "" {
 		canonical = claudecode.AdapterName
-	case "deepseek-harness":
-		canonical = dsh.AdapterName
 	}
 	if f, ok := agentwiring.ParserFactories(agents.All())[canonical]; ok {
 		return canonical, f()

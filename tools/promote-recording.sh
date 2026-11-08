@@ -111,6 +111,9 @@ source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/promote-hookcheck.sh"
 # Desktop evidence validator and execution-results writer (#1887).
 # shellcheck source=onboarding-factory/scripts/lib/desktop-profile.sh
 source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/desktop-profile.sh"
+# resolve_cli_version — the version-table resolver shared with precheck.sh.
+# shellcheck source=onboarding-factory/scripts/lib/cli-version.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/cli-version.sh"
 
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
@@ -227,6 +230,7 @@ if [[ -z "$AGENT_VER" ]]; then
     pi)           CLI_BIN="pi";       VER_FIELD=1 ;;
     aider)        CLI_BIN="aider";    VER_FIELD=2 ;;
     opencode)     CLI_BIN="opencode"; VER_FIELD=1 ;;
+    opencode-v2)  CLI_BIN="@store"; VER_FIELD=0 ;;
     kiro-cli)     CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
     gemini-cli)   CLI_BIN="gemini";   VER_FIELD=1 ;;
     antigravity)  CLI_BIN="agy";      VER_FIELD=1 ;;
@@ -238,13 +242,11 @@ if [[ -z "$AGENT_VER" ]]; then
     *)            CLI_BIN=""; VER_FIELD=1 ;;
   esac
   AGENT_VER="$UNKNOWN_VALUE"
-  if [[ -n "$CLI_BIN" ]] && command -v "$CLI_BIN" >/dev/null 2>&1; then
-    # Same trailing-punctuation strip as precheck.sh: `copilot --version` prints
-    # "GitHub Copilot CLI 1.0.77." and the period would ride into the manifest.
-    AGENT_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
-    # ...and the same leading-"v" strip: hermes prints "Hermes Agent v0.19.0".
-    AGENT_VER="${AGENT_VER#v}"
-    [[ -n "$AGENT_VER" ]] || AGENT_VER="$UNKNOWN_VALUE"
+  # The same resolver precheck.sh uses (lib/cli-version.sh): the trailing-period
+  # and leading-"v" strips, and an "@store" arm (opencode-v2) that reads the
+  # agent's store and runs no binary. A version it cannot read stays "unknown".
+  if [[ -n "$CLI_BIN" ]]; then
+    AGENT_VER="$(resolve_cli_version "$AGENT" "$CLI_BIN" "$VER_FIELD" 2>/dev/null)" || AGENT_VER="$UNKNOWN_VALUE"
   fi
 fi
 

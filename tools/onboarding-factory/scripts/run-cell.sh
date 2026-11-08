@@ -614,6 +614,17 @@ else
     # shellcheck disable=SC2034  # shared state read by spawn-record-daemon.sh
     MANAGED_FILE_ORACLE_BIN="$IRRLICHT_DESKTOP_DRIVER_BIN"
   fi
+  # The opencode-v2 column (#2109) records into a SHARED home — the OpenCode
+  # sandbox's own $HOME/.local/share/irrlicht, where the 2.x plugin's beacon
+  # finds the daemon (replaydata/agents/opencode-v2/prerequisites.md). A
+  # session an earlier daemon persisted there would be restored into this
+  # recording, bound to the one live service pid, so spawn_record_daemon wipes
+  # the stores this daemon will own — after its socket guards, and never in
+  # the production home (record_daemon_wipe_state_stores).
+  if [[ "$ADAPTER" == "opencode-v2" && -n "$ONBOARD_HOME" ]]; then
+    # shellcheck disable=SC2034  # read by the sourced spawn-record-daemon.sh (spawn_record_daemon)
+    RECORD_DAEMON_WIPE_STATE_STORES=1
+  fi
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTER" || exit 1
 fi
 
@@ -750,7 +761,17 @@ DRIVER_PID="$(tr -d '[:space:]' < "$DRIVER_PID_FILE" 2>/dev/null || true)"
 # verified: `grep -c tmux replaydata/agents/*/driver.sh` is 0 for all four.
 TMUX_GATE_STATUS="skipped"
 TMUX_GATE_DETAIL="headless cell — no interactive driver ran, and no driver.sh uses tmux"
-if [[ -n "$SCRIPT_JSON" ]]; then
+if [[ -n "$SCRIPT_JSON" ]] && ! driver_launches_tmux "$DRIVER"; then
+  # An interactive driver that never invokes tmux has no session to leak —
+  # the opencode-v2 driver drives a running service over HTTP (#2109). Asking
+  # tmux anyway would read a host without tmux as "unreadable" and fail every
+  # such run as driver_teardown_unverifiable. driver_launches_tmux
+  # (lib/tmux-teardown-check.sh) counts any tmux command word, a broader rule
+  # than internal/driverteardown's static LaunchCount, so a driver either gate
+  # could miss keeps this one.
+  TMUX_GATE_DETAIL="$DRIVER invokes no tmux command, so there is no session to leak"
+  echo "tmux teardown: $TMUX_GATE_STATUS — $TMUX_GATE_DETAIL"
+elif [[ -n "$SCRIPT_JSON" ]]; then
   # Before tmux is asked anything: is there a run identity to ask ABOUT? The pid
   # comes from a file the driver's own process wrote (the driver_pid_capture
   # block above), and the three ways it can be unusable are not the same
@@ -1026,12 +1047,12 @@ fi
 # transcript (e.g. aider's Python wrapper + worker), we pick the earliest
 # by sequence number; curate's existing pid_discovered scan picks up the
 # other PIDs from there.
-# The adapter field in transcript_new uses the daemon's canonical name,
-# which matches $ADAPTER for aider/codex/pi but is "claude-code" for
-# claudecode — for that adapter the lookup naturally finds nothing and
-# the original UUID is preserved.
+# The adapter field in transcript_new uses the daemon's canonical name, so
+# the column slug is translated first (lib/adapter-slug.sh): "claude-code"
+# for claudecode, "opencode" for the opencode-v2 column (#2109). A miss
+# preserves the driver's UUID.
 if [[ -n "$RECORDING" && -n "$TRANSCRIPT" ]]; then
-  RECORDED_SID="$(jq -r --arg path "$TRANSCRIPT" --arg ad "$ADAPTER" '
+  RECORDED_SID="$(jq -r --arg path "$TRANSCRIPT" --arg ad "$(adapter_slug_to_daemon_name "$ADAPTER")" '
     select(.adapter==$ad and .kind=="transcript_new" and .transcript_path==$path)
     | [.seq, .session_id] | @tsv' "$RECORDING" | sort -n | head -n1 | cut -f2)"
   if [[ -n "$RECORDED_SID" ]]; then
@@ -1067,8 +1088,10 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
   # write child sessions as separate .jsonl files (claudecode's
   # <parent>/subagents/agent-<uuid>.jsonl convention). For adapters whose
   # children live in a shared store (opencode = SQLite rows on the same
-  # DB), the parent_linked count alone is the spawn proof.
-  case "$ADAPTER" in
+  # DB), the parent_linked count alone is the spawn proof. Keyed on the
+  # daemon adapter, not the column: the opencode-v2 column (#2109) is the same
+  # shared store.
+  case "$(adapter_slug_to_daemon_name "$ADAPTER")" in
     opencode)
       SUBAGENT_FILES="$PARENT_LINKED_COUNT"
       ;;

@@ -47,6 +47,10 @@
 #   source "$SCRIPT_DIR/lib/hook-install-wait.sh"
 #   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=adapter-slug.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adapter-slug.sh"
+
 # Poll knobs, read at call time; the defaults ARE the production timings and are
 # overridable only so the unit tests need not spend them in real seconds.
 # 60 × 0.5s = 30s, generously above the ~4s observed for a vibe install.
@@ -57,10 +61,11 @@ HOOK_INSTALL_WAIT_TICK_S="${HOOK_INSTALL_WAIT_TICK_S:-0.5}"
 # run's install must create before the CLI may be launched. Colon- or
 # newline-separated; unset for every ordinary run.
 #
-# WHY IT EXISTS. The prefix selection below can only speak for an adapter that
-# has a rig-home row, and two hooks-declaring adapters deliberately do not have
-# one (agent-home.sh's NOT IN THE TABLE section: opencode's paths split across
-# two XDG variables, gemini-cli has no override at all). For those, this file's
+# WHY IT EXISTS. The prefix selection below can only speak for a column that
+# has a rig-home row, and some hooks-declaring columns do not have one
+# (agent-home.sh's NOT IN THE TABLE section: gemini-cli has no override at all;
+# the opencode 1.x column is exempt by choice — the opencode-v2 column has the
+# multi-variable row, #2109). For those, this file's
 # honest answer has been "NOT waiting" — which leaves exactly the #1735 race it
 # was written to remove. An operator who KNOWS the path — because they set the
 # variable that moves it, or because it is simply the home default — can name
@@ -145,7 +150,7 @@ hook_install_declared_under() {
 # not name a refusal that explains it.
 wait_for_hook_install() {
   local adapter="${1:-}" staging="${2:-}" bind="${3:-}"
-  local var prefix declared pending waited=0
+  local var prefix prefixes="" declared pending waited=0 n
   local explicit="" p subject=""
 
   if [[ -z "$adapter" || -z "$staging" ]]; then
@@ -178,9 +183,28 @@ wait_for_hook_install() {
     done <<< "$explicit"
     subject="the $declared operator-named path(s)"
   else
-    var="$(agent_home_var "$adapter")"
-    prefix="${var:+${!var:-}}"
-    if [[ -z "$prefix" ]]; then
+    # Every home the DAEMON reads for this column (agent_home_daemon_vars): one
+    # for most rows; XDG_CONFIG_HOME and XDG_DATA_HOME for opencode-v2's
+    # (#2109), whose plugin lands under the first. A driver-only variable is
+    # no place a hook install writes, so it is not polled.
+    #
+    # An XDG base directory is SHARED by definition — every XDG application
+    # keeps its files in <base>/<app> — so polling the whole base waits on
+    # other tools' managed files too. Measured on the first opencode-v2 run:
+    # the manifest held $XDG_CONFIG_HOME/kitty/kitty.conf (the kitty terminal
+    # integration, absent and never written by an opencode recording), and the
+    # wait refused a run whose plugin had arrived. Under an XDG base the
+    # prefix is therefore the adapter's own subdirectory, named — as opencode
+    # names it, join(XDG_CONFIG_HOME, "opencode") — after the daemon adapter.
+    while IFS= read -r var; do
+      [[ -n "$var" && -n "${!var:-}" ]] || continue
+      case "$var" in
+        XDG_*_HOME) prefix="${!var}/$(adapter_slug_to_daemon_name "$adapter")" ;;
+        *) prefix="${!var}" ;;
+      esac
+      prefixes+="${prefixes:+$'\n'}$prefix"
+    done < <(agent_home_daemon_vars "$adapter")
+    if [[ -z "$prefixes" ]]; then
       echo "hook-install-wait: $adapter — no isolated home is exported, so this adapter's managed files"
       echo "hook-install-wait:   cannot be told from every other adapter's in the manifest. NOT waiting;"
       echo "hook-install-wait:   if the CLI reads its hook config at startup, this run can race the install."
@@ -188,13 +212,17 @@ wait_for_hook_install() {
       return 0
     fi
 
-    declared="$(hook_install_declared_under "$staging" "$prefix")"
+    declared=0
+    while IFS= read -r prefix; do
+      n="$(hook_install_declared_under "$staging" "$prefix")"
+      declared=$((declared + n))
+    done <<< "$prefixes"
     if [[ "$declared" == "0" ]]; then
-      echo "hook-install-wait: $adapter — the daemon declares no managed file under $prefix;"
+      echo "hook-install-wait: $adapter — the daemon declares no managed file under $(printf '%s' "$prefixes" | tr '\n' ' ');"
       echo "hook-install-wait:   there is nothing to wait for and nothing was checked."
       return 0
     fi
-    subject="all $declared managed file(s) under $prefix"
+    subject="all $declared managed file(s) under $(printf '%s' "$prefixes" | tr '\n' ' ' | sed 's/ $//')"
   fi
 
   while (( waited < HOOK_INSTALL_WAIT_TICKS )); do
@@ -204,7 +232,11 @@ wait_for_hook_install() {
         [[ -n "$p" && ! -e "$p" ]] && pending+="${pending:+$'\n'}$p"
       done <<< "$explicit"
     else
-      pending="$(hook_install_pending_paths "$staging" "$prefix")"
+      pending=""
+      while IFS= read -r prefix; do
+        n="$(hook_install_pending_paths "$staging" "$prefix")"
+        [[ -n "$n" ]] && pending+="${pending:+$'\n'}$n"
+      done <<< "$prefixes"
     fi
     if [[ -z "$pending" ]]; then
       echo "hook-install-wait: $adapter — $subject are present after $(awk -v w="$waited" -v t="$HOOK_INSTALL_WAIT_TICK_S" 'BEGIN{printf "%.1f", w*t}')s"
@@ -236,7 +268,8 @@ wait_for_hook_install() {
   if [[ -n "$bind" ]]; then
     local reasons_filter='[(.unapplied_grants // [])[] | select(.agent == $a) | "\(.key): \(.reason)"] | join("; ")'
     local reasons
-    reasons="$(curl -fsS --max-time 2 "http://$bind/api/v1/permissions" 2>/dev/null | jq -r --arg a "$adapter" "$reasons_filter" 2>/dev/null || true)" # NOSONAR (shell:S5332) — loopback-only daemon API, no TLS listener exists
+    # .agent is the daemon's adapter name, not the column slug (#2109).
+    reasons="$(curl -fsS --max-time 2 "http://$bind/api/v1/permissions" 2>/dev/null | jq -r --arg a "$(adapter_slug_to_daemon_name "$adapter")" "$reasons_filter" 2>/dev/null || true)" # NOSONAR (shell:S5332) — loopback-only daemon API, no TLS listener exists
     if [[ -n "$reasons" ]]; then
       echo "hook-install-wait:   the daemon names a refusal: $reasons" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above
     else

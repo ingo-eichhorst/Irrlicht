@@ -230,6 +230,13 @@
         "structured_question": "absent"
       }
     },
+    "opencode-v2": {
+      "maturity": "planned",
+      "capabilities": {
+        "cloud_agent": "absent",
+        "file_transcript": "absent"
+      }
+    },
     "pi": {
       "maturity": "beta",
       "capabilities": {

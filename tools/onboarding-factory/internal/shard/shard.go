@@ -137,6 +137,62 @@ func SlugForAdapter(identityName string) string {
 	return identityName
 }
 
+// columnAdapters names every column (a replaydata/agents/<slug> directory)
+// whose daemon adapter's agent.Identity.Name differs from the slug. Every
+// other column's slug IS its adapter's name.
+//
+// The map is many-to-one by design (#2109): the opencode-v2 column records
+// OpenCode 2.x and replays through the same opencode adapter as the opencode
+// column, so opencode has two columns and SlugForAdapter — one answer per
+// adapter — cannot invert it.
+//
+// The shell rig carries a mirror of this map
+// (scripts/lib/adapter-slug.sh adapter_slug_to_daemon_name), because a
+// recording daemon told IRRLICHT_RECORD_ADAPTERS=<slug> scopes the recorded
+// adapter's own hooks OUT on an exact-string miss.
+// TestShellSlugMapMatchesTheGoMap keeps the two equal.
+var columnAdapters = map[string]string{
+	"claudecode":       "claude-code",
+	"deepseek-harness": "dsh",
+	"opencode-v2":      "opencode",
+}
+
+// DaemonAdapterForSlug maps a column slug to the agent.Identity.Name of the
+// daemon adapter that records and replays it. A slug outside columnAdapters
+// is returned unchanged, so a caller that must refuse an unknown name checks
+// the result against the adapter registry itself.
+func DaemonAdapterForSlug(slug string) string {
+	if a, ok := columnAdapters[slug]; ok {
+		return a
+	}
+	return slug
+}
+
+// ColumnsFor returns, in the given order, the columns among columns (normally
+// Agents) that DaemonAdapterForSlug routes to adapter — opencode's are
+// opencode and opencode-v2, dsh's is deepseek-harness. Empty when the catalog
+// has no column for it; each caller decides what that means.
+func ColumnsFor(columns []string, adapter string) []string {
+	var out []string
+	for _, col := range columns {
+		if DaemonAdapterForSlug(col) == adapter {
+			out = append(out, col)
+		}
+	}
+	return out
+}
+
+// AliasedColumns returns the sorted slugs of every column whose directory is
+// not its adapter's name — the keys of the map DaemonAdapterForSlug reads.
+func AliasedColumns() []string {
+	out := make([]string, 0, len(columnAdapters))
+	for slug := range columnAdapters {
+		out = append(out, slug)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func AgentCellDir(repoRoot, adapter, folder string) string {
 	return filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios", sanitizePathComponent(folder))
 }
