@@ -115,6 +115,16 @@ func (p *Parser) foldV2Tool(part map[string]interface{}, ev *tailer.ParsedEvent)
 		ev.ToolResultIDs = append(ev.ToolResultIDs, id)
 		ev.IsError = ev.IsError || status == "error"
 		delete(p.v2.openTools, id)
+	default:
+		return
+	}
+
+	// todowrite's state.input.todos is the whole list, as in 1.x
+	// (parseToolPart): the same reconciler folds it into the session's tasks
+	// (#2109 P5b-2). The shape was read off a 2.1.4 store row
+	// (testdata/v2-todowrite.rows.sql).
+	if name == "todowrite" {
+		p.appendTodowriteDeltas(state, ev)
 	}
 }
 
