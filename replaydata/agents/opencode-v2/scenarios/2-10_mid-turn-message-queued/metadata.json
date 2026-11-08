@@ -85,9 +85,9 @@
         }
       ],
       "verify": [
-        "working from the first prompt, with no ready or waiting for at least 12s — through the queued prompt's arrival",
+        "working from the first prompt, with no ready or waiting in its first 12s",
         "both prompts answered (two user rows in the transcript)",
-        "ready once, at the end"
+        "ready once, at the end, and no working after it — no flicker at the step boundary or the queued row's landing"
       ]
     }
   }
