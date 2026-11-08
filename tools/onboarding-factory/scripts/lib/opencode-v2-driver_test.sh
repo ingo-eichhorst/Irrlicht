@@ -128,6 +128,15 @@ def note(name, line):
     # One shared log in arrival order, so a test can check the ORDER of calls
     # that land in different files (reset_session: create, then archive).
     with open(os.path.join(OUT, "seq"), "a") as f: f.write(name + " " + line + "\n")
+def append_rows(db, sid, rows, t0, bad_user_id=False):
+    # The session's next rows, seq after its last, timestamped t0, t0+1, ...
+    seq = db.execute("SELECT coalesce(max(seq), -1) + 1 FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
+    for i, (typ, data) in enumerate(rows):
+        mid = "msg_x/../%d" % (seq + i) if bad_user_id and typ == "user" else "msg_%s%d" % (sid.replace("_", ""), seq + i)
+        db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
+                   (mid, sid, typ, seq + i, t0 + i, t0 + i, json.dumps(data)))
+def set_idle(db, sid, t):
+    db.execute("UPDATE session_v2 SET time_idle=?, idle_outcome='succeeded' WHERE id=?", (t, sid))
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def reply(self, code, obj):
@@ -188,28 +197,17 @@ class H(BaseHTTPRequestHandler):
             text = body["text"]
             sid = m.group(1)
             note("bodies", "%s %s" % (self.path, json.dumps(body, separators=(",", ":"))))
-            if mode() == "queue":
+            if mode() == "queue" and "delivery" not in body:
                 # A turn that stays in flight until a queued prompt arrives:
                 # the first prompt writes only its user row; the queued one
-                # completes the turn (one idle, as the 2.1.4 service does).
-                seq = db.execute("SELECT coalesce(max(seq), -1) + 1 FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
-                rows = [("user", {"text": text})] if "delivery" not in body else [("user", {"text": text}), ("assistant", {"content": [{"type": "text", "text": "ok"}]}), ("idle", {"outcome": "succeeded"})]
-                for i, (typ, data) in enumerate(rows):
-                    db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
-                               ("msg_%s%d" % (sid.replace("_", ""), seq + i), sid, typ, seq + i, now + i, now + i, json.dumps(data)))
-                if "delivery" in body:
-                    db.execute("UPDATE session_v2 SET time_idle=?, idle_outcome='succeeded' WHERE id=?", (now + 3, sid))
+                # completes the turn below (one idle, as the 2.1.4 service does).
+                append_rows(db, sid, [("user", {"text": text})], now)
                 db.commit()
                 return self.reply(200, {"data": {}})
-            if mode() in ("idle", "perm", "badperm", "badmsg"):
-                seq = db.execute("SELECT coalesce(max(seq), -1) + 1 FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
-                rows = [("user", {"text": text}), ("assistant", {"content": [{"type": "text", "text": "ok"}], "tokens": {"input": 10, "output": 1}}), ("idle", {"outcome": "succeeded"})]
-                for i, (typ, data) in enumerate(rows):
-                    mid = "msg_%s%d" % (sid.replace("_", ""), seq + i)
-                    if typ == "user" and mode() == "badmsg": mid = "msg_x/../%d" % (seq + i)
-                    db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
-                               (mid, sid, typ, seq + i, now + i, now + i, json.dumps(data)))
-                db.execute("UPDATE session_v2 SET time_idle=?, idle_outcome='succeeded' WHERE id=?", (now + 3, sid))
+            if mode() in ("idle", "perm", "badperm", "badmsg", "queue"):
+                append_rows(db, sid, [("user", {"text": text}), ("assistant", {"content": [{"type": "text", "text": "ok"}], "tokens": {"input": 10, "output": 1}}), ("idle", {"outcome": "succeeded"})],
+                            now, bad_user_id=mode() == "badmsg")
+                set_idle(db, sid, now + 3)
                 db.commit()
             if mode() == "tool":
                 db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
@@ -229,22 +227,16 @@ class H(BaseHTTPRequestHandler):
             note("bodies", "%s %s" % (self.path, json.dumps(self.body(), separators=(",", ":"))))
             if mode() == "nocompact": return self.reply(500, {"error": "no"})
             sid = m.group(1)
-            seq = db.execute("SELECT coalesce(max(seq), -1) + 1 FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
-            for i, (typ, data) in enumerate([("compaction", {"status": "completed", "reason": "manual", "summary": "s"}), ("idle", {"outcome": "succeeded"})]):
-                db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
-                           ("msg_c%s%d" % (sid.replace("_", ""), seq + i), sid, typ, seq + i, now + 10 + i, now + 10 + i, json.dumps(data)))
-            db.execute("UPDATE session_v2 SET time_idle=?, idle_outcome='succeeded' WHERE id=?", (now + 13, sid))
+            append_rows(db, sid, [("compaction", {"status": "completed", "reason": "manual", "summary": "s"}), ("idle", {"outcome": "succeeded"})], now + 10)
+            set_idle(db, sid, now + 13)
             db.commit()
             return self.reply(200, {"data": {}})
         m = re.fullmatch(r"/api/session/(ses_\w+)/shell", self.path)
         if m:
             body = self.body()
             note("bodies", "%s %s" % (self.path, json.dumps(body, separators=(",", ":"))))
-            sid = m.group(1)
-            seq = db.execute("SELECT coalesce(max(seq), -1) + 1 FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
             status = "running" if mode() == "shellstuck" else "exited"
-            db.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?,?,?,?,?,?,?)",
-                       ("msg_s%s%d" % (sid.replace("_", ""), seq), sid, "shell", seq, now, now, json.dumps({"command": body.get("command"), "status": status})))
+            append_rows(db, m.group(1), [("shell", {"command": body.get("command"), "status": status})], now)
             db.commit()
             return self.reply(200, {"data": {}})
         m = re.fullmatch(r"/api/session/ses_\w+/model", self.path)
@@ -323,6 +315,7 @@ run_driver() {
 reset_store() { sqlite3 "$DB" "DELETE FROM session_message; DELETE FROM session_v2;"; local f; for f in created auth booted posted patched model revert seq bodies; do : > "$STUB_OUT/$f"; done; rm -f "$TMP/ps.drift" "$TMP/ps.argscount"; }
 prompts() { grep '/prompt$' "$STUB_OUT/posted" | tr '\n' ' ' | sed 's/ $//'; }
 created_count() { grep -c . "$STUB_OUT/created" 2>/dev/null || true; }
+export_types() { jq -rs 'map(.type) | join(" ")' "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null; }
 
 one_service; service_env; write_service_json
 
@@ -581,7 +574,7 @@ run_driver compact 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_eq "…POSTed to the active session's compact endpoint" "1" "$(grep -cx '/api/session/ses_stub1/compact' "$STUB_OUT/posted")"
 assert_has "…and waited for the compaction's own idle" "idle_outcome=succeeded (time_idle" "$(grep -A1 'compact sent' <<<"$RUN_OUT")"
-assert_eq "…whose rows are in the export" "user assistant idle compaction idle" "$(jq -r .type "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "…whose rows are in the export" "user assistant idle compaction idle" "$(export_types)"
 reset_store; echo nocompact > "$STUB_OUT/mode"
 run_driver nocompact 5 '[{"type":"send","text":"a"},{"type":"compact"},{"type":"wait_turn"}]'
 assert_eq "a compaction the service refuses: not recorded as ok" "nonzero(2)" "$RUN_REASON"
@@ -593,12 +586,23 @@ run_driver shell 20 '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"s
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_eq "…the command went in the body" '/api/session/ses_stub1/shell {"command":"echo hello"}' "$(grep '/shell ' "$STUB_OUT/bodies")"
 assert_has "…and the step waited for its row to leave running" "shell escape 'echo hello' on ses_stub1 finished (1 shell row(s) done)" "$RUN_OUT"
-for bad in 'rm -rf x' 'echo ../x' 'echo ..' 'echo a;b' 'echo $(id)' 'cat /etc/passwd' 'echo a/b' 'echo  x' ''; do
-  reset_store
-  run_driver "badshell" 20 "$(jq -nc --arg c "$bad" '[{"type":"send","text":"a"},{"type":"wait_turn"},{"type":"shell","command":$c}]')"
-  assert_eq "shell '$bad': refused" "nonzero(2)" "$RUN_REASON"
-  assert_eq "…and nothing reached the shell endpoint" "0" "$(grep -c '/shell$' "$STUB_OUT/posted")"
-done
+# One refusal end to end — the driver's call site is what keeps a refused
+# command off the service — and every other shape on the validator itself,
+# which needs no driver run.
+reset_store
+run_driver badshell 20 '[{"type":"shell","command":"rm -rf x"}]'
+assert_eq "shell 'rm -rf x': refused" "nonzero(2)" "$RUN_REASON"
+assert_eq "…and nothing reached the shell endpoint" "0" "$(grep -c '/shell$' "$STUB_OUT/posted")"
+if (( ! SKIPPING )); then
+  for bad in 'echo ../x' 'echo ..' 'echo a;b' 'echo $(id)' 'cat /etc/passwd' 'echo a/b' 'echo  x' ''; do
+    ( source "$ROOT/replaydata/agents/opencode-v2/service-api.sh" && oc2_valid_shell_command "$bad" ) && got=accepted || got=refused
+    assert_eq "shell '$bad': refused" "refused" "$got"
+  done
+  for good in 'echo hello' 'date' 'pwd' 'true' 'echo a.b=c:d-e_f'; do
+    ( source "$ROOT/replaydata/agents/opencode-v2/service-api.sh" && oc2_valid_shell_command "$good" ) && got=accepted || got=refused
+    assert_eq "shell '$good': accepted" "accepted" "$got"
+  done
+fi
 reset_store; echo shellstuck > "$STUB_OUT/mode"
 run_driver shellstuck 4 '[{"type":"shell","command":"echo hello"}]'
 assert_eq "a shell row that never leaves running: timeout" "timeout" "$RUN_REASON"
@@ -609,7 +613,7 @@ reset_store; echo queue > "$STUB_OUT/mode"
 run_driver midturn 20 '[{"type":"send","text":"long"},{"type":"mid_turn_send","text":"also this"},{"type":"wait_turn"}]'
 assert_eq "exit reason ok" "ok" "$RUN_REASON"
 assert_eq "…the second prompt went with delivery queue" '/api/session/ses_stub1/prompt {"text":"also this","delivery":"queue"}' "$(sed -n 2p "$STUB_OUT/bodies")"
-assert_eq "…and the turn's one idle ended it" "user user assistant idle" "$(jq -r .type "$(cat "$RUN_STAGING/transcript.path" 2>/dev/null)" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "…and the turn's one idle ended it" "user user assistant idle" "$(export_types)"
 reset_store; echo queue > "$STUB_OUT/mode"
 run_driver steer 20 '[{"type":"send","text":"long"},{"type":"mid_turn_send","text":"also this","delivery":"steer"},{"type":"wait_turn"}]'
 assert_eq "delivery steer is passed through" '/api/session/ses_stub1/prompt {"text":"also this","delivery":"steer"}' "$(sed -n 2p "$STUB_OUT/bodies")"

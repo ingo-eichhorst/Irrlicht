@@ -501,15 +501,20 @@ current_idle() { # prints the active session's time_idle (0 when never idle)
   printf '%s\n' "${m%%|*}"
 }
 
-step_send() { # <text>
-  local body
-  IDLE_MARK="$(current_idle)" || { EXIT_REASON="$NONZERO_2"; return 1; }
-  body="$(jq -nc --arg t "$1" '{text:$t}')"
-  if ! oc2_api POST "/api/session/$SESSION_ID/prompt" "$body" > /dev/null; then
+# post_prompt <text> [<delivery>] POSTs one prompt to the active session —
+# with the API's delivery when one is given (step_mid_turn_send) — and records
+# a refused POST as a driver fault.
+post_prompt() {
+  if ! oc2_api POST "/api/session/$SESSION_ID/prompt" "$(jq -nc --arg t "$1" --arg d "${2:-}" '{text:$t} + (if $d == "" then {} else {delivery:$d} end)')" > /dev/null; then
     log "prompt to $SESSION_ID failed"
     EXIT_REASON="$NONZERO_2"; return 1
   fi
-  log "send ($(printf '%s' "$1" | wc -c | tr -d ' ') chars) to $SESSION_ID; idle mark $IDLE_MARK"
+}
+
+step_send() { # <text>
+  IDLE_MARK="$(current_idle)" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  post_prompt "$1" || return 1
+  log "send (${#1} chars) to $SESSION_ID; idle mark $IDLE_MARK"
 }
 
 step_wait_turn() {
@@ -589,11 +594,8 @@ step_mid_turn_send() {
     log "mid_turn_send: refusing — no turn of $SESSION_ID is in flight, so this would be an ordinary next prompt, not a mid-turn one"
     EXIT_REASON="$NONZERO_2"; return 1
   fi
-  if ! oc2_api POST "/api/session/$SESSION_ID/prompt" "$(jq -nc --arg t "$text" --arg d "$delivery" '{text:$t, delivery:$d}')" > /dev/null; then
-    log "mid-turn prompt to $SESSION_ID failed"
-    EXIT_REASON="$NONZERO_2"; return 1
-  fi
-  log "mid_turn_send ($(printf '%s' "$text" | wc -c | tr -d ' ') chars, delivery $delivery) to $SESSION_ID; idle mark stays $IDLE_MARK"
+  post_prompt "$text" "$delivery" || return 1
+  log "mid_turn_send (${#text} chars, delivery $delivery) to $SESSION_ID; idle mark stays $IDLE_MARK"
 }
 
 step_interrupt() {

@@ -38,9 +38,8 @@ func assertTasks(t *testing.T, got []session.Task, want [][3]string) {
 		t.Fatalf("Tasks = %+v (%d), want %d tasks %v — the 2.x todowrite items were not folded", got, len(got), len(want), want)
 	}
 	for i, w := range want {
-		if got[i].ID != w[0] || got[i].Subject != w[1] || got[i].Status != w[2] {
-			t.Errorf("Tasks[%d] = {ID:%q Subject:%q Status:%q}, want {ID:%q Subject:%q Status:%q}",
-				i, got[i].ID, got[i].Subject, got[i].Status, w[0], w[1], w[2])
+		if g := [3]string{got[i].ID, got[i].Subject, got[i].Status}; g != w {
+			t.Errorf("Tasks[%d] = %q (id, subject, status), want %q", i, g, w)
 		}
 	}
 }
