@@ -43,23 +43,16 @@
 # Exit codes:
 #   0  at least one PR is actionable
 #   1  nothing is actionable (the JSON is still printed)
-#   2  REFUSAL — could not look: gh failed or answered with something that is
-#      not the JSON shape asked for while reading the collaborator list or the
-#      open-PR list, the collaborator list came back empty, or the open-PR list
-#      may be truncated. Nothing is
-#      printed on stdout, so "could not look" never reads as "nothing to do"
-#      (AGENTS.md: "A verification mechanism must fail loudly when it cannot
-#      run").
+#   2  REFUSAL — could not look: one of the two global reads (the collaborator
+#      list, the open-PR list) failed or was not the JSON shape asked for, the
+#      collaborator list came back empty, or the open-PR list may be truncated.
+#      Nothing is printed on stdout, so "could not look" never reads as
+#      "nothing to do" (AGENTS.md: "A verification mechanism must fail loudly
+#      when it cannot run"). A failed read of ONE PR is not a refusal; see
+#      unreadable() below.
 #
 # The Factory gate maps these as: 0 → `factory task run <task>`, 1 → exit 0
 # without starting an agent, 2 → fail the gate so the owner sees it.
-#
-# One PR whose own reads fail (an HTTP error on its comments, files, tree or
-# commits) or whose file list cannot be read in full (more files than the API
-# returns, a truncated tree) is NOT a refusal: that PR alone is held, with an
-# `unreadable:<what>` or file-list reason, because one PR must not stop the
-# pass for every other PR, and holding it still fails closed. Only the two
-# global reads, the collaborator list and the open-PR list, refuse the run.
 #
 # Requires bash (3.2 is enough: no associative arrays, no mapfile) and jq.
 set -uo pipefail
@@ -147,8 +140,8 @@ gh_get() {
 
 # ── Classification, in jq ────────────────────────────────────────────────────
 # Every rule lives in this one program so the bash above stays plumbing. The
-# entry points at the bottom are `cheap` (fields from `gh pr list` only),
-# `marker` (the latest trusted marker comment) and `full` (everything else).
+# entry points are `cheap` (fields from `gh pr list` only), `latest_marker`
+# (the latest trusted marker comment) and `full` (everything else).
 # shellcheck disable=SC2016  # $vars below are jq variables, not shell ones
 JQ_LIB='
 # A string we may print: a path, login or dependency name made only of these
@@ -224,11 +217,9 @@ def cheap($required; $collab):
 def marker_re: "<!-- ir:pr-merge sha=(?<sha>[0-9a-f]{40}) verdict=(?<verdict>merge|needs-human) -->";
 def latest_marker($collab):
   [ .[] | select((.user.login // "") as $u | $collab | any(. == $u))
-        | select((.body // "") | test(marker_re))
-        | ((.body | capture(marker_re)) as $c
-           | {comment_id: .id, updated_at: (.updated_at // ""), sha: $c.sha, verdict: $c.verdict}) ]
-  | sort_by(.updated_at) | last
-  | if . == null then null else del(.updated_at) end;
+        | (.body // "" | capture(marker_re)) as $c
+        | {comment_id: .id, updated_at: (.updated_at // ""), sha: $c.sha, verdict: $c.verdict} ]
+  | sort_by(.updated_at) | last | del(.updated_at);
 
 # ── Sensitive paths ──
 # The issue'"'"'s list, widened (review of #2129) to agent config an agent loads
@@ -263,10 +254,9 @@ def lines($c): [ .patch // "" | split("\n")[] | select(startswith($c)) | .[1:] ]
 # module path, a `replace`, a `use`, or any other directive is a hit.
 def gomod_line:
   gsub("^\\s+|\\s+$"; "") as $s
-  | if $s == "" or ($s | startswith("//")) or $s == ")" or ($s | test("^require\\s*\\($")) then {kind: "skip"}
-    elif ($s | test("^(go|toolchain)\\s")) then {kind: "skip"}
-    elif ($s | test("^(require\\s+)?[^\\s=]+\\s+v[0-9][^\\s]*(\\s+//\\s*indirect)?$")) then
-      {kind: "dep", mod: ($s | sub("^require\\s+"; "") | split(" ")[0] | split("\t")[0])}
+  | ([$s | capture("^(require\\s+)?(?<mod>[^\\s=]+)\\s+v[0-9][^\\s]*(\\s+//\\s*indirect)?$")] | first) as $dep
+  | if $s == "" or ($s | test("^(//|\\)$|require\\s*\\($|(go|toolchain)\\s)")) then {kind: "skip"}
+    elif $dep != null then {kind: "dep", mod: $dep.mod}
     else {kind: "other"} end;
 
 def gomod_hits:
@@ -282,9 +272,9 @@ def gomod_hits:
 # new script), a script whose command changed, or a structural line is a hit.
 def pkg_line:
   gsub("^\\s+|\\s*,?\\s*$"; "") as $s
+  | ([$s | capture("^\"(?<k>[^\"]+)\"\\s*:\\s*\"(?<v>[^\"]*)\"$")] | first) as $c
   | if $s == "" then {kind: "skip"}
-    elif ($s | test("^\"[^\"]+\"\\s*:\\s*\"[^\"]*\"$")) then
-      ($s | capture("^\"(?<k>[^\"]+)\"\\s*:\\s*\"(?<v>[^\"]*)\"$")) as $c | {kind: "kv", key: $c.k, val: $c.v}
+    elif $c != null then {kind: "kv", key: $c.k, val: $c.v}
     else {kind: "other"} end;
 
 def pkg_hits:
@@ -297,12 +287,14 @@ def pkg_hits:
         else empty end ]
   + (if any($add[]; .kind == "other") then [{rule: "package-json-structure", path: ($f | safe)}] else [] end);
 
-def content_hits($tree; $max_bytes):
+# $idx is the head tree as {path: entry}, built once per PR in `full`: a lookup
+# per changed file instead of a scan of the whole tree (~8.5K entries here).
+def content_hits($idx; $max_bytes):
   .filename as $f
   | (if (.patch == null) and .status != "removed" and ((.status == "renamed" and .changes == 0) | not)
        then [{rule: "opaque", path: ($f | safe)}] else [] end)
   + (if .status == "removed" then []
-     else ([ $tree.tree[]? | select(.path == $f) ] | first) as $blob
+     else $idx[$f] as $blob
        | if $blob == null then [{rule: "not-in-tree", path: ($f | safe)}]
          elif ($blob.size // 0) > $max_bytes then [{rule: "large-file", path: ($f | safe)}]
          else [] end end)
@@ -333,8 +325,7 @@ def updated_deps:
 
 def lead_major: ltrimstr("v") | capture("^(?<m>[0-9]+)").m | tonumber;
 def first_from_to:
-  [ match("from (?<a>v?[0-9]+(\\.[0-9A-Za-z+-]+)*) to (?<b>v?[0-9]+(\\.[0-9A-Za-z+-]+)*)"; "g")
-    | {a: .captures[0].string, b: .captures[2].string} ] | first;
+  [capture("from (?<a>v?[0-9]+(\\.[0-9A-Za-z+-]+)*) to (?<b>v?[0-9]+(\\.[0-9A-Za-z+-]+)*)")] | first;
 
 # A major bump, or a bump this cannot classify, is a hold. update-type is the
 # primary signal; an entry without one (dependabot omits it for indirect
@@ -363,14 +354,13 @@ def dependabot_reasons($commits; $files):
    + [ $files[] | select(.filename | test(manifest_re) | not) | "dependabot-non-manifest-file" ])
   | unique;
 
-def full($base; $collab; $hold_label; $commits; $files; $tree; $max_files; $max_bytes):
+def full($base; $hold_label; $commits; $files; $tree; $max_files; $max_bytes):
   . as $pr
   | ($base.tier) as $claimed
   | (if $claimed == "dependabot" then dependabot_reasons($commits; $files) else [] end) as $dep_problems
-  | (if $claimed == "dependabot" and ($dep_problems | length) == 0 then "dependabot"
-     elif $claimed == "dependabot" then "external"
-     else $claimed end) as $tier
-  | ([ $files[] | path_hits(.filename), (if .previous_filename then path_hits(.previous_filename) else [] end), content_hits($tree; $max_bytes) ]
+  | (if ($dep_problems | length) > 0 then "external" else $claimed end) as $tier
+  | INDEX($tree.tree[]?; .path) as $idx
+  | ([ $files[] | path_hits(.filename), (if .previous_filename then path_hits(.previous_filename) else [] end), content_hits($idx; $max_bytes) ]
      | add // [] | unique) as $hits
   | ( (if $tier == "external" then ["external-author"] else [] end)
       + $dep_problems
@@ -389,10 +379,10 @@ def full($base; $collab; $hold_label; $commits; $files; $tree; $max_files; $max_
              sensitive_hits: $hits};
 '
 
-jq -n "$JQ_LIB"' 1' >/dev/null 2>&1 || {
-  echo "REFUSE: pr-merge-candidates — the embedded jq program does not compile ($(jq -n "$JQ_LIB"' 1' 2>&1 | head -c 300))" >&2
+if ! jq_err=$(jq -n "$JQ_LIB"' 1' 2>&1 >/dev/null); then
+  echo "REFUSE: pr-merge-candidates — the embedded jq program does not compile ($(printf '%s' "$jq_err" | head -c 300))" >&2
   exit 2
-}
+fi
 
 # ── Gather and classify ──────────────────────────────────────────────────────
 # refuse_run <what> — a global read failed; nothing can be classified.
@@ -421,15 +411,25 @@ if [ "$(jq length "$TMP/prs.json")" -ge "$PRM_LIST_LIMIT" ]; then
   exit 2
 fi
 
-# unreadable <what> — record this PR as held because one of its own reads
-# failed. Only the two global reads (collaborators, the PR list) refuse the
-# whole run: a PR whose files API answers an error (GitHub returns HTTP 422
-# for a diff "taking too long to generate") must not become an off-switch for
-# every other PR. Its marker and content are unknown, so the skill writes
-# nothing on a PR carrying an `unreadable:` reason; it only reports it.
+# emit <jq args...> — append one result row built from this PR's base.json.
+emit() {
+  jq -c "$@" "$TMP/base.json" >>"$TMP/results.jsonl"
+}
+
+# unreadable <what> — one of this PR's own reads failed. Only the two global
+# reads refuse the whole run: a PR whose files API answers an error (GitHub
+# returns HTTP 422 for a diff "taking too long to generate") must not become an
+# off-switch for every other PR, and it still fails closed. Without its
+# comments the marker is unknown, so that PR is `skip` (nothing may be written
+# to it) and is tried again next run. Any later read failure is an ordinary
+# `hold` that keeps the marker already read, exactly like `too-many-files`.
 unreadable() {
-  jq -c --arg what "$1" '. + {decision: "hold", reasons: ["unreadable:\($what)"], sensitive_hits: [], marker: null}' \
-    "$TMP/base.json" >>"$TMP/results.jsonl"
+  if [ "$1" = comments ]; then
+    emit --arg what "$1" '. + {decision: "skip", reasons: ["unreadable:\($what)"], sensitive_hits: [], marker: null}'
+  else
+    emit --arg what "$1" --slurpfile m "$TMP/marker.json" \
+      '. + {decision: "hold", reasons: ["unreadable:\($what)"], sensitive_hits: [], marker: $m[0]}'
+  fi
 }
 
 : >"$TMP/results.jsonl"
@@ -440,7 +440,7 @@ for num in $(jq -r '.[].number' "$TMP/prs.json"); do
     "$JQ_LIB"' cheap($required; $collab[0])' "$TMP/pr.json" >"$TMP/base.json" || exit 2
 
   if [ "$(jq '.reasons | length' "$TMP/base.json")" -gt 0 ]; then
-    jq -c '. + {decision: "skip", sensitive_hits: [], marker: null}' "$TMP/base.json" >>"$TMP/results.jsonl"
+    emit '. + {decision: "skip", sensitive_hits: [], marker: null}'
     continue
   fi
 
@@ -454,9 +454,8 @@ for num in $(jq -r '.[].number' "$TMP/prs.json"); do
 
   head_sha=$(jq -r '.head_sha' "$TMP/base.json")
   if [ "$(jq -r '.sha // ""' "$TMP/marker.json")" = "$head_sha" ]; then
-    jq -c --slurpfile m "$TMP/marker.json" \
-      '. + {decision: "skip", reasons: ["handled:\(.head_sha)"], sensitive_hits: [], marker: $m[0]}' \
-      "$TMP/base.json" >>"$TMP/results.jsonl"
+    emit --slurpfile m "$TMP/marker.json" \
+      '. + {decision: "skip", reasons: ["handled:\(.head_sha)"], sensitive_hits: [], marker: $m[0]}'
     continue
   fi
 
@@ -480,12 +479,12 @@ for num in $(jq -r '.[].number' "$TMP/prs.json"); do
     echo '[]' >"$TMP/commits.json"
   fi
 
-  jq -c --slurpfile base "$TMP/base.json" --slurpfile collab "$TMP/collab.json" \
+  jq -c --slurpfile base "$TMP/base.json" \
     --slurpfile commits "$TMP/commits.json" --slurpfile files "$TMP/files.json" \
     --slurpfile tree "$TMP/tree.json" --slurpfile marker "$TMP/marker.json" \
     --arg hold_label "$PRM_HOLD_LABEL" \
     --argjson max_files "$PRM_MAX_FILES" --argjson max_bytes "$PRM_MAX_FILE_BYTES" \
-    "$JQ_LIB"' full($base[0]; $collab[0]; $hold_label; $commits[0]; $files[0]; $tree[0]; $max_files; $max_bytes) + {marker: $marker[0]}' \
+    "$JQ_LIB"' full($base[0]; $hold_label; $commits[0]; $files[0]; $tree[0]; $max_files; $max_bytes) + {marker: $marker[0]}' \
     "$TMP/pr.json" >>"$TMP/results.jsonl" || exit 2
 done
 

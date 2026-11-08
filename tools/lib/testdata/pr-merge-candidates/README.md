@@ -10,7 +10,9 @@ Payloads served by `gh-stub.sh` to `tools/pr-merge-candidates.sh` under
   `gh api repos/{owner}/{repo}/collaborators?permission=push`. Each `<N>/`
   holds `comments.json`, `files.json`, `tree.json`, `commits.json`
   (dependabot rows only) and a `NOTE` saying what the row isolates and where
-  its data came from.
+  its data came from. #145–#148 each leave out, on purpose, the one payload
+  whose read they fail: the stub then answers it the way gh answers an HTTP
+  error. Adding the "missing" file turns that row into an ordinary one.
 - `quiet/` — one draft PR: nothing actionable, exit 1.
 - `nocollab/` — an empty collaborator list: refusal, exit 2.
 

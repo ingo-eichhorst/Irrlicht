@@ -3,7 +3,8 @@
 # serves recorded payloads from a fixture world directory and answers only the
 # two read forms tools/pr-merge-candidates.sh is allowed to use:
 #
-#   gh pr list ... --json <fields>          → <world>/pr-list.json
+#   gh pr list ... --json <fields>          → <world>/pr-list.json, keeping only
+#                                             the requested fields, as gh does
 #   gh api [--paginate] <endpoint>          →
 #     repos/{owner}/{repo}/collaborators?…  → <world>/collaborators.json
 #     repos/{owner}/{repo}/issues/N/comments?…  → <world>/N/comments.json
@@ -36,6 +37,7 @@
 #                              from an answer.
 #   PRM_STUB_GARBAGE_ON=<text> exit 0 but print non-JSON when the joined
 #                              arguments contain <text>
+#   PRM_STUB_ONLY_PR=<N>       list only PR <N> (a one-PR run of the same world)
 set -uo pipefail
 
 world=${PRM_STUB_WORLD:?gh-stub: PRM_STUB_WORLD is not set}
@@ -67,18 +69,37 @@ fi
 
 serve() { # serve <file> <paginate:0|1>
   [ -f "$1" ] || http_error 404 "Not Found (gh-stub has no fixture $1)"
-  if [ "$2" = 1 ] && jq -e 'type == "array"' "$1" >/dev/null 2>&1; then
+  if [ "$2" = 1 ]; then
     # Pages of two; an empty array is still one page, as real gh prints `[]`.
-    jq -c 'if length == 0 then [] else [range(0; length; 2) as $i | .[$i:$i+2]][] end' "$1"
+    # Anything that is not an array (or not JSON) is served as it is.
+    jq -c 'if type != "array" then . elif length == 0 then [] else [range(0; length; 2) as $i | .[$i:$i+2]][] end' \
+      "$1" 2>/dev/null || cat "$1"
   else
     cat "$1"
   fi
   exit 0
 }
 
-case "${1:-} ${2:-}" in
-  'pr list') serve "$world/pr-list.json" 0 ;;
-esac
+# `pr list --json a,b` returns only those fields. Serving the whole fixture
+# would let a field dropped from the script's --json list (labels: the kill
+# switch) go unnoticed, since the fixture would still carry it.
+if [ "${1:-} ${2:-}" = 'pr list' ]; then
+  shift 2
+  fields=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json) fields=${2:-}; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$fields" ] || { echo "gh-stub: 'pr list' without --json" >&2; exit 64; }
+  [ -f "$world/pr-list.json" ] || http_error 404 "Not Found (gh-stub has no fixture $world/pr-list.json)"
+  jq -c --arg f "$fields" --arg only "${PRM_STUB_ONLY_PR:-}" '
+    ($f | split(",")) as $keep
+    | [ .[] | select($only == "" or (.number | tostring) == $only)
+            | with_entries(select(.key as $k | $keep | index($k))) ]' "$world/pr-list.json"
+  exit 0
+fi
 
 if [ "${1:-}" != api ]; then
   echo "gh-stub: unexpected command '$joined' — only 'pr list' and 'api' are served" >&2
@@ -100,15 +121,9 @@ done
 path=${endpoint%%\?*}
 case "$path" in
   'repos/{owner}/{repo}/collaborators') serve "$world/collaborators.json" "$paginate" ;;
-  'repos/{owner}/{repo}/issues/'*/comments)
-    n=${path#repos/\{owner\}/\{repo\}/issues/}; n=${n%/comments}
-    serve "$world/$n/comments.json" "$paginate" ;;
-  'repos/{owner}/{repo}/pulls/'*/files)
-    n=${path#repos/\{owner\}/\{repo\}/pulls/}; n=${n%/files}
-    serve "$world/$n/files.json" "$paginate" ;;
-  'repos/{owner}/{repo}/pulls/'*/commits)
-    n=${path#repos/\{owner\}/\{repo\}/pulls/}; n=${n%/commits}
-    serve "$world/$n/commits.json" "$paginate" ;;
+  'repos/{owner}/{repo}/issues/'*/comments | 'repos/{owner}/{repo}/pulls/'*/files | 'repos/{owner}/{repo}/pulls/'*/commits)
+    rest=${path#repos/\{owner\}/\{repo\}/*/}   # <N>/<what>
+    serve "$world/${rest%%/*}/${rest#*/}.json" "$paginate" ;;
   'repos/{owner}/{repo}/git/trees/'*)
     sha=${path#repos/\{owner\}/\{repo\}/git/trees/}
     n=$(jq -r --arg s "$sha" '.[] | select(.headRefOid == $s) | .number' "$world/pr-list.json")

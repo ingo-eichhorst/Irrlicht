@@ -17,7 +17,7 @@ cd "$REPO_ROOT" || { echo "FAIL: cannot cd to repo root $REPO_ROOT" >&2; exit 1;
 
 SKILL=.claude/skills/ir:pr-merge/SKILL.md
 SCRIPT=tools/pr-merge-candidates.sh
-for f in "$SKILL" "$SCRIPT" AGENTS.md .claude/skills/ir:exec/SKILL.md .claude/skills/ir:fleet/SKILL.md; do
+for f in "$SKILL" "$SCRIPT" AGENTS.md; do
   [ -r "$f" ] || { echo "FAIL: pr-merge-contract — $f not found" >&2; exit 1; }
 done
 
@@ -38,9 +38,10 @@ check() { grep -qF -- "$3" <<<"$2" || fail "[$1] $4"; }
 
 untrusted=$(section '^## Untrusted input$')
 never=$(section '^## Never$')
-act=$(section '^## 3 · Act$')
+classify=$(section '^## 1 · Classify$')
 review=$(section '^## 2 · Review, read-only$')
-for s in untrusted never act review; do
+act=$(section '^## 3 · Act$')
+for s in untrusted never classify review act; do
   [ -n "${!s}" ] || { fail "could not find the skill's '$s' section; nothing below can be verified"; exit 1; }
 done
 
@@ -92,7 +93,7 @@ else
   done <<<"$merges"
 fi
 
-forbidden=$(grep -nE 'gh pr (review|close|checkout|ready|update-branch)|--remove-label|gh label (delete|edit)|git (checkout|switch|push|rebase|worktree add|reset)|--force|gh pr merge .*--auto' <<<"$code")
+forbidden=$(grep -nE 'gh pr (review|close|checkout|ready|update-branch)|--remove-label|gh label (delete|edit)|git (checkout|switch|push|rebase|worktree add|reset)|--force' <<<"$code")
 [ -z "$forbidden" ] || fail "the skill's commands include a forbidden one: $forbidden"
 
 # ── --dry-run reaches no write ──────────────────────────────────────────────
@@ -125,8 +126,19 @@ check review "$review" '`unusual-path`: its verdict is `needs-human` without rea
 check review "$review" '**only after step 3'"'"'s merges are done**' \
   'external reviews may now precede a merge decision'
 
-classify=$(section '^## 1 · Classify$')
-[ -n "$classify" ] || fail "could not find the skill's Classify section"
+# The path character set the skill quotes is the classifier's own `safe`
+# filter, read from the script, so the two cannot drift apart.
+safe_class=$(sed -n 's/^def safe: .*test("\\\\A\(\[[^]]*\]\).*/\1/p' "$SCRIPT")
+if [ -z "$safe_class" ]; then
+  fail "could not read the character class from the classifier's def safe; the path-filter pin cannot run"
+else
+  quoted=$(grep -oE '`\[A-Za-z0-9[^]`]*\]`' "$SKILL" | tr -d '`' | sort -u)
+  [ -n "$quoted" ] || fail 'the skill no longer quotes the path filter it relies on'
+  for q in $quoted; do
+    [ "$q" = "$safe_class" ] || fail "the skill quotes the path filter as $q, but the classifier's safe filter is $safe_class"
+  done
+fi
+
 check classify "$classify" 'git merge-base --is-ancestor HEAD origin/main' \
   'the run no longer checks that the checkout carries only main'"'"'s commits'
 check classify "$classify" 'git status --porcelain' 'the run no longer checks that the checkout is clean'
@@ -141,8 +153,6 @@ check act "$act" 'gh api -X PATCH "repos/{owner}/{repo}/issues/comments/$COMMENT
   'an existing marker comment is no longer edited in place'
 check act "$act" 'Never paste a title, body, commit message or diff line' \
   'the comment may now echo PR text'
-check act "$act" 'A PR whose reasons include an `unreadable:` code gets no label and no comment' \
-  'a PR whose marker could not be read may now get a second marker comment'
 
 # The marker the skill writes is the marker the classifier reads.
 grep -qF '<!-- ir:pr-merge sha=<40-hex head_sha> verdict=<merge|needs-human> -->' "$SKILL" ||
@@ -150,13 +160,24 @@ grep -qF '<!-- ir:pr-merge sha=<40-hex head_sha> verdict=<merge|needs-human> -->
 grep -qF 'def marker_re: "<!-- ir:pr-merge sha=(?<sha>[0-9a-f]{40}) verdict=(?<verdict>merge|needs-human) -->";' "$SCRIPT" ||
   fail "the classifier's marker regex no longer matches the marker the skill writes"
 
-# ── AGENTS.md and the two skills that must keep merging nothing ─────────────
+# ── AGENTS.md, and no other skill merges ────────────────────────────────────
 grep -qF '/ir:pr-merge' AGENTS.md || fail 'AGENTS.md Short Cuts no longer names /ir:pr-merge'
 grep -qF 'never merges' AGENTS.md || fail 'AGENTS.md no longer says ir:exec never merges'
 grep -qF 'merges nothing' AGENTS.md || fail 'AGENTS.md no longer says ir:fleet merges nothing'
-for s in .claude/skills/ir:exec/SKILL.md .claude/skills/ir:fleet/SKILL.md; do
-  grep -qF 'gh pr merge' "$s" && fail "$s now runs gh pr merge; only ir:pr-merge may"
+# AGENTS.md calls ir:pr-merge the one skill that merges other contributors'
+# PRs. ir:release merges only its own release PR (its SKILL.md step 7b).
+# Every other skill, present or future, must not run gh pr merge.
+merge_allow='ir:pr-merge ir:release'
+n_skills=0
+for s in .claude/skills/*/SKILL.md; do
+  [ -f "$s" ] || continue
+  n_skills=$((n_skills + 1))
+  name=${s#.claude/skills/}
+  name=${name%/SKILL.md}
+  case " $merge_allow " in *" $name "*) continue ;; esac
+  grep -qF 'gh pr merge' "$s" && fail "$s now runs gh pr merge; only ir:pr-merge (and ir:release, for its own PR) may"
 done
+[ "$n_skills" -ge 3 ] || fail "found only $n_skills skills under .claude/skills/; the no-other-merger check read nothing"
 
 if [ "$rc" -eq 0 ]; then
   echo 'OK: pr-merge-contract_test — the untrusted-input rule, never-list, merge shape, one-marker rule and dry-run bound are all in place'

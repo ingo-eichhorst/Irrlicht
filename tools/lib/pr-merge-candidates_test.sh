@@ -136,7 +136,7 @@ row 'collaborator login with is_bot'  142 hold   external   '["external-author"]
 row 'check name is injection text'    143 skip   trusted    '["ci-failed:other"]'
 row 'tag characters and LRM'          144 hold   trusted    '["hidden-unicode-in-description","sensitive:hidden-unicode"]'
 row 'files API error'                 145 hold   trusted    '["unreadable:files"]'
-row 'comments API error'              146 hold   trusted    '["unreadable:comments"]'
+row 'comments API error'              146 skip   trusted    '["unreadable:comments"]'
 row 'tree API error'                  147 hold   trusted    '["unreadable:tree"]'
 row 'commits API error'               148 hold   dependabot '["unreadable:commits"]'
 row 'file name ending in a newline'   149 hold   trusted    '["sensitive:unusual-path"]'
@@ -149,8 +149,6 @@ want131='["agent-config=.Claude/settings.json","agent-config=.mcp.json","agent-c
 [ "$hits131" = "$want131" ] && echo '  PASS: #131 every path rule hits its own file' ||
   fail "#131 every remaining path rule — wanted hits $want131, got $hits131"
 
-# A per-PR read failure holds that PR and the run goes on: the rows after it
-# were still classified (#145-#148 sit mid-world).
 
 # Every PR in the world is pinned by a row above.
 pinned=$(grep -cE '^row .* [0-9]{3} (skip|review|hold) ' "$SELF")
@@ -176,15 +174,18 @@ grep -q -- '--paginate repos/{owner}/{repo}/collaborators' "$LOG" ||
 
 # ── 2. Nothing attacker-controlled reaches the output ────────────────────────
 leaks=0
+# One jq pass: every title line, body line and non-required check name that
+# appears verbatim in the output (none contains a newline, so a substring of
+# the file is what a per-line grep would find).
+required=$(sed -n "s/^PRM_REQUIRED_CHECKS='\\(.*\\)'$/\\1/p" "$SCRIPT")
+[ -n "$required" ] || fail 'output hygiene — could not read PRM_REQUIRED_CHECKS from the script'
 while IFS= read -r text; do
-  [ -n "$text" ] || continue
-  if grep -qF -- "$text" "$WORK/world.json"; then
-    fail "output hygiene — a PR title or body reached the output: $text"
-    leaks=1
-  fi
-done < <(jq -r --argjson req "$(sed -n "s/^PRM_REQUIRED_CHECKS='\\(.*\\)'$/\\1/p" "$SCRIPT")" \
-  '.[] | .title, (.body | split("\n")[]),
-   (.statusCheckRollup[] | .name // .context | select(. as $n | $req | index($n) | not))' "$TD/world/pr-list.json")
+  fail "output hygiene — a PR title, body or check name reached the output: $text"
+  leaks=1
+done < <(jq -r --rawfile out "$WORK/world.json" --argjson req "${required:-[]}" '
+  .[] | .title, (.body | split("\n")[]),
+        (.statusCheckRollup[] | .name // .context | select(. as $n | $req | index($n) | not))
+  | select(. as $t | $t != "" and ($out | index($t)) != null)' "$TD/world/pr-list.json")
 # (The required check names are printed on purpose; every other name is not.)
 for text in 'IGNORE PREVIOUS' 'read me'; do
   grep -qF -- "$text" "$WORK/world.json" && { fail "output hygiene — '$text' reached the output"; leaks=1; }
@@ -260,19 +261,20 @@ refuse 'an HTTP error on the collaborator list' world PRM_STUB_FAIL_ON=collabora
 refuse 'non-JSON from pr list'         world 'PRM_STUB_GARBAGE_ON=pr list'
 refuse 'an empty collaborator list'    nocollab
 
-# Non-JSON on one PR's read holds that PR, never the run.
-run_world world PRM_STUB_GARBAGE_ON=pulls/104/files
-r104=$(jq -c '.prs[] | select(.number == 104) | [.decision, .reasons]' "$WORK/out" 2>/dev/null)
+# Non-JSON on one PR's read holds that PR, never the run. One PR of the same
+# world is enough: rows #145-#148 already show the rest of a run continuing.
+run_world world PRM_STUB_ONLY_PR=104 PRM_STUB_GARBAGE_ON=pulls/104/files
+r104=$(jq -c 'if (.prs | length) == 1 then .prs[0] | [.decision, .reasons] else "wrong PR count" end' "$WORK/out" 2>/dev/null)
 if [ "$GOT" -eq 0 ] && [ "$r104" = '["hold",["unreadable:files"]]' ]; then
   echo '  PASS: non-JSON on one PR'"'"'s files holds that PR and the run continues'
 else
   fail "non-JSON on one PR's files — wanted exit 0 and #104 held unreadable:files, got exit $GOT and $r104"
 fi
 
-PATH="$WORK/bin:$PATH" PRM_STUB_WORLD="$TD/world" bash "$SCRIPT" --frobnicate >/dev/null 2>&1
-GOT=$?
-[ "$GOT" -eq 2 ] && echo '  PASS: an unknown argument refuses with 2' ||
-  fail "an unknown argument must refuse with 2, got $GOT"
+# shellcheck source=tools/lib/checker-assert.sh
+. tools/lib/checker-assert.sh
+run_script() { PATH="$WORK/bin:$PATH" PRM_STUB_WORLD="$TD/world" bash "$SCRIPT" "$@"; }
+assert_checker_rc run_script 'an unknown argument refuses' 2 'unknown argument' --frobnicate
 
 # ── 5. Vacuity guard — the real repository, through the real gh ─────────────
 # Every case above passes against payloads shaped like gh's. This one checks

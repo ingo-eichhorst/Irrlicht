@@ -258,7 +258,7 @@ for rule in \
   '  {rule: "release",            re: "^version\\.json$"},' \
   '  {rule: "git-metadata",       re: "(^|/)\\.git(attributes|modules)$"},' \
   '  {rule: "binary",             re: "\\.(exe|dll|so|dylib|a|o|bin|jar|war|class|pyc|wasm|node|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|pkg|deb|rpm|whl|apk|ipa)$"},'; do
-  assert_mutation_is_red "dropping path rule '${rule:9:30}' is caught" "$S" "$rule" '' '#131 every'
+  assert_mutation_is_red "dropping path rule ${rule#*re: } is caught" "$S" "$rule" '' '#131 every'
 done
 
 # The last entry has no trailing comma, so it is neutralised, not deleted.
@@ -336,6 +336,20 @@ assert_mutation_is_red 'refusing the whole run on one PR'"'"'s read failure is c
   $'    unreadable files\n    continue' \
   '    exit 2' \
   'the fixture world must exit 0'
+
+# The stub returns only the fields `pr list --json` asks for, as gh does, so
+# dropping one from the script's list is visible. `labels` carries the kill
+# switch.
+assert_mutation_is_red 'not asking gh for labels is caught' "$S" \
+  "PRM_PR_FIELDS='number,isDraft,headRefOid,author,isCrossRepository,mergeable,mergeStateStatus,labels,changedFiles,statusCheckRollup,title,body'" \
+  "PRM_PR_FIELDS='number,isDraft,headRefOid,author,isCrossRepository,mergeable,mergeStateStatus,changedFiles,statusCheckRollup,title,body'" \
+  '#110 re-pushed after a hold'
+
+# The hygiene check itself: put the PR title where the author login goes.
+assert_mutation_is_red 'printing a PR title is caught by the hygiene check' "$S" \
+  '  { number, head_sha: .headRefOid, author: (.author.login // "" | safe),' \
+  '  { number, head_sha: .headRefOid, author: .title,' \
+  'output hygiene'
 
 if [[ $fails -gt 0 ]]; then
   echo "pr-merge-candidates-mutations: $fails FAILED"

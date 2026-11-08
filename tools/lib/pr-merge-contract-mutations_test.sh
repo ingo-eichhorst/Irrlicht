@@ -159,8 +159,8 @@ assert_mutation_is_red 'dropping the never-interpolate-a-path rule is caught' "$
   'forbids putting a PR path into a command'
 
 assert_mutation_is_red 'reviewing a PR with an unusual path is caught' "$K" \
-  $'include `unusual-path`: its verdict is\n  `needs-human` without reading;' \
-  'include `unusual-path`: review it carefully;' \
+  $'include `unusual-path`: its verdict\nis `needs-human` without reading.' \
+  'include `unusual-path`: review it carefully.' \
   'a PR with an unusual path may now be reviewed'
 
 assert_mutation_is_red 'reviewing external PRs before the merges is caught' "$K" \
@@ -173,10 +173,15 @@ assert_mutation_is_red 'dropping the main-checkout precondition is caught' "$K" 
   'git log -1 --oneline' \
   "checkout carries only main's commits"
 
-assert_mutation_is_red 'writing on an unreadable PR is caught' "$K" \
-  $'A PR whose reasons include an `unreadable:` code gets no label and no\ncomment, live or dry.' \
-  'A PR whose reasons include an `unreadable:` code is held like any other.' \
-  'second marker comment'
+assert_mutation_is_red 'quoting a path filter the classifier does not use is caught' "$K" \
+  $'whole name is made of `[A-Za-z0-9._/@+-]`.' \
+  $'whole name is made of `[A-Za-z0-9._/@+~-]`.' \
+  "but the classifier's safe filter is"
+
+assert_mutation_is_red 'any other skill gaining a merge is caught' .claude/skills/ir:triage/SKILL.md \
+  '# Triage and Plan Irrlicht Issues' \
+  $'# Triage and Plan Irrlicht Issues\n\n```bash\ngh pr merge "$N" --squash\n```' \
+  'now runs gh pr merge; only ir:pr-merge'
 
 # ── AGENTS.md and the skills that merge nothing ─────────────────────────────
 assert_mutation_is_red 'dropping the AGENTS.md short cut is caught' AGENTS.md \
@@ -187,7 +192,7 @@ assert_mutation_is_red 'dropping the AGENTS.md short cut is caught' AGENTS.md \
 assert_mutation_is_red 'ir:exec gaining a merge is caught' .claude/skills/ir:exec/SKILL.md \
   'Do not merge. Do not recommend a merge or another execution mode.' \
   $'Do not merge. Do not recommend a merge or another execution mode.\ngh pr merge <PR> --squash' \
-  'now runs gh pr merge; only ir:pr-merge may'
+  'now runs gh pr merge; only ir:pr-merge'
 
 if [[ $fails -gt 0 ]]; then
   echo "pr-merge-contract-mutations: $fails FAILED"
