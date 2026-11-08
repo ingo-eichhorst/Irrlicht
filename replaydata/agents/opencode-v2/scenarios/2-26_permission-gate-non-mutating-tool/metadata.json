@@ -1,0 +1,104 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario's point: a READ-only tool behind a permission gate must hold the session in waiting exactly like a mutating one. On 2.x both asks come through the same channel — the plugin forwards `permission.asked` with the ask's `action` (`edit` for the write tool, `read` for the read tool), and the receiver holds waiting while it is pending (hooks.go). Probed on the sandbox service (/Users/factory/.oc2sb/qa/p5b2-work/probe/2-26-read.log, 2-26-both.log): with project-local `{\"permission\": {\"edit\": \"ask\", \"read\": \"ask\"}}`, a write raised an `edit` ask and a read raised a `read` ask, each answered over `POST …/permission/{id}/reply`.\n\n## Spec choices\n\n- Two turns, so each gated call gets its own waiting episode: turn 1 writes (`edit` ask, the path tool-gate-permission-prompt covers), turn 2 only reads (`read` ask, what this row adds). In one turn the second ask lands inside the first's #1366 waiting-exit dwell (measured: 2s apart), and the two episodes merge.\n- No post-reply working is asserted (the #1366 dwell, as in 2-19): each turn anchors its ready on its waiting phase.",
+      "caveats": [
+        "The local model chooses its tools; if it reads before it writes in turn 1, the first reply answers a read ask instead. The recording's hook lines show each ask's tool."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-26-both.log",
+          "note": "probe: one turn, a write (edit ask) then a read (read ask), both answered over the API"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "settings ask for the edit and read tools and deny the shell in RUN_CWD/opencode.json",
+        "gate.txt is seeded into RUN_CWD before the session",
+        "each ask is held 8s, then answered once over the API"
+      ],
+      "settings": {
+        "permission": {
+          "edit": "ask",
+          "read": "ask",
+          "bash": "deny"
+        }
+      },
+      "timeout_seconds": 420,
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "gate.txt",
+          "text": "pelican\nsecond line\n"
+        },
+        {
+          "type": "send",
+          "text": "Use your write tool to create the file notes.txt containing exactly the text: hello. Do not use any other tool. Then reply with exactly: written"
+        },
+        {
+          "type": "permission_reply",
+          "decision": "once",
+          "hold_seconds": 8
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Use your read tool to read the file gate.txt, then reply with exactly its first word. Do not use any other tool."
+        },
+        {
+          "type": "permission_reply",
+          "decision": "once",
+          "hold_seconds": 8
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "turn 1: working → waiting on the write's edit ask → ready after the reply",
+        "turn 2: working → waiting on the read's read ask → ready after the reply",
+        "each ask is a permission.asked hook_received"
+      ]
+    }
+  }
+}

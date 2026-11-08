@@ -1,0 +1,139 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nA provider refuses a turn because the quota is used up. On 2.x the refusal is terminal and classified: probed with the repo's mock-openai-429 (HTTP 403 `insufficient_quota`, which the AI SDK does not retry — /Users/factory/.oc2sb/qa/p5b2-work/probe/2-9-mock.log), the turn ended at once with an `idle` row, outcome `failed`, error `{type: provider.quota, status: 403, message: \"You exceeded your current quota…\"}`. parser_v2.go turns a failed idle into SessionError (v2SessionError: class = the error's type), the plugin forwards `session.execution.failed` (a Stop hook), and the classifier routes a turn that ended in failure to the error state.\n\n## Recipe\n\nThe mock answers its FIRST request and refuses every later one. 2.x sends the session-title request concurrently with the first turn's request (4 ms apart, measured), so the success would go to whichever lands first. To make the order deterministic, turn 1 runs on the sandbox's own Kolibri model (the title is generated there), the `model` step then moves the session to the mock provider, turn 2 takes the mock's one success, and turn 3 hits the exhausted quota.\n\n## Wire check\n\nThe per-cell config, with every provider's baseURL pointed at a local capture stub (/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-9b.log): the title and turn 1 named the Kolibri path (the sandbox's kolibri provider), turns 2 and 3 named `mock-quota-model`. No request names any other model.",
+      "caveats": [
+        "The failed turn's arc is measured, not assumed: the Stop hook may land before the store's failed idle row (P5a measured the idle row 60-460 ms after the hook), so a brief ready before error is possible; the spec pins only that the turn ends in error and stays there."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_v2.go",
+          "note": "each assistant row's model.id is the step's ModelName; text items feed applyAssistantText (task-estimate scan)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "a turn that ended with a SessionError → error (\"turn ended in failure → error\")"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-9-mock.log",
+          "note": "probe: 403 insufficient_quota → idle failed, error.type provider.quota, no retry"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-9b.log",
+          "note": "wire check: every request named the Kolibri path or mock-quota-model"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset",
+        "The repo's mock-openai-429 running at 127.0.0.1:18766 for the whole run (default flags: the first request succeeds, every later one is HTTP 403 insufficient_quota); it serves the mock provider's turns, so they never reach the local model. Build: go build -o .build/refresh/bin/mock-openai-429 ./tools/onboarding-factory/recording/mock-openai-429/"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "mock provider `mockquota` declared in RUN_CWD/opencode.json (baseURL 127.0.0.1:18766); the session starts on the sandbox's default Kolibri model; the shell is denied",
+        "turn 1 on Kolibri, then the model step to mockquota/mock-quota-model, turn 2 (the mock's one success), turn 3 (403 insufficient_quota)"
+      ],
+      "settings": {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+          "bash": "deny"
+        },
+        "provider": {
+          "mockquota": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "mockquota (local mock, #2109 2-9)",
+            "options": {
+              "baseURL": "http://127.0.0.1:18766/v1",
+              "apiKey": "mock"
+            },
+            "models": {
+              "mock-quota-model": {
+                "id": "mock-quota-model",
+                "name": "mock-quota-model",
+                "limit": {
+                  "context": 8192,
+                  "output": 1024
+                }
+              }
+            }
+          }
+        }
+      },
+      "timeout_seconds": 300,
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok. Do not use any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "model",
+          "provider": "mockquota",
+          "model": "mock-quota-model"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "turns 1 and 2 working → ready",
+        "turn 3's quota refusal ends the turn in error, and the session stays in error (no ready, no waiting)",
+        "the transcript's last idle row is outcome failed, error.type provider.quota"
+      ]
+    }
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "opencode-v2",
+      "assessed_at": "2026-11-08T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nA turn's model call fails and the agent gives up. Probed with the repo's mock-openai-error at its defaults (HTTP 503 `server_error`/`overloaded`, every request — /Users/factory/.oc2sb/qa/p5b2-work/probe/2-14-mock.log): 2.x retried for about 80s (12 requests, the title's included), writing nothing to the store meanwhile but the user row, then wrote an assistant row with `finish: error` and an `idle` row, outcome `failed`, error `{type: provider.internal, status: 503, message: \"Provider overloaded (mock).\"}`. parser_v2.go turns the failed idle into SessionError, the plugin forwards `session.execution.failed` (a Stop hook), and the classifier routes a turn that ended in failure to the error state.\n\n## Wire check\n\nThe per-cell config, with every provider's baseURL pointed at a local capture stub (/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14.log): the title and the turn both named `mock-openai-error-model`; nothing named the Kolibri path, so no request reaches the local model.",
+      "caveats": [
+        "The ~80s retry window is 2.x's own policy (the AI SDK alone retries twice); the spec gives the failure no upper bound beyond the cell deadline."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser_v2.go",
+          "note": "each assistant row's model.id is the step's ModelName; text items feed applyAssistantText (task-estimate scan)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "2.x hook receiver: permission.asked holds waiting, session.execution.{succeeded,failed,interrupted} end the turn through HandleStopHook (#2108)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "a turn that ended with a SessionError → error"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/2-14-mock.log",
+          "note": "probe: 503 retried ~80s, then idle failed, error.type provider.internal"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/factory/.oc2sb/qa/p5b2-work/probe/wire-2-14.log",
+          "note": "wire check: every request named mock-openai-error-model"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "One OpenCode 2.x `serve --service` running, with a model it can reach (this host: the sandbox service, local Kolibri-1 4-bit model (mlx_lm) at 127.0.0.1:8087); the rig never starts, stops or reconfigures it",
+        "The three XDG exports, coexist IRRLICHT_ONBOARD_HOME and a non-7837 bind address from replaydata/agents/opencode-v2/prerequisites.md; OPENCODE_DB unset",
+        "The repo's mock-openai-error running at 127.0.0.1:18806 for the whole run (default flags: every request fails with HTTP 503 server_error / overloaded); it serves the mock provider's turns, so they never reach the local model. Build: go build -o .build/refresh/bin/mock-openai-error ./tools/onboarding-factory/recording/mock-openai-error/"
+      ],
+      "setup": [
+        "driver-interactive.sh (API driver) refuses before creating anything unless exactly one `serve --service` runs, its environment carries the run's XDG_* values, and the plugin's beacon resolves this run's daemon",
+        "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
+        "mock provider `mockerror` declared in RUN_CWD/opencode.json (baseURL 127.0.0.1:18806) and set as the session's model; the shell is denied",
+        "one turn; every model request fails with HTTP 503"
+      ],
+      "settings": {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+          "bash": "deny"
+        },
+        "provider": {
+          "mockerror": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "mockerror (local mock, #2109 2-14)",
+            "options": {
+              "baseURL": "http://127.0.0.1:18806/v1",
+              "apiKey": "mock"
+            },
+            "models": {
+              "mock-openai-error-model": {
+                "id": "mock-openai-error-model",
+                "name": "mock-openai-error-model",
+                "limit": {
+                  "context": 8192,
+                  "output": 1024
+                }
+              }
+            }
+          }
+        },
+        "model": "mockerror/mock-openai-error-model"
+      },
+      "timeout_seconds": 300,
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "working on the prompt, through 2.x's retries",
+        "the turn ends in error after the last retry, and the session stays in error",
+        "the transcript's idle row is outcome failed"
+      ]
+    }
+  }
+}
