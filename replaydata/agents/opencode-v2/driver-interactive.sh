@@ -52,6 +52,20 @@
 #   await_child      wait for a child session of the active one — a
 #                    session_v2 row whose parent_id is it — and, with
 #                    {"tool": NAME}, until a tool NAME of that child is running
+# Compaction, shell escape and queued input (#2109 P5b-2):
+#   compact          POST /api/session/{id}/compact — a manual compaction; it
+#                    ends with an idle row, so a wait_turn after it waits for
+#                    that NEW idle (the mark is taken before the POST)
+#   shell            POST /api/session/{id}/shell {"command"} — the user's
+#                    shell escape, run by the service with no model turn; the
+#                    step waits until the session's shell row leaves running.
+#                    Only echo/date/pwd/true with plain words is sent
+#                    (oc2_valid_shell_command)
+#   mid_turn_send    POST /api/session/{id}/prompt {"text","delivery"} WHILE a
+#                    turn runs ({"delivery": "queue"} by default, or "steer").
+#                    Refused unless the store shows the turn still in flight
+#                    (oc2_turn_in_flight): a send after the turn ended would
+#                    record an ordinary next turn as the scenario
 # The service window (#2109 Q1: approved for 3-4 and 1-2's service-exit
 # variant only):
 #   exit_clean       SIGTERM the service; sigkill — SIGKILL it. Both refuse
@@ -101,7 +115,7 @@ source "$_HERE/../../_lib/drive/contracts.sh"
 # recipe-lint contract (#508 #4): the step types this driver genuinely elicits,
 # scraped from this file by tools/onboarding-factory/scripts/lib/recipe-lint.sh.
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh, never expanded in shell
-DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction start_session session reset_session archive unarchive model revert background await_tool await_child exit_clean sigkill"
+DRIVE_ELICITS="send wait_turn sleep interrupt permission_reply seed_instruction start_session session reset_session archive unarchive model revert background await_tool await_child compact shell mid_turn_send exit_clean sigkill"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by recipe-lint.sh
 DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 
@@ -516,6 +530,72 @@ step_wait_turn() {
   done
 }
 
+# step_compact asks the service for a manual compaction of the active session.
+# The idle mark is taken first: the compaction ends with its own idle row
+# (measured on the sandbox 2.1.4 service: a `compaction` row, status completed,
+# reason manual, then an idle row, outcome succeeded).
+step_compact() {
+  IDLE_MARK="$(current_idle)" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  if ! oc2_api POST "/api/session/$SESSION_ID/compact" '{}' > /dev/null; then
+    log "compaction of $SESSION_ID failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "compact sent to $SESSION_ID; idle mark $IDLE_MARK"
+}
+
+# step_shell <command> runs the user's shell escape in the active session and
+# waits, to the run's deadline, until the session has one more shell row out
+# of `running` than before — observed, not slept for.
+step_shell() {
+  local cmd="$1" before now
+  if ! oc2_valid_shell_command "$cmd"; then
+    log "shell: refusing '$cmd' — only echo, date, pwd or true with plain words is run inside the shared service"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  before="$(oc2_shell_rows_done "$DB" "$SESSION_ID")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  if ! oc2_api POST "/api/session/$SESSION_ID/shell" "$(jq -nc --arg c "$cmd" '{command:$c}')" > /dev/null; then
+    log "shell escape on $SESSION_ID failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  while :; do
+    now="$(oc2_shell_rows_done "$DB" "$SESSION_ID")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+    if (( now > before )); then
+      log "shell escape '$cmd' on $SESSION_ID finished ($now shell row(s) done)"; return 0
+    fi
+    if (( $(remaining_seconds) <= 0 )); then
+      log "shell: '$cmd' on $SESSION_ID never left running by the deadline"
+      EXIT_REASON="$TIMEOUT_REASON"; return 1
+    fi
+    sleep 1
+  done
+}
+
+# step_mid_turn_send <text> <delivery> sends a prompt while the active
+# session's turn runs. The delivery is the API's own enum (2.1.4 openapi
+# Session.Inbox.Delivery: steer, queue). The idle mark is NOT moved: the turn
+# the message joins is still the one wait_turn waits for.
+step_mid_turn_send() {
+  local text="$1" delivery="$2" running
+  if [[ "$delivery" != "queue" && "$delivery" != "steer" ]]; then
+    log "mid_turn_send: refusing delivery '$delivery' — the service takes queue or steer"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if [[ -z "$text" ]]; then
+    log "mid_turn_send needs {\"text\": …}"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  running="$(oc2_turn_in_flight "$DB" "$SESSION_ID")" || { EXIT_REASON="$NONZERO_2"; return 1; }
+  if [[ "$running" != "yes" ]]; then
+    log "mid_turn_send: refusing — no turn of $SESSION_ID is in flight, so this would be an ordinary next prompt, not a mid-turn one"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  if ! oc2_api POST "/api/session/$SESSION_ID/prompt" "$(jq -nc --arg t "$text" --arg d "$delivery" '{text:$t, delivery:$d}')" > /dev/null; then
+    log "mid-turn prompt to $SESSION_ID failed"
+    EXIT_REASON="$NONZERO_2"; return 1
+  fi
+  log "mid_turn_send ($(printf '%s' "$text" | wc -c | tr -d ' ') chars, delivery $delivery) to $SESSION_ID; idle mark stays $IDLE_MARK"
+}
+
 step_interrupt() {
   if ! oc2_api POST "/api/session/$SESSION_ID/interrupt" > /dev/null; then
     log "interrupt of $SESSION_ID failed"
@@ -584,6 +664,9 @@ while IFS= read -r step; do
     background)       step_background || break ;;
     await_tool)       step_await_tool "$(jq -r '.tool // empty' <<<"$step")" || break ;;
     await_child)      step_await_child "$(jq -r '.tool // empty' <<<"$step")" || break ;;
+    compact)          step_compact || break ;;
+    shell)            step_shell "$(jq -r '.command // empty' <<<"$step")" || break ;;
+    mid_turn_send)    step_mid_turn_send "$(jq -r '.text // empty' <<<"$step")" "$(jq -r '.delivery // "queue"' <<<"$step")" || break ;;
     exit_clean)       step_signal_service SIGTERM || break ;;
     sigkill)          step_signal_service SIGKILL || break ;;
     *)                log "unknown step type: $type"; EXIT_REASON="$NONZERO_2"; break ;;
