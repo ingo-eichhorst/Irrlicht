@@ -1,0 +1,3 @@
+its tree API answers an error -> hold unreadable:tree. The stub prints the
+HTTP error body as a JSON object on stdout, as gh does, so only the exit status
+tells it apart from a tree.

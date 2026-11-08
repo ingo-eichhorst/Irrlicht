@@ -92,7 +92,7 @@ else
   done <<<"$merges"
 fi
 
-forbidden=$(grep -nE 'gh pr (review|close|checkout|ready)|git (checkout|switch|push|rebase|worktree add|reset)|--force|gh pr merge .*--auto' <<<"$code")
+forbidden=$(grep -nE 'gh pr (review|close|checkout|ready|update-branch)|--remove-label|gh label (delete|edit)|git (checkout|switch|push|rebase|worktree add|reset)|--force|gh pr merge .*--auto' <<<"$code")
 [ -z "$forbidden" ] || fail "the skill's commands include a forbidden one: $forbidden"
 
 # ── --dry-run reaches no write ──────────────────────────────────────────────
@@ -106,7 +106,7 @@ else
       NR >= stop { exit }
       /^[[:space:]]*```/ { inside = !inside; next }
       inside { print NR ": " $0 }' "$SKILL" |
-    grep -E 'gh pr (merge|edit|comment)|gh label create|gh api -X|gh issue (edit|comment)')
+    grep -E 'gh pr (merge|edit|comment|close|ready|update-branch)|gh label (create|edit|delete)|gh api .*(-X|--method)|gh api .* -[fF] |gh issue (edit|comment)')
   [ -z "$early" ] || fail "a write command appears before the --dry-run stop: $early"
 fi
 check top "$(head -20 "$SKILL" | tr '\n' ' ')" 'no label, no comment, no merge, no label creation' \
@@ -117,6 +117,20 @@ check review "$review" 'Read every PR-side file with `git show refs/ir-pr/<N>:<p
   'the review no longer pins PR-side reads to git show'
 check review "$review" 'never run them' 'the review may now run the PR'"'"'s tests'
 check review "$review" '= "$SHA"' 'the fetched ref is no longer checked against the classified head SHA'
+check review "$review" '**Never put a PR path into a command line by hand.**' \
+  'the review no longer forbids putting a PR path into a command'
+check review "$review" 'wrap each one in single quotes' 'PR paths are no longer single-quoted'
+check review "$review" '`unusual-path`: its verdict is `needs-human` without reading' \
+  'a PR with an unusual path may now be reviewed (its names would reach a shell)'
+check review "$review" '**only after step 3'"'"'s merges are done**' \
+  'external reviews may now precede a merge decision'
+
+classify=$(section '^## 1 · Classify$')
+[ -n "$classify" ] || fail "could not find the skill's Classify section"
+check classify "$classify" 'git merge-base --is-ancestor HEAD origin/main' \
+  'the run no longer checks that the checkout carries only main'"'"'s commits'
+check classify "$classify" 'git status --porcelain' 'the run no longer checks that the checkout is clean'
+check classify "$classify" 'a live run refuses and stops' 'a live run on a non-main checkout no longer refuses'
 
 # ── Act: merge pinned to the reviewed SHA, one marker comment ────────────────
 check act "$act" 're-run the classifier' 'a merge no longer re-runs the classifier first'
@@ -127,6 +141,8 @@ check act "$act" 'gh api -X PATCH "repos/{owner}/{repo}/issues/comments/$COMMENT
   'an existing marker comment is no longer edited in place'
 check act "$act" 'Never paste a title, body, commit message or diff line' \
   'the comment may now echo PR text'
+check act "$act" 'A PR whose reasons include an `unreadable:` code gets no label and no comment' \
+  'a PR whose marker could not be read may now get a second marker comment'
 
 # The marker the skill writes is the marker the classifier reads.
 grep -qF '<!-- ir:pr-merge sha=<40-hex head_sha> verdict=<merge|needs-human> -->' "$SKILL" ||

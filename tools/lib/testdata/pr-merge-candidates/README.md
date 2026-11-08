@@ -5,7 +5,7 @@ Payloads served by `gh-stub.sh` to `tools/pr-merge-candidates.sh` under
 
 ## Worlds
 
-- `world/` — 30 PRs, one per decision row. `pr-list.json` answers
+- `world/` — 49 PRs, one per decision row. `pr-list.json` answers
   `gh pr list --json …`, `collaborators.json` answers
   `gh api repos/{owner}/{repo}/collaborators?permission=push`. Each `<N>/`
   holds `comments.json`, `files.json`, `tree.json`, `commits.json`

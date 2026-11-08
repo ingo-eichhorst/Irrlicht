@@ -1,0 +1,3 @@
+a file name ending in a newline under tools/: `safe` must anchor to the
+whole string (jq's `$` also matches before a final newline), so the name is
+unusual and never printed raw.

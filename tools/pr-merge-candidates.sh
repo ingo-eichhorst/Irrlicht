@@ -43,9 +43,10 @@
 # Exit codes:
 #   0  at least one PR is actionable
 #   1  nothing is actionable (the JSON is still printed)
-#   2  REFUSAL — could not look: gh failed (auth, network, rate limit), gh
-#      answered with something that is not the JSON shape asked for, a write
-#      verb reached gh_get, or the open-PR list may be truncated. Nothing is
+#   2  REFUSAL — could not look: gh failed or answered with something that is
+#      not the JSON shape asked for while reading the collaborator list or the
+#      open-PR list, the collaborator list came back empty, or the open-PR list
+#      may be truncated. Nothing is
 #      printed on stdout, so "could not look" never reads as "nothing to do"
 #      (AGENTS.md: "A verification mechanism must fail loudly when it cannot
 #      run").
@@ -53,10 +54,12 @@
 # The Factory gate maps these as: 0 → `factory task run <task>`, 1 → exit 0
 # without starting an agent, 2 → fail the gate so the owner sees it.
 #
-# One PR whose file list cannot be read in full (more files than the API
-# returns, a truncated tree) is NOT a refusal: that PR alone is held, because
-# one oversized PR must not stop the pass for every other PR, and holding it
-# still fails closed.
+# One PR whose own reads fail (an HTTP error on its comments, files, tree or
+# commits) or whose file list cannot be read in full (more files than the API
+# returns, a truncated tree) is NOT a refusal: that PR alone is held, with an
+# `unreadable:<what>` or file-list reason, because one PR must not stop the
+# pass for every other PR, and holding it still fails closed. Only the two
+# global reads, the collaborator list and the open-PR list, refuse the run.
 #
 # Requires bash (3.2 is enough: no associative arrays, no mapfile) and jq.
 set -uo pipefail
@@ -125,7 +128,7 @@ gh_get() {
   gh "$@" >"$TMP/gh.out" 2>"$TMP/gh.err"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "REFUSE: pr-merge-candidates — could not read $label (gh exit $rc): $(head -c 400 "$TMP/gh.err")" >&2
+    echo "pr-merge-candidates: could not read $label (gh exit $rc): $(head -c 400 "$TMP/gh.err")" >&2
     return 2
   fi
   if [ "$want" = array ]; then
@@ -136,7 +139,7 @@ gh_get() {
       "$TMP/gh.out" >"$outfile" 2>/dev/null
   fi
   if [ "$?" -ne 0 ]; then
-    echo "REFUSE: pr-merge-candidates — gh answered with something that is not a JSON $want for $label: $(head -c 200 "$TMP/gh.out")" >&2
+    echo "pr-merge-candidates: gh answered with something that is not a JSON $want for $label: $(head -c 200 "$TMP/gh.out")" >&2
     return 2
   fi
   return 0
@@ -148,16 +151,23 @@ gh_get() {
 # `marker` (the latest trusted marker comment) and `full` (everything else).
 # shellcheck disable=SC2016  # $vars below are jq variables, not shell ones
 JQ_LIB='
-# A string we may print: a path, login, dependency or check name made only of
-# these characters. Anything else (spaces in a path, bidi or zero-width code
-# points, quotes, markup) prints as a placeholder, so a file name cannot carry
-# text into the skill'"'"'s PR comment.
-def safe: if type == "string" and test("^[A-Za-z0-9._/@+-]{1,200}$") then . else "<unusual>" end;
-def safe_check: if type == "string" and test("^[A-Za-z0-9 ._/()@+:-]{1,120}$") then . else "<unusual>" end;
+# A string we may print: a path, login or dependency name made only of these
+# characters, anchored to the whole string (\A…\z: jq'"'"'s `$` also matches
+# before a final newline). Anything else (spaces in a path, bidi or zero-width
+# code points, quotes, markup) prints as a placeholder, so a file name cannot
+# carry text into the skill'"'"'s PR comment.
+def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+-]{1,200}\\z") then . else "<unusual>" end;
 
-# Bidi controls and zero-width characters: the "Trojan Source" and hidden-
-# instruction families. Matched in the title, body and every added line.
-def hidden_unicode: test("[​-‍⁠﻿‪-‮⁦-⁩]");
+# Invisible and direction-changing code points, the "Trojan Source" and
+# hidden-instruction carriers: soft hyphen, Arabic letter mark, Mongolian vowel
+# separator, zero-width space/joiners and LRM/RLM, bidi embeddings, overrides
+# and isolates, invisible operators, BOM, the Unicode tag block (invisible
+# ASCII), and variation selectors. A single U+FE0F after an emoji is ordinary
+# text, so U+FE0F alone is allowed and only a run of two or more selectors
+# counts. Probed with jq 1.7.1: U+200E, U+E0041 and U+FE00 match, "\u26a0\ufe0f"
+# does not. Matched in the title, body and every added line.
+def hidden_unicode:
+  test("[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufe00-\ufe0e]|[\udb40\udc00-\udb40\udc7f]|[\udb40\udd00-\udb40\uddef]|[\ufe00-\ufe0f]{2,}");
 
 def check_name: .name // .context // "";
 # One check-run or status context → pass | pending | failed. Anything this
@@ -176,6 +186,10 @@ def check_success:
   (.__typename == "StatusContext" and .state == "SUCCESS")
   or (.__typename != "StatusContext" and .status == "COMPLETED" and .conclusion == "SUCCESS");
 
+# A check name is chosen by whoever writes the workflow, which a PR can do, so
+# only the required names are printed. Every other check reads as `other`.
+def shown_check($required): check_name as $n | if ($required | any(. == $n)) then $n else "other" end;
+
 def ci_reasons($required):
   (.statusCheckRollup // []) as $checks
   | [ $required[] as $r
@@ -184,8 +198,8 @@ def ci_reasons($required):
         elif ($m | all(check_state != "pass")) then empty
         elif ($m | all(check_success)) then empty
         else "ci-required-not-success:\($r)" end ]
-  + [ $checks[] | select(check_state == "pending") | "ci-pending:\(check_name | safe_check)" ]
-  + [ $checks[] | select(check_state == "failed") | "ci-failed:\(check_name | safe_check)" ];
+  + [ $checks[] | select(check_state == "pending") | "ci-pending:\(shown_check($required))" ]
+  + [ $checks[] | select(check_state == "failed") | "ci-failed:\(shown_check($required))" ];
 
 def mergeable_reasons:
   if .mergeable == "MERGEABLE" and .mergeStateStatus == "CLEAN" then []
@@ -203,7 +217,7 @@ def cheap($required; $collab):
   { number, head_sha: .headRefOid, author: (.author.login // "" | safe),
     tier: login_tier($collab),
     reasons: ((if .isDraft == false then [] else ["draft"] end)
-              + mergeable_reasons + ci_reasons($required)) };
+              + mergeable_reasons + (ci_reasons($required) | unique)) };
 
 # The marker the skill writes. Only a push collaborator'"'"'s comment counts, so
 # an outsider cannot plant a "handled" marker on their own PR.
@@ -217,13 +231,19 @@ def latest_marker($collab):
   | if . == null then null else del(.updated_at) end;
 
 # ── Sensitive paths ──
-# Matched case-insensitively: on a case-insensitive checkout `.Claude/` IS
-# `.claude/`. Both a file'"'"'s new and previous name are matched, so renaming a
-# workflow out of `.github/` is still a hit.
+# The issue'"'"'s list, widened (review of #2129) to agent config an agent loads
+# from anywhere in the tree: nested `.claude/`, other agents'"'"' directories,
+# `.mcp.json`, `CLAUDE.local.md`, and package-manager config (`.npmrc` can set
+# `node-options`, which runs code under npm). Matched case-insensitively: on a
+# case-insensitive checkout `.Claude/` IS `.claude/` (row #131). Both a file'"'"'s
+# new and previous name are matched, so renaming a workflow out of `.github/`
+# is still a hit (row #132).
 def path_rules: [
   {rule: "github",             re: "^\\.github/"},
-  {rule: "agent-config",       re: "^\\.(claude|pi)/"},
-  {rule: "agent-instructions", re: "(^|/)(AGENTS|CLAUDE)\\.md$"},
+  {rule: "agent-config",       re: "(^|/)\\.(claude|pi|codex|cursor|gemini|opencode)/"},
+  {rule: "agent-config",       re: "(^|/)\\.mcp\\.json$"},
+  {rule: "agent-instructions", re: "(^|/)(AGENTS|CLAUDE)(\\.local)?\\.md$"},
+  {rule: "package-manager-config", re: "(^|/)\\.(npmrc|yarnrc|yarnrc\\.yml)$"},
   {rule: "tools",              re: "^tools/"},
   {rule: "install-path",       re: "^site/(install\\.sh|relay\\.sh|appcast\\.xml)$"},
   {rule: "release",            re: "^version\\.json$"},
@@ -375,9 +395,16 @@ jq -n "$JQ_LIB"' 1' >/dev/null 2>&1 || {
 }
 
 # ── Gather and classify ──────────────────────────────────────────────────────
+# refuse_run <what> — a global read failed; nothing can be classified.
+refuse_run() {
+  echo "REFUSE: pr-merge-candidates — could not read $1; nothing was classified" >&2
+  exit 2
+}
+
 # `{owner}/{repo}` is resolved by gh from the checkout or GH_REPO.
 gh_get "$TMP/collab.raw" array "push collaborators" \
-  api --paginate 'repos/{owner}/{repo}/collaborators?permission=push&per_page=100' || exit 2
+  api --paginate 'repos/{owner}/{repo}/collaborators?permission=push&per_page=100' ||
+  refuse_run "the push-collaborator list"
 jq -c '[.[] | .login // empty]' "$TMP/collab.raw" >"$TMP/collab.json" || exit 2
 if [ "$(jq length "$TMP/collab.json")" -eq 0 ]; then
   # Every PR would read as external, which fails closed but would also make a
@@ -387,11 +414,23 @@ if [ "$(jq length "$TMP/collab.json")" -eq 0 ]; then
 fi
 
 gh_get "$TMP/prs.json" array "open pull requests" \
-  pr list --state open --limit "$PRM_LIST_LIMIT" --json "$PRM_PR_FIELDS" || exit 2
+  pr list --state open --limit "$PRM_LIST_LIMIT" --json "$PRM_PR_FIELDS" ||
+  refuse_run "the open-PR list"
 if [ "$(jq length "$TMP/prs.json")" -ge "$PRM_LIST_LIMIT" ]; then
   echo "REFUSE: pr-merge-candidates — $PRM_LIST_LIMIT or more open PRs; the list may be truncated" >&2
   exit 2
 fi
+
+# unreadable <what> — record this PR as held because one of its own reads
+# failed. Only the two global reads (collaborators, the PR list) refuse the
+# whole run: a PR whose files API answers an error (GitHub returns HTTP 422
+# for a diff "taking too long to generate") must not become an off-switch for
+# every other PR. Its marker and content are unknown, so the skill writes
+# nothing on a PR carrying an `unreadable:` reason; it only reports it.
+unreadable() {
+  jq -c --arg what "$1" '. + {decision: "hold", reasons: ["unreadable:\($what)"], sensitive_hits: [], marker: null}' \
+    "$TMP/base.json" >>"$TMP/results.jsonl"
+}
 
 : >"$TMP/results.jsonl"
 for num in $(jq -r '.[].number' "$TMP/prs.json"); do
@@ -405,8 +444,11 @@ for num in $(jq -r '.[].number' "$TMP/prs.json"); do
     continue
   fi
 
-  gh_get "$TMP/comments.json" array "comments on #$num" \
-    api --paginate "repos/{owner}/{repo}/issues/$num/comments?per_page=100" || exit 2
+  if ! gh_get "$TMP/comments.json" array "comments on #$num" \
+    api --paginate "repos/{owner}/{repo}/issues/$num/comments?per_page=100"; then
+    unreadable comments
+    continue
+  fi
   jq -c --slurpfile collab "$TMP/collab.json" \
     "$JQ_LIB"' latest_marker($collab[0])' "$TMP/comments.json" >"$TMP/marker.json" || exit 2
 
@@ -418,13 +460,22 @@ for num in $(jq -r '.[].number' "$TMP/prs.json"); do
     continue
   fi
 
-  gh_get "$TMP/files.json" array "files of #$num" \
-    api --paginate "repos/{owner}/{repo}/pulls/$num/files?per_page=100" || exit 2
-  gh_get "$TMP/tree.json" object "tree of #$num at $head_sha" \
-    api "repos/{owner}/{repo}/git/trees/$head_sha?recursive=1" || exit 2
+  if ! gh_get "$TMP/files.json" array "files of #$num" \
+    api --paginate "repos/{owner}/{repo}/pulls/$num/files?per_page=100"; then
+    unreadable files
+    continue
+  fi
+  if ! gh_get "$TMP/tree.json" object "tree of #$num at $head_sha" \
+    api "repos/{owner}/{repo}/git/trees/$head_sha?recursive=1"; then
+    unreadable tree
+    continue
+  fi
   if [ "$(jq -r '.tier' "$TMP/base.json")" = dependabot ]; then
-    gh_get "$TMP/commits.json" array "commits of #$num" \
-      api --paginate "repos/{owner}/{repo}/pulls/$num/commits?per_page=100" || exit 2
+    if ! gh_get "$TMP/commits.json" array "commits of #$num" \
+      api --paginate "repos/{owner}/{repo}/pulls/$num/commits?per_page=100"; then
+      unreadable commits
+      continue
+    fi
   else
     echo '[]' >"$TMP/commits.json"
   fi

@@ -1,0 +1,101 @@
+[
+ {
+  "sha": "300086314c5e1225e596d37f39502ac5db950f70",
+  "filename": ".Claude/settings.json",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "e31d594e221d28249e0111b4d0ef05f477432e0a",
+  "filename": ".mcp.json",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "bf5fc7d4ca72d100b114645584e9b17b00b2bc64",
+  "filename": "platforms/web/.codex/config.toml",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "13c9952584244dd7bee2f2e37c5bb43f17167d1b",
+  "filename": "core/AGENTS.md",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "a82b39b1008cf8ab846bf132244940030e60266d",
+  "filename": "CLAUDE.local.md",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "457ccf2357b1e7c25664ea379b0e2d9d826a36b4",
+  "filename": "platforms/web/.npmrc",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "85cc362f3214ab961f16e9487cb26e38108a8e0a",
+  "filename": "site/install.sh",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "1ae12eebfbe9eb29dba64ae0f16b70bd220aaa8a",
+  "filename": "version.json",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "73bbfbc8e62ba0e8d5e32a3d69c2735842b0a6d7",
+  "filename": ".gitattributes",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "6455db47df65204b64891eb1272ac1253070af24",
+  "filename": "lib/x.dll",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ },
+ {
+  "sha": "d632295312aa76de7af265738fd7796b2bc9d935",
+  "filename": "platforms/web/app.min.js",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ }
+]

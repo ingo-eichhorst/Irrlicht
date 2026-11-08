@@ -1,0 +1,16 @@
+[
+ {
+  "sha": "551a80718f45442ce5e0f9c8e8d960f76d3c40bc",
+  "author": {
+   "login": "dependabot[bot]",
+   "type": "Bot"
+  },
+  "commit": {
+   "message": "chore(deps): Bump two\n\nBumps a from 1.0.0 to 1.0.1 and b from 2.0.0 to 3.0.0.\n\n---\nupdated-dependencies:\n- dependency-name: alpha\n  dependency-type: indirect\n- dependency-name: beta\n  dependency-type: indirect\n...\n",
+   "verification": {
+    "verified": true,
+    "reason": "valid"
+   }
+  }
+ }
+]

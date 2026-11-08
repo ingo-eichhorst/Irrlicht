@@ -44,12 +44,12 @@ assert_mutation_is_red 'dropping the draft rule is caught' "$S" \
   '#101 draft'
 
 assert_mutation_is_red 'dropping the CI-pending rule is caught' "$S" \
-  '  + [ $checks[] | select(check_state == "pending") | "ci-pending:\(check_name | safe_check)" ]' \
+  '  + [ $checks[] | select(check_state == "pending") | "ci-pending:\(shown_check($required))" ]' \
   '  + []' \
   '#102 CI pending'
 
 assert_mutation_is_red 'dropping the CI-failed rule is caught' "$S" \
-  '  + [ $checks[] | select(check_state == "failed") | "ci-failed:\(check_name | safe_check)" ];' \
+  '  + [ $checks[] | select(check_state == "failed") | "ci-failed:\(shown_check($required))" ];' \
   '  + [];' \
   '#103 CI failed'
 
@@ -207,13 +207,13 @@ assert_mutation_is_red 'exiting 0 when nothing is actionable is caught' "$S" \
   'quiet world'
 
 assert_mutation_is_red 'ignoring a failed gh call is caught' "$S" \
-  $'  if [ "$rc" -ne 0 ]; then\n    echo "REFUSE: pr-merge-candidates — could not read' \
-  $'  if false; then\n    echo "REFUSE: pr-merge-candidates — could not read' \
-  'an HTTP error from the tree API'
+  $'  if [ "$rc" -ne 0 ]; then\n    echo "pr-merge-candidates: could not read' \
+  $'  if false; then\n    echo "pr-merge-candidates: could not read' \
+  '#147 tree API error'
 
 assert_mutation_is_red 'accepting non-JSON from gh is caught' "$S" \
-  $'  if [ "$?" -ne 0 ]; then\n    echo "REFUSE: pr-merge-candidates — gh answered' \
-  $'  if false; then\n    echo "REFUSE: pr-merge-candidates — gh answered' \
+  $'  if [ "$?" -ne 0 ]; then\n    echo "pr-merge-candidates: gh answered' \
+  $'  if false; then\n    echo "pr-merge-candidates: gh answered' \
   'non-JSON from'
 
 assert_mutation_is_red 'a gh write outside gh_get is caught' "$S" \
@@ -230,6 +230,112 @@ assert_mutation_is_red 'letting gh_get run any subcommand is caught' "$S" \
   $'    \'pr list\' | \'api \'*) ;;' \
   '    *) ;;' \
   'gh_get did not refuse'
+
+# ── Rows added after review of #2129 ─────────────────────────────────────────
+assert_mutation_is_red 'printing every check name again is caught' "$S" \
+  'def shown_check($required): check_name as $n | if ($required | any(. == $n)) then $n else "other" end;' \
+  'def shown_check($required): check_name as $n | $n;' \
+  '#143 check name is injection text'
+
+assert_mutation_is_red 'anchoring safe with ^ and $ again is caught' "$S" \
+  'def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+-]{1,200}\\z") then . else "<unusual>" end;' \
+  'def safe: if type == "string" and test("^[A-Za-z0-9._/@+-]{1,200}$") then . else "<unusual>" end;' \
+  '#149 file name ending in a newline'
+
+assert_mutation_is_red 'narrowing hidden_unicode back to zero-width only is caught' "$S" \
+  '  test("[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufe00-\ufe0e]|[\udb40\udc00-\udb40\udc7f]|[\udb40\udd00-\udb40\uddef]|[\ufe00-\ufe0f]{2,}");' \
+  '  test("[\u200b-\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]");' \
+  '#144 tag characters and LRM'
+
+# Each path rule ending in a comma can be deleted outright and the array still
+# parses; #131 holds one file per rule and pins the exact hits.
+for rule in \
+  '  {rule: "agent-config",       re: "(^|/)\\.(claude|pi|codex|cursor|gemini|opencode)/"},' \
+  '  {rule: "agent-config",       re: "(^|/)\\.mcp\\.json$"},' \
+  '  {rule: "agent-instructions", re: "(^|/)(AGENTS|CLAUDE)(\\.local)?\\.md$"},' \
+  '  {rule: "package-manager-config", re: "(^|/)\\.(npmrc|yarnrc|yarnrc\\.yml)$"},' \
+  '  {rule: "install-path",       re: "^site/(install\\.sh|relay\\.sh|appcast\\.xml)$"},' \
+  '  {rule: "release",            re: "^version\\.json$"},' \
+  '  {rule: "git-metadata",       re: "(^|/)\\.git(attributes|modules)$"},' \
+  '  {rule: "binary",             re: "\\.(exe|dll|so|dylib|a|o|bin|jar|war|class|pyc|wasm|node|zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|pkg|deb|rpm|whl|apk|ipa)$"},'; do
+  assert_mutation_is_red "dropping path rule '${rule:9:30}' is caught" "$S" "$rule" '' '#131 every'
+done
+
+# The last entry has no trailing comma, so it is neutralised, not deleted.
+assert_mutation_is_red 'dropping the minified rule is caught' "$S" \
+  '  {rule: "minified",           re: "\\.min\\.(js|mjs|cjs|css)$"}' \
+  '  {rule: "minified",           re: "\\A\\z"}' \
+  '#131 every'
+
+assert_mutation_is_red 'matching paths case-sensitively is caught' "$S" \
+  '  else [ path_rules[] | select(.re as $re | $p | test($re; "i")) | {rule, path: $p} ] end;' \
+  '  else [ path_rules[] | select(.re as $re | $p | test($re)) | {rule, path: $p} ] end;' \
+  '#131 every'
+
+assert_mutation_is_red 'ignoring a renamed file'"'"'s previous name is caught' "$S" \
+  '(if .previous_filename then path_hits(.previous_filename) else [] end)' \
+  '[]' \
+  '#132 renamed out of .github/'
+
+assert_mutation_is_red 'reading a pure rename as opaque is caught' "$S" \
+  '  | (if (.patch == null) and .status != "removed" and ((.status == "renamed" and .changes == 0) | not)' \
+  '  | (if (.patch == null) and .status != "removed"' \
+  '#132 renamed out of .github/'
+
+assert_mutation_is_red 'dropping the too-many-files hold is caught' "$S" \
+  '      + (if ($pr.changedFiles // 0) > $max_files then ["too-many-files"]' \
+  '      + (if false then ["too-many-files"]' \
+  '#133 more files than the API returns'
+
+assert_mutation_is_red 'letting dependabot touch a non-manifest file is caught' "$S" \
+  '   + [ $files[] | select(.filename | test(manifest_re) | not) | "dependabot-non-manifest-file" ])' \
+  '   + [])' \
+  '#134 dependabot non-manifest file'
+
+assert_mutation_is_red 'accepting a dependabot PR with no commits is caught' "$S" \
+  '  ((if ($commits | length) == 0 then ["dependabot-no-commits"] else [] end)' \
+  '  (([])' \
+  '#135 dependabot with no commits'
+
+assert_mutation_is_red 'accepting a commit without dependabot metadata is caught' "$S" \
+  '    | if ($deps | length) == 0 then "dependabot-metadata-missing"' \
+  '    | if false then "dependabot-metadata-missing"' \
+  '#136 dependabot metadata missing'
+
+assert_mutation_is_red 'guessing a version for a multi-dependency commit is caught' "$S" \
+  '          else "dependabot-major-unknown:\($d.name | safe)" end' \
+  '          else empty end' \
+  '#137 dependabot two deps, no type'
+
+assert_mutation_is_red 'accepting a SKIPPED required check is caught' "$S" \
+  '        else "ci-required-not-success:\($r)" end ]' \
+  '        else empty end ]' \
+  '#138 required check SKIPPED'
+
+assert_mutation_is_red 'passing every commit status is caught' "$S" \
+  '    (if .state == "SUCCESS" then "pass"' \
+  '    (if true then "pass"' \
+  '#139 commit status FAILURE'
+
+assert_mutation_is_red 'reading a pending commit status as failed is caught' "$S" \
+  '     elif .state == "PENDING" or .state == "EXPECTED" then "pending"' \
+  '     elif false then "pending"' \
+  '#140 commit status PENDING'
+
+assert_mutation_is_red 'trusting the dependabot login without is_bot is caught' "$S" \
+  '  | if $u == "app/dependabot" and .author.is_bot == true then "dependabot"' \
+  '  | if $u == "app/dependabot" then "dependabot"' \
+  '#141 dependabot login without is_bot'
+
+assert_mutation_is_red 'trusting a collaborator login flagged as a bot is caught' "$S" \
+  '    elif .author.is_bot != true and .isCrossRepository == false and ($collab | any(. == $u)) then "trusted"' \
+  '    elif .isCrossRepository == false and ($collab | any(. == $u)) then "trusted"' \
+  '#142 collaborator login with is_bot'
+
+assert_mutation_is_red 'refusing the whole run on one PR'"'"'s read failure is caught' "$S" \
+  $'    unreadable files\n    continue' \
+  '    exit 2' \
+  'the fixture world must exit 0'
 
 if [[ $fails -gt 0 ]]; then
   echo "pr-merge-candidates-mutations: $fails FAILED"

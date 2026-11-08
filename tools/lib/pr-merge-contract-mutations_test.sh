@@ -137,6 +137,47 @@ assert_mutation_is_red 'a marker the classifier cannot read is caught' \
   'verdict=(?<verdict>merge|hold) -->";' \
   "the classifier's marker regex no longer matches"
 
+# ── Rows added after review of #2129 ─────────────────────────────────────────
+assert_mutation_is_red 'an update-branch command is caught' "$K" \
+  'gh pr edit "$N" --add-label needs-human' \
+  $'gh pr edit "$N" --add-label needs-human\ngh pr update-branch "$N" --rebase' \
+  'include a forbidden one'
+
+assert_mutation_is_red 'a --remove-label command is caught' "$K" \
+  'gh pr edit "$N" --add-label needs-human' \
+  'gh pr edit "$N" --remove-label needs-human' \
+  'include a forbidden one'
+
+assert_mutation_is_red 'a gh api --method write ahead of the dry-run stop is caught' "$K" \
+  'git diff --stat "origin/main...refs/ir-pr/$N"' \
+  $'git diff --stat "origin/main...refs/ir-pr/$N"\ngh api --method POST "repos/{owner}/{repo}/issues/$N/comments" -f body=x' \
+  'a write command appears before the --dry-run stop'
+
+assert_mutation_is_red 'dropping the never-interpolate-a-path rule is caught' "$K" \
+  '**Never put a PR path into a command line by hand.**' \
+  'Prefer not to put PR paths in commands.' \
+  'forbids putting a PR path into a command'
+
+assert_mutation_is_red 'reviewing a PR with an unusual path is caught' "$K" \
+  $'include `unusual-path`: its verdict is\n  `needs-human` without reading;' \
+  'include `unusual-path`: review it carefully;' \
+  'a PR with an unusual path may now be reviewed'
+
+assert_mutation_is_red 'reviewing external PRs before the merges is caught' "$K" \
+  "**only after step 3's merges are done**" \
+  'whenever convenient' \
+  'external reviews may now precede a merge decision'
+
+assert_mutation_is_red 'dropping the main-checkout precondition is caught' "$K" \
+  'git merge-base --is-ancestor HEAD origin/main   # must exit 0' \
+  'git log -1 --oneline' \
+  "checkout carries only main's commits"
+
+assert_mutation_is_red 'writing on an unreadable PR is caught' "$K" \
+  $'A PR whose reasons include an `unreadable:` code gets no label and no\ncomment, live or dry.' \
+  'A PR whose reasons include an `unreadable:` code is held like any other.' \
+  'second marker comment'
+
 # ── AGENTS.md and the skills that merge nothing ─────────────────────────────
 assert_mutation_is_red 'dropping the AGENTS.md short cut is caught' AGENTS.md \
   '- Merge the open PRs that are safe with `/ir:pr-merge [--dry-run]`.' \

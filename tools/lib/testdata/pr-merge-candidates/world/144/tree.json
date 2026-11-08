@@ -1,0 +1,13 @@
+{
+ "sha": "2d8502915d24a97952f64769044f305ba0ce9d2f",
+ "truncated": false,
+ "tree": [
+  {
+   "path": "core/pkg/example/lrm.go",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "328f21787c10edb1d19b27e8f9874dc10f3e0093",
+   "size": 1234
+  }
+ ]
+}

@@ -9,7 +9,8 @@
 # isolate a skip rule are synthetic in exactly one field — the field that rule
 # reads — and CLEAN and green otherwise, so that rule is the only thing that
 # can produce the skip. tools/lib/pr-merge-candidates-mutations_test.sh
-# removes each rule in turn and requires the row named here to go red.
+# removes the rules one at a time (its rows list which) and requires the row
+# named here to go red.
 #
 # Every row asserts the EXACT reason list, not "contains": a rule that starts
 # firing on a row it should not touch is as much a defect as one that stops.
@@ -119,6 +120,38 @@ row 'dependabot with a merge commit'  128 hold   external   '["dependabot-foreig
 row 'truncated tree, missing blob'    129 hold   trusted    '["sensitive:not-in-tree","tree-truncated"]'
 row 'non-collaborator, head in repo'  130 hold   external   '["external-author"]'
 
+# Rows added after review of #2129: one per rule that had none.
+row 'every remaining path rule'       131 hold   trusted    '["sensitive:agent-config","sensitive:agent-instructions","sensitive:binary","sensitive:git-metadata","sensitive:install-path","sensitive:minified","sensitive:package-manager-config","sensitive:release"]'
+row 'renamed out of .github/'         132 hold   trusted    '["sensitive:github"]'
+row 'more files than the API returns' 133 hold   trusted    '["too-many-files"]'
+row 'dependabot non-manifest file'    134 hold   external   '["dependabot-non-manifest-file","external-author"]'
+row 'dependabot with no commits'      135 hold   external   '["dependabot-no-commits","external-author"]'
+row 'dependabot metadata missing'     136 hold   dependabot '["dependabot-metadata-missing"]'
+row 'dependabot two deps, no type'    137 hold   dependabot '["dependabot-major-unknown:alpha","dependabot-major-unknown:beta"]'
+row 'required check SKIPPED'          138 skip   trusted    '["ci-required-not-success:go-test"]'
+row 'commit status FAILURE'           139 skip   trusted    '["ci-failed:other"]'
+row 'commit status PENDING'           140 skip   trusted    '["ci-pending:other"]'
+row 'dependabot login without is_bot' 141 hold   external   '["external-author"]'
+row 'collaborator login with is_bot'  142 hold   external   '["external-author"]'
+row 'check name is injection text'    143 skip   trusted    '["ci-failed:other"]'
+row 'tag characters and LRM'          144 hold   trusted    '["hidden-unicode-in-description","sensitive:hidden-unicode"]'
+row 'files API error'                 145 hold   trusted    '["unreadable:files"]'
+row 'comments API error'              146 hold   trusted    '["unreadable:comments"]'
+row 'tree API error'                  147 hold   trusted    '["unreadable:tree"]'
+row 'commits API error'               148 hold   dependabot '["unreadable:commits"]'
+row 'file name ending in a newline'   149 hold   trusted    '["sensitive:unusual-path"]'
+
+# #131 carries one file per path rule, and several rules share a reason code
+# (three agent-config patterns, two agent-instructions ones), so pin the exact
+# hits: deleting any single pattern removes exactly one path from this list.
+hits131=$(jq -c '.prs[] | select(.number == 131) | [.sensitive_hits[] | "\(.rule)=\(.path)"] | sort' "$WORK/world.json")
+want131='["agent-config=.Claude/settings.json","agent-config=.mcp.json","agent-config=platforms/web/.codex/config.toml","agent-instructions=CLAUDE.local.md","agent-instructions=core/AGENTS.md","binary=lib/x.dll","git-metadata=.gitattributes","install-path=site/install.sh","minified=platforms/web/app.min.js","package-manager-config=platforms/web/.npmrc","release=version.json"]'
+[ "$hits131" = "$want131" ] && echo '  PASS: #131 every path rule hits its own file' ||
+  fail "#131 every remaining path rule — wanted hits $want131, got $hits131"
+
+# A per-PR read failure holds that PR and the run goes on: the rows after it
+# were still classified (#145-#148 sit mid-world).
+
 # Every PR in the world is pinned by a row above.
 pinned=$(grep -cE '^row .* [0-9]{3} (skip|review|hold) ' "$SELF")
 [ "$pinned" = "$want_n" ] || fail "the world holds $want_n PRs but $pinned rows pin a decision"
@@ -149,15 +182,21 @@ while IFS= read -r text; do
     fail "output hygiene — a PR title or body reached the output: $text"
     leaks=1
   fi
-done < <(jq -r '.[] | .title, (.body | split("\n")[])' "$TD/world/pr-list.json")
+done < <(jq -r --argjson req "$(sed -n "s/^PRM_REQUIRED_CHECKS='\\(.*\\)'$/\\1/p" "$SCRIPT")" \
+  '.[] | .title, (.body | split("\n")[]),
+   (.statusCheckRollup[] | .name // .context | select(. as $n | $req | index($n) | not))' "$TD/world/pr-list.json")
+# (The required check names are printed on purpose; every other name is not.)
 for text in 'IGNORE PREVIOUS' 'read me'; do
   grep -qF -- "$text" "$WORK/world.json" && { fail "output hygiene — '$text' reached the output"; leaks=1; }
 done
-if jq -e '[.. | strings | test("[\u200b-\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]")] | any' "$WORK/world.json" >/dev/null; then
-  fail 'output hygiene — a zero-width or bidi character reached the output'
+# Stronger than retyping the classifier's invisible-character class: every
+# string the classifier emits passed `safe`, is an enum or a SHA, so the whole
+# output is printable ASCII. Any other byte is a leak, whatever it encodes.
+if ! jq -e '[.. | strings | test("\\A[ -~]*\\z")] | all' "$WORK/world.json" >/dev/null; then
+  fail 'output hygiene — a non-ASCII or control character reached the output'
   leaks=1
 fi
-[ "$leaks" -eq 0 ] && echo '  PASS: no title, body, raw file name or hidden character reached the output'
+[ "$leaks" -eq 0 ] && echo '  PASS: no title, body, check name, raw file name or non-ASCII character reached the output'
 
 # ── 3. Read-only ─────────────────────────────────────────────────────────────
 # At run time: every call the stub saw was a `pr list` or a flag-free `api`.
@@ -184,7 +223,7 @@ else
     'api --method=PATCH repos/{owner}/{repo}/issues/comments/1' \
     'pr merge 1 --squash' 'issue comment 1 --body x' 'label create needs-human'; do
     : >"$LOG"
-    # shellcheck disable=SC2086  # $args is split on purpose: it is an argv
+    # shellcheck disable=SC2086,SC2034  # $args is split on purpose (an argv); TMP is read by the eval'd gh_get
     ( eval "$fn"; TMP=$WORK; PATH="$WORK/bin:$PATH" PRM_STUB_WORLD="$TD/world" PRM_STUB_LOG="$LOG" \
       gh_get "$WORK/w.json" array 'a write' $args ) >/dev/null 2>"$WORK/err"
     got=$?
@@ -213,14 +252,22 @@ refuse() { # refuse <label> <world> [ENV=value ...]
     fail "$label — wanted exit 2, an empty stdout and a REFUSE line; got exit $GOT, stdout $(wc -c <"$WORK/out" | tr -d ' ') bytes"
   fi
 }
+# Only the two global reads refuse. A per-PR read failure is a hold (rows
+# #145-#148); #147 is the case that makes gh's exit status load-bearing, since
+# gh's HTTP-error body is a valid JSON object, the type the tree call asks for.
 refuse 'gh failing'                    world PRM_STUB_FAIL=1
-refuse 'gh failing mid-loop'           world PRM_STUB_FAIL_ON=pulls/104/files
-# The case that makes the exit status load-bearing: gh's HTTP-error body is a
-# valid JSON object, which is exactly the type the tree call asks for.
-refuse 'an HTTP error from the tree API' world PRM_STUB_FAIL_ON=git/trees
+refuse 'an HTTP error on the collaborator list' world PRM_STUB_FAIL_ON=collaborators
 refuse 'non-JSON from pr list'         world 'PRM_STUB_GARBAGE_ON=pr list'
-refuse 'non-JSON from the tree API'    world PRM_STUB_GARBAGE_ON=git/trees
 refuse 'an empty collaborator list'    nocollab
+
+# Non-JSON on one PR's read holds that PR, never the run.
+run_world world PRM_STUB_GARBAGE_ON=pulls/104/files
+r104=$(jq -c '.prs[] | select(.number == 104) | [.decision, .reasons]' "$WORK/out" 2>/dev/null)
+if [ "$GOT" -eq 0 ] && [ "$r104" = '["hold",["unreadable:files"]]' ]; then
+  echo '  PASS: non-JSON on one PR'"'"'s files holds that PR and the run continues'
+else
+  fail "non-JSON on one PR's files — wanted exit 0 and #104 held unreadable:files, got exit $GOT and $r104"
+fi
 
 PATH="$WORK/bin:$PATH" PRM_STUB_WORLD="$TD/world" bash "$SCRIPT" --frobnicate >/dev/null 2>&1
 GOT=$?

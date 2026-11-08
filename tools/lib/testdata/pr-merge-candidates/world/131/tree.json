@@ -1,0 +1,83 @@
+{
+ "sha": "6cb34615b34a37264ea510ab595056873b6ea03f",
+ "truncated": false,
+ "tree": [
+  {
+   "path": ".Claude/settings.json",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "300086314c5e1225e596d37f39502ac5db950f70",
+   "size": 1234
+  },
+  {
+   "path": ".mcp.json",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "e31d594e221d28249e0111b4d0ef05f477432e0a",
+   "size": 1234
+  },
+  {
+   "path": "platforms/web/.codex/config.toml",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "bf5fc7d4ca72d100b114645584e9b17b00b2bc64",
+   "size": 1234
+  },
+  {
+   "path": "core/AGENTS.md",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "13c9952584244dd7bee2f2e37c5bb43f17167d1b",
+   "size": 1234
+  },
+  {
+   "path": "CLAUDE.local.md",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "a82b39b1008cf8ab846bf132244940030e60266d",
+   "size": 1234
+  },
+  {
+   "path": "platforms/web/.npmrc",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "457ccf2357b1e7c25664ea379b0e2d9d826a36b4",
+   "size": 1234
+  },
+  {
+   "path": "site/install.sh",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "85cc362f3214ab961f16e9487cb26e38108a8e0a",
+   "size": 1234
+  },
+  {
+   "path": "version.json",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "1ae12eebfbe9eb29dba64ae0f16b70bd220aaa8a",
+   "size": 1234
+  },
+  {
+   "path": ".gitattributes",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "73bbfbc8e62ba0e8d5e32a3d69c2735842b0a6d7",
+   "size": 1234
+  },
+  {
+   "path": "lib/x.dll",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "6455db47df65204b64891eb1272ac1253070af24",
+   "size": 1234
+  },
+  {
+   "path": "platforms/web/app.min.js",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "d632295312aa76de7af265738fd7796b2bc9d935",
+   "size": 1234
+  }
+ ]
+}
