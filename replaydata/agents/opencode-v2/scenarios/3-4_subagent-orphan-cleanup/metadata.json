@@ -56,7 +56,7 @@
         "It creates one session over POST /api/session at <staging>/cwd, waits for the service log to show the plugin the daemon installed loading for that location with no load failure, then drives the script; the session's session_message rows are exported read-only as the transcript",
         "Service window (#2109 Q1, approved for this cell only): the operator exports OC2_SERVICE_WINDOW=1, records the sandbox service's identity first, and restores it afterwards with the sandbox's own start command; the driver signals the service but never starts one",
         "settings allow the shell tool in RUN_CWD/opencode.json, so the child's `sleep 30` runs without an ask",
-        "send; await_child until the child's shell tool runs; sigkill the service (every slot exported first); 15s"
+        "send; await_child until the child's shell tool runs; sigkill the service (every slot exported first); 15s. The prompt keeps the shell in the foreground: the first attempt's child set the shell tool's background:true, so the tool completed at once and was never seen running (the run timed out before any signal)"
       ],
       "settings": {
         "permission": {
@@ -67,7 +67,7 @@
       "script": [
         {
           "type": "send",
-          "text": "Use the task tool to launch a subagent (the built-in 'general' agent) that runs the shell command `sleep 30` and then replies with exactly the word: finished. Wait for that subagent to finish, then reply with exactly the word: done."
+          "text": "Use the task tool to launch a subagent (the built-in 'general' agent) that runs the shell command `sleep 30` in the FOREGROUND (the shell tool's background option must stay false) and then replies with exactly the word: finished. Wait for that subagent to finish, then reply with exactly the word: done."
         },
         {
           "type": "await_child",
