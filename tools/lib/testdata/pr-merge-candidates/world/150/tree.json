@@ -1,0 +1,13 @@
+{
+ "sha": "88da1f3f7e6eecb2c264a8374f057353286f8a1a",
+ "truncated": false,
+ "tree": [
+  {
+   "path": ".claude/skills/ir:example/SKILL.md",
+   "mode": "100644",
+   "type": "blob",
+   "sha": "0e676a669f565fa0790a5b663aebb729aa254e1a",
+   "size": 1234
+  }
+ ]
+}

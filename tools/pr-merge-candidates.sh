@@ -146,10 +146,12 @@ gh_get() {
 JQ_LIB='
 # A string we may print: a path, login or dependency name made only of these
 # characters, anchored to the whole string (\A…\z: jq'"'"'s `$` also matches
-# before a final newline). Anything else (spaces in a path, bidi or zero-width
+# before a final newline). `:` is in the set because every skill directory in
+# this repository is named `ir:<name>` (row #150), and it is not a shell
+# metacharacter. Anything else (spaces in a path, bidi or zero-width
 # code points, quotes, markup) prints as a placeholder, so a file name cannot
 # carry text into the skill'"'"'s PR comment.
-def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+-]{1,200}\\z") then . else "<unusual>" end;
+def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+:-]{1,200}\\z") then . else "<unusual>" end;
 
 # Invisible and direction-changing code points, the "Trojan Source" and
 # hidden-instruction carriers: soft hyphen, Arabic letter mark, Mongolian vowel

@@ -238,8 +238,8 @@ assert_mutation_is_red 'printing every check name again is caught' "$S" \
   '#143 check name is injection text'
 
 assert_mutation_is_red 'anchoring safe with ^ and $ again is caught' "$S" \
-  'def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+-]{1,200}\\z") then . else "<unusual>" end;' \
-  'def safe: if type == "string" and test("^[A-Za-z0-9._/@+-]{1,200}$") then . else "<unusual>" end;' \
+  'def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+:-]{1,200}\\z") then . else "<unusual>" end;' \
+  'def safe: if type == "string" and test("^[A-Za-z0-9._/@+:-]{1,200}$") then . else "<unusual>" end;' \
   '#149 file name ending in a newline'
 
 assert_mutation_is_red 'narrowing hidden_unicode back to zero-width only is caught' "$S" \
@@ -350,6 +350,13 @@ assert_mutation_is_red 'printing a PR title is caught by the hygiene check' "$S"
   '  { number, head_sha: .headRefOid, author: (.author.login // "" | safe),' \
   '  { number, head_sha: .headRefOid, author: .title,' \
   'output hygiene'
+
+# Every skill directory here is `ir:<name>`. Without `:` in the safe set the
+# skill path reads as <unusual> and the agent-config rule never names it.
+assert_mutation_is_red 'dropping : from the safe set is caught' "$S" \
+  'def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+:-]{1,200}\\z") then . else "<unusual>" end;' \
+  'def safe: if type == "string" and test("\\A[A-Za-z0-9._/@+-]{1,200}\\z") then . else "<unusual>" end;' \
+  '#150 a skill file (ir:<name>)'
 
 if [[ $fails -gt 0 ]]; then
   echo "pr-merge-candidates-mutations: $fails FAILED"

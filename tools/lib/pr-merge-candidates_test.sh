@@ -140,6 +140,7 @@ row 'comments API error'              146 skip   trusted    '["unreadable:commen
 row 'tree API error'                  147 hold   trusted    '["unreadable:tree"]'
 row 'commits API error'               148 hold   dependabot '["unreadable:commits"]'
 row 'file name ending in a newline'   149 hold   trusted    '["sensitive:unusual-path"]'
+row 'a skill file (ir:<name>)'        150 hold   trusted    '["sensitive:agent-config"]'
 
 # #131 carries one file per path rule, and several rules share a reason code
 # (three agent-config patterns, two agent-instructions ones), so pin the exact

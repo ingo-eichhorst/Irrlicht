@@ -174,8 +174,8 @@ assert_mutation_is_red 'dropping the main-checkout precondition is caught' "$K" 
   "checkout carries only main's commits"
 
 assert_mutation_is_red 'quoting a path filter the classifier does not use is caught' "$K" \
-  $'whole name is made of `[A-Za-z0-9._/@+-]`.' \
-  $'whole name is made of `[A-Za-z0-9._/@+~-]`.' \
+  $'whole name is made of `[A-Za-z0-9._/@+:-]`.' \
+  $'whole name is made of `[A-Za-z0-9._/@+:~-]`.' \
   "but the classifier's safe filter is"
 
 assert_mutation_is_red 'any other skill gaining a merge is caught' .claude/skills/ir:triage/SKILL.md \

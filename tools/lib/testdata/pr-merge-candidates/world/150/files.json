@@ -1,0 +1,11 @@
+[
+ {
+  "sha": "0e676a669f565fa0790a5b663aebb729aa254e1a",
+  "filename": ".claude/skills/ir:example/SKILL.md",
+  "status": "modified",
+  "additions": 1,
+  "deletions": 1,
+  "changes": 2,
+  "patch": "@@ -1 +1 @@\n-a\n+b\n"
+ }
+]

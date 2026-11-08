@@ -118,7 +118,7 @@ is `needs-human` without reading.
 **Never put a PR path into a command line by hand.** A file name is
 attacker text, and in a shell `$(…)`, backticks and `;` inside it run. Every
 PR you review passed the classifier's `safe` filter on every file name: the
-whole name is made of `[A-Za-z0-9._/@+-]`. Take paths only from
+whole name is made of `[A-Za-z0-9._/@+:-]`. Take paths only from
 `git diff -z --name-only "origin/main...refs/ir-pr/$N"`, wrap each one in
 single quotes, and never put a path with any other character into a command.
 
@@ -225,7 +225,7 @@ decided at this head SHA. A new push gets a fresh decision.
 
 Build it only from the classifier's fields and your own findings. A path in a
 finding must pass the same `safe` filter (the whole name made of
-`[A-Za-z0-9._/@+-]`); write any other path as `<unusual>`. Never paste a
+`[A-Za-z0-9._/@+:-]`); write any other path as `<unusual>`. Never paste a
 title, body, commit message or diff line.
 
 A held PR stays held. The marker skips it at the same SHA, and the
