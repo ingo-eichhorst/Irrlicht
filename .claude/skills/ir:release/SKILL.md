@@ -378,24 +378,43 @@ from `gh api`, the token is missing the `security_events` scope:
 > ```
 >
 > **On the factory build host** (`ssh factory`: Command Line Tools only, no
-> Xcode), the credentials live in a dedicated keychain and a key file;
-> `~/.config/irrlicht-release/SETUP.md` there records the setup. Add
-> `NOTARYTOOL_KEYCHAIN="$HOME/Library/Keychains/irrlicht-release.keychain-db"`
-> to the command above, and set
-> `SPARKLE_ED_KEY_FILE="$HOME/.config/irrlicht-release/sparkle_ed25519_private.key"`
-> for the Sparkle step. Without Xcode the script builds the Swift app once per
-> arch and joins the two with `lipo`. A keychain is unlocked per login session:
-> an unlock in an `ssh -t factory` window does not reach an agent's session,
-> and the script's signing preflight then fails in seconds. Unlock it inside
-> the agent's session without the agent seeing the password through a pipe.
-> The agent runs, in the background,
-> `F=~/.config/irrlicht-release/unlock.fifo; mkfifo -m 600 "$F"; security unlock-keychain ~/Library/Keychains/irrlicht-release.keychain-db < "$F" >/dev/null 2>&1; rm -f "$F"`.
-> The maintainer then runs, in an `ssh -t factory` window,
-> `printf 'Keychain password: '; read -rs KCPW; echo; printf '%s\n' "$KCPW" > ~/.config/irrlicht-release/unlock.fifo; unset KCPW`.
-> The keychain locks again after an hour idle, so unlock it right before this
-> step. The launch tests in step 7 below and in Step 9 take
-> `IRRLICHT_SMOKE_PORT` and `IRRLICHT_CANARY_APP`: there, port 7839 is the
-> relay's and the production app runs from `~/Applications`.
+> Xcode), the credentials live in a dedicated keychain and a key file, and
+> `~/.config/irrlicht-release/SETUP.md` there records the setup. Every
+> variable the release needs is in `~/.config/irrlicht-release/release.env`,
+> which holds names and paths and no secret. Load it, then run the script with
+> no inline variables:
+>
+> ```bash
+> source ~/.config/irrlicht-release/release.env && tools/build-release.sh
+> ```
+>
+> - **Variables it sets:** `DEVELOPER_ID`, `NOTARYTOOL_KEYCHAIN_PROFILE`,
+>   `NOTARYTOOL_KEYCHAIN` (the release keychain),
+>   `RELEASE_KEYCHAIN_PASSWORD_FILE`, `SPARKLE_ED_KEY_FILE`,
+>   `IRRLICHT_SMOKE_PORT` and `IRRLICHT_CANARY_APP`.
+> - **Nobody types a password.** A keychain is unlocked per login session, so
+>   an unlock in an `ssh -t factory` window never reaches an agent's session.
+>   Instead, the script unlocks the release keychain in its own session from
+>   `RELEASE_KEYCHAIN_PASSWORD_FILE` (mode 600; `tools/release-keychain.sh`
+>   refuses anything looser) and locks it again on exit. It prints
+>   `Release keychain: unlocked` before the build and `locked again` after.
+> - **Fallback when the password file is missing.** The preflight then fails
+>   in seconds. Unlock through a pipe so the agent never sees the password:
+>   - The agent runs, in the background,
+>     `F=~/.config/irrlicht-release/unlock.fifo; mkfifo -m 600 "$F"; security unlock-keychain ~/Library/Keychains/irrlicht-release.keychain-db < "$F" >/dev/null 2>&1; rm -f "$F"`.
+>   - The maintainer runs, in an `ssh -t factory` window,
+>     `printf 'Keychain password: '; read -rs KCPW; echo; printf '%s\n' "$KCPW" > ~/.config/irrlicht-release/unlock.fifo; unset KCPW`.
+> - **Without Xcode** the script builds the Swift app once per arch and joins
+>   the two with `lipo`.
+> - **Launch tests.** Step 7 below and Step 9 use `IRRLICHT_SMOKE_PORT` and
+>   `IRRLICHT_CANARY_APP`, because there port 7839 is the relay's and the
+>   production app runs from `~/Applications`.
+>
+> The Swift release build uses its own scratch directory, `.build/swift`,
+> which the script deletes before every build. It never reads the dev cache in
+> `platforms/macos/.build`, which on the factory host once held another Mac's
+> paths and broke the v0.6.8 build. Sparkle's `sign_update` is therefore at
+> `.build/swift/artifacts/sparkle/Sparkle/bin/sign_update` after the build.
 >
 > It builds the universal daemon + `irrlicht-focus` + `irrlicht-ls` (embedded
 > in the bundle; the PKG postinstall symlinks `irrlicht-ls` into
@@ -783,7 +802,9 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    On the factory build host it is a file instead, named by
    `SPARKLE_ED_KEY_FILE` (see the Step 6 banner).
    ```bash
-   SIGN_UPDATE="platforms/macos/.build/artifacts/sparkle/Sparkle/bin/sign_update"
+   # build-release.sh's own Swift scratch directory, not platforms/macos/.build.
+   SIGN_UPDATE=".build/swift/artifacts/sparkle/Sparkle/bin/sign_update"
+   [ -x "$SIGN_UPDATE" ] || { echo "FAIL: $SIGN_UPDATE missing; did tools/build-release.sh run?"; exit 1; }
    # sign_update emits a single line like:
    #   sparkle:edSignature="…" length="…"
    if [ -n "${SPARKLE_ED_KEY_FILE:-}" ]; then
