@@ -80,7 +80,7 @@ Irrlicht writes like a quietly confident German open-source maintainer. Copy is 
 - **Second-person, active, present-tense.** *"You don't know which session needs you."* / *"Install, run, and Irrlicht discovers your sessions automatically."*
 - **Problem-led, not feature-led.** Marketing copy names the pain first (*"Parallel sessions shred your attention"*), then the fix.
 - **Receipts.** Technical claims carry citations — GitHub issues, dev.to, The Register. No vague *"studies show."*
-- **Literary openings, mechanical endings.** A block often opens with the Faust line or an italic aside, then drops into a deterministic `Transcript Files → FSEvents → State Machine → Menu Bar` diagram.
+- **Literary openings, mechanical endings.** A block often opens with the Faust line or an italic aside, then drops into a deterministic `Transcript files → kqueue (fsnotify) → state machine → menu bar` diagram.
 
 ### Tone & vibe
 

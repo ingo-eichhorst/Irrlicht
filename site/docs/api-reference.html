@@ -202,7 +202,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.6.7"
+  "version": "0.6.8"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -676,6 +676,11 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td><code>SessionMetrics</code> object (see below)</td>
           </tr>
           <tr>
+            <td><code>account_binding</code></td>
+            <td>object</td>
+            <td>Which account this session&rsquo;s quota readings are attributed to (Claude Code and Codex sessions only, behind the consent each adapter&rsquo;s account entry in <a href="adapters.html">Adapters</a> names): <code>decided</code>, <code>ref</code> (the account; absent when unconfirmed), <code>confirmed_at</code> (last unix second the session&rsquo;s agent home was seen still logged into <code>ref</code>) and <code>cleared_at</code> (last unix second a reading may still carry <code>ref</code>; absent while bound). Decided once: a session binds only to an account its home already held, unchanged, when the session began; a later account change sets <code>cleared_at</code>, a withdrawn consent drops <code>ref</code>, and neither is undone. Each reading it covers carries the same account in the <code>rate_limit</code> snapshot&rsquo;s <code>confirmed_account_ref</code>, which the menu bar and dashboard use to give each account its own quota chip. Absent until decided</td>
+          </tr>
+          <tr>
             <td><code>parent_session_id</code></td>
             <td>string</td>
             <td>ID of the parent session, if this is a sub-agent</td>
@@ -973,7 +978,7 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
           <tr>
             <td><code>rate_limit</code></td>
             <td>object</td>
-            <td>Most recent subscription quota snapshot for this session, including <code>windows</code> (each with <code>used_percent</code>, <code>window_minutes</code>, <code>resets_at</code>), <code>plan_type</code>, <code>credits</code>, <code>reached_type</code> and <code>sampled_at</code>; absent when the provider surfaces no quota or none has arrived yet</td>
+            <td>Most recent subscription quota snapshot for this session, including <code>windows</code> (each with <code>used_percent</code>, <code>window_minutes</code>, <code>resets_at</code>), <code>plan_type</code>, <code>credits</code>, <code>reached_type</code>, <code>sampled_at</code> and <code>confirmed_account_ref</code> (the account the reading is attributed to, from <code>account_binding</code>; absent when unconfirmed); absent when the provider surfaces no quota or none has arrived yet</td>
           </tr>
           <tr>
             <td><code>rate_limit_forecast_eta</code></td>
