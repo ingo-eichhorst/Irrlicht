@@ -55,9 +55,10 @@ enum QuotaMenuBarRenderer {
     /// freshest renderable snapshot (ties by provider key ascending), the
     /// documented "whichever provider reported most recently". D1 applies only
     /// WITHIN that provider. Its candidates are bucketed by
-    /// `RateLimitInfo.accountBucketKey` — the same key the popover uses —
-    /// keeping, inside one account, the fresh-over-stale then newest-
-    /// `sampledAt` snapshot. ACROSS that provider's accounts the choice is:
+    /// `RateLimitInfo.accountBucketKey` — the same key the popover uses, so
+    /// all of the provider's unconfirmed sessions count as ONE account here
+    /// (#2136) — keeping, inside one account, the fresh-over-stale then
+    /// newest-`sampledAt` snapshot. ACROSS that provider's accounts the choice is:
     /// fresh before stale, then the highest imminent `usedPercent` (nil
     /// imminent = 0), ties by bucket key ascending. Freshest-`sampledAt`
     /// across accounts is the bug this replaces: two accounts ticking
@@ -85,7 +86,7 @@ enum QuotaMenuBarRenderer {
             guard let snap = s.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
             return Candidate(
                 provider: snap.bucketProviderKey(adapter: s.adapter),
-                key: snap.accountBucketKey(adapter: s.adapter, sessionID: s.id),
+                key: snap.accountBucketKey(adapter: s.adapter),
                 info: snap,
                 stale: SessionListView.snapshotIsStale(snap, now: now))
         }

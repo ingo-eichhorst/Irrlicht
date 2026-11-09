@@ -241,10 +241,11 @@ function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
   }
 }
 
-// Fold session snapshots into one bucket per account (per session while
-// unconfirmed). Rules mirror macOS mergeIntoBuckets: subscription beats usage;
-// fresh beats stale; among same-staleness snapshots, the highest sampled_at
-// wins. Exported for quotaChips.test.js.
+// Fold session snapshots into one bucket per confirmed account, plus one
+// "Account unconfirmed" bucket per provider for every snapshot whose account
+// is not confirmed (#2136). Rules mirror macOS mergeIntoBuckets: subscription
+// beats usage; fresh beats stale; among same-staleness snapshots, the highest
+// sampled_at wins. Exported for quotaChips.test.js.
 export function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
@@ -259,10 +260,13 @@ export function bucketChips(sessions, nowMs) {
     const confirmedProvider = providerKeyFor(snap, s.adapter);
     const providerKey = confirmedProvider || ('unknown:' + (s.adapter || ''));
     // An account ref only counts when the provider is confirmed (the ref is
-    // meaningless against an inferred provider). Unconfirmed snapshots get a
-    // per-session bucket so they never merge with another session's (#2095).
+    // meaningless against an inferred provider). Every unconfirmed snapshot of
+    // one provider shares that provider's one unconfirmed bucket, so N
+    // sessions on one subscription show one chip, not N (#2136, revising
+    // #2095's D3, which gave each unconfirmed session a bucket of its own). A
+    // confirmed account keeps its own bucket and never merges with it.
     const accountRef = (confirmedProvider && snap.confirmed_account_ref) || '';
-    const key = providerKey + '|' + (accountRef || ('session:' + s.session_id));
+    const key = providerKey + '|' + (accountRef || 'unconfirmed');
     const mode = chipModeFor(snap, providerKey);
     const hasWindows = Array.isArray(snap.windows) && snap.windows.length > 0;
     // A subscription-mode snapshot with nothing to show — no windows, no
