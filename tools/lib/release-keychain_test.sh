@@ -45,7 +45,30 @@ fail() {
 TMP=$(mktemp -d -t release-keychain-test) || { echo "FAIL: $NAME — mktemp"; exit 1; }
 KC="$TMP/throwaway.keychain-db"
 SEARCH_BEFORE=$(security list-keychains -d user)
+
+# Watchdog: a keychain call that waits on a dialog must fail this file, not
+# hold the suite. The first version of this test hung on GitHub's macOS runner
+# (run 42707412360): it printed nothing between its header (22:38:27) and the
+# cancel 23 minutes later, so it stopped during setup. Setup then created and
+# locked the throwaway keychain and read its state with
+# `security show-keychain-info`, the call most likely to wait on an unlock
+# dialog in a session that allows UI. The log does not say which of the three
+# it was. State is now read without that command (see state), setup prints
+# each step, and this watchdog fails the file instead of the job's six-hour
+# timeout. Every process holding the temp dir is killed, then this shell; its
+# TERM trap exits 1 and the EXIT trap cleans up.
+WATCHDOG_SECS=${RELEASE_KEYCHAIN_TEST_WATCHDOG_SECS:-180}
+( sleep "$WATCHDOG_SECS"
+  echo "FAIL: $NAME — still running after ${WATCHDOG_SECS}s; killing it (a keychain call is waiting on something)"
+  pkill -f "$TMP"
+  kill -TERM $$ ) 2>/dev/null &
+WATCHDOG=$!
+disown "$WATCHDOG" 2>/dev/null || true
+trap 'echo "FAIL: $NAME — stopped by its watchdog"; exit 1' TERM
+
 cleanup() {
+    pkill -P "$WATCHDOG" 2>/dev/null
+    kill "$WATCHDOG" 2>/dev/null
     [[ -e "$KC" ]] && security delete-keychain "$KC" >/dev/null 2>&1
     rm -rf "$TMP"
 }
@@ -54,10 +77,28 @@ trap cleanup EXIT
 # The throwaway password goes on argv once, to create the keychain. It guards
 # nothing.
 PW=$(openssl rand -hex 16)
+echo "setup: creating a throwaway keychain"
 security create-keychain -p "$PW" "$KC" || { echo "FAIL: $NAME — cannot create a throwaway keychain"; exit 1; }
 ( umask 077; printf '%s\n' "$PW" > "$TMP/pw"; printf 'not-the-password\n' > "$TMP/wrong" )
 
-state() { security show-keychain-info "$KC" >/dev/null 2>&1 && echo unlocked || echo locked; }
+# state — the throwaway keychain's lock state, read independently of the tool
+# (its own SecKeychainGetStatus call, written separately here), and never
+# through `security show-keychain-info`, which can prompt (see WATCHDOG_SECS).
+# Prints "error" when the status cannot be read, which matches no assertion.
+state() {
+    python3 - "$KC" <<'PY' 2>/dev/null || echo error
+import ctypes, sys
+sec = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+sec.SecKeychainOpen.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+sec.SecKeychainOpen.restype = ctypes.c_int32
+sec.SecKeychainGetStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+sec.SecKeychainGetStatus.restype = ctypes.c_int32
+ref, st = ctypes.c_void_p(), ctypes.c_uint32()
+if sec.SecKeychainOpen(sys.argv[1].encode(), ctypes.byref(ref)) or sec.SecKeychainGetStatus(ref, ctypes.byref(st)):
+    sys.exit(1)
+print("unlocked" if st.value & 1 else "locked")
+PY
+}
 relock() { security lock-keychain "$KC"; [[ "$(state)" == locked ]] || { echo "FAIL: $NAME — cannot relock the throwaway keychain"; exit 1; }; }
 
 # run_tool <args...> — sets OUT, ERR, RC.
@@ -85,6 +126,7 @@ bounded() {
     return 124
 }
 
+echo "setup: locking it and reading its state"
 relock
 
 echo "== unlock =="
@@ -110,6 +152,28 @@ else
     fail "lock" "rc=$RC state=$(state) err=[$ERR]"
 fi
 relock
+
+echo "== status =="
+run_tool status "$KC"
+if [[ "$RC" -eq 0 && "$OUT" == "locked" && "$(state)" == locked ]]; then
+    pass "status reports a locked keychain as 'locked'"
+else
+    fail "status of a locked keychain" "rc=$RC out=[$OUT] state=$(state) err=[$ERR]"
+fi
+"$TOOL" unlock "$KC" "$TMP/pw" >/dev/null 2>&1
+run_tool status "$KC"
+if [[ "$RC" -eq 0 && "$OUT" == "unlocked" && "$(state)" == unlocked ]]; then
+    pass "status reports an unlocked keychain as 'unlocked'"
+else
+    fail "status of an unlocked keychain" "rc=$RC out=[$OUT] state=$(state) err=[$ERR]"
+fi
+relock
+run_tool status "$TMP/no.keychain-db"
+if [[ "$RC" -eq 1 && "$ERR" == *"does not exist"* ]]; then
+    pass "status of a missing keychain is an error, not 'locked'"
+else
+    fail "status of a missing keychain" "rc=$RC out=[$OUT] err=[$ERR]"
+fi
 
 echo "== refusals =="
 cp "$TMP/pw" "$TMP/pw-644"; chmod 644 "$TMP/pw-644"

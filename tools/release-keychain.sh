@@ -4,6 +4,7 @@
 #
 #   tools/release-keychain.sh unlock <keychain> <password-file>
 #   tools/release-keychain.sh lock   <keychain>
+#   tools/release-keychain.sh status <keychain>    # prints locked | unlocked
 #
 # unlock prints one word on stdout and exits 0 once the keychain is unlocked:
 # `unlocked` when this run unlocked it, `already-unlocked` when it already was.
@@ -45,7 +46,7 @@
 set -uo pipefail
 
 usage() {
-    echo "usage: $0 unlock <keychain> <password-file> | lock <keychain>" >&2
+    echo "usage: $0 unlock <keychain> <password-file> | lock <keychain> | status <keychain>" >&2
     exit 2
 }
 
@@ -54,8 +55,41 @@ die() {
     exit 1
 }
 
+# keychain_status <keychain> — prints `locked` or `unlocked`; exits 2 when the
+# status cannot be read. It asks SecKeychainGetStatus through python3's
+# ctypes rather than `security show-keychain-info`. On a locked keychain that
+# command fails at once in a session without UI ("User interaction is not
+# allowed", the factory host's agent session), but in a session that allows
+# UI it can raise an unlock dialog and wait on it. GitHub's macOS runner is
+# such a session, and this file's first test hung there during setup (see
+# tools/lib/release-keychain_test.sh, WATCHDOG_SECS). SecKeychainGetStatus
+# only reads the status bits (kSecUnlockStateStatus = 1). Measured on macOS
+# 26: 0x7 unlocked, 0x2 locked, -25294 for a keychain that does not exist.
+keychain_status() {
+    python3 - "$1" <<'PY'
+import ctypes, sys
+
+sec = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+sec.SecKeychainOpen.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+sec.SecKeychainOpen.restype = ctypes.c_int32
+sec.SecKeychainGetStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+sec.SecKeychainGetStatus.restype = ctypes.c_int32
+ref = ctypes.c_void_p()
+if sec.SecKeychainOpen(sys.argv[1].encode(), ctypes.byref(ref)) != 0:
+    sys.exit(2)
+status = ctypes.c_uint32()
+if sec.SecKeychainGetStatus(ref, ctypes.byref(status)) != 0:
+    sys.exit(2)
+print("unlocked" if status.value & 1 else "locked")
+PY
+}
+
+# is_unlocked <keychain> — 0 when unlocked; 1 when locked; dies (exit 1) when
+# the status cannot be read, which is never taken to mean either.
 is_unlocked() {
-    security show-keychain-info "$1" >/dev/null 2>&1
+    local st
+    st=$(keychain_status "$1") || die "cannot read the lock status of $1"
+    [[ "$st" == "unlocked" ]]
 }
 
 # check_password_file <file> — refuses (exit 1) a file whose permissions would
@@ -105,7 +139,6 @@ cmd_unlock() {
         echo "already-unlocked"
         return 0
     fi
-    command -v python3 >/dev/null 2>&1 || die "python3 not found; it runs the detached unlock (macOS has no setsid(1))"
     detached_unlock "$kc" "$file" || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         die "security unlock-keychain exited $rc for $kc; is $file this keychain's password? (51 means a wrong password)"
@@ -124,8 +157,12 @@ cmd_lock() {
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || die "keychains are macOS-only; this is $(uname -s)"
+command -v python3 >/dev/null 2>&1 || die "python3 not found; it reads the lock status and runs the detached unlock (macOS has no setsid(1))"
 case "${1:-}" in
     unlock) [[ $# -eq 3 ]] || usage; cmd_unlock "$2" "$3" ;;
     lock)   [[ $# -eq 2 ]] || usage; cmd_lock "$2" ;;
+    status) [[ $# -eq 2 ]] || usage
+            [[ -f "$2" ]] || die "keychain $2 does not exist"
+            keychain_status "$2" || die "cannot read the lock status of $2" ;;
     *)      usage ;;
 esac
