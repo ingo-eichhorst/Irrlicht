@@ -48,15 +48,15 @@ type writeCatalog struct {
 // writeBytesAtomic replaces path with b via a temp file + rename, so a crashed
 // write never leaves a half file. Parent dirs are created as needed.
 func writeBytesAtomic(path string, b []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { // #nosec G703 -- paths are under the repo root the operator runs `of` in (replaydata/)
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o644); err != nil { // #nosec G703 -- paths are under the repo root the operator runs `of` in (replaydata/)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp) // don't leave a stray .tmp for directory scans to trip on
+	if err := os.Rename(tmp, path); err != nil { // #nosec G703 -- paths are under the repo root the operator runs `of` in (replaydata/)
+		os.Remove(tmp) // #nosec G703 -- tmp is path+".tmp" under the operator's repo root; don't leave a stray .tmp for directory scans to trip on
 		return err
 	}
 	return nil
@@ -91,7 +91,7 @@ func resolveCellFolder(repoRoot, agent string, sh shard.Shard, override string) 
 }
 
 func loadWriteCatalog(repoRoot string) (*writeCatalog, error) {
-	b, err := os.ReadFile(shard.File(repoRoot))
+	b, err := os.ReadFile(shard.File(repoRoot)) // #nosec G703 -- the catalog file under the operator's repo root
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func readFileArg(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G703 -- path is the operator's own --*-file CLI argument
 	if err != nil {
 		return "", err
 	}

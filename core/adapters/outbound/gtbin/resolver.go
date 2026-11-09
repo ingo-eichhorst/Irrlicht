@@ -71,7 +71,7 @@ func (r *gtbinResolver) resolve() string {
 
 // isExecutable returns true if path exists and has at least one execute bit.
 func isExecutable(path string) bool {
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(path) // #nosec G703 -- path is a gt candidate from $GT_BIN, a fixed install dir, ~/bin, ~/go/bin or PATH; Stat only reads its mode
 	if err != nil {
 		return false
 	}

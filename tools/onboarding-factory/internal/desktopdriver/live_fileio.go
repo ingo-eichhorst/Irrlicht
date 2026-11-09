@@ -26,5 +26,5 @@ func copyRegularFile(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(destination, data, 0o600)
+	return os.WriteFile(destination, data, 0o600) // #nosec G703 -- destination is <evidenceDir>/transcript.jsonl: the recording run's own evidence dir and a constant name
 }
