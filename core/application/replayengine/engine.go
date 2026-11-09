@@ -196,7 +196,7 @@ func newReplayer(src string, opts Options, events []rawEvent) (*replayer, func()
 		if body, err := os.ReadFile(sidecarSrc); err == nil {
 			// Best-effort: a failed write just means replay runs sidecar-less,
 			// exactly like a live session whose sidecar is missing.
-			_ = os.WriteFile(filepath.Join(tmpDir, "transcript.json"), body, 0o644)
+			_ = os.WriteFile(filepath.Join(tmpDir, "transcript.json"), body, 0o644) // #nosec G703 -- tmpDir is this replay's own os.MkdirTemp dir and the name is a constant
 		}
 	}
 

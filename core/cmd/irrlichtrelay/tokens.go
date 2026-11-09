@@ -48,7 +48,7 @@ func hashToken(plaintext string) string {
 // loadTokens reads the hashed token store. A missing file is not an error (an
 // auth-enabled relay with no tokens yet simply rejects everyone).
 func loadTokens(path string) ([]TokenRecord, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G703 -- tokens path is the operator's --tokens-file or <data-dir>/tokens.json (resolveTokensPath), never request input
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -69,7 +69,7 @@ func loadTokens(path string) ([]TokenRecord, error) {
 // write would hand them half a JSON document.
 func saveTokens(path string, recs []TokenRecord) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { // #nosec G703 -- tokens path is the operator's --tokens-file or <data-dir>/tokens.json (resolveTokensPath), never request input
 		return err
 	}
 	data, err := json.MarshalIndent(recs, "", "  ")
@@ -92,7 +92,7 @@ func saveTokens(path string, recs []TokenRecord) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) // #nosec G703 -- tokens path is the operator's --tokens-file or <data-dir>/tokens.json (resolveTokensPath), never request input
 }
 
 // issueToken mints a new 256-bit token bound to workspace, appends its hash to

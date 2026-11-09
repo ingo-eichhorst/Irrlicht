@@ -46,6 +46,7 @@ func run(args []string, stderr io.Writer) int {
 
 	client := &http.Client{Timeout: 3 * time.Second}
 
+	// #nosec G704 -- the host is the local daemon (daemonaddr.ClientURL); the argument is only a path-escaped session ID
 	resp, err := client.Post(focusURL(args[0]), "application/json", nil) //nolint:noctx
 	if err != nil {
 		fmt.Fprintf(stderr, "irrlicht-focus: daemon unreachable: %v\n", err)

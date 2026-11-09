@@ -322,7 +322,7 @@ func hasIndexHTML(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(dir, "index.html"))
+	_, err := os.Stat(filepath.Join(dir, "index.html")) // #nosec G703 -- dir comes from the UI-dir env override, the executable's location or $HOME (resolveUIDirFor), never request input
 	return err == nil
 }
 
