@@ -104,7 +104,7 @@ Before each run, `ls core/adapters/inbound/agents/` and `ls core/adapters/inboun
 ### 0. Preflight
 
 ```bash
-cd /Users/ingo/projects/irrlicht
+cd "$(git rev-parse --show-toplevel)"
 gh auth status
 ls core/adapters/inbound/agents
 ls core/adapters/inbound/orchestrators

@@ -946,7 +946,7 @@ below.
   the fresh-name one only where it is the subject, is what buys the headroom —
   measured at `go test -count=12` when this was written, against roughly eight
   before. Trust neither number: nothing produces either, which is precisely the
-  drift "Replay's measured figures" below is about. What IS load-bearing is that
+  drift "Replay's measured figures" in [replay-testing.md](replay-testing.md) is about. What IS load-bearing is that
   `assertNameTableHadRoom` reports a saturated table as a limit of the TEST
   BINARY — quoting the bound it reads from `hookjson` rather than a copy of it —
   instead of letting it become the false accusation ("counted 0") it otherwise

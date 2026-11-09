@@ -816,9 +816,11 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    commit in Step 7a must include `site/appcast.xml` (its `git add … site/` covers it) — GitHub Pages serves
    it from `https://irrlicht.io/appcast.xml` so existing installs see the
    new entry.
-7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
-   the process is still alive, has spawned `irrlichd`, and that the daemon
-   serves the dashboard at `127.0.0.1:7837/`.
+7. **Smoke test before packaging** — launch the built app on an isolated
+   port, wait ~3s, confirm the process is still alive, has spawned
+   `irrlichd`, and that the daemon serves the dashboard on `$SMOKE_PORT`
+   (`IRRLICHT_SMOKE_PORT`, default 7849 — never the default 7837; see the
+   port-hazard note at the top of Step 6).
 
    **Do not ship through a smoke-test failure.** v0.4.3 shipped broken
    because the smoke test failed locally and the failure was dismissed

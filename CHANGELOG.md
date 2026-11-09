@@ -12,6 +12,51 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.8] — 2026-11-09
+
+### OpenCode 2.x sessions show up, and quota chips split by account
+
+### Also in this release
+
+**Added**
+- OpenCode 2.x support. Sessions from the 2.x terminal client show up, and so do sessions from the 2.x service's API, desktop app and web app, which have no client process. With hooks granted, Irrlicht installs a 2.x plugin, so waiting and turn end are detected. Upgrading to 2.x with `brew upgrade` no longer leaves a broken 1.x plugin or a ghost row (#2104; #2105–#2108 in PRs #2112, #2113, #2114, #2115).
+- One quota chip per account. Claude Code and Codex sessions are now bound to the account they were confirmed against. The web dashboard, the macOS popover and the menu bar show one chip per account, instead of one chip per provider that alternated between accounts (#2095, #2097).
+
+**Fixed**
+- A turn that a hook ended no longer flips back to working for a moment when the agent's own turn-end record arrives (#2120).
+- Settings → Review agent permissions can always be closed, even when one permission keeps failing to apply. Hermes' stock `config.yaml` is accepted (#2123, #2124). Thanks @dernerl.
+- Linux: while a permission is pending, the consent wizard's detection walks `/proc` once per pass instead of once per adapter (#2119). Thanks @arnepluhar.
+- macOS: a folder created while the daemon runs is always watched; a kqueue race could leave it unwatched (#2098, #2101).
+
+**Security**
+- `golang.org/x/net` 0.62.0, which fixes two HTML-parser advisories, GO-2026-6860 and GO-2026-6866 (#2132).
+
+**Changed / Docs / Distribution**
+- Docs: OpenCode 2.x in the monitoring-surface reference and on the adapters page (#2116); `/ir:agent-releases` tracks OpenCode 2.x releases (#2111).
+- Releases can be built on a Mac with only the Command Line Tools (#2131).
+- Dependencies: `modernc.org/sqlite`, `undici`, and the Go and npm minor/patch groups (#2091, #2102, #2121, #2122, #2074, #2103, #2126).
+
+**Contributor tooling**
+- `/ir:pr-merge`: a gated review-and-merge pass over open PRs, built on a read-only classifier, `tools/pr-merge-candidates.sh` (#2128, #2129).
+- Gate scripts find tools installed with `go install` when `GOBIN` is not on `PATH` (#2099, #2100).
+- Tests: fake agent processes outlive their start on ubuntu-26.04 runners (#2125).
+
+### Technical appendix
+
+- **2.x upgrade is harmless (#2105, PR #2112).** `agent.VersionGate` gains an exclusive ceiling `Max`. opencode's 1.x hook declares `[1.14.50, 2.0.0)`. On a version at or above the ceiling, the permission's own sentinel-checked `Uninstall` removes the 1.x plugin an earlier install left. The 1.x store reader checks `sqlite_master` for `session_v2` before every scan and stands down on a 2.x store. `Process.SessionHostArgv: IsServiceArgv` keeps the `opencode serve --service` process from minting a ghost row.
+- **2.x store reader (#2106, PR #2113).** `StorePath()` resolves the store as 2.1.4 does: `$OPENCODE_DB`, then `$XDG_DATA_HOME/opencode/opencode.db`, then `~/.local/share/opencode/opencode.db`. Each scan picks its reader by schema. The 2.x reader follows `session_v2` and `session_message` with a `(time_updated, id)` cursor. An `idle` row ends the turn, `failed` adds a `SessionError`, and `parent_id` becomes `ParentSessionID`.
+- **Sessions no client runs (#2107, PR #2114).** API, desktop and web sessions live inside the one service process. They are admitted on live activity while a service is up and no client owns the directory, and they bind to the service through `SharedPIDOwner`, only while their `session_v2` row is live. An idle hosted session ends on the ready TTL, and a service-bound root captures no launcher.
+- **2.x hook plugin (#2108, PR #2115).** `ManagedUserFile.Variants` declares one artifact per upstream major, and the installed version selects it. The 1.x variant `[1.14.50, 2.0.0)` is the old `plugin.js`, byte for byte. The 2.x variant `[2.1.4, 3.0.0)` is `plugin_v2.js`, which forwards `permission.asked`, `permission.replied` and `session.execution.{succeeded,failed,interrupted}` through the same address-free beacon. The repair loop rewrites a 1.x file under a 2.x opencode in place within one pass.
+- **Hook-ended turn tail (#2109 P5-0, PR #2120).** `forceReadyToWorkingIfActive` skips the forced ready → working when `IsHookTurnTail` holds: a hook's turn-done verdict decided the current ready, no user turn has started since (`SessionMetrics.UserTurns`), and the metrics still read done with no background process. The replay sidecar calls the same predicate. The marker is in memory only, so after a restart the force runs as before.
+- **OpenCode 2.x onboarding (#2109; PRs #2117, #2127, #2130).** The `opencode-v2` replay column has 30 recorded cells, 2 blocked, 4 unobservable, 3 n/a and 2 unknown. `of status --summary` shows claimed `stable` = earned `stable`, core 12/12. The 2.x reader now folds `todowrite` tool calls into the session's task list.
+- **Accounts (#2095, PR #2097).** `AccountBinding` binds a session only if its home's account was observed unchanged at or before the session's start, and a change while it runs clears the binding for good. `AccountBinder` stamps `metrics.rate_limit.confirmed_account_ref`. Claude Code reads only `oauthAccount.accountUuid` and `organizationType` from `.claude.json`, behind its own `claude-code-account` consent row. Codex reads `tokens.account_id` from the session's own `auth.json`, only in `chatgpt` mode. Clients bucket chips by `<provider>|<ref>`, and every unconfirmed session gets its own chip. The menu bar shows the most constrained account for the selected provider. The pi/opencode `auth.json` reads behind quota inheritance now require that adapter's observe consent.
+- **Review wizard (#2123, PR #2124).** The wizard closes even when an effect keeps failing. `hookyaml` accepts block sequences at column 0, as Hermes writes them under `toolsets:`.
+- **Linux detection pass (PR #2119).** One `/proc` walk per detection pass is shared by every `HasLiveProcess` call, instead of one walk per call.
+- **fswatcher (#2098, PR #2101).** A directory created at runtime is re-armed after 100 ms against the kqueue `Add` downgrade race (fsnotify#783), which could drop its `NOTE_WRITE` for good.
+- **Release tooling (PR #2131).** Where Xcode's XCBuild is missing, `tools/build-release.sh` builds the Swift app once per arch and joins the two with `lipo`, then drops the toolchain rpath. It checks the Swift build's exit status: before, main's script exited 0 on a Command-Line-Tools host and shipped an x86_64-only app. It asserts the app and Sparkle are universal and fresh. A signing preflight signs a probe before the build, and `NOTARYTOOL_KEYCHAIN` names the keychain that holds the notarytool profile. This release was built that way, on the factory build host.
+- **Security gate (PR #2132).** `tools/security-scan.sh` failed on two counts. First, govulncheck found GO-2026-6860 and GO-2026-6866 in `golang.org/x/net` v0.61.0, which `core` calls; `core/go.mod` now requires v0.62.0. Second, gosec v2.30.0 adds taint-analysis rules and flagged 14 G703 sites and 1 G704 site in files unchanged since v0.6.7. Each site was read: its path comes from operator flags, the environment, the executable's location, `$HOME` or the repo root, and the one HTTP call goes to the local daemon. Each is annotated `#nosec <rule> -- <reason>`.
+- **Alias sync.** No change. Upstream codeburn still re-points five canonicals, left for maintainer review: `codex-auto-review` → `gpt-5.6-luna` and the four GLM spellings → `z-ai/glm-5.2` / `z-ai/glm-5.3`. `kimi-code` and `kimi-for-coding` keep their LOCAL_OVERRIDE (upstream: `kimi-k2.7-code`, not in the LiteLLM snapshot). `gpt-4.1` is skipped as a self-mapping.
+
 ## [0.6.7] — 2026-10-11
 
 ### Every codex session on codex's shared background process shows up, and a chip flags agents that sound unsure
@@ -2114,7 +2159,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.8...HEAD
+[0.6.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.8
 [0.6.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.7
 [0.6.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.6
 [0.6.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.5

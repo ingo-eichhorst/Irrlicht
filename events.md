@@ -219,7 +219,7 @@ Subagent sessions run independent state machines with the same states.
 | Axis | Values |
 |------|--------|
 | **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` / `copilot` / `hermes` / `junie` / `muse` / `dsh` -- identifies source agent |
-| **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
+| **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization; `unknown` when there are no tokens or model yet, or no context window is known for the model |
 
 ---
 

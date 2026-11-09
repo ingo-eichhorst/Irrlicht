@@ -442,7 +442,8 @@ CI parity section (chunking, the budget, and what it makes visible).
   stopped aborting, the fix would be protecting nothing and would pass for the
   wrong reason.
 - The ARS badge job: `tools/lib/ars-badge-push_test.sh` EXTRACTS each of
-  `.github/workflows/ars.yml`'s three `run:` steps out of the workflow
+  three of `.github/workflows/ars.yml`'s four `run:` steps (`Run ARS scan`,
+  `Extract ARS badge`, `Update Gist with ARS score`) out of the workflow
   file and EXECUTES it against a stub, under the invocation that step
   actually gets — DERIVED from the workflow, today `bash -e` (see "Which bash a
   workflow step gets" below; this bullet claimed

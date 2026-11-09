@@ -87,7 +87,8 @@ The **config inventory** that completeness checks against is the user-facing sub
   (`os.Getenv(key)`), `core/pkg/daemonaddr` reads `IRRLICHT_BIND_ADDR` via `EnvBindAddr`, and
   `core/cmd/irrlichtrelay/main.go` reads its `IRRLICHT_RELAY_*` limits by name. Sweep every
   literal instead, then drop the test helpers (`IRRLICHT_SKIP_GIT_PRIME` lives in the
-  `gittest` package, which is non-`_test.go` but test-only):
+  `gittest` package and `IRRLICHT_FAKEPROC_SLEEP` in `core/internal/fakeproc`, both
+  non-`_test.go` but test-only):
 
 ```bash
 grep -rhoE '"IRRLICHT_[A-Z_]+"' core platforms/macos --include='*.go' --include='*.swift' \

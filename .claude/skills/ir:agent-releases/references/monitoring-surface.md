@@ -2,7 +2,7 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into the states declared by `session.CanonicalStates()` (`core/domain/session/session.go`) — currently **working**, **waiting**, **ready**, **error**. Any upstream agent change that alters the items below can break detection.
 
-This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. `core/adapters/inbound/agents/` ships **twelve agent adapters** (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot, hermes, junie), and this file has **eleven numbered sections**: ten of those twelve adapters **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below). **Copilot and Hermes have no section of their own yet** — they appear only in the inline tables below, so a release sweep must not treat "no section" as "not monitored".
+This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. `core/adapters/inbound/agents/` ships **fourteen agent adapters** (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot, hermes, junie, muse, dsh), and this file has **eleven numbered sections**: ten of those fourteen adapters **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below). **Copilot, Hermes, Muse and DeepSeek Harness (`dsh`) have no section of their own yet** — they appear only in the inline tables below, so a release sweep must not treat "no section" as "not monitored".
 
 *(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". At that time: nine adapters + one orchestrator = ten sections; there were not ten agent adapters. Noted because the miscount is exactly the kind of thing this file is supposed to stop — and it recurred. Per `git log -p` on this file, the count was right at "ten sections / nine adapters"; copilot (#1256) and hermes (#1325) then each incremented it **without adding a section**, and junie inherited that accumulated drift (it did add `### 11`), leaving a claim of thirteen against a file holding eleven. Count with `grep -cE '^### [0-9]+\.'` on this file instead of incrementing the previous number.)*
 
@@ -48,9 +48,9 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Tier | Adapters | Meaning |
 |---|---|---|
-| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider, copilot, junie | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
+| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider, copilot, junie, muse, dsh | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
 | **(b)** Tailer + sibling side-read | antigravity, kiro-cli, mistral-vibe | Parser reads a sibling store for data the transcript lacks, via the `TranscriptPathAware` seam |
-| **(c)** Full bypass | **opencode** | `MetricsProvider` short-circuits before a tailer is ever constructed (`core/adapters/outbound/metrics/adapter.go:110-112`) |
+| **(c)** Full bypass | **opencode**, **hermes** | `MetricsProvider` short-circuits before a tailer is ever constructed (`core/adapters/outbound/metrics/adapter.go`, `ComputeMetrics`) |
 
 ⚠️ **corrected (#1090):** tier (b) previously read as "everything except opencode uses the tailer normally." Antigravity, kiro-cli, and vibe each depend on a **second file** whose schema is its own break surface.
 
@@ -74,7 +74,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 `core/adapters/inbound/agents/fswatcher/watcher.go`
 
 - **Recursive, unbounded depth** — `filepath.WalkDir` per root child (`watcher.go:490-499`), plus `addSubtree` for dirs created at runtime (`watcher.go:566-577`). The recursion is load-bearing for Claude Code's `subagents/`, gemini's `chats/<uuid>/`, vibe's `agents/`, and antigravity's 3-deep layout.
-- **`.jsonl` only** (`transcriptExt`, `watcher.go:21`; enforced `:303`, `:588`, `:610`). This is how sibling non-transcripts are ignored for free (gemini's `logs.json`/`.project_root`, vibe's `meta.json`, kiro's `.json`/`.lock`). aider's `.md` is invisible to it entirely — hence `FilesUnderCWD`.
+- **`.jsonl` by default** (`transcriptExt`, enforced by `rejectsDefaultSuffix` in `watcher.go`). This is how sibling non-transcripts are ignored for free (gemini's `logs.json`/`.project_root`, kiro's `.json`/`.lock`). An adapter that declares `SessionIDFromPath` (antigravity, codex, copilot, dsh, junie, muse, vibe) owns the path rule instead: vibe's returns no id for `meta.json`, and dsh's transcript is `.jsonl.zstd`. aider's `.md` is invisible to it entirely — hence `FilesUnderCWD`.
 - **Session ID** defaults to the filename stem (`extractSessionID`, `watcher.go:608-614`), overridable per adapter via `FilesUnderRoot.SessionIDFromPath`; returning `""` **skips the file** (antigravity uses this to ignore `transcript_full.jsonl`).
 - **Max session age**: default **5 days** (`core/domain/config/config.go:13`), overridable via `IRRLICHT_MAX_SESSION_AGE`. Applied to Create/Write, **not** to Remove/Rename (`watcher.go:341-344`).
 - Broadcast is non-blocking with a 64-cap channel (`watcher.go:273-279`) — **events are dropped silently** if a subscriber is slow.
@@ -84,7 +84,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 1. `tailer.NormalizeModelName` (`core/pkg/tailer/parser.go:618-660`): strips a `[1m]` suffix, applies a 3-entry alias map (`opusplan`→`claude-opus-4-1`, `sonnet`→`claude-sonnet-4-6`, `haiku`→`claude-haiku-4-5`), strips a `-\d{8}$` date suffix, then a most-specific-first `Contains` switch. ⚠️ Those hardcoded aliases pin `sonnet`/`haiku` to *specific versions* — an upstream model bump silently mis-prices until they're updated.
 2. `capacity.modelAliases` (`core/pkg/capacity/aliases.go`), applied in `GetModelCapacity`. **Exact match only, no fuzzy.** Synced from codeburn via `/ir:refresh-aliases`. A model id missing here prices at **$0**.
 
-**Config fallback is deliberately narrow** (`tailer_config.go:51-66`): only `claude-code` (`~/.claude/settings.json`), `pi` (`~/.pi/agent/settings.json`), `codex` (`~/.codex/config.toml`). **Every other adapter returns `""`** — no config is read for vibe, kiro-cli, opencode, antigravity, aider, or gemini-cli. This is intentional: #1019 found a vibe session inheriting an unrelated claude-code model from what used to be a catch-all default. Corollary: for those six, **if the model isn't in the transcript (or sibling store), there is no fallback at all.**
+**Config fallback is deliberately narrow** (`tailer_config.go`, `getDefaultModelFromConfig`): only `claude-code` (`~/.claude/settings.json`), `pi` (`~/.pi/agent/settings.json`), `codex` (`~/.codex/config.toml`). **Every other adapter returns `""`** — no config is read for vibe, kiro-cli, opencode, antigravity, aider, gemini-cli, copilot, hermes, junie, muse, or dsh. This is intentional: #1019 found a vibe session inheriting an unrelated claude-code model from what used to be a catch-all default. Corollary: for those eleven, **if the model isn't in the transcript (or sibling store), there is no fallback at all.**
 
 ### Timestamps
 
@@ -100,10 +100,10 @@ Adapters with no timestamps in-band at all (**vibe**, **aider**, and every kiro 
 
 ### User-blocking tools — a hardcoded, Claude-flavored list
 
-The list is `AskUserQuestion`, `ExitPlanMode`, `question`, hardcoded in **two** places (deliberate duplication to avoid a domain import):
+The list is `AskUserQuestion`, `ExitPlanMode`, `question`, `ask_user_question`, `exit_plan_mode`, `ask_user`, `request_user_input`, hardcoded in **two** places (deliberate duplication to avoid a domain import):
 
-- `core/pkg/tailer/tailer_config.go:34-40` — feeds `SawUserBlockingToolClosedThisPass`
-- `core/domain/session/metrics.go:380-382` — the **classifier-facing** one, via `NeedsUserAttention()`
+- `core/pkg/tailer/tailer_config.go`, `isUserBlockingToolName` — feeds `SawUserBlockingToolClosedThisPass`
+- `core/domain/session/metrics.go`, `isUserBlockingTool` — the **classifier-facing** one, via `NeedsUserAttention()`
 
 > **The duplication is pinned, not just documented.** Both predicates are probed
 > against one shared table (`core/internal/contracttesting/userblocking`) by a
@@ -129,8 +129,9 @@ Adjacent hardcoded list: `isPermissionGatedEditTool` (`metrics.go:388-397`) matc
 | `queuedTurnSplitter` | vibe |
 | `TranscriptPathAware` | vibe, kiro-cli, antigravity |
 | `pendingContributor` | claude-code |
-| `ParserStateProvider` | claude-code, codex |
+| `ParserStateProvider` | claude-code, codex, dsh |
 | `ReplayStoreStager` | antigravity |
+| `SubagentCounter` | claude-code, copilot |
 
 `core/pkg/tailer/parser.go:381-509`.
 
@@ -346,7 +347,7 @@ Envelope: `{"version":"v1","kind":…,"data":{"content":[…]}}`. **`version` is
 
 ### 7. opencode (`opencode`)
 
-The odd one out twice over: **SQLite-backed**, and the **only full tailer bypass**. One adapter covers **both majors** of opencode: it reads the 1.x schema (`session`/`message`/`part`) and the 2.x schema (`session_v2`/`session_message`), and installs one of two hook plugins. The 2.x support landed as #2104's phases P1–P4 (#2112, #2113, #2114, #2115); the 2.x material is in the subsections headed "opencode 2.x". Everything else in this section applies to both majors unless it says 1.x.
+The odd one out twice over: **SQLite-backed**, and one of the **two full tailer bypasses** (with hermes). One adapter covers **both majors** of opencode: it reads the 1.x schema (`session`/`message`/`part`) and the 2.x schema (`session_v2`/`session_message`), and installs one of two hook plugins. The 2.x support landed as #2104's phases P1–P4 (#2112, #2113, #2114, #2115); the 2.x material is in the subsections headed "opencode 2.x". Everything else in this section applies to both majors unless it says 1.x.
 
 - **Storage**: ⚠️ **corrected (#2109) — `$XDG_DATA_HOME` IS honored since #2106.** `StorePath()` (`adapter.go:83-92`) resolves the store the way opencode does:
   - `$OPENCODE_DB` when set: an absolute value as is, a relative one inside the data dir, and `:memory:` falls back to the default;
@@ -699,7 +700,7 @@ grant the hooks permission).
 | **File rotation without shrink** | In-place rewrite at same-or-larger size, inode swap at the same path | HIGH — silently mis-tailed; the tailer is size-only, with no inode awareness |
 | **Config path/format change** | Settings file moved or reformatted | LOW — only affects model fallback, and only for claude-code / pi / codex |
 | **New session type** | New agent mode, new transcript location | MEDIUM — sessions invisible until adapter added |
-| **New tool category** | New user-blocking tools added | MEDIUM — inert until aliased into `AskUserQuestion`/`ExitPlanMode`/`question` |
+| **New tool category** | New user-blocking tools added | MEDIUM — inert until aliased into the user-blocking list (`isUserBlockingToolName` / `session.isUserBlockingTool`) |
 | **Permission system change** | New permission modes, removal of permission-mode events | MEDIUM — `PermissionMode` surfacing affected |
 | **CLI output change** | Gas Town `gt` command output format changed | HIGH — orchestrator polling breaks |
 | **Timestamp format change** | RFC3339 → epoch millis, etc. | MEDIUM — silently falls back to `time.Now()`; corrupts elapsed/rate metrics and replay determinism |

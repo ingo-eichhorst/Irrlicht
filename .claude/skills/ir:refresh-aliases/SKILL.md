@@ -40,13 +40,14 @@ The block is a single TypeScript object literal: `'key': 'value',` per line, wit
 
 ### 3. Load current Irrlicht map
 
-Read `core/pkg/capacity/aliases.go` and extract entries from `var modelAliases`. Each line has the form:
+Read `core/pkg/capacity/aliases.go` and extract entries from `var modelAliases`. Each line has one of two forms:
 
 ```go
 "key": "value",
+"key": modelConstName,
 ```
 
-Strip whitespace, comments, and the surrounding `map[string]string{…}` boilerplate.
+Resolve each `modelConstName` to its string from the `const (...)` block above `var modelAliases`. Strip whitespace, comments, and the surrounding `map[string]string{…}` boilerplate.
 
 ### 4. Diff
 

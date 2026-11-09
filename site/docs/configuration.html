@@ -477,7 +477,7 @@ launchctl setenv IRRLICHT_DEBUG 1
         <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (a single configurable threshold, default 80% of the context window or an absolute token count) &mdash; each has its own enable toggle and sound picker in Preferences</li>
         <li>Built-in sounds: Ping, Chime, Funk, Whoosh, Sosumi; defaults Ready=Funk, Waiting=Ping, Context=Sosumi</li>
         <li><strong>None</strong> &mdash; the banner still appears but plays no sound</li>
-        <li><strong>Speak aloud</strong> &mdash; routes the title and body through <code>AVSpeechSynthesizer</code> (pinned to en-US) with three voice variants: Default, Zoe-Premium (female), Jamie-Premium (male). If a premium voice isn't installed, the row deep-links to System Settings &rarr; Accessibility &rarr; Spoken Content</li>
+        <li><strong>Speak aloud</strong> &mdash; routes the title and body through <code>AVSpeechSynthesizer</code> (pinned to en-US) with three voice variants: Default, &ldquo;Zoe, Premium&rdquo; (female) and &ldquo;Jamie, Premium&rdquo; (male). If a premium voice isn't installed, the row deep-links to System Settings &rarr; Accessibility &rarr; Spoken Content</li>
         <li><strong>Custom</strong> &mdash; imports <code>aiff/wav/mp3/m4a/caf</code> from disk into <code>~/Library/Sounds/</code>, transcoding <code>mp3</code>/<code>m4a</code> to LPCM-in-CAF so <code>UNNotificationSound</code> can play them</li>
         <li>Requires macOS notification permission (requested the first time a notification event is enabled in Settings)</li>
       </ul>
@@ -490,7 +490,7 @@ launchctl setenv IRRLICHT_DEBUG 1
         <li><strong>Location:</strong> <code>~/Library/Application Support/Irrlicht/logs/</code></li>
         <li><strong>Files:</strong> <code>events.log</code> (current), <code>events.log.1</code> through <code>.5</code> (rotated)</li>
         <li><strong>Max size:</strong> 10MB per file, 5 files retained</li>
-        <li><strong>Log event types</strong> (the component field) include <code>startup</code>, <code>shutdown</code>, <code>permissions</code>, <code>hooks</code>, <code>session-detector</code>, <code>process-watcher</code>, <code>process-exit</code> and <code>relay-forwarder</code>, among others</li>
+        <li><strong>Log event types</strong> (the <code>event_type</code> field) include <code>startup</code>, <code>shutdown</code>, <code>permissions</code>, <code>hooks</code>, <code>session-detector</code>, <code>process-watcher</code>, <code>process-exit</code> and <code>relay-forwarder</code>, among others</li>
       </ul>
 
       <!-- ── Network ── -->

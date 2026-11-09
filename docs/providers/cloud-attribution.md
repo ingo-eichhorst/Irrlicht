@@ -142,7 +142,7 @@ Three violations, none of which an unprobed route can answer truthfully: it
 has no observed billed product, no captured response to commit as a fixture,
 and no transport — the five strategies in `internal/provider/schema.go` are
 all real ones Irrlicht implements. (A fourth check, the non-empty
-`redaction.allowed_fields` at `verify.go:278`, only fires once a fixture
+`redaction.allowed_fields` in `verify.go`'s `redactionFindings`, only fires once a fixture
 exists, so it does not appear above.) A true local runtime fails the first of
 those by definition: it has no billed product at all.
 
