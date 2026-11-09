@@ -759,6 +759,24 @@ func TestSessionDetector_ActiveSubagentsNotPromoted_ByOrphanFinish(t *testing.T)
 // agents), so CheckPIDLiveness eventually deletes them as stale. Before
 // this fix the parent was never re-evaluated, so it sat in `working`
 // forever.
+// parentIdleSeconds backdates the parents in the two child-sweep tests below.
+// UpdatedAt holds whole seconds, so a parent stamped time.Now().Unix() is
+// already up to a second old when it is saved. With a 1s ready TTL that let
+// the sweep's idle reap (reapsIdleTopLevel: PID 0 and UpdatedAt older than
+// the TTL) delete the parent whenever setup plus the sweep crossed the
+// second: main's go-test failed this way on d7adce077 ("parent session
+// should still exist", run 42541669428). Two seconds makes that crossing
+// certain instead of occasional, so the TTL below has to cover it.
+const parentIdleSeconds = 2
+
+// sweepTestReadyTTL is the ready TTL for those two tests. The child-sweep path
+// only needs readyTTL > 0 (CheckPIDLiveness skips sweepStaleSnapshot at 0);
+// the children are reaped because their transcripts are five minutes stale
+// (reapStaleChild), whatever the TTL. A minute keeps the idle reap away from
+// a parent that is a few seconds old, however slow the runner. With 1s and
+// parentIdleSeconds both tests failed 10 of 10 runs (-count=5).
+const sweepTestReadyTTL = time.Minute
+
 func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -766,7 +784,7 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 
 	// The child-sweep path in PIDManager is gated on readyTTL > 0,
 	// so the default newDetector (readyTTL=0) would skip it entirely.
-	// Use a tiny TTL so the sweep actually runs its child-cleanup loop.
+	// See sweepTestReadyTTL for why it is a minute rather than a second.
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
 		PW:           pw,
 		Repo:         repo,
@@ -775,7 +793,7 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 		Metrics:      &mockMetrics{},
 		Broadcaster:  nil,
 		Version:      "test",
-		ReadyTTL:     1 * time.Second,
+		ReadyTTL:     sweepTestReadyTTL,
 		PIDDiscovers: nil,
 		ProcessNames: nil,
 		LiveCWDs:     nil,
@@ -796,8 +814,8 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 		SessionID:      "parent-swept",
 		State:          session.StateWorking,
 		TranscriptPath: "/home/.claude/projects/-Users-test/parent-swept.jsonl",
-		FirstSeen:      now,
-		UpdatedAt:      now,
+		FirstSeen:      now - parentIdleSeconds,
+		UpdatedAt:      now - parentIdleSeconds,
 		EventCount:     10,
 		Metrics: &session.SessionMetrics{
 			LastEventType:     "assistant",
@@ -832,8 +850,11 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 	// Trigger the sweep directly instead of waiting the real 5s ticker.
 	det.RunPIDLivenessSweepForTest()
 
-	// Give the parent re-evaluation time to land.
-	time.Sleep(30 * time.Millisecond)
+	// Wait for the parent re-evaluation to land rather than sleeping a fixed
+	// 30ms: poll for its two effects to a deadline. The helpers return on
+	// timeout and the assertions below report what was missing.
+	waitForSessionDeleted(repo, "child-swept", 2*time.Second)
+	waitForSessionState(repo, "parent-swept", session.StateReady, 2*time.Second)
 
 	parent, _ := repo.Load("parent-swept")
 	if parent == nil {
@@ -1372,8 +1393,9 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	// The child-sweep path in PIDManager is gated on readyTTL > 0; wire a
-	// capturing broadcaster to assert the corrective parent push.
+	// The child-sweep path in PIDManager is gated on readyTTL > 0 (see
+	// sweepTestReadyTTL); wire a capturing broadcaster to assert the
+	// corrective parent push.
 	bc := &mockBroadcaster{}
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
 		PW:           pw,
@@ -1383,7 +1405,7 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 		Metrics:      &mockMetrics{},
 		Broadcaster:  bc,
 		Version:      "test",
-		ReadyTTL:     1 * time.Second,
+		ReadyTTL:     sweepTestReadyTTL,
 		PIDDiscovers: nil,
 		ProcessNames: nil,
 		LiveCWDs:     nil,
@@ -1406,8 +1428,8 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 		SessionID:      "parent-waiting",
 		State:          session.StateWaiting,
 		TranscriptPath: parentPath,
-		FirstSeen:      now,
-		UpdatedAt:      now,
+		FirstSeen:      now - parentIdleSeconds,
+		UpdatedAt:      now - parentIdleSeconds,
 		EventCount:     10,
 		Metrics: &session.SessionMetrics{
 			LastEventType:     "assistant",
