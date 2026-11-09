@@ -73,6 +73,23 @@ copy_web_files() {
 # NOTARYTOOL_KEYCHAIN names the keychain that holds the notarytool profile
 # when it is not the default keychain. On the factory host that is the
 # dedicated release keychain; see the ir:release skill, Step 6.
+#
+# RELEASE_KEYCHAIN_PASSWORD_FILE (optional) unlocks NOTARYTOOL_KEYCHAIN in
+# this session from a mode-600 file, so a release needs nobody at the keyboard
+# (tools/release-keychain.sh says how, and what it refuses). When this run
+# unlocked the keychain, it locks it again on exit; a keychain that was
+# already unlocked is left as it was.
+if [[ -n "${RELEASE_KEYCHAIN_PASSWORD_FILE:-}" ]]; then
+    if [[ -z "${NOTARYTOOL_KEYCHAIN:-}" ]]; then
+        echo "ERROR: RELEASE_KEYCHAIN_PASSWORD_FILE is set but NOTARYTOOL_KEYCHAIN, the keychain it unlocks, is not." >&2
+        exit 1
+    fi
+    KEYCHAIN_STATE=$("$SCRIPT_DIR/release-keychain.sh" unlock "$NOTARYTOOL_KEYCHAIN" "$RELEASE_KEYCHAIN_PASSWORD_FILE")
+    echo "Release keychain: $KEYCHAIN_STATE ($NOTARYTOOL_KEYCHAIN)"
+    if [[ "$KEYCHAIN_STATE" == "unlocked" ]]; then
+        trap '"$SCRIPT_DIR/release-keychain.sh" lock "$NOTARYTOOL_KEYCHAIN" && echo "Release keychain: locked again"' EXIT
+    fi
+fi
 NOTARY_ARGS=()
 if [[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
     NOTARY_ARGS=(--keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE")
@@ -240,14 +257,25 @@ build_relay_linux_tarball arm64
 # The build's exit status is checked. It used to be piped into `tail`, which
 # discarded it, and a `find` fallback then picked up whatever older Release
 # binary was lying around.
+#
+# The release build has its own SwiftPM scratch directory, SWIFT_SCRATCH,
+# under $BUILD_DIR, which the clean step above has just deleted. It never
+# reads platforms/macos/.build, the dev and test builds' cache. That cache had
+# been copied over from another Mac on the factory host, and its
+# workspace-state.json named that Mac's paths: the v0.6.8 build failed at
+# planning with "XCFramework Info.plist not found at
+# '/Users/ingo/projects/irrlicht/platforms/macos/.build/artifacts/...'". A
+# release starts from a fresh resolve and a full compile every time, so no
+# leftover state from an earlier build or another machine can reach it.
 echo ""
 echo "Building macOS app..."
 SWIFT_LOG="$ROOT_DIR/$BUILD_DIR/swift-build.log"
+SWIFT_SCRATCH="$ROOT_DIR/$BUILD_DIR/swift"
 XCBUILD="${DEVELOPER_DIR:-$(xcode-select -p)}/../SharedFrameworks/XCBuild.framework/Versions/A/Support/xcbuild"
 
 swift_build() {
-    if ! ( cd platforms/macos && swift build -c release "$@" ) >>"$SWIFT_LOG" 2>&1; then
-        echo "ERROR: swift build -c release $* failed. Last lines of $SWIFT_LOG:" >&2
+    if ! ( cd platforms/macos && swift build -c release --scratch-path "$SWIFT_SCRATCH" "$@" ) >>"$SWIFT_LOG" 2>&1; then
+        echo "ERROR: swift build -c release --scratch-path $SWIFT_SCRATCH $* failed. Last lines of $SWIFT_LOG:" >&2
         tail -30 "$SWIFT_LOG" >&2
         exit 1
     fi
@@ -267,18 +295,18 @@ require_universal() {
 if [[ -x "$XCBUILD" ]]; then
     echo "  Universal build via XCBuild"
     swift_build --arch arm64 --arch x86_64
-    SWIFT_BIN="platforms/macos/.build/apple/Products/Release/Irrlicht"
+    SWIFT_BIN="$SWIFT_SCRATCH/apple/Products/Release/Irrlicht"
     SWIFT_INPUTS=("$SWIFT_BIN")
-    SPARKLE_SRC="platforms/macos/.build/apple/Products/Release/Sparkle.framework"
+    SPARKLE_SRC="$SWIFT_SCRATCH/apple/Products/Release/Sparkle.framework"
     if [[ ! -d "$SPARKLE_SRC" ]]; then
-        SPARKLE_SRC=$(find platforms/macos/.build -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
+        SPARKLE_SRC=$(find "$SWIFT_SCRATCH" -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
     fi
 else
     echo "  No XCBuild (Command Line Tools only): building each arch, then lipo"
     SWIFT_INPUTS=()
     for arch in arm64 x86_64; do
         swift_build --arch "$arch"
-        SWIFT_ARCH_DIR=$(cd platforms/macos && swift build -c release --arch "$arch" --show-bin-path)
+        SWIFT_ARCH_DIR=$(cd platforms/macos && swift build -c release --scratch-path "$SWIFT_SCRATCH" --arch "$arch" --show-bin-path)
         SWIFT_INPUTS+=("$SWIFT_ARCH_DIR/Irrlicht")
     done
     for f in "${SWIFT_INPUTS[@]}"; do
