@@ -120,8 +120,8 @@ describe('buildQuotaRowDOM per density', () => {
 describe('buildOverflowChipDOM', () => {
   test('the pill carries its "+N more" label', () => {
     const hidden = [
-      { key: 'openai|session:a', providerKey: 'openai', accountRef: '', mode: 'subscription', snapshot: {}, imminent: { used_percent: 90 } },
-      { key: 'zai|session:b', providerKey: 'zai', accountRef: 'zzzz-1234', mode: 'subscription', snapshot: {}, imminent: null },
+      { key: 'openai|unconfirmed', providerKey: 'openai', accountRef: '', mode: 'subscription', snapshot: {}, imminent: { used_percent: 90 } },
+      { key: 'zai|zzzz-1234', providerKey: 'zai', accountRef: 'zzzz-1234', mode: 'subscription', snapshot: {}, imminent: null },
     ];
     const pill = buildOverflowChipDOM(hidden);
     expect(pill.textContent).toBe('+2 more');
@@ -158,8 +158,11 @@ describe('applyStripDensity', () => {
   });
 });
 
-// Issue #2095: one chip per confirmed account; an unconfirmed session never
-// merges with another session's snapshot.
+// Issue #2095: one chip per confirmed account. Issue #2136 revised #2095's D3
+// for the unconfirmed case: every session of one provider whose snapshot has
+// no confirmed account shares ONE "Account unconfirmed" chip (key
+// `<provider>|unconfirmed`) instead of getting a chip each. A confirmed
+// account never merges with that bucket or with another account.
 describe('bucketChips per account (#2095)', () => {
   const nowMs = Date.UTC(2026, 0, 1);
   const future = nowMs / 1000 + 3600;
@@ -186,28 +189,35 @@ describe('bucketChips per account (#2095)', () => {
     }
   });
 
-  test('C2: confirmed provider with empty or missing ref never merges across sessions', () => {
+  // Flipped by #2136 (was "never merges across sessions"): an empty and a
+  // missing ref are both unconfirmed, so the two sessions share the
+  // provider's one unconfirmed chip and the newer reading wins.
+  test('C2: confirmed provider with empty or missing ref folds into one unconfirmed chip', () => {
     for (const [aT, bT] of [[2, 1], [3, 4], [6, 5]]) {
       const chips = bucketChips([
         mk({ id: 's1', adapter: 'claude-code', extra: { confirmed_account_ref: '' }, sampledAt: aT, pct: 10 }),
         mk({ id: 's2', adapter: 'claude-code', extra: {}, sampledAt: bT, pct: 20 }),
       ], nowMs);
-      expect(chips).toHaveLength(2);
-      expect(chips.map(pctOf).sort()).toEqual([10, 20]);
-      expect(chips.every((c) => c.accountRef === '')).toBe(true);
+      expect(chips).toHaveLength(1);
+      expect(chips[0].key).toBe('anthropic|unconfirmed');
+      expect(chips[0].accountRef).toBe('');
+      expect(pctOf(chips[0])).toBe(aT > bT ? 10 : 20);
     }
   });
 
-  test('C2: two unknown-provider sessions of one adapter stay two chips', () => {
+  // Flipped by #2136 (was "stay two chips"): an unknown provider's sessions
+  // are unconfirmed too, so one adapter's share one chip, as in v0.6.7.
+  test('C2: two unknown-provider sessions of one adapter fold into one chip', () => {
     const unk = (id, t, pct) => ({
       session_id: id, adapter: 'codex',
       metrics: { rate_limit: { sampled_at: t, windows: [{ used_percent: pct, window_minutes: 300, resets_at: future }] } },
     });
     for (const [aT, bT] of [[2, 1], [3, 4]]) {
       const chips = bucketChips([unk('u1', aT, 10), unk('u2', bT, 20)], nowMs);
-      expect(chips).toHaveLength(2);
-      expect(chips.map(pctOf).sort()).toEqual([10, 20]);
-      expect(chips.every((c) => c.providerKey === 'unknown:codex')).toBe(true);
+      expect(chips).toHaveLength(1);
+      expect(chips[0].key).toBe('unknown:codex|unconfirmed');
+      expect(chips[0].providerKey).toBe('unknown:codex');
+      expect(pctOf(chips[0])).toBe(aT > bT ? 10 : 20);
     }
   });
 
@@ -248,5 +258,113 @@ describe('bucketChips per account (#2095)', () => {
     const [u] = bucketChips([mk({ id: 's2', adapter: 'claude-code', extra: {}, sampledAt: 1, pct: 10 })], nowMs);
     expect(quotaTooltip(u, nowMs)).toContain('Account unconfirmed');
     expect(buildOverflowChipDOM([a, u]).title).toBe('Claude Team · Account …ABCD: 10%\nAnthropic · Account unconfirmed: 10%');
+  });
+});
+
+// Issue #2136: v0.6.8 gave every unconfirmed session its own chip
+// (`<provider>|session:<id>`), so N Claude Code sessions on one subscription
+// showed N Anthropic chips and N Muse sessions N identical Meta chips. The
+// approved fix keys an unconfirmed snapshot by `<provider>|unconfirmed`. The
+// first and last cases are red on main; the two-chip cases are locks (they
+// pass on main too) that pin what the fix must NOT merge.
+describe('bucketChips unconfirmed bucket per provider (#2136)', () => {
+  const nowMs = Date.UTC(2026, 10, 10, 23, 0, 0);
+  const now = nowMs / 1000;
+  // One subscription: every session reports the same 5h and 7d resets.
+  const reset5h = now + 2 * 3600;
+  const reset7d = now + 4 * 86400;
+  // A Claude Code statusline reading: provider confirmed, account not
+  // (confirmed_account_ref omitted, as omitempty drops "" on the wire).
+  const claude = ({ id, sampledAt, pct5h, ref, cost = 0 }) => ({
+    session_id: id, adapter: 'claude-code',
+    metrics: {
+      estimated_cost_usd: cost,
+      rate_limit: {
+        provider: 'anthropic', attribution_quality: 'confirmed',
+        attribution_evidence: 'claude_code_statusline', observation_source: 'hook',
+        sampled_at: sampledAt,
+        windows: [
+          { used_percent: pct5h, window_minutes: 300, resets_at: reset5h },
+          { used_percent: 40, window_minutes: 10080, resets_at: reset7d },
+        ],
+        ...(ref ? { confirmed_account_ref: ref } : {}),
+      },
+    },
+  });
+  const pct5h = (chip) => chip.snapshot.windows[0].used_percent;
+
+  test('two unconfirmed Anthropic sessions share ONE chip carrying the newer reading', () => {
+    const older = claude({ id: 's-older', sampledAt: now - 1800, pct5h: 6, cost: 1.5 });
+    const newer = claude({ id: 's-newer', sampledAt: now - 120, pct5h: 22, cost: 2.5 });
+    for (const order of [[older, newer], [newer, older]]) {
+      const chips = bucketChips(order, nowMs);
+      expect(chips).toHaveLength(1);
+      expect(chips[0].key).toBe('anthropic|unconfirmed');
+      expect(chips[0].providerKey).toBe('anthropic');
+      expect(chips[0].accountRef).toBe('');
+      expect(pct5h(chips[0])).toBe(22);
+      expect(chips[0].session.session_id).toBe('s-newer');
+      expect(chips[0].totalCostUSD).toBe(4);
+      expect(quotaTooltip(chips[0], nowMs)).toContain('Account unconfirmed');
+    }
+  });
+
+  test('lock: a confirmed and an unconfirmed session of one provider stay two chips', () => {
+    const confirmed = claude({ id: 's-acct', sampledAt: now - 1800, pct5h: 10, ref: 'acct-A' });
+    const unconfirmed = claude({ id: 's-unc', sampledAt: now - 120, pct5h: 30 });
+    for (const order of [[confirmed, unconfirmed], [unconfirmed, confirmed]]) {
+      // Asserted through accountRef rather than the bucket key, so the lock
+      // reads the same before and after the key change.
+      const chips = bucketChips(order, nowMs);
+      expect(chips).toHaveLength(2);
+      expect(chips.every((c) => c.providerKey === 'anthropic')).toBe(true);
+      expect(pct5h(chips.find((c) => c.accountRef === 'acct-A'))).toBe(10);
+      expect(pct5h(chips.find((c) => c.accountRef === ''))).toBe(30);
+    }
+  });
+
+  test('lock: two different confirmed accounts stay two chips', () => {
+    const a = claude({ id: 's-a', sampledAt: now - 1800, pct5h: 10, ref: 'acct-A' });
+    const b = claude({ id: 's-b', sampledAt: now - 120, pct5h: 80, ref: 'acct-B' });
+    const chips = bucketChips([b, a], nowMs);
+    expect(chips.map((c) => c.key)).toEqual(['anthropic|acct-A', 'anthropic|acct-B']);
+    expect(chips.map(pct5h)).toEqual([10, 80]);
+  });
+
+  test('lock: unconfirmed sessions of two providers stay two chips', () => {
+    const anthropic = claude({ id: 's-claude', sampledAt: now - 120, pct5h: 30 });
+    const openai = {
+      session_id: 's-codex', adapter: 'codex',
+      metrics: { rate_limit: {
+        provider: 'openai', attribution_quality: 'confirmed', sampled_at: now - 60,
+        windows: [{ used_percent: 50, window_minutes: 10080, resets_at: reset7d }],
+      } },
+    };
+    const chips = bucketChips([openai, anthropic], nowMs);
+    expect(chips.map((c) => c.providerKey)).toEqual(['anthropic', 'openai']);
+    expect(chips.every((c) => c.accountRef === '')).toBe(true);
+  });
+
+  test('two Muse sessions carrying the same Meta snapshot give ONE chip', () => {
+    // The shape museaccountapi.buildSnapshot writes: provider "meta",
+    // confirmed attribution, and NO account ref (accountRef() is always ""
+    // and omitempty drops it). The account-API sweep stamps this same
+    // snapshot onto every live top-level Muse session.
+    const meta = {
+      provider: 'meta', attribution_quality: 'confirmed',
+      attribution_evidence: 'muse_account_api', observation_source: 'account_api',
+      product: 'Muse Code Everyday Usage',
+      sampled_at: now - 30, last_success_at: now - 30, last_attempt_at: now - 30,
+      windows: [
+        { used_percent: 12, window_minutes: 300, resets_at: reset5h },
+        { used_percent: 35, window_minutes: 10080, resets_at: reset7d },
+      ],
+    };
+    const muse = (id) => ({ session_id: id, adapter: 'muse', metrics: { rate_limit: meta } });
+    const chips = bucketChips([muse('m1'), muse('m2'), muse('m3')], nowMs);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].key).toBe('meta|unconfirmed');
+    expect(chips[0].providerKey).toBe('meta');
+    expect(chips[0].mode).toBe('subscription');
   });
 });
