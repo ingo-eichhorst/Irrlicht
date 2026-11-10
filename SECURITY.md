@@ -84,7 +84,12 @@ nothing until the user grants each per-agent permission through the
 permission wizard (v0.5.0+); revoking a permission actively undoes it
 (hooks uninstall, watchers stop). Once granted, the daemon reads transcript
 files the user already has on disk and exposes state on `127.0.0.1:7837`
-by default. It does not transmit transcript contents off the machine.
+by default. It does not transmit transcript contents off the machine
+unless relay publishing is turned on (`IRRLICHT_RELAY_URL`, or the app's
+publish setting via `PUT /api/v1/relay/publish`): the relay you run then
+receives the full session state, including short transcript excerpts such
+as `last_assistant_text` (about 200 characters of the latest assistant
+message).
 Security-relevant areas include: any path traversal or TOCTOU around
 transcript watching, the loopback HTTP/WS surface, file-permission handling
 on the state directory (including `permissions.json`), and the

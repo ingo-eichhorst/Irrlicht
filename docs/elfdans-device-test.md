@@ -20,6 +20,8 @@ Setup friction is what makes this plan expensive to repeat, so most of it is scr
 ```sh
 tools/elfdans-rig.sh up [--serve]   # build + start an isolated relay, auth on, own state dir
 tools/elfdans-rig.sh check          # every assertion below that needs no phone
+tools/elfdans-rig.sh drive <name>   # one Phase 5 scenario as a synthetic daemon: waiting, ready, flap, burst, subagent, disconnect ('drive -h' lists flags)
+tools/elfdans-rig.sh status         # what is running, and where its state is
 tools/elfdans-rig.sh down [--wipe]
 ```
 

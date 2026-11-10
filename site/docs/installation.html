@@ -238,7 +238,7 @@ systemctl --user enable --now irrlichd</code></pre>
       <!-- ── Build from Source ── -->
       <h2 id="build-from-source">Build from Source</h2>
 
-      <p>Building from source gives you the full installer package, identical to the release download.</p>
+      <p>Building from source gives you the full installer package, with the same layout as the release download &mdash; ad-hoc signed and not notarized unless you set <code>DEVELOPER_ID</code> and <code>NOTARYTOOL_KEYCHAIN_PROFILE</code>.</p>
 
       <h3>One-command build</h3>
 
@@ -246,17 +246,17 @@ systemctl --user enable --now irrlichd</code></pre>
 cd Irrlicht
 ./tools/build-release.sh</code></pre>
 
-      <p>The script produces a <code>.dmg</code> (and optionally a <code>.pkg</code>) in the build directory.</p>
+      <p>The script produces a <code>.dmg</code> and a <code>.pkg</code> in <code>.build/</code>.</p>
 
       <h3>What the build script does</h3>
 
       <p>Under the hood, <code>build-release.sh</code> performs these steps in order:</p>
 
       <ol>
-        <li><strong>Stages the web frontend</strong> &mdash; copies the dashboard HTML/CSS/JS into <code>Irrlicht.app/Contents/Resources/web/</code>, where the daemon serves it from disk.</li>
         <li><strong>Cross-compiles the daemon</strong> &mdash; builds <code>irrlichd</code> for both <code>arm64</code> (Apple Silicon) and <code>amd64</code> (Intel).</li>
         <li><strong>Creates a universal binary</strong> &mdash; merges both architectures with <code>lipo</code> so one binary runs natively on any Mac.</li>
         <li><strong>Builds the Swift menu-bar app</strong> &mdash; compiles <code>Irrlicht.app</code> from the SwiftUI source.</li>
+        <li><strong>Stages the web frontend</strong> &mdash; copies the dashboard HTML/CSS/JS into <code>Irrlicht.app/Contents/Resources/web/</code>, where the daemon serves it from disk.</li>
         <li><strong>Embeds the daemon</strong> &mdash; places the universal <code>irrlichd</code> binary inside <code>Irrlicht.app/Contents/MacOS/</code>.</li>
         <li><strong>Packages into DMG and installer</strong> &mdash; creates a <code>.dmg</code> for drag-and-drop install and a <code>.pkg</code> installer.</li>
       </ol>

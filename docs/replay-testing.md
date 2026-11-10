@@ -108,7 +108,7 @@ the `replaydata/agents/adapters.json` maturity + capability model.
   `UnpairedSidecars` and `PairedButUngraded` are the denominator's honesty:
   every sidecar on disk is either graded, unpairable, or paired-but-ungradeable,
   and the three figures sum to the catalog. Nothing is unpairable today — the
-  Go walk and `tools/replay-fixtures.sh` select recordings by the same two
+  Go walk and `tools/replay-fixtures.sh` select recordings by the same
   transcript names, from the one declaration `replay.TranscriptNames`, with
   `TestSweepAndGatesWalkTheSameTranscriptNames` pinning the shell's own `find`
   list to it. They do not walk one identical *set* — the sweep enumerates

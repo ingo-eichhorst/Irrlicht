@@ -12,6 +12,38 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.9] — 2026-11-10
+
+### One quota chip per subscription again
+
+### Also in this release
+
+**Fixed**
+- Quota chips: sessions whose account is not confirmed share one chip per provider again. In v0.6.8, every such session got a chip of its own, so several Claude Code sessions on one subscription showed several Anthropic chips with slightly different numbers, and N Muse sessions showed N identical Meta chips. Confirmed accounts keep their own chips. For one chip per Claude Code account, grant Settings → Review agent permissions → "Claude Code account" (#2136, #2137).
+
+**Changed / Docs / Distribution**
+- Docs: a full documentation sweep, which corrected these pages. The OpenCode 2.x adapter is now listed as `stable`, the stage it earned in v0.6.8 (#2130); 1.x stays `alpha`.
+  - The state-machine and event references: three turn-end signals, how ESC ends a turn, and when `presession_removed` fires.
+  - The API reference: the dashboard and history fields, task-estimate risk and confidence, and the relay publish status.
+  - The LAN recipe in the configuration page.
+  - Copilot's hooks permission.
+  - `irrlicht-ls` after a Homebrew or DMG install.
+  - `SECURITY.md`, which now says that relay publishing sends session state, including short transcript excerpts, to the relay you run.
+- Releases build unattended on the factory build host. The release keychain is unlocked from a mode-600 password file and locked again afterwards, and the Swift release build uses its own scratch directory (#2135).
+
+**Contributor tooling**
+- Tests: the two child-sweep tests no longer flake on a parent reaped early (#2134).
+
+### Technical appendix
+
+- **Quota buckets (#2136, PR #2137).** Both clients key a chip by `<provider>|<account ref>`. An unconfirmed snapshot now keys as `<provider>|unconfirmed` instead of `<provider>|session:<id>`: `bucketChips` in `platforms/web/quotaChips.js` and `RateLimitInfo.accountBucketKey(adapter:)` in the macOS app (popover and menu bar). Inside the bucket the existing precedence picks the reading: subscription beats usage, fresh beats stale, newest `sampled_at` wins. This revises #2095's D3 for unconfirmed snapshots only; a confirmed account never merges with the unconfirmed bucket or with another account. With two accounts and no consent, the unconfirmed chip can alternate between them, as every chip did before #2095.
+  - Claude Code sessions are unconfirmed while the `claude-code-account` consent is pending, which a newly declared permission is after an upgrade. They are also unconfirmed when they were already running when the daemon first observed the account.
+  - Muse snapshots carry no account ref by design.
+  - The tests were committed first and seen red on main: 4 web tests (local and CI) and 4 Swift tests (CI run 42720840632).
+- **Unattended release (PR #2135).** `tools/release-keychain.sh` reads the lock state with `SecKeychainGetStatus`, not `security show-keychain-info`, which can wait on an unlock dialog in a UI session. It runs `security unlock-keychain` in a forked, `setsid` child with the password file as stdin, because with a controlling terminal `security` reads the terminal and ignores stdin. The file is refused if it is a symlink, owned by another user, or readable by group or others. `tools/build-release.sh` unlocks before the build when `RELEASE_KEYCHAIN_PASSWORD_FILE` is set, and relocks on exit only if it unlocked. Every `swift build` uses `--scratch-path .build/swift`. `tools/lib/release-keychain_test.sh` runs 14 cases on a throwaway keychain, including a terminal case and a naive-unlock control, under a 180 s watchdog.
+- **Test flake (PR #2134).** `UpdatedAt` is truncated to whole seconds, and the tests' ready TTL was 1 s, so the sweep could reap a parent before the test looked at it. The tests now use a one-minute TTL and poll to a deadline instead of sleeping.
+- **Alias sync.** No change. Upstream codeburn still re-points five canonicals, left for maintainer review: `codex-auto-review` → `gpt-5.6-luna`, and the four GLM spellings → `z-ai/glm-5.2` / `z-ai/glm-5.3`.
+
 ## [0.6.8] — 2026-11-09
 
 ### OpenCode 2.x sessions show up, and quota chips split by account
@@ -2159,7 +2191,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.8...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.9...HEAD
+[0.6.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.9
 [0.6.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.8
 [0.6.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.7
 [0.6.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.6

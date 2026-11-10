@@ -146,7 +146,7 @@ Semantic pressure scale adds: `#FF3B30` (high) and `#D70015` (critical) — **on
 
 Three-family system. Always use in their assigned role — no cross-casting.
 
-1. **Cormorant Garamond** — serif display. Light weight 300. Used for: logo wordmark, hero H1, big section titles ("Three states."), italic meanings. Never for body.
+1. **Cormorant Garamond** — serif display. Light weight 300. Used for: logo wordmark, hero H1, big section titles ("Why a small light"), italic meanings. Never for body.
 2. **Outfit** — humanist sans. Weights 200–600. Used for: body, subheads, buttons, feature copy.
 3. **DM Mono** — monospace. Weights 300/400/500. Used for: eyebrows, code, data, small uppercase labels, metrics, CLI. **This is the brand's workhorse** — more than half the interface.
 

@@ -1,6 +1,6 @@
 # Mobile Notifications — Architecture (arc42)
 
-**Status:** **built, unproven.** Slices 1–9 are implemented on `feat/1346-elfdans`; every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`elfdans-device-test.md`](./elfdans-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. Both gaps this line used to name are now closed and say so where they live: the test-notification button in §11 row 11 (slice 9), R6 in §8.5/ADR-9 (slice 8). No size figure is quoted here on purpose — the one that stood here was hand-typed and had already drifted, claiming 100 files against a branch of 115.
+**Status:** **built, unproven.** Slices 1–10 are implemented on `main`; every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`elfdans-device-test.md`](./elfdans-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. Both gaps this line used to name are now closed and say so where they live: the test-notification button in §11 row 11 (slice 9), R6 in §8.5/ADR-9 (slice 8). No size figure is quoted here on purpose — the one that stood here was hand-typed and had already drifted, claiming 100 files against a branch of 115.
 **Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`. Operator runbook: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md). User guide: [`site/docs/elfdans.html`](../site/docs/elfdans.html).
 **Format note:** minimal arc42 profile — every section present, none padded
 
@@ -372,7 +372,7 @@ Division of labor: the **device token** is the phone's durable identity (an ordi
 |---|---|
 | Your Mac | Everything (unchanged) |
 | Your relay | Full session state — **already true today** for any relay user; it composes payloads (ADR-6) |
-| Apple/Google | Endpoint identity, **timing**, ciphertext padded to a fixed 2 KiB — **and four plaintext headers we long described as absent**: `TTL` (3600 for `waiting`, 600 for `ready` and daemon), `Urgency` (`high` vs `normal`, splitting the same way), the `Topic` collapse key, and the VAPID `k=` public key. The first two mean the push service can distinguish *which kind* of event fired, not merely that one did; `Topic` is a stable per-session pseudonym across its lifetime; `k=` groups every phone paired to one relay, and the `sub` claim (ADR-7) names the software. Content stays unreadable; the metadata is richer than "timing" implied (`core/pkg/webpush/sender.go:117-126`) | 
+| Apple/Google | Endpoint identity, **timing**, ciphertext padded to a fixed 2 KiB — **and four plaintext headers we long described as absent**: `TTL` (3600 for `waiting`, 600 for `ready` and daemon), `Urgency` (`high` vs `normal`, splitting the same way), the `Topic` collapse key, and the VAPID `k=` public key. The first two mean the push service can distinguish *which kind* of event fired, not merely that one did; `Topic` is a stable per-session key across its lifetime — a hash for a UUID session id, but the id itself for one that already fits RFC 8030's 32-char token (§8.4); `k=` groups every phone paired to one relay, and the `sub` claim (ADR-7) names the software. Content stays unreadable; the metadata is richer than "timing" implied (`core/pkg/webpush/sender.go:117-126`) | 
 | Phone | Structured payload; notification text is composed **on-device** by the service worker |
 
 Named leak, accepted as in #1346: timing is a work-rhythm signal; batching would hide it and ruin the feature. Payloads are structured data (ids, labels, states), never prose — composition stays on-device.
@@ -402,7 +402,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 | First sighting / snapshot seed | Silent (no push), except a genuine state *diff* on reconcile (§6.3) |
 | Subagent sessions (`ParentSessionID` set) | Never — parent covers them (matches both existing client implementations) |
 | `session_deleted` | No push; cancels pending hold-downs |
-| Collapse | One notification per session. The device-side `tag` **is** the session id; the `Topic` header is `base64url(sha256(id))[:32]`, because RFC 8030 §5.4 caps a Topic at 32 base64url chars and a session UUID is 36. Same collapse semantics, deterministic, but the header never carries the id — which is also why it is a stable pseudonym rather than a leak of the id itself (§8.2) |
+| Collapse | One notification per session. The device-side `tag` **is** the session id; the `Topic` header is `webpush.TopicHeader(id)`, because RFC 8030 §5.4 caps a Topic at 32 base64url chars: an id that already fits (opencode's 30-char `ses_*`) is sent **verbatim**, and anything else (a 36-char session UUID) becomes `base64url(sha256(id))[:32]`. Same collapse semantics, deterministic either way, but only the hashed form keeps the id out of the header — a short id reaches the push service as itself (§8.2) |
 | Cooldown | 60 s per (session, edge) — inherited from the event→action engine removed with the backchannel in #1846; the value stayed |
 | Burst | > 3 pushes within 20 s → single summary "N agents need attention" (itself Topic-replaced) |
 | TTL and urgency | Per edge, and the split is one idea: a stale `ready` is noise, so it expires in 10 m at `normal` urgency. The other two notifying edges above stay TRUE until a human or a successful turn changes them, so both keep 1 h at `high`. Watchdog 10 m |
@@ -467,7 +467,7 @@ awaiting a reply that never arrives would hang, so every message carrying a repl
 
 ### 8.6 Persistence and restart behavior
 
-The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_snapshot` on every daemon reconnect); the only file it writes today is `tokens.json`, hashed at rest. The push engine keeps that shape: flat JSON files, 0600, atomic temp+rename, no database. **Session content is never at rest on the relay host — before this feature and after it.**
+The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_snapshot` on every daemon reconnect); before this feature the only file it wrote was `tokens.json`, hashed at rest. The push engine keeps that shape: flat JSON files, 0600, atomic temp+rename, no database. **Session content is never at rest on the relay host — before this feature and after it.**
 
 | Data | Where | Survives restart | Notes |
 |---|---|---|---|
@@ -495,7 +495,7 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Default device label | `beacon` → `elfdans` | `tokens.json` at rest (`push_handlers.go:39`) | cosmetic; existing records keep the old label in `token list` |
 | Ledger database | `beacon-ledger` → `elfdans-ledger` | IndexedDB on the phone (`sw.js:274`) | opens a **fresh empty** database at version 1; the old one is orphaned, so the home-screen badge resets to 0 and §8.5's R6 fallback has no last-known state left to name |
 
-What is deliberately *not* in the table, so the count is checkable rather than merely asserted: the four page↔worker message names and the `elfdans-session` URL-fragment key moved too, but they cross no boundary above — both copies ship in the same release and `sw-contract.test.js` pins them to each other, so the only exposure is the moments-long skew while a new worker activates.
+What is deliberately *not* in the table, so the count is checkable rather than merely asserted: the three page↔worker message names and the `elfdans-session` URL-fragment key moved too, but they cross no boundary above — both copies ship in the same release and `sw-contract.test.js` pins them to each other, so the only exposure is the moments-long skew while a new worker activates.
 
 Three of the six are breaking for a paired device — the device-token key, the manifest identity, and the ledger — and they cost nothing **only because nothing is paired**: slice D has never run (see the Status line), so the sole pairings that have ever existed live in the rig's scratch dir under `.build/`, which `elfdans-rig.sh down --wipe` discards. Were this rename to happen after a real rollout, rows 1 and 2 would each need a migration step, and neither is self-healing — §8.3's `selfHeal` re-subscribes only when the browser has no subscription *or* the relay has no record, and a renamed `localStorage` key produces neither condition.
 
@@ -691,7 +691,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | **RFC 8291** | Mandatory end-to-end payload encryption to the device's subscription keys |
 | **PWA** | Installable web app; on iOS the only vehicle for third-party web push |
 | **Service worker** | Phone-side script woken by a push while the app is closed; composes the banner on-device |
-| **Topic / tag** | Push-service-side replacement key / device-side notification collapse key — both set to the session id |
+| **Topic / tag** | Push-service-side replacement key / device-side notification collapse key — the `tag` is the session id; the `Topic` is the id itself when it already fits RFC 8030 §5.4, else `base64url(sha256(id))[:32]` (§8.4) |
 | **Hold-down** | Delay before a `ready` push, cancelled if the state flaps back |
 | **Device token** | Ordinary relay `TokenRecord` issued at pairing; revocable via existing CLI |
 | **Workspace** | Relay's tenant isolation unit; subscriptions and fan-out are scoped to it |

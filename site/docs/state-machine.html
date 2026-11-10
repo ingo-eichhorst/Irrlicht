@@ -318,10 +318,11 @@
       <p>When any path matches, the session transitions to <span class="badge badge-ready">ready</span>. The light turns green.</p>
 
       <h3>Turn Completion Signals</h3>
-      <p>Two transcript event types signal the end of an agent turn:</p>
+      <p>Three transcript event types signal the end of an agent turn:</p>
       <ul>
         <li><code>turn_duration</code> &mdash; emitted at the end of each agent turn. This is the primary signal.</li>
         <li><code>stop_hook_summary</code> &mdash; emitted after stop hooks run. Used as a fallback when <code>turn_duration</code> is not present.</li>
+        <li><code>compact_boundary</code> &mdash; only for a manual <code>/compact</code> (<code>compactMetadata.trigger</code> = <code>manual</code>); auto-compaction fires mid-turn and is not a turn end.</li>
       </ul>
 
       <!-- ─── Pre-Sessions ─── -->
@@ -421,7 +422,7 @@
       <p>Cancellation maps directly to <span class="badge badge-ready">ready</span>. There is no intermediate "cancelled" state. The detection logic:</p>
       <ul>
         <li><code>LastWasUserInterrupt = true</code> signals the ESC marker was seen.</li>
-        <li>The agent stops executing, so <code>IsAgentDone()</code> fires.</li>
+        <li>The classifier&rsquo;s <code>user_interrupt</code> rule fires: no tool call is open and the last transcript event is that user event. (<code>IsAgentDone()</code> is not the path &mdash; an ESC writes no <code>turn_duration</code> or <code>stop_hook_summary</code>.)</li>
         <li>The session transitions to <span class="badge badge-ready">ready</span>.</li>
       </ul>
       <p>This is a deliberate design choice. From the user's perspective, a cancelled turn is equivalent to a completed turn &mdash; the agent is idle and waiting for the next message. Folding it into <span class="badge badge-ready">ready</span> keeps the state model free of a value that would carry no information the user could act on.</p>
@@ -507,7 +508,7 @@
           <tr>
             <td><code>presession_removed</code></td>
             <td>Pre-sessions</td>
-            <td>A pre-session is cleaned up &mdash; either superseded once its real transcript appears, or discarded because the process exited before any transcript showed up.</td>
+            <td>A pre-session is retired because it was superseded once its real transcript appeared. A pre-session whose process exits before any transcript shows up is recorded as <code>process_exited</code>, not as this kind.</td>
           </tr>
           <tr>
             <td><code>task_delta</code></td>

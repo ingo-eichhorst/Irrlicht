@@ -112,8 +112,10 @@ Keeps the tooltip live without a full re-`snapshot`.
 The daemon wraps each `PushMessage` it would send on its own WebSocket. The relay
 stamps `source` with the originating `daemon_id` (authoritative — it does not
 trust the daemon's stamp) and re-emits to every client. **Clients read `.msg`
-and process it exactly as a raw daemon frame.** `focus_requested` is filtered at
-the forwarder (host-local; meaningless cross-host, wiki §5.4).
+and process it exactly as a raw daemon frame.** Host-local frames are filtered
+at the forwarder and never reach the relay: `focus_requested` (meaningless
+cross-host, wiki §5.4), `permissions_updated` (consent is managed on the
+daemon's own machine, #570) and `input_requested`.
 
 ## Client behavior
 

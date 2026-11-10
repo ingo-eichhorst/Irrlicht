@@ -20,8 +20,8 @@ CI parity section (chunking, the budget, and what it makes visible).
   under `t.TempDir()`, so it never touches the production daemon).
 - Architecture: `core/architecture_test.go` (runs automatically as part of
   `go test ./core/...`) statically enforces the hexagonal import direction
-  from Key Conventions — `domain/` and `ports/` packages may not import
-  outward into `adapters/` or `application/`, `application/services/`
+  from Key Conventions — `domain/` may not import `ports/`, `adapters/` or
+  `application/`, `ports/` may not import `adapters/`, `application/services/`
   may only reach `adapters/inbound/` through `ports/`, and `pkg/` — the
   shared leaf layer depended on from domain, adapters, application and
   cmd alike — may not import `adapters/` or `application/` at all. It checks
@@ -429,8 +429,9 @@ CI parity section (chunking, the budget, and what it makes visible).
   neither invocation changes it) and died with `No such file or directory`,
   while preflight's `[[ -e "$t" ]] || continue` filtered that out and returned
   0, passing silently. And the two callers' one remaining scope difference —
-  CI skips `posix-lint_test.sh`, which needs a linter the macos image lacks —
-  is an **argument** that is validated against the corpus before anything runs,
+  CI skips `posix-lint_test.sh` and `bash-lint_test.sh`, which need linters the
+  macos image lacks — is a list of **arguments**, each validated against the
+  corpus before anything runs,
   so a skip that stops matching a real file is a refusal instead of a `case`
   pattern quietly matching nothing. Its tests are
   `tools/lib/shell-lib-suite_test.sh`, which grades the runner in BARE

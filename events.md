@@ -98,7 +98,7 @@ Pre-sessions (`proc-<pid>`) are synthetic sessions created by the process scanne
 
 | Step | Mechanism | Details |
 |------|-----------|---------|
-| Discovery | `lsof -t <transcript>` | One-shot on session creation; retried async on activity if PID=0 |
+| Discovery | the adapter's own `DiscoverPID` (e.g. Claude Code: `~/.claude/sessions/<pid>.json`, then a CWD match; Codex: the process holding the transcript open for writing, via `lsof`) | `DiscoverPIDWithRetry` on session creation: at once, then retried at 500ms, 1s, 2s; retried async on activity if PID=0 |
 | Registration | `EVFILT_PROC NOTE_EXIT` | kqueue watches the PID for exit |
 | Liveness sweep | `syscall.Kill(pid, 0)` | Every 5s, backing off to 15s after 3 consecutive clean sweeps; checks all sessions and deletes dead ones |
 | Startup cleanup | `syscall.Kill(pid, 0)` | Synchronous in `seedFromDisk`; dead PIDs deleted before kqueue registration |
@@ -115,7 +115,7 @@ These transitions change the lifecycle state of an existing session.
 | Assistant calls tool (stop_reason=tool_use) | `working` | `working` | Transcript write | Open tool call count > 0 |
 | Tool result returned, assistant continues | `working` | `working` | Transcript write | Activity event, agent still processing |
 | Assistant finished turn (end_turn) | `working` | `ready` | `turn_duration` or `stop_hook_summary` system event | `IsAgentDone()=true` |
-| User cancelled mid-turn (ESC) | `working` | `ready` | `stop_hook_summary` system event | `IsAgentDone()=true` |
+| User cancelled mid-turn (ESC) | `working` | `ready` | `[Request interrupted by user]` user event | classifier rule `user_interrupt` (`LastWasUserInterrupt=true`, no open tool call) |
 | AskUserQuestion tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | ExitPlanMode tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | User answers question / approves plan | `waiting` | `working` | Tool result in transcript | `NeedsUserAttention()=false` |
@@ -130,7 +130,7 @@ These transitions change the lifecycle state of an existing session.
 
 Both bullets predate `error` and constrain only the three original states. **No
 impossibility is asserted about `error` in either direction** -- its edges are
-the two in "Leaving `error`" above. If a genuine `error` impossibility is ever
+the three in "Leaving `error`" above. If a genuine `error` impossibility is ever
 established it belongs here; do not infer one from this list's silence.
 
 **`error` sits BELOW the waiting rules.** The classifier is a ladder, and
@@ -170,11 +170,12 @@ The transcript tailer maps these system events to `LastEventType = "turn_done"`:
 |---------------|-------------|
 | `turn_duration` | End of each agent turn (primary signal) |
 | `stop_hook_summary` | After stop hooks run (fallback when turn_duration is absent) |
+| `compact_boundary` | A manual `/compact` only (`compactMetadata.trigger` = `manual`); auto-compaction fires mid-turn and stays skipped |
 
 ### Transcript Event Classification
 
 **Message events** (affect `LastEventType`):
-`user`, `assistant`, `tool_use`, `tool_call`, `tool_result`, `user_message`, `assistant_message`, `user_input`, `assistant_output`, `message`
+`user`, `assistant`, `tool_use`, `tool_call`, `tool_result`, `user_message`, `assistant_message`, `user_input`, `assistant_output`, `message`, `assistant_streaming` (the claudecode parser's type for a mid-stream assistant chunk; deliberately not matched by `IsAgentDone`)
 
 **System events** (do NOT affect `LastEventType`, except turn completion):
 `turn_duration`, `stop_hook_summary`, `local_command`, `compact_boundary`, `api_error`
@@ -228,7 +229,7 @@ Subagent sessions run independent state machines with the same states.
 Session files: `~/Library/Application Support/Irrlicht/instances/<sessionID>.json`
 Atomic writes via temp file + rename. Real-time updates fan out via WebSocket (`session_created`, `session_updated`, `session_deleted`).
 
-Memory store merges disk on `ListAll` to pick up sessions created externally (e.g. by the claudecode hooks receiver, `POST /api/v1/hooks/claudecode`).
+There is no in-memory session store: `ListAll` reads the instances directory through `filesystem.SessionRepository`, behind a 3s TTL cache (`NewCachedSessionRepository`) that every `Save`/`Delete` invalidates.
 
 ## Session Discovery Paths
 
@@ -273,7 +274,7 @@ session recording and replay. The vocabulary is declared once, in
 | `debounce_terminal` | A terminal event bypasses the debounce window |
 | `hook_received` | An agent hook request reaches the daemon |
 | `presession_created` | The process scanner creates a `proc-<pid>` pre-session |
-| `presession_removed` | A pre-session is superseded by its transcript or cleaned up |
+| `presession_removed` | A pre-session is superseded by its real session's transcript (one whose process exits first is recorded as `process_exited` instead) |
 | `task_delta` | The tailer folds one task-list change into a session |
 | `ui_detected` | Retired terminal read-back of a UI dialog; no daemon path emits it since #1875, kept so frozen recordings stay readable |
 | `cache_bloat_detected` | A cache-creation regression is first detected for a (project, version) pair (#374) |
