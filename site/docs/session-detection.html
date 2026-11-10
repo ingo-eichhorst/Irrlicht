@@ -161,7 +161,7 @@
 
       <ul>
         <li><strong>Transcript location:</strong> <code>&lt;cwd&gt;/.aider.chat.history.md</code> (markdown, per-CWD &mdash; not JSONL)</li>
-        <li>Process discovery via <code>CommandLineMatch</code> (<code>/aider($| )</code>) since the OS process is <code>python</code></li>
+        <li>Process discovery via a command-line match (<code>agent.CommandPattern</code>, regex <code>/aider</code>) since the OS process is <code>python</code></li>
         <li>Waiting state pinned to a trailing <code>?</code> contract on the most recent assistant block</li>
         <li><strong>Adapter name:</strong> <code>aider</code></li>
       </ul>
@@ -287,11 +287,11 @@
         <tbody>
           <tr>
             <td>Discovery</td>
-            <td><code>lsof -t &lt;transcript&gt;</code> with retry at 500ms, 1s, 2s intervals</td>
+            <td>The adapter&rsquo;s own <code>DiscoverPID</code> (e.g. Claude Code: the <code>~/.claude/sessions/&lt;pid&gt;.json</code> file Claude writes per process; Codex: the process holding the transcript open for writing, via <code>lsof</code>), tried at once and retried at 500ms, 1s, 2s intervals</td>
           </tr>
           <tr>
             <td>CWD fallback</td>
-            <td>If lsof fails, matches <code>claude</code> processes by working directory</td>
+            <td>Claude Code only: if no <code>~/.claude/sessions/&lt;pid&gt;.json</code> file claims the session, matches <code>claude</code> processes by working directory, binding only when exactly one unclaimed candidate remains</td>
           </tr>
           <tr>
             <td>Registration</td>

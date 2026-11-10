@@ -92,6 +92,43 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2 id="v0-6-9">v0.6.9 <small>(2026-11-10)</small></h2>
+      <h3>One quota chip per subscription again</h3>
+      <h3>Also in this release</h3>
+      <h4>Fixed</h4>
+      <ul>
+        <li>Quota chips: sessions whose account is not confirmed share one chip per provider again. In v0.6.8, every such session got a chip of its own, so several Claude Code sessions on one subscription showed several Anthropic chips with slightly different numbers, and N Muse sessions showed N identical Meta chips. Confirmed accounts keep their own chips. For one chip per Claude Code account, grant Settings → Review agent permissions → "Claude Code account" (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2136" target="_blank" rel="noopener">#2136</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2137" target="_blank" rel="noopener">#2137</a>).</li>
+      </ul>
+      <h4>Changed / Docs / Distribution</h4>
+      <ul>
+        <li>Docs: a full documentation sweep, which corrected these pages. The OpenCode 2.x adapter is now listed as <code>stable</code>, the stage it earned in v0.6.8 (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2130" target="_blank" rel="noopener">#2130</a>); 1.x stays <code>alpha</code>.
+        <ul>
+          <li>The state-machine and event references: three turn-end signals, how ESC ends a turn, and when <code>presession_removed</code> fires.</li>
+          <li>The API reference: the dashboard and history fields, task-estimate risk and confidence, and the relay publish status.</li>
+          <li>The LAN recipe in the configuration page.</li>
+          <li>Copilot's hooks permission.</li>
+          <li><code>irrlicht-ls</code> after a Homebrew or DMG install.</li>
+          <li><code>SECURITY.md</code>, which now says that relay publishing sends session state, including short transcript excerpts, to the relay you run.</li>
+        </ul></li>
+        <li>Releases build unattended on the factory build host. The release keychain is unlocked from a mode-600 password file and locked again afterwards, and the Swift release build uses its own scratch directory (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2135" target="_blank" rel="noopener">#2135</a>).</li>
+      </ul>
+      <h4>Contributor tooling</h4>
+      <ul>
+        <li>Tests: the two child-sweep tests no longer flake on a parent reaped early (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2134" target="_blank" rel="noopener">#2134</a>).</li>
+      </ul>
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Quota buckets (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2136" target="_blank" rel="noopener">#2136</a>, PR <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2137" target="_blank" rel="noopener">#2137</a>).</strong> Both clients key a chip by <code>&lt;provider&gt;|&lt;account ref&gt;</code>. An unconfirmed snapshot now keys as <code>&lt;provider&gt;|unconfirmed</code> instead of <code>&lt;provider&gt;|session:&lt;id&gt;</code>: <code>bucketChips</code> in <code>platforms/web/quotaChips.js</code> and <code>RateLimitInfo.accountBucketKey(adapter:)</code> in the macOS app (popover and menu bar). Inside the bucket the existing precedence picks the reading: subscription beats usage, fresh beats stale, newest <code>sampled_at</code> wins. This revises <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2095" target="_blank" rel="noopener">#2095</a>'s D3 for unconfirmed snapshots only; a confirmed account never merges with the unconfirmed bucket or with another account. With two accounts and no consent, the unconfirmed chip can alternate between them, as every chip did before <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2095" target="_blank" rel="noopener">#2095</a>.
+        <ul>
+          <li>Claude Code sessions are unconfirmed while the <code>claude-code-account</code> consent is pending, which a newly declared permission is after an upgrade. They are also unconfirmed when they were already running when the daemon first observed the account.</li>
+          <li>Muse snapshots carry no account ref by design.</li>
+          <li>The tests were committed first and seen red on main: 4 web tests (local and CI) and 4 Swift tests (CI run 42720840632).</li>
+        </ul></li>
+        <li><strong>Unattended release (PR <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2135" target="_blank" rel="noopener">#2135</a>).</strong> <code>tools/release-keychain.sh</code> reads the lock state with <code>SecKeychainGetStatus</code>, not <code>security show-keychain-info</code>, which can wait on an unlock dialog in a UI session. It runs <code>security unlock-keychain</code> in a forked, <code>setsid</code> child with the password file as stdin, because with a controlling terminal <code>security</code> reads the terminal and ignores stdin. The file is refused if it is a symlink, owned by another user, or readable by group or others. <code>tools/build-release.sh</code> unlocks before the build when <code>RELEASE_KEYCHAIN_PASSWORD_FILE</code> is set, and relocks on exit only if it unlocked. Every <code>swift build</code> uses <code>--scratch-path .build/swift</code>. <code>tools/lib/release-keychain_test.sh</code> runs 14 cases on a throwaway keychain, including a terminal case and a naive-unlock control, under a 180 s watchdog.</li>
+        <li><strong>Test flake (PR <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/2134" target="_blank" rel="noopener">#2134</a>).</strong> <code>UpdatedAt</code> is truncated to whole seconds, and the tests' ready TTL was 1 s, so the sweep could reap a parent before the test looked at it. The tests now use a one-minute TTL and poll to a deadline instead of sleeping.</li>
+        <li><strong>Alias sync.</strong> No change. Upstream codeburn still re-points five canonicals, left for maintainer review: <code>codex-auto-review</code> → <code>gpt-5.6-luna</code>, and the four GLM spellings → <code>z-ai/glm-5.2</code> / <code>z-ai/glm-5.3</code>.</li>
+      </ul>
+
       <h2 id="v0-6-8">v0.6.8 <small>(2026-11-09)</small></h2>
       <h3>OpenCode 2.x sessions show up, and quota chips split by account</h3>
       <h3>Also in this release</h3>

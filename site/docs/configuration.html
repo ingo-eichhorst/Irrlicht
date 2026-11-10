@@ -246,7 +246,7 @@
             <td><code>IRRLICHT_HOME</code></td>
             <td>Path</td>
             <td><code>~/.local/share/irrlicht</code></td>
-            <td>Relocate the daemon's entire state tree &mdash; socket, addr file, history rollups, session/cost/ledger stores, and recordings &mdash; for a fully isolated dev / test daemon that never touches the production install</td>
+            <td>Relocate the daemon's state tree &mdash; socket, addr file, <code>permissions.json</code>, history rollups, session/cost/ledger stores, and recordings &mdash; for an isolated dev / test daemon. Two files do not move: the event log (always <code>~/Library/Application Support/Irrlicht/logs/events.log</code>) and the model capacity cache (<code>~/.local/share/irrlicht/model-capacity-cache.json</code>, relocatable only via <code>IRRLICHT_MODEL_CAPACITY_CACHE</code>)</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_DEMO_MODE</code></td>
@@ -263,7 +263,7 @@
           <tr>
             <td><code>IRRLICHT_RECORDINGS_DIR</code></td>
             <td>Path</td>
-            <td><code>&lt;dataDir&gt;/recordings</code></td>
+            <td><code>$IRRLICHT_HOME/recordings</code> (default <code>~/.local/share/irrlicht/recordings</code>)</td>
             <td>Override the directory lifecycle recordings are written to. Wins even when <code>IRRLICHT_HOME</code> is set, so a recording run can be pinned somewhere specific (only used while recording is enabled)</td>
           </tr>
           <tr>
@@ -282,7 +282,7 @@
             <td><code>IRRLICHT_RELAY_TOKEN</code></td>
             <td>String</td>
             <td>unset</td>
-            <td>Bearer token for an auth-enabled relay. Overrides the <code>token</code> field of <code>&lt;dataDir&gt;/relay-token.json</code>; leave unset against a no-auth relay</td>
+            <td>Bearer token for an auth-enabled relay. Overrides the <code>token</code> field of <code>$IRRLICHT_HOME/relay-token.json</code> (default <code>~/.local/share/irrlicht/relay-token.json</code>); leave unset against a no-auth relay</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_CACHE_BLOAT_THRESHOLD</code></td>
@@ -370,11 +370,11 @@
 
       <pre><code>IRRLICHT_BIND_ADDR=0.0.0.0:7837 IRRLICHT_MDNS=1 irrlichd</code></pre>
 
-      <p>If the macOS app auto-spawns the daemon for you (the default for DMG / Homebrew installs), shell env vars never reach it. Set them in the per-user launchd context first, then relaunch the app:</p>
+      <p>If the macOS app auto-spawns the daemon for you (the default for DMG / Homebrew installs), it always binds that daemon to <code>127.0.0.1:&lt;IRRLICHT_DAEMON_PORT&gt;</code> and overwrites any inherited <code>IRRLICHT_BIND_ADDR</code>, so a LAN bind address set for the app never reaches the daemon. Instead, quit Irrlicht.app, start the bundled daemon yourself with the vars inline, and only then reopen the app &mdash; it adopts a daemon that already answers on its port instead of spawning its own:</p>
 
-      <pre><code>launchctl setenv IRRLICHT_BIND_ADDR 0.0.0.0:7837
-launchctl setenv IRRLICHT_MDNS 1
-# quit Irrlicht.app from the menu bar, then reopen it</code></pre>
+      <pre><code># quit Irrlicht.app from the menu bar first
+IRRLICHT_BIND_ADDR=0.0.0.0:7837 IRRLICHT_MDNS=1 /Applications/Irrlicht.app/Contents/MacOS/irrlichd
+# then reopen Irrlicht.app</code></pre>
 
       <p>Either way, then open <code>http://&lt;hostname&gt;.local:7837</code> in any browser on the same network. mDNS lets the phone find the host without you typing an IP.</p>
 

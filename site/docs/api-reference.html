@@ -103,7 +103,7 @@
 
       <h3>GET /api/v1/sessions</h3>
 
-      <p>Returns a hierarchical <code>DashboardResponse</code> with sessions grouped by project and nested parent-child relationships.</p>
+      <p>Returns the dashboard payload: <code>groups</code> (sessions grouped by project, with nested parent-child relationships; each group may carry trailing-window <code>costs</code> in USD keyed <code>day</code> / <code>week</code> / <code>month</code> / <code>year</code>), plus the optional <code>provider_costs</code> (provider &rarr; timeframe &rarr; USD) and <code>daemon_errors</code> (faults in the daemon&rsquo;s own machinery, each with <code>kind</code>, <code>scope</code>, <code>message</code> and an optional <code>detail</code>).</p>
 
       <pre><code>{
   "groups": [
@@ -202,7 +202,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.6.8"
+  "version": "0.6.9"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -274,6 +274,21 @@
             <td>comma-separated</td>
             <td>Orthogonal cross-filters (the active <code>group</code> dimension is never filtered). <code>token_type</code> values: <code>input</code> / <code>output</code> / <code>cache_read</code> / <code>cache_creation</code>. For <code>chart=dora</code>, <code>project</code> instead names the single required repo (not a cross-filter)</td>
           </tr>
+          <tr>
+            <td><code>bucket</code></td>
+            <td>seconds (positive integer)</td>
+            <td>Bucket-width override for the <code>range</code>-windowed charts; by default it follows the window span (60&nbsp;s up to 2 days, 3600&nbsp;s up to 14 days, else 86400&nbsp;s). Ignored by <code>chart=state</code> and the autonomy charts, which take their buckets from <code>granularity</code> / <code>window</code></td>
+          </tr>
+          <tr>
+            <td><code>forecast</code></td>
+            <td><code>true</code> (default), <code>false</code>, <code>0</code></td>
+            <td><code>false</code> or <code>0</code> omits the linear <code>forecast</code> block, which is only ever attached to <code>cost</code> / <code>models</code> / <code>providers</code></td>
+          </tr>
+          <tr>
+            <td><code>forecast_buckets</code></td>
+            <td>positive integer</td>
+            <td>Forecast horizon in buckets; the default is about 20% of the visible buckets (at least 1, at most 60)</td>
+          </tr>
         </tbody>
       </table>
 
@@ -331,7 +346,7 @@ curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</co
 
       <h3>POST /api/v1/sessions/{id}/focus</h3>
 
-      <p>Activates the host terminal or IDE window of the given session, bringing it to the foreground. This is what the <code>irrlicht-focus</code> CLI calls when you click a session row or notification. The session ID is taken from the path; the request has no body. The daemon broadcasts the focus request and the macOS app activates the launching window.</p>
+      <p>Activates the host terminal or IDE window of the given session, bringing it to the foreground. This is the route the <code>irrlicht-focus</code> CLI calls; clicking a session row or notification in the macOS app focuses the window directly, without this route. The session ID is taken from the path; the request has no body. The daemon broadcasts the focus request and the macOS app activates the launching window.</p>
 
       <p>Responses:</p>
 
@@ -379,7 +394,7 @@ curl -X POST http://127.0.0.1:7837/api/v1/activation/task-eta
 
       <h3>GET /api/v1/relay/publish</h3>
 
-      <p>Reports the daemon&rsquo;s outbound relay-publish state. When publishing is off it returns <code>{"enabled":false}</code>; when on, it returns the live forwarder link state: <code>{"enabled":true,"url":...,"state":...,"daemonId":...,"daemonLabel":...}</code> where <code>state</code> is one of <code>connecting</code> / <code>connected</code> / <code>auth_failed</code> / <code>disconnected</code>. The macOS app polls this to render the &ldquo;Publishing&rdquo; status dot.</p>
+      <p>Reports the daemon&rsquo;s outbound relay-publish state. When publishing is off it returns <code>{"enabled":false}</code>; when on, it returns the live forwarder link state: <code>{"enabled":true,"url":...,"state":...,"lastError":...,"daemonId":...,"daemonLabel":...}</code> (<code>lastError</code> only when the link has failed) where <code>state</code> is one of <code>connecting</code> / <code>connected</code> / <code>auth_failed</code> / <code>disconnected</code>. The macOS app polls this to render the &ldquo;Publishing&rdquo; status dot.</p>
 
       <h3>PUT /api/v1/relay/publish</h3>
 
@@ -988,7 +1003,7 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
           <tr>
             <td><code>task_estimate</code></td>
             <td>object</td>
-            <td>The agent's self-reported task progress (<code>total_rounds</code>, <code>completed_rounds</code>, <code>updated_at</code>, <code>source</code>), parsed from its in-band progress marker or derived from the task list / subagents</td>
+            <td>The agent's self-reported task progress (<code>total_rounds</code>, <code>completed_rounds</code>, <code>updated_at</code>, <code>source</code>, plus the optional <code>risk</code> and <code>confidence</code> when the marker carries them), parsed from its in-band progress marker or derived from the task list / subagents</td>
           </tr>
           <tr>
             <td><code>task_completion_eta</code></td>

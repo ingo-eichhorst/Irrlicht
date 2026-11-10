@@ -211,7 +211,7 @@ timeout/witness design.
   its remaining consumers read it and pass it explicitly
   (`SessionListView.swift`, `QuotaResetFormat.swift`, `HistoryView.swift`), and
   `PinnedLocaleSnapshot.referenceLocale` stays `de_DE`, because that is still
-  what the surviving 60 references were recorded under. What did NOT survive is
+  what every committed reference under `Tests/__Snapshots__` was recorded under. What did NOT survive is
   the **lock**: `PinnedLocaleSnapshotTests` drove the deleted editor, so it
   retired with its subject rather than being re-pointed at a view invented to
   keep it alive — #1390's lesson, that a guard over an API the same change
@@ -392,7 +392,7 @@ timeout/witness design.
   non-comment references exist in the app target and 14 are ordinary reads in
   managers, models and the menu-bar controller, so the rule would arrive with 14
   exemptions. The narrowing is a property, not a preference — `Irrlicht/Views/`
-  is exactly the set of files declaring a SwiftUI `View` (14 files; a `: View`
+  holds every file declaring a SwiftUI `View` (a `: View`
   conformance appears nowhere else in the target) and it is the code
   `PinnedSnapshotHost` pins. It held exactly two references, both reads, both
   removed, so it carries no exemption list. Its declared limit is a false

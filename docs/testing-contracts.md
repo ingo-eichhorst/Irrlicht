@@ -229,11 +229,15 @@ below.
   (`HookReceiver.Route`, #1719), because there are two ways to satisfy it and
   the second makes the first unsatisfiable. `PathFromBody` — the zero value, and
   every receiver before #1719 — is the six obligations below. `PathDaemonDerived`
-  is a receiver whose payload names no filesystem path, because the adapter has
-  no file for a caller to name: opencode's and hermes' `Source` is an
+  is a receiver that reads no filesystem path from its payload. For opencode
+  and hermes the adapter has no file for a caller to name: their `Source` is an
   `agent.ProcessOwnedStore`, one SQLite database with no file per session, so
   the path every consumer keys a session on is composed by the daemon from its
-  own store resolver and the body carries a session id. That route reaches its
+  own store resolver and the body carries a session id. Antigravity's payload
+  does carry a `transcriptPath`, but it names `transcript_full.jsonl`, a file
+  the adapter refuses to key a session on, so its receiver never decodes that
+  field: it reads `conversationId` instead and the daemon composes the path from
+  its own declared roots (`antigravity/hooks.go`). That route reaches its
   payload through `hookjson.DecodeSealed` rather than `DecodeConfined`, and its
   three obligations assert the property was actually OBTAINED — a well-formed
   payload still dispatches (the vacuity guard), the dispatched string is the
@@ -519,10 +523,10 @@ below.
   same reason and says so in `unenforceableHere()`, whose row's PREMISE (every
   hooks adapter's package already calls it, so a required row would discriminate
   nothing) is re-derived every run rather than trusted once. That exclusion also
-  surfaced a finding worth its own ticket: five of the six hooks-declaring
-  adapters wire `AssertPermissionGated` for their hooks INSTALL closures and
-  claude-code does not — it wires the family only for its instructions
-  permission. The other limits: a skipped or constant-false-guarded call still
+  surfaced a finding worth its own ticket: nine of the ten hooks-declaring
+  adapters (five of six when #1740 measured it) wire `AssertPermissionGated`
+  for their hooks INSTALL closures and claude-code does not — it wires the
+  family only for its instructions and account permissions. The other limits: a skipped or constant-false-guarded call still
   counts; a wiring reached through a package-level func var or a helper in a
   third package is not seen (fail-closed); an entry point taken as a value and
   called later is not seen (fail-closed); and — the standing one — nothing here
@@ -613,8 +617,9 @@ below.
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
   All three project the **full consent catalog** (`consentCatalog` in
-  `core/cmd/irrlichd`), not `agents.All()`: five daemon-wide declarations —
-  gastown, launcher, kitty, endpoint, and Muse's account API (#2007) — are appended outside the adapter registry, and
+  `core/cmd/irrlichd`), not `agents.All()`: six daemon-wide declarations —
+  gastown, launcher, kitty, endpoint, Muse's account API (#2007), and the
+  Claude Code account permission (#2095) — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
   offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is
@@ -985,7 +990,8 @@ below.
 - Probe costs in doc comments: `core/internal/costreport` is "Replay's measured
   figures" one layer down, for the numbers that justify a CONSTANT rather than
   describe a catalog — `shelloutTimeout`, `ancestryReads`, `clientHostBudget`,
-  `bundleIDMemo`, `gitTimeout`, `gitHistoryTimeout`, `gitMaxOutput` (#1572). Two
+  `bundleIDMemo`, `gitTimeout`, `gitHistoryTimeout`, `gitMaxOutput` (#1572),
+  plus the per-pid writer probe `darwinObserver.HoldsForWriting` (#2086). Two
   doc comments in one file described the same `plutil` exec at 2.2ms (#1524) and
   9.7ms (#1544); the mechanism is what settled it, and the answer is that the
   4x is LOAD — the same generator on one machine reports 5.4ms idle and 10.2ms

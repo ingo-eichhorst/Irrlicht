@@ -53,7 +53,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works (state only, metrics not claimed) · `planned` on the roadmap.
 
-The **14 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Junie has an adapter but remains `planned` until recordings earn its maturity claims. Other orchestrator, platform, and `planned` rows are editorial and have no adapter.
+The **14 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json) (OpenCode twice: `opencode` for 1.x, `opencode-v2` for 2.x), and the onboarding factory's `of validate` check ([`tools/onboarding-factory`](tools/onboarding-factory)) fails if a stage claims more than a core set of 12 recorded test scenarios earns. Junie has an adapter (the daemon-side integration that reads one agent's sessions — see the [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html)) but remains `planned` until recordings earn its maturity claims. Other orchestrator, platform, and `planned` rows are editorial and have no adapter.
 
 **Coding agents**
 
@@ -63,7 +63,7 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | OpenAI Codex   | beta    |
 | Pi             | beta    |
 | Aider          | alpha   |
-| OpenCode       | alpha   |
+| OpenCode       | alpha (1.x) · stable (2.x) |
 | Kiro CLI       | alpha   |
 | Gemini CLI     | alpha   |
 | Antigravity    | alpha   |
@@ -90,7 +90,7 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | --------------------- | ------- | ------------------------- |
 | macOS (menu bar app)  | beta    | [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest) |
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
-| CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after install; DMG drag-installs: Settings → Advanced Settings → Command-Line Tool → Install Command-Line Tool |
+| CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after the curl or PKG install; Homebrew and DMG drag-installs: Settings → Advanced Settings → Command-Line Tool → Install Command-Line Tool |
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
 | Linux (**daemon**-only — background service, no menu-bar UI) | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
