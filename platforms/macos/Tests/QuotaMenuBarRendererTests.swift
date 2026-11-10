@@ -345,10 +345,14 @@ final class QuotaMenuBarRendererTests: XCTestCase {
 
     /// Renamed from `...PicksFreshestAcrossSessions` (#2095 D1): across
     /// accounts the icon no longer follows freshest-`sampledAt`, it follows the
-    /// most constrained account. This fixture's sessions are confirmed but ref-less (one
-    /// bucket each) and the newer one is also the more used, so it passes under
-    /// both rules — the rule itself is locked red-first by
-    /// `QuotaAccountBucketTests.testSelectedSnapshotIsDeterministicAcrossInterleavedTicks`.
+    /// most constrained account. This fixture's sessions are confirmed but
+    /// ref-less, so since #2136 they share the provider's one unconfirmed
+    /// bucket and the newer reading wins inside it; the newer one is also the
+    /// more used, so it passes under every rule. The across-accounts rule is
+    /// locked red-first by
+    /// `QuotaAccountBucketTests.testSelectedSnapshotIsDeterministicAcrossInterleavedTicks`,
+    /// the unconfirmed-bucket rule by
+    /// `QuotaAccountBucketTests.testSelectedSnapshotTreatsUnconfirmedSessionsOfOneProviderAsOneAccount`.
     func testSelectedSnapshotPicksMostConstrainedAcrossSessions() {
         let older = makeSession(id: "1", adapter: "claude-code", usedPercent: 10, sampledSecondsAgo: 120)
         let newer = makeSession(id: "2", adapter: "claude-code", usedPercent: 90, sampledSecondsAgo: 5)

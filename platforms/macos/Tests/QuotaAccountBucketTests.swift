@@ -5,6 +5,14 @@ import XCTest
 /// bucketing contract: `mergeIntoBuckets` (popover) and
 /// `QuotaMenuBarRenderer.selectedSnapshot` (menu bar) both key by
 /// `RateLimitInfo.accountBucketKey`.
+///
+/// #2136 revised #2095's D3 for the unconfirmed case: every session of one
+/// provider whose snapshot has no confirmed account shares ONE bucket
+/// (`<provider>|unconfirmed`) instead of getting a bucket each. A confirmed
+/// account never merges with that bucket or with another account. The #2136
+/// tests below assert through `mergeIntoBuckets` / `selectedSnapshot` rather
+/// than calling `accountBucketKey` directly, so they compile unchanged on
+/// both sides of the fix.
 @MainActor
 final class QuotaAccountBucketTests: XCTestCase {
     private let base = Date(timeIntervalSince1970: 1_800_000_000)
@@ -57,19 +65,27 @@ final class QuotaAccountBucketTests: XCTestCase {
         XCTAssertEqual(buckets["anthropic|acct-B"]?.snapshot.windows.first?.usedPercent, 80)
     }
 
-    /// D-b: an empty ref never folds sessions together (D3).
-    func testUnconfirmedSessionsNeverFoldTogether() {
+    /// D-b, flipped by #2136 (was `testUnconfirmedSessionsNeverFoldTogether`):
+    /// an empty and a missing ref are both unconfirmed, so one provider's
+    /// sessions share its one unconfirmed bucket and the newer reading wins.
+    /// An unknown provider's sessions are unconfirmed too, so one adapter's
+    /// share one bucket, as they did in v0.6.7.
+    func testUnconfirmedSessionsOfOneProviderShareOneBucket() {
         let reset = base.addingTimeInterval(3600)
         let confirmedNoRef = fold([
             session("1", snap(used: 10, sampledAt: base, resetsAt: reset, ref: "")),
-            session("2", snap(used: 30, sampledAt: base, resetsAt: reset, ref: nil)),
+            session("2", snap(used: 30, sampledAt: base.addingTimeInterval(1), resetsAt: reset, ref: nil)),
         ], now: base)
-        XCTAssertEqual(confirmedNoRef.count, 2, "confirmed provider with no ref: one bucket per session")
+        XCTAssertEqual(Array(confirmedNoRef.keys), ["anthropic|unconfirmed"],
+                       "confirmed provider with no ref: one bucket for the provider")
+        XCTAssertEqual(confirmedNoRef["anthropic|unconfirmed"]?.snapshot.windows.first?.usedPercent, 30)
         let unknown = fold([
             session("1", adapter: "pi", snap(used: 10, sampledAt: base, resetsAt: reset, provider: nil, ref: nil)),
-            session("2", adapter: "pi", snap(used: 30, sampledAt: base, resetsAt: reset, provider: nil, ref: nil)),
+            session("2", adapter: "pi", snap(used: 30, sampledAt: base.addingTimeInterval(1), resetsAt: reset, provider: nil, ref: nil)),
         ], now: base)
-        XCTAssertEqual(unknown.count, 2, "unknown provider of one adapter: one bucket per session")
+        XCTAssertEqual(Array(unknown.keys), ["unknown:pi|unconfirmed"],
+                       "unknown provider of one adapter: one bucket for the adapter")
+        XCTAssertEqual(unknown["unknown:pi|unconfirmed"]?.snapshot.windows.first?.usedPercent, 30)
     }
 
     /// D-c: the FRESHER snapshot is the LESS constrained account; the menu bar
@@ -82,6 +98,100 @@ final class QuotaAccountBucketTests: XCTestCase {
             for order in [[session("a", a), session("b", b)], [session("b", b), session("a", a)]] {
                 let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: "anthropic", now: wall)
                 XCTAssertEqual(got?.windows.first?.usedPercent, 80, "aNewer=\(aNewer)")
+            }
+        }
+    }
+
+    // MARK: - #2136: one unconfirmed bucket per provider
+
+    /// Red on main: two buckets (`anthropic|session:sess_older`,
+    /// `anthropic|session:sess_newer`). One subscription, two Claude Code
+    /// sessions whose account is unconfirmed (consent pending, or running
+    /// before the account was first seen): one chip, the newer reading.
+    func testTwoUnconfirmedSessionsOfOneProviderShareOneBucketWithTheNewerReading() {
+        let reset = base.addingTimeInterval(7200)
+        let older = session("older", snap(used: 6, sampledAt: base.addingTimeInterval(-1800), resetsAt: reset, ref: nil))
+        let newer = session("newer", snap(used: 22, sampledAt: base.addingTimeInterval(-120), resetsAt: reset, ref: nil))
+        for order in [[older, newer], [newer, older]] {
+            let buckets = fold(order, now: base)
+            XCTAssertEqual(Array(buckets.keys), ["anthropic|unconfirmed"])
+            let bucket = buckets["anthropic|unconfirmed"]
+            XCTAssertEqual(bucket?.snapshot.windows.first?.usedPercent, 22)
+            XCTAssertEqual(bucket?.session.id, "sess_newer")
+            XCTAssertEqual(bucket?.accountRef, "")
+            let chips = SessionListView.quotaChipData(sessions: order, now: base)
+            XCTAssertEqual(chips.count, 1)
+            XCTAssertEqual(chips.first.map { RateLimitInfo.accountLine(ref: $0.accountRef) }, "Account unconfirmed",
+                           "the shared chip keeps its \"Account unconfirmed\" tooltip line")
+        }
+    }
+
+    /// Lock (passes on main too): a confirmed account never absorbs the
+    /// provider's unconfirmed bucket. Asserted through `accountRef`, not the
+    /// bucket key, so it reads the same on both sides of the key change.
+    func testAConfirmedAndAnUnconfirmedSessionOfOneProviderStayTwoBuckets() {
+        let reset = base.addingTimeInterval(7200)
+        let confirmed = session("acct", snap(used: 10, sampledAt: base.addingTimeInterval(-1800), resetsAt: reset, ref: "acct-A"))
+        let unconfirmed = session("unc", snap(used: 30, sampledAt: base.addingTimeInterval(-120), resetsAt: reset, ref: nil))
+        for order in [[confirmed, unconfirmed], [unconfirmed, confirmed]] {
+            let chips = SessionListView.quotaChipData(sessions: order, now: base)
+            XCTAssertEqual(chips.count, 2)
+            XCTAssertEqual(chips.first { $0.accountRef == "acct-A" }?.snapshot.windows.first?.usedPercent, 10)
+            XCTAssertEqual(chips.first { $0.accountRef.isEmpty }?.snapshot.windows.first?.usedPercent, 30)
+        }
+    }
+
+    /// Lock (passes on main too): two confirmed accounts keep their own
+    /// buckets, keyed `<provider>|<ref>` on both sides of the fix.
+    func testTwoDifferentConfirmedRefsStayTwoBuckets() {
+        let reset = base.addingTimeInterval(7200)
+        let buckets = fold([
+            session("b", snap(used: 80, sampledAt: base.addingTimeInterval(-120), resetsAt: reset, ref: "acct-B")),
+            session("a", snap(used: 10, sampledAt: base.addingTimeInterval(-1800), resetsAt: reset, ref: "acct-A")),
+        ], now: base)
+        XCTAssertEqual(buckets.keys.sorted(), ["anthropic|acct-A", "anthropic|acct-B"])
+        XCTAssertEqual(buckets["anthropic|acct-A"]?.snapshot.windows.first?.usedPercent, 10)
+        XCTAssertEqual(buckets["anthropic|acct-B"]?.snapshot.windows.first?.usedPercent, 80)
+    }
+
+    /// Red on main: three buckets. The Muse account-API sweep stamps the same
+    /// Meta snapshot onto every live top-level Muse session, and its ref is
+    /// always empty (`museaccountapi.accountRef()`), so N Muse sessions must
+    /// give one Meta chip, as in v0.6.7.
+    func testMuseSessionsCarryingTheSameMetaSnapshotShareOneBucket() {
+        let meta = RateLimitInfo(
+            windows: [
+                RateLimitWindowInfo(usedPercent: 12, windowMinutes: 300, resetsAt: base.addingTimeInterval(7200)),
+                RateLimitWindowInfo(usedPercent: 35, windowMinutes: 10080, resetsAt: base.addingTimeInterval(4 * 86400)),
+            ],
+            sampledAt: base.addingTimeInterval(-30),
+            provider: "meta",
+            attributionQuality: RateLimitInfo.attributionQualityConfirmed,
+            attributionEvidence: "muse_account_api", observationSource: "account_api",
+            confirmedAccountRef: nil, product: "Muse Code Everyday Usage"
+        )
+        let buckets = fold([
+            session("m1", adapter: "muse", meta),
+            session("m2", adapter: "muse", meta),
+            session("m3", adapter: "muse", meta),
+        ], now: base)
+        XCTAssertEqual(Array(buckets.keys), ["meta|unconfirmed"])
+        XCTAssertEqual(buckets["meta|unconfirmed"]?.providerKey, "meta")
+    }
+
+    /// Red on main: the menu bar treated each unconfirmed session as its own
+    /// account and showed the most constrained (80%, the OLDER reading).
+    /// Sharing one bucket, the in-account rule applies: fresh over stale, then
+    /// newest `sampledAt` (20%). The older reading is deliberately the more
+    /// used one so the two rules disagree.
+    func testSelectedSnapshotTreatsUnconfirmedSessionsOfOneProviderAsOneAccount() {
+        let reset = wall.addingTimeInterval(3600)
+        let older = session("older", snap(used: 80, sampledAt: wall.addingTimeInterval(-50), resetsAt: reset, ref: nil))
+        let newer = session("newer", snap(used: 20, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: nil))
+        for providerKey in ["anthropic", nil] as [String?] {
+            for order in [[older, newer], [newer, older]] {
+                let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: providerKey, now: wall)
+                XCTAssertEqual(got?.windows.first?.usedPercent, 20, "providerKey=\(providerKey ?? "auto")")
             }
         }
     }

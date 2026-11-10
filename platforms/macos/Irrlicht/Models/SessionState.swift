@@ -383,8 +383,8 @@ struct RateLimitInfo: Codable, Hashable {
     }
 
     /// The confirmed account ref, or "" when the provider is unconfirmed or
-    /// the ref is absent/empty. One quota bucket per confirmed account, one
-    /// per session while unconfirmed (#2095).
+    /// the ref is absent/empty. One quota bucket per confirmed account (#2095),
+    /// plus one shared bucket per provider while unconfirmed (#2136).
     var accountRef: String {
         guard providerKey(adapter: nil) != nil else { return "" }
         return confirmedAccountRef ?? ""
@@ -392,13 +392,16 @@ struct RateLimitInfo: Codable, Hashable {
 
     /// The quota-chip bucket key shared by the popover (`mergeIntoBuckets`)
     /// and the menu bar (`QuotaMenuBarRenderer.selectedSnapshot`): one bucket
-    /// per confirmed account, and one per SESSION when the account is
-    /// unconfirmed — an unconfirmed snapshot never merges with another
-    /// session's (#2095 D3).
-    func accountBucketKey(adapter: String?, sessionID: String) -> String {
+    /// per confirmed account (`<provider>|<ref>`), and ONE bucket per provider
+    /// for every snapshot whose account is unconfirmed
+    /// (`<provider>|unconfirmed`), so N sessions on one subscription show one
+    /// chip, not N (#2136). That revises #2095's D3, which keyed an unconfirmed
+    /// snapshot by its session; a confirmed account still never merges with
+    /// the unconfirmed bucket or with another account.
+    func accountBucketKey(adapter: String?) -> String {
         let key = bucketProviderKey(adapter: adapter)
         let ref = accountRef
-        return ref.isEmpty ? "\(key)|session:\(sessionID)" : "\(key)|\(ref)"
+        return ref.isEmpty ? "\(key)|unconfirmed" : "\(key)|\(ref)"
     }
 
     /// Friendly label for `product`, mirroring the web's `productLabel`.

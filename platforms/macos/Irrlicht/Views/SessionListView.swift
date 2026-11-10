@@ -676,8 +676,9 @@ struct SessionListView: View {
         let totalCostUSD: Double
     }
 
-    /// All chips to render, one per confirmed account (one per session while
-    /// unconfirmed). See `mergeIntoBuckets` for the bucketing rules.
+    /// All chips to render, one per confirmed account plus one per provider
+    /// for its unconfirmed sessions (#2136). See `mergeIntoBuckets` for the
+    /// bucketing rules.
     ///
     /// `static` and pure since #1675: `now` is a required argument, so the
     /// staleness branch below is decided by an input rather than by the
@@ -756,7 +757,12 @@ struct SessionListView: View {
     /// rollover, leaving the chip stuck on the bad data forever. The
     /// bucket is account-scoped so all live sessions on a single
     /// account report identical numbers anyway; freshness only matters
-    /// when one session has gone stale.
+    /// when one session has gone stale. The exception is a provider's
+    /// "Account unconfirmed" bucket (`<provider>|unconfirmed`, #2136): it
+    /// holds every session whose account is unconfirmed, so with two
+    /// accounts and no confirmed ref its reading can alternate between
+    /// them, as every chip did before #2095. Confirming the account (the
+    /// agent's account consent) gives each its own bucket again.
     ///
     /// `totalCostUSD` sums cumulative `estimatedCostUSD` across every
     /// matching session; it now feeds only the tooltip / accessibility
@@ -775,7 +781,7 @@ struct SessionListView: View {
         guard let snap = session.metrics?.rateLimit else { return }
         let snapIsStale = snapshotIsStale(snap, now: now)
         let providerKey = snap.bucketProviderKey(adapter: session.adapter)
-        let key = snap.accountBucketKey(adapter: session.adapter, sessionID: session.id)
+        let key = snap.accountBucketKey(adapter: session.adapter)
         let mode = resolveChipMode(snap: snap, providerKey: providerKey)
         let imminent = snap.imminentWindow
         let sessionCost = session.metrics?.estimatedCostUSD ?? 0
