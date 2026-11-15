@@ -9,9 +9,7 @@ const ok = text => ({ status: 200, ok: true, headers: {}, text });
 // none of them throws (a throw out of the poll would be a hook failure).
 describe('every failure is the not-reachable view, never a throw', () => {
   const cases = [
-    ['a refused connection (fetch rejected)', { error: new Error('ECONNREFUSED') }, 'no connection'],
-    ['a policy refusal that rejects', { error: new Error('refused by policy') }, 'no connection'],
-    ['no response at all', {}, 'no connection'],
+    ['a rejected fetch (refused connection, policy refusal)', {}, 'no connection'],
     ['HTTP 500', { response: { status: 500, ok: false, headers: {}, text: 'internal error' } }, 'HTTP 500'],
     ['HTTP 403 (a refusal read as one)', { response: { status: 403, ok: false, headers: {}, text: '' } }, 'HTTP 403'],
     ['a body that is not JSON', { response: ok('<html>proxy login</html>') }, 'not a JSON answer'],
@@ -31,7 +29,7 @@ describe('every failure is the not-reachable view, never a throw', () => {
   }
 
   test('the view names the address it asked', () => {
-    expect(viewFromResponse({ error: new Error('x'), hostPort: 'localhost:7838', nowMs: NOW_MS }).hostPort)
+    expect(viewFromResponse({ hostPort: 'localhost:7838', nowMs: NOW_MS }).hostPort)
       .toBe('localhost:7838');
   });
 });
@@ -41,7 +39,7 @@ describe('buildView over the synthetic payload', () => {
 
   test('reachable, with every session and the 24h cost', () => {
     expect(view.status).toBe('ok');
-    expect(view.sessionCount).toBe(5);
+    expect(view.sections.flatMap(s => s.rows)).toHaveLength(5);
     expect(view.dayCost).toBe('$16.50');
     expect(view.sections.map(s => s.name)).toEqual(['orchard', 'lighthouse', 'fleet / rig-a']);
   });
@@ -71,7 +69,7 @@ describe('buildView over the synthetic payload', () => {
 
   test('a daemon with no sessions', () => {
     expect(buildView({ groups: null }, { hostPort: HOST, hereSessionId: HERE_ID, nowMs: NOW_MS }))
-      .toEqual({ status: 'ok', hostPort: HOST, quota: null, sections: [], sessionCount: 0, dayCost: '$0' });
+      .toEqual({ status: 'ok', hostPort: HOST, quota: null, sections: [], dayCost: '$0' });
   });
 });
 
@@ -105,6 +103,5 @@ describe('the quota is bucketed over the sessions the dashboard buckets', () => 
   test('the nested session is still listed', () => {
     const v = buildView(payload, { hostPort: HOST, hereSessionId: undefined, nowMs: NOW_MS });
     expect(v.sections.map(s => s.name)).toEqual(['orchard', 'fleet / rig-a']);
-    expect(v.sessionCount).toBe(2);
   });
 });

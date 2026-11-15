@@ -31,7 +31,7 @@ describe('sessionSections', () => {
   const sections = sessionSections(SESSIONS_PAYLOAD, HERE_ID);
 
   test('one section per group with sessions; a nested group is named under its parent', () => {
-    expect(sections.map(s => [s.name, s.count])).toEqual([
+    expect(sections.map(s => [s.name, s.rows.length])).toEqual([
       ['orchard', 3],
       ['lighthouse', 1],
       ['fleet / rig-a', 1], // "fleet" itself holds no agent, so it has no section

@@ -8,7 +8,6 @@ import type { IrrlichtPanelView } from '../types'
 export function unreachableView(hostPort: string, reason: string, isAwaitingAnswer?: boolean): IrrlichtPanelView
 export function viewFromResponse(outcome: {
   response?: HttpResponse
-  error?: unknown
   hostPort: string
   hereSessionId?: string
   nowMs: number

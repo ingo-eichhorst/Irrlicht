@@ -93,8 +93,10 @@ export function sessionRow(session, depth, hereSessionId) {
   };
 }
 
-function groupsOf(payload) {
-  return Array.isArray(payload?.groups) ? payload.groups : [];
+// groupsOf answers the `groups` of the payload or of a group: the payload's
+// top-level groups, or a group's nested ones.
+function groupsOf(payloadOrGroup) {
+  return Array.isArray(payloadOrGroup?.groups) ? payloadOrGroup.groups : [];
 }
 
 function agentsOf(group) {
@@ -123,7 +125,7 @@ export function flattenSessions(payload) {
   const visitGroups = groups => {
     for (const g of groups) {
       visitAgents(agentsOf(g));
-      visitGroups(Array.isArray(g?.groups) ? g.groups : []);
+      visitGroups(groupsOf(g));
     }
   };
   visitGroups(groupsOf(payload));
@@ -171,8 +173,8 @@ export function sessionSections(payload, hereSessionId) {
         }
       };
       visitAgents(agentsOf(g), 0);
-      if (rows.length > 0) sections.push({ name, count: rows.length, rows });
-      visitGroups(Array.isArray(g?.groups) ? g.groups : [], name);
+      if (rows.length > 0) sections.push({ name, rows });
+      visitGroups(groupsOf(g), name);
     }
   };
   visitGroups(groupsOf(payload), '');

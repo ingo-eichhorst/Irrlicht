@@ -153,7 +153,9 @@ export function isReadableAddrFile(stat) {
 //   stat(path)      → { kind, isLink } (a `$.fs.stat` answer)
 //   read(path)      → the file's text
 // Resolves { port, source, addrFile } where source is 'env', 'file' or
-// 'default', so the view can say which daemon it asked.
+// 'default'. The view prints only the port (hostPortOf); `source` and
+// `addrFile` are returned so the tests can tell which rung of the ladder
+// answered (address.test.js).
 export async function resolveDaemonAddress(io) {
   const settle = async (fn, ...args) => {
     try { return await fn(...args); } catch { return undefined; }

@@ -46,7 +46,6 @@ export type IrrlichtPanelRow = {
 /** One project group's rows. */
 export type IrrlichtPanelSection = {
   name: string
-  count: number
   rows: IrrlichtPanelRow[]
 }
 
@@ -57,7 +56,6 @@ export type IrrlichtPanelView =
       hostPort: string
       quota: IrrlichtPanelQuota | null
       sections: IrrlichtPanelSection[]
-      sessionCount: number
       dayCost: string
     }
   | {

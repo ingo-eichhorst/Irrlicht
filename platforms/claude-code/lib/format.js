@@ -53,14 +53,10 @@ export function formatUsd(cost) {
 }
 
 // oneLine folds whitespace (newlines included) to single spaces and cuts the
-// text at `max` characters with an ellipsis, cutting by code point so an
-// emoji is never split into a lone surrogate.
+// text at `max` characters with an ellipsis (shorten).
 export function oneLine(text, max) {
   if (typeof text !== 'string') return '';
-  const flat = text.replace(/\s+/g, ' ').trim();
-  const chars = Array.from(flat);
-  if (chars.length <= max) return flat;
-  return chars.slice(0, Math.max(0, max - 1)).join('').trimEnd() + '…';
+  return shorten(text.replace(/\s+/g, ' ').trim(), max);
 }
 
 // quotaBar draws `width` cells, filled in proportion to `percent`.
@@ -99,9 +95,10 @@ export function fitRow(row, width) {
   }
 }
 
+// shorten cuts `text` to `max` characters, the last an ellipsis, by code
+// point so an emoji is never split into a lone surrogate.
 function shorten(text, max) {
   const chars = Array.from(text);
   if (chars.length <= max) return text;
-  if (max <= 1) return '…';
-  return chars.slice(0, max - 1).join('') + '…';
+  return chars.slice(0, Math.max(0, max - 1)).join('').trimEnd() + '…';
 }

@@ -22,6 +22,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { IrrlichtPanelRow, IrrlichtPanelView } from '../types'
 import { hostPortOf, resolveDaemonAddress, sessionsURL } from '../lib/address.js'
+import type { DaemonAddress } from '../lib/address.js'
 import { fitRow, quotaBar } from '../lib/format.js'
 import { unreachableView, viewFromResponse } from '../lib/view.js'
 
@@ -48,14 +49,12 @@ const STALL_MS = 10_000
 const view = atom({ plugin: 'irrlicht-panel', key: 'view' } as const, null)
 const expanded = atom({ plugin: 'irrlicht-panel', key: 'expanded' } as const, [])
 
-type Address = Awaited<ReturnType<typeof resolveDaemonAddress>>
-
 // Module state for the poller alone. Nothing drawn reads it (drawing reads
 // `$.state`), and a hot reload, which drops it, also drops the timer it serves.
 let timer: Timer | undefined
 // The resolved address; cleared after any failed poll so the next one walks
 // the ladder again (a daemon restarted on another port is found again).
-let address: Address | undefined
+let address: DaemonAddress | undefined
 // The one outstanding request, if any: when it started, the daemon it asked,
 // and whether its stall has been drawn.
 let inFlight: { since: number; hostPort: string; isReported: boolean } | undefined
@@ -112,17 +111,19 @@ async function poll($: EngineInterface): Promise<void> {
       const target = address ?? (address = await resolveDaemonAddress(addressIO($)))
       request.hostPort = hostPortOf(target)
       let response: Awaited<ReturnType<EngineInterface['http']['fetch']>> | undefined
-      let error: unknown
       try {
         response = await $.http.fetch(sessionsURL(target))
-      } catch (err) {
-        error = err ?? 'rejected'
+      } catch {
+        // Rejected (a refused connection, a policy refusal): response stays
+        // undefined, which the view reads as "no connection". A try/catch
+        // rather than `.catch()`, so a fetch that throws synchronously lands
+        // here too.
       }
       // Read per poll, never cached: after a /clear the process goes on under
       // a new session id, and no session.start follows to say so.
       const hereSessionId = await $.session.id().catch(() => undefined)
       const next = viewFromResponse({
-        response, error, hostPort: hostPortOf(target), hereSessionId, nowMs: await $.clock.now(),
+        response, hostPort: hostPortOf(target), hereSessionId, nowMs: await $.clock.now(),
       })
       if (next.status !== 'ok') address = undefined
       await publish($, next)
@@ -285,7 +286,7 @@ export const register: Register = on => {
         {current.sections.map(section => (
           <Box flexDirection="column" marginBottom={1}>
             <Text bold wrap="truncate-end">
-              {section.name} ({section.count})
+              {section.name} ({section.rows.length})
             </Text>
             {section.rows.map(row)}
           </Box>

@@ -4,7 +4,7 @@
 
 import { formatUsd } from './format.js';
 import { bucketChips, quotaView, selectBucket } from './quota.js';
-import { dayCostUSD, flattenSessions, quotaSessions, sessionSections } from './sessions.js';
+import { dayCostUSD, flattenSessions, isHere, quotaSessions, sessionSections } from './sessions.js';
 
 // unreachableView is what the panel shows when it could not get a usable
 // answer from the daemon at `hostPort`, with the reason in a few words.
@@ -18,28 +18,26 @@ export function unreachableView(hostPort, reason, isAwaitingAnswer = false) {
 // Claude Code session's id (`$.session.id()`), `nowMs` the clock the quota
 // staleness and reset countdowns are measured against.
 export function buildView(payload, { hostPort, hereSessionId, nowMs }) {
-  const sessions = flattenSessions(payload);
   // The current session is looked up among every listed session; the buckets
   // are built over the dashboard's set only (quotaSessions says why).
-  const current = hereSessionId ? sessions.find(s => s.session_id === hereSessionId) : undefined;
+  const current = flattenSessions(payload).find(s => isHere(s, hereSessionId));
   const bucket = selectBucket(bucketChips(quotaSessions(payload), nowMs), current);
   return {
     status: 'ok',
     hostPort,
     quota: quotaView(bucket, nowMs),
     sections: sessionSections(payload, hereSessionId),
-    sessionCount: sessions.length,
     dayCost: formatUsd(dayCostUSD(payload)),
   };
 }
 
 // viewFromResponse turns one `$.http.fetch` outcome into a view: `response`
-// is what the fetch resolved with, `error` what it rejected with (a refused
+// is what the fetch resolved with, undefined when it rejected (a refused
 // connection, an organization's web-fetch policy saying no). Non-2xx, a body
 // that is not JSON, and JSON that is not a sessions payload all read as "not
 // reachable": the panel only draws what it can trust came from the daemon.
-export function viewFromResponse({ response, error, hostPort, hereSessionId, nowMs }) {
-  if (error !== undefined || !response) {
+export function viewFromResponse({ response, hostPort, hereSessionId, nowMs }) {
+  if (!response) {
     return unreachableView(hostPort, 'no connection');
   }
   if (!response.ok) {
