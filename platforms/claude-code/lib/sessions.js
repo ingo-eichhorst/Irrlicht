@@ -42,10 +42,15 @@ export function adapterTag(session) {
   return adapter === DEFAULT_ADAPTER ? '' : '[' + adapter + ']';
 }
 
+// metricsOf is a session's metrics, an empty object when it reports none.
+function metricsOf(session) {
+  return session?.metrics || {};
+}
+
 // modelOf prefers the transcript-derived metrics.model_name over the
 // top-level model, as the dashboard does.
 export function modelOf(session) {
-  return session?.metrics?.model_name || session?.model || '';
+  return metricsOf(session).model_name || session?.model || '';
 }
 
 // isHere is an exact id match and nothing else: the panel marks the session
@@ -64,20 +69,33 @@ export const DETAIL_TEXT_MAX = 200;
 
 // sessionDetail is what pressing a row reveals.
 export function sessionDetail(session) {
-  const m = session?.metrics || {};
-  const text = m.question_headline || m.last_assistant_text || '';
+  const m = metricsOf(session);
+  const { textKind, text } = detailText(m);
   return {
     state: session?.state || '',
     elapsed: fmtDuration(m.elapsed_seconds),
-    cost: m.estimated_cost_usd > 0 ? formatUsd(m.estimated_cost_usd) : '',
-    textKind: m.question_headline ? 'question' : (m.last_assistant_text ? 'last reply' : ''),
+    cost: detailCost(m),
+    textKind,
     text: oneLine(text, DETAIL_TEXT_MAX),
   };
 }
 
+// detailText is the text a detail block quotes, and what kind it is: the
+// question the session waits on, else its last reply, else nothing.
+function detailText(m) {
+  if (m.question_headline) return { textKind: 'question', text: m.question_headline };
+  if (m.last_assistant_text) return { textKind: 'last reply', text: m.last_assistant_text };
+  return { textKind: '', text: '' };
+}
+
+// detailCost is the session's estimated cost, or nothing when it reports none.
+function detailCost(m) {
+  return m.estimated_cost_usd > 0 ? formatUsd(m.estimated_cost_usd) : '';
+}
+
 // sessionRow is one row of the list, as plain data.
 export function sessionRow(session, depth, hereSessionId) {
-  const m = session?.metrics || {};
+  const m = metricsOf(session);
   return {
     id: session.session_id,
     depth,
@@ -111,20 +129,26 @@ function isSession(value) {
   return value !== null && typeof value === 'object' && typeof value.session_id === 'string';
 }
 
+// visitSessions calls `visit(session, depth)` for every session among
+// `agents`, each followed by its children at any depth, a child one level
+// deeper than its parent. Whatever is not a session (isSession) is passed
+// over, and its children with it. The one walk of an agent list that
+// flattenSessions, quotaSessions and sessionSections share.
+function visitSessions(agents, depth, visit) {
+  for (const a of agents) {
+    if (!isSession(a)) continue;
+    visit(a, depth);
+    visitSessions(childrenOf(a), depth + 1, visit);
+  }
+}
+
 // flattenSessions lists every session in the payload once: every group's
 // agents, every nested group's, and every agent's children at any depth.
 export function flattenSessions(payload) {
   const out = [];
-  const visitAgents = agents => {
-    for (const a of agents) {
-      if (!isSession(a)) continue;
-      out.push(a);
-      visitAgents(childrenOf(a));
-    }
-  };
   const visitGroups = groups => {
     for (const g of groups) {
-      visitAgents(agentsOf(g));
+      visitSessions(agentsOf(g), 0, a => out.push(a));
       visitGroups(groupsOf(g));
     }
   };
@@ -145,14 +169,7 @@ export function flattenSessions(payload) {
 // .swift). The panel follows the dashboard, the one the parity test pins.
 export function quotaSessions(payload) {
   const out = [];
-  const visit = agents => {
-    for (const a of agents) {
-      if (!isSession(a)) continue;
-      out.push(a);
-      visit(childrenOf(a));
-    }
-  };
-  for (const g of groupsOf(payload)) visit(agentsOf(g));
+  for (const g of groupsOf(payload)) visitSessions(agentsOf(g), 0, a => out.push(a));
   return out;
 }
 
@@ -163,22 +180,21 @@ export function sessionSections(payload, hereSessionId) {
   const sections = [];
   const visitGroups = (groups, prefix) => {
     for (const g of groups) {
-      const name = (prefix ? prefix + ' / ' : '') + (g?.name || '(no project)');
+      const name = sectionName(prefix, g);
       const rows = [];
-      const visitAgents = (agents, depth) => {
-        for (const a of agents) {
-          if (!isSession(a)) continue;
-          rows.push(sessionRow(a, depth, hereSessionId));
-          visitAgents(childrenOf(a), depth + 1);
-        }
-      };
-      visitAgents(agentsOf(g), 0);
+      visitSessions(agentsOf(g), 0, (a, depth) => rows.push(sessionRow(a, depth, hereSessionId)));
       if (rows.length > 0) sections.push({ name, rows });
       visitGroups(groupsOf(g), name);
     }
   };
   visitGroups(groupsOf(payload), '');
   return sections;
+}
+
+// sectionName is a group's section heading: its name, or "(no project)"
+// when it has none, after its parent's heading and " / " when nested.
+function sectionName(prefix, group) {
+  return (prefix ? prefix + ' / ' : '') + (group?.name || '(no project)');
 }
 
 // dayCostUSD sums the trailing-24h spend over every provider key the daemon
@@ -189,9 +205,14 @@ export function dayCostUSD(payload) {
   const costs = payload?.provider_costs;
   if (!costs || typeof costs !== 'object') return 0;
   let total = 0;
-  for (const byWindow of Object.values(costs)) {
-    const day = byWindow?.day;
-    if (Number.isFinite(day)) total += day;
-  }
+  for (const byWindow of Object.values(costs)) total += dayCostOf(byWindow);
   return total;
+}
+
+// dayCostOf is one provider key's `day` figure, 0 when it is not a finite
+// number. Adding that 0 is the same as skipping the key: x + 0 is x for
+// every x but -0, and a sum that starts at 0 is never -0.
+function dayCostOf(byWindow) {
+  const day = byWindow?.day;
+  return Number.isFinite(day) ? day : 0;
 }

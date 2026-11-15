@@ -49,11 +49,7 @@ export function viewFromResponse({ response, hostPort, hereSessionId, nowMs }) {
   } catch {
     return unreachableView(hostPort, 'not a JSON answer');
   }
-  // sessionsResponse.Groups is tagged `json:"groups"` without omitempty
-  // (core/cmd/irrlichd/handlers.go), so the key is always there: an array, or
-  // null for a nil slice. Anything else is not this endpoint's answer.
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload) ||
-      !(payload.groups === null || Array.isArray(payload.groups))) {
+  if (!isSessionsPayload(payload)) {
     return unreachableView(hostPort, 'not an Irrlicht sessions answer');
   }
   try {
@@ -63,4 +59,20 @@ export function viewFromResponse({ response, hostPort, hereSessionId, nowMs }) {
     // than draw half of it.
     return unreachableView(hostPort, 'unexpected sessions answer');
   }
+}
+
+// isSessionsPayload is whether parsed JSON is shaped as a sessions answer.
+// sessionsResponse.Groups is tagged `json:"groups"` without omitempty
+// (core/cmd/irrlichd/handlers.go), so the key is always there: an array, or
+// null for a nil slice. Anything else is not this endpoint's answer.
+function isSessionsPayload(payload) {
+  if (!isJsonObject(payload)) return false;
+  return payload.groups === null || Array.isArray(payload.groups);
+}
+
+// isJsonObject is whether a JSON.parse result is an object: not null, not an
+// array, not a primitive.
+function isJsonObject(value) {
+  if (value === null || Array.isArray(value)) return false;
+  return typeof value === 'object';
 }

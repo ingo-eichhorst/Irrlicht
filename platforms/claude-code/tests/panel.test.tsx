@@ -9,6 +9,7 @@
 // (lib/testdata/sessions.fixture.js); no real daemon answer is used.
 
 import { expect, mock, test } from 'claude-code/testing'
+import type { ElementQuery, Mounted } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { HERE_ID, NOW_MS, SESSIONS_PAYLOAD } from '../lib/testdata/sessions.fixture.js'
@@ -84,6 +85,51 @@ function world(on: On, w: World = {}) {
   return { clock, fetched, opened }
 }
 
+// The reads and the press the shared assertions below make on a mounted Pane.
+type Drawing = Pick<Mounted, 'find' | 'press'>
+
+// textOf answers the text of the first element matching `query`, or
+// undefined when none matches (which then fails the assertion it feeds).
+async function textOf(ui: Drawing, query: ElementQuery): Promise<string | undefined> {
+  return (await ui.find(query))?.text
+}
+
+// The quota of the here session's own account, its two windows as bars.
+async function expectHereQuota(ui: Drawing) {
+  expect(await ui.find({ type: 'Text', text: 'Claude Max · …0001' })).toBeDefined()
+  expect(await textOf(ui, { type: 'Text', text: /^5h / })).toContain('11%')
+  expect(await textOf(ui, { type: 'Text', text: /^7d / })).toContain('83%')
+}
+
+// Grouped by project, nested groups under their parent, all adapters.
+async function expectSessionRows(ui: Drawing) {
+  for (const heading of ['orchard (3)', 'lighthouse (1)', 'fleet / rig-a (1)']) {
+    expect(await ui.find({ type: 'Text', text: heading }), heading).toBeDefined()
+  }
+  const here = await ui.find({ key: 'row:' + HERE_ID })
+  expect(here?.type).toBe('Button')
+  expect(here?.text).toContain('main 177K 17.7% opus-5.5 ← here')
+  expect(await textOf(ui, { key: 'row:sess-pi-0004' })).toContain('[pi]')
+  expect(await textOf(ui, { key: 'row:sess-child-0002' })).toContain('↳')
+  expect(await ui.find({ type: 'Text', text: /24h \$16\.50/ })).toBeDefined()
+}
+
+// Press: the detail block appears; press again: it goes.
+async function expectRowPressTogglesDetail(ui: Drawing) {
+  expect(await ui.find({ type: 'Text', text: /Refactored the loader/ })).toBeUndefined()
+  await ui.press({ key: 'row:' + HERE_ID })
+  expect(await textOf(ui, { type: 'Text', text: /Refactored the loader/ }))
+    .toBe('› Refactored the loader into two passes.')
+  expect(await textOf(ui, { type: 'Text', text: /^working · / })).toBe('working · 10m5s · $1.23')
+  await ui.press({ key: 'row:sess-other-0003' })
+  expect(await textOf(ui, { type: 'Text', text: /staging database/ }))
+    .toBe('? Apply the migration to the staging database?')
+  await ui.press({ key: 'row:' + HERE_ID })
+  await ui.press({ key: 'row:sess-other-0003' })
+  expect(await ui.find({ type: 'Text', text: /Refactored the loader/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /staging database/ })).toBeUndefined()
+}
+
 test('sessions render on both surfaces, and a row press shows its detail', async ($, on) => {
   const { clock, fetched } = world(on)
   await $.session.start({ cwd: '/home/test/src/orchard', surface: 'terminal', isInteractive: true })
@@ -92,37 +138,9 @@ test('sessions render on both surfaces, and a row press shows its detail', async
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: PANE_PROPS })
-
-    // The quota of the here session's own account, its two windows as bars.
-    expect(await ui.find({ type: 'Text', text: 'Claude Max · …0001' })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /^5h / }))?.text).toContain('11%')
-    expect((await ui.find({ type: 'Text', text: /^7d / }))?.text).toContain('83%')
-
-    // Grouped by project, nested groups under their parent, all adapters.
-    for (const heading of ['orchard (3)', 'lighthouse (1)', 'fleet / rig-a (1)']) {
-      expect(await ui.find({ type: 'Text', text: heading }), heading).toBeDefined()
-    }
-    const here = await ui.find({ key: 'row:' + HERE_ID })
-    expect(here?.type).toBe('Button')
-    expect(here?.text).toContain('main 177K 17.7% opus-5.5 ← here')
-    expect((await ui.find({ key: 'row:sess-pi-0004' }))?.text).toContain('[pi]')
-    expect((await ui.find({ key: 'row:sess-child-0002' }))?.text).toContain('↳')
-    expect(await ui.find({ type: 'Text', text: /24h \$16\.50/ })).toBeDefined()
-
-    // Press: the detail block appears; press again: it goes.
-    expect(await ui.find({ type: 'Text', text: /Refactored the loader/ })).toBeUndefined()
-    await ui.press({ key: 'row:' + HERE_ID })
-    expect((await ui.find({ type: 'Text', text: /Refactored the loader/ }))?.text)
-      .toBe('› Refactored the loader into two passes.')
-    expect((await ui.find({ type: 'Text', text: /^working · / }))?.text).toBe('working · 10m5s · $1.23')
-    await ui.press({ key: 'row:sess-other-0003' })
-    expect((await ui.find({ type: 'Text', text: /staging database/ }))?.text)
-      .toBe('? Apply the migration to the staging database?')
-    await ui.press({ key: 'row:' + HERE_ID })
-    await ui.press({ key: 'row:sess-other-0003' })
-    expect(await ui.find({ type: 'Text', text: /Refactored the loader/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /staging database/ })).toBeUndefined()
-
+    await expectHereQuota(ui)
+    await expectSessionRows(ui)
+    await expectRowPressTogglesDetail(ui)
     await ui.unmount()
   }
 })

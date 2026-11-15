@@ -46,43 +46,91 @@ export function bucketKeyFor(session, snap) {
   return { providerKey, accountRef, key: providerKey + '|' + (accountRef || 'unconfirmed') };
 }
 
-// chipModeFor mirrors quotaChips.js chipModeFor's `auto` branch.
-function chipModeFor(snap) {
-  if (Array.isArray(snap?.windows) && snap.windows.length > 0) return 'subscription';
-  if (snap?.credits) return 'usage';
-  return 'subscription';
+// hasWindows is the "this snapshot carries quota windows" test that
+// quotaChips.js spells out in chipModeFor and bucketChips
+// (`Array.isArray(windows) && windows.length > 0`); imminentWindow's first
+// guard is its negation.
+function hasWindows(snap) {
+  return Array.isArray(snap?.windows) && snap.windows.length > 0;
 }
 
-// imminentWindow mirrors quotaChips.js imminentWindow.
+// chipModeFor mirrors quotaChips.js chipModeFor's `auto` branch.
+function chipModeFor(snap) {
+  if (hasWindows(snap)) return 'subscription';
+  return snap?.credits ? 'usage' : 'subscription';
+}
+
+// usedPercentOf is a window's used_percent as quotaChips.js reads it,
+// `w.used_percent || 0`.
+function usedPercentOf(w) {
+  return w.used_percent || 0;
+}
+
+// imminentWindow mirrors quotaChips.js imminentWindow: the window used the
+// most (the first of equals), or null when none is used above 0.
 function imminentWindow(snap) {
-  if (!snap || !Array.isArray(snap.windows) || snap.windows.length === 0) return null;
+  if (!hasWindows(snap)) return null;
   let best = null;
-  for (const w of snap.windows) {
-    if (!w) continue;
-    if (!best || (w.used_percent || 0) > (best.used_percent || 0)) best = w;
-  }
-  if (!best || (best.used_percent || 0) <= 0) return null;
+  for (const w of snap.windows) best = moreUsedWindow(best, w);
+  if (!best || usedPercentOf(best) <= 0) return null;
   return best;
 }
 
-// mergeChipIntoBucket mirrors quotaChips.js mergeChipIntoBucket.
-function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
-  if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
+// moreUsedWindow is one turn of imminentWindow's loop: `w` takes over from
+// `best` only when it is used strictly more; a missing window is passed over.
+function moreUsedWindow(best, w) {
+  if (!w) return best;
+  if (!best || usedPercentOf(w) > usedPercentOf(best)) return w;
+  return best;
+}
+
+// sampledAtOf is a snapshot's sampled_at as quotaChips.js compares it,
+// `snap.sampled_at || 0`.
+function sampledAtOf(snap) {
+  return snap.sampled_at || 0;
+}
+
+// mergeChipIntoBucket mirrors quotaChips.js mergeChipIntoBucket's rule, its
+// three branches in the web's order: subscription beats usage, fresh beats
+// stale, then the newest sampled_at wins. The web's (snap, s, mode, imm,
+// stale) arguments arrive here as one `chip` (chipFor's).
+function mergeChipIntoBucket(existing, chip) {
+  if (subscriptionBeatsUsage(existing, chip)) {
     existing.mode = 'subscription';
-    existing.snapshot = snap;
-    existing.session = s;
-    existing.imminent = imm;
-    existing.isStale = stale;
-  } else if (existing.isStale && !stale) {
-    existing.snapshot = snap;
-    existing.session = s;
-    existing.imminent = imm;
+    adoptChip(existing, chip);
+    existing.isStale = chip.isStale;
+  } else if (freshBeatsStale(existing, chip)) {
+    adoptChip(existing, chip);
     existing.isStale = false;
-  } else if (existing.isStale === stale && (snap.sampled_at || 0) > (existing.snapshot.sampled_at || 0)) {
-    existing.snapshot = snap;
-    existing.session = s;
-    existing.imminent = imm;
+  } else if (newerSampleWins(existing, chip)) {
+    adoptChip(existing, chip);
   }
+}
+
+// subscriptionBeatsUsage is the web's first branch: a subscription sample
+// replaces a usage bucket's, unless it is stale and the bucket's is not.
+function subscriptionBeatsUsage(existing, chip) {
+  if (existing.mode !== 'usage' || chip.mode !== 'subscription') return false;
+  return !chip.isStale || existing.isStale;
+}
+
+// freshBeatsStale is the web's second branch: a fresh sample replaces a
+// stale one, whatever either was sampled at.
+function freshBeatsStale(existing, chip) {
+  return existing.isStale && !chip.isStale;
+}
+
+// newerSampleWins is the web's third branch: between two equally stale
+// samples, the later sampled_at.
+function newerSampleWins(existing, chip) {
+  return existing.isStale === chip.isStale && sampledAtOf(chip.snapshot) > sampledAtOf(existing.snapshot);
+}
+
+// adoptChip is what every branch of mergeChipIntoBucket takes from the chip.
+function adoptChip(existing, chip) {
+  existing.snapshot = chip.snapshot;
+  existing.session = chip.session;
+  existing.imminent = chip.imminent;
 }
 
 // makeBucketChips builds bucketChips over a key rule. Production uses
@@ -92,35 +140,8 @@ export function makeBucketChips(keyFor) {
   return function bucketChips(sessions, nowMs) {
     const buckets = new Map();
     for (const s of sessions) {
-      const snap = s?.metrics?.rate_limit;
-      if (!snap) continue;
-      // Any window whose reset is in the past (or zero) makes the snapshot
-      // stale — Swift's mergeIntoBuckets rule, as the web ports it.
-      const stale = Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
-      const { providerKey, accountRef, key } = keyFor(s, snap);
-      const mode = chipModeFor(snap);
-      const hasWindows = Array.isArray(snap.windows) && snap.windows.length > 0;
-      // A subscription snapshot with nothing to show is skipped (#1995).
-      if (mode === 'subscription' && !hasWindows && !snap.credits && !snap.retrieval_failure) continue;
-      const imm = imminentWindow(snap);
-      const cost = s.metrics?.estimated_cost_usd || 0;
-      const existing = buckets.get(key);
-      if (!existing) {
-        buckets.set(key, {
-          key: key,
-          providerKey: providerKey,
-          accountRef: accountRef,
-          snapshot: snap,
-          session: s,
-          imminent: imm,
-          totalCostUSD: cost,
-          mode: mode,
-          isStale: stale,
-        });
-        continue;
-      }
-      mergeChipIntoBucket(existing, snap, s, mode, imm, stale);
-      existing.totalCostUSD += cost;
+      const chip = chipFor(s, nowMs, keyFor);
+      if (chip) addChip(buckets, chip);
     }
     return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
   };
@@ -128,31 +149,108 @@ export function makeBucketChips(keyFor) {
 
 export const bucketChips = makeBucketChips(bucketKeyFor);
 
+// chipFor is what one session brings to bucketChips: its rate-limit snapshot
+// with that snapshot's bucket key (by `keyFor`), mode, staleness, imminent
+// window and the session's cost; or null when it brings nothing (no
+// snapshot, or a subscription snapshot with nothing to show).
+function chipFor(s, nowMs, keyFor) {
+  const snap = s?.metrics?.rate_limit;
+  if (!snap) return null;
+  const isStale = isStaleSnapshot(snap, nowMs);
+  const { providerKey, accountRef, key } = keyFor(s, snap);
+  const mode = chipModeFor(snap);
+  if (isBlankSubscription(snap, mode)) return null;
+  return {
+    key,
+    providerKey,
+    accountRef,
+    snapshot: snap,
+    session: s,
+    imminent: imminentWindow(snap),
+    cost: sessionCostOf(s),
+    mode,
+    isStale,
+  };
+}
+
+// isStaleSnapshot: any window whose reset is in the past (or zero) makes the
+// snapshot stale — Swift's mergeIntoBuckets rule, as the web ports it.
+function isStaleSnapshot(snap, nowMs) {
+  return Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
+}
+
+// isBlankSubscription is the snapshot bucketChips skips (#1995): a
+// subscription one with nothing to show, no windows, no credits and no
+// retrieval failure.
+function isBlankSubscription(snap, mode) {
+  if (mode !== 'subscription' || hasWindows(snap)) return false;
+  return !snap.credits && !snap.retrieval_failure;
+}
+
+// sessionCostOf is the cost a session adds to its bucket's total.
+function sessionCostOf(s) {
+  return s.metrics?.estimated_cost_usd || 0;
+}
+
+// addChip opens the chip's bucket, or merges the chip into the bucket its key
+// already has; either way the session's cost counts toward that bucket.
+function addChip(buckets, chip) {
+  const existing = buckets.get(chip.key);
+  if (existing) {
+    mergeChipIntoBucket(existing, chip);
+    existing.totalCostUSD += chip.cost;
+    return;
+  }
+  buckets.set(chip.key, {
+    key: chip.key,
+    providerKey: chip.providerKey,
+    accountRef: chip.accountRef,
+    snapshot: chip.snapshot,
+    session: chip.session,
+    imminent: chip.imminent,
+    totalCostUSD: chip.cost,
+    mode: chip.mode,
+    isStale: chip.isStale,
+  });
+}
+
 // selectBucket picks the one bucket the panel shows: the bucket the current
 // session's own snapshot lands in, else the most recently sampled bucket.
 // `current` is the API session whose session_id equals this Claude Code
 // session's id, or undefined when the daemon lists none.
 export function selectBucket(buckets, current) {
   if (buckets.length === 0) return null;
+  return ownBucket(buckets, current) || newestBucket(buckets);
+}
+
+// ownBucket is the bucket the current session's own snapshot lands in, found
+// by the rule that built the buckets; undefined when it has no snapshot or
+// that bucket is not among them.
+function ownBucket(buckets, current) {
   const snap = current?.metrics?.rate_limit;
-  if (snap) {
-    const { key } = bucketKeyFor(current, snap);
-    const own = buckets.find(b => b.key === key);
-    if (own) return own;
-  }
+  if (!snap) return undefined;
+  const { key } = bucketKeyFor(current, snap);
+  return buckets.find(b => b.key === key);
+}
+
+// newestBucket is the bucket sampled last, the first of equals.
+function newestBucket(buckets) {
   let newest = buckets[0];
   for (const b of buckets) {
-    if ((b.snapshot.sampled_at || 0) > (newest.snapshot.sampled_at || 0)) newest = b;
+    if (sampledAtOf(b.snapshot) > sampledAtOf(newest.snapshot)) newest = b;
   }
   return newest;
 }
 
 // --- presentation, ported from quotaChips.js where the dashboard has one ---
 
+// The window lengths quotaWindowLabel names outright, Codex v1's off-by-one
+// 299 and 10079 included.
+const NAMED_WINDOW_LABELS = new Map([[299, '5h'], [300, '5h'], [10079, '7d'], [10080, '7d']]);
+
 // quotaWindowLabel mirrors quotaChips.js quotaWindowLabel.
 export function quotaWindowLabel(minutes) {
-  if (minutes === 299 || minutes === 300) return '5h';
-  if (minutes === 10079 || minutes === 10080) return '7d';
+  if (NAMED_WINDOW_LABELS.has(minutes)) return NAMED_WINDOW_LABELS.get(minutes);
   if (minutes >= 1440) return Math.floor(minutes / 1440) + 'd';
   if (minutes >= 60) return Math.floor(minutes / 60) + 'h';
   return minutes + 'm';
@@ -170,17 +268,20 @@ function paceFor(w, nowMs) {
 }
 
 // barTone mirrors quotaChips.js barColorClass (QuotaBarThreshold in
-// SessionListView.swift), answering a tone instead of a CSS class.
+// SessionListView.swift), answering a tone instead of a CSS class: orange
+// from 85 % used whatever the pace; with no pace, by the percent used
+// (70 / 50); else by how far usage runs ahead of pace (15 / 5).
 export function barTone(used, pace) {
   if (used >= 85) return 'orange';
-  if (pace == null) {
-    if (used >= 70) return 'orange';
-    if (used >= 50) return 'yellow';
-    return 'green';
-  }
-  const delta = used - pace;
-  if (delta >= 15) return 'orange';
-  if (delta >= 5) return 'yellow';
+  if (pace == null) return thresholdTone(used, 70, 50);
+  return thresholdTone(used - pace, 15, 5);
+}
+
+// thresholdTone is orange from `orangeAt` up, yellow from `yellowAt` up, else
+// green.
+function thresholdTone(value, orangeAt, yellowAt) {
+  if (value >= orangeAt) return 'orange';
+  if (value >= yellowAt) return 'yellow';
   return 'green';
 }
 
@@ -200,16 +301,29 @@ export function formatTimeUntil(unixSec, nowMs) {
   return m + 'm';
 }
 
+// capitalize upper-cases a word's first character, as quotaChips.js does
+// inline for a plan type, a product word and a provider key.
+function capitalize(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+// The plan types quotaChips.js planTypeLabel's switch names. A Map, not an
+// object, so the lookup neither coerces a key nor finds anything on a
+// prototype: Map.get's SameValueZero differs from the switch's `===` only on
+// NaN, which planTypeLabel's `!planType` turns away first.
+const PLAN_TYPE_LABELS = new Map([
+  ['max', 'Claude Max'],
+  ['pro', 'Claude Pro'],
+  ['plus', 'ChatGPT Plus'],
+  ['team', 'Team'],
+  ['enterprise', 'Enterprise'],
+]);
+
+// planTypeLabel mirrors quotaChips.js planTypeLabel: a named plan type's
+// label, any other capitalised.
 function planTypeLabel(planType) {
   if (!planType) return null;
-  switch (planType) {
-    case 'max': return 'Claude Max';
-    case 'pro': return 'Claude Pro';
-    case 'plus': return 'ChatGPT Plus';
-    case 'team': return 'Team';
-    case 'enterprise': return 'Enterprise';
-    default: return planType.charAt(0).toUpperCase() + planType.slice(1);
-  }
+  return PLAN_TYPE_LABELS.get(planType) ?? capitalize(planType);
 }
 
 const PRODUCT_LABELS = {
@@ -222,8 +336,7 @@ const PRODUCT_LABELS = {
 function productLabel(product) {
   if (!product) return null;
   if (PRODUCT_LABELS[product]) return PRODUCT_LABELS[product];
-  return product.split('_').filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  return product.split('_').filter(Boolean).map(capitalize).join(' ');
 }
 
 // bucketTitle mirrors the dashboard's chip heading: tier (plan type, then
@@ -232,7 +345,7 @@ function productLabel(product) {
 export function bucketTitle(bucket) {
   const tier = planTypeLabel(bucket.snapshot.plan_type) ||
     productLabel(bucket.snapshot.product) ||
-    (bucket.providerKey.charAt(0).toUpperCase() + bucket.providerKey.slice(1));
+    capitalize(bucket.providerKey);
   const account = bucket.accountRef ? '…' + bucket.accountRef.slice(-4) : 'unconfirmed';
   return tier + ' · ' + account;
 }
@@ -242,23 +355,26 @@ export function bucketTitle(bucket) {
 // is stale.
 export function quotaView(bucket, nowMs) {
   if (!bucket) return null;
-  const windows = (bucket.snapshot.windows || []).filter(Boolean).map(w => {
-    // The tone is decided on the raw figure, as the dashboard decides it
-    // (buildQuotaRowDOM: barColorClass(w.used_percent || 0, pace)); only the
-    // printed percent is rounded. Rounding first would turn 84.6 % at pace 80
-    // orange here while the dashboard shows it green.
-    const used = w.used_percent || 0;
-    return {
-      label: quotaWindowLabel(w.window_minutes || 0),
-      usedPercent: Math.round(used),
-      tone: barTone(used, paceFor(w, nowMs)),
-      resetsIn: w.resets_at > 0 ? formatTimeUntil(w.resets_at, nowMs) : '',
-    };
-  });
+  const windows = (bucket.snapshot.windows || []).filter(Boolean).map(w => windowView(w, nowMs));
   return {
     title: bucketTitle(bucket),
     windows,
     isStale: bucket.isStale,
     retrievalFailure: bucket.snapshot.retrieval_failure || '',
+  };
+}
+
+// windowView is one window's line in quotaView.
+function windowView(w, nowMs) {
+  // The tone is decided on the raw figure, as the dashboard decides it
+  // (buildQuotaRowDOM: barColorClass(w.used_percent || 0, pace)); only the
+  // printed percent is rounded. Rounding first would turn 84.6 % at pace 80
+  // orange here while the dashboard shows it green.
+  const used = usedPercentOf(w);
+  return {
+    label: quotaWindowLabel(w.window_minutes || 0),
+    usedPercent: Math.round(used),
+    tone: barTone(used, paceFor(w, nowMs)),
+    resetsIn: w.resets_at > 0 ? formatTimeUntil(w.resets_at, nowMs) : '',
   };
 }

@@ -4,7 +4,7 @@
 // formatTokens is compact on purpose (the pane is a narrow column): 950,
 // 4.2K, 177K, 1.2M, 12M.
 export function formatTokens(n) {
-  if (!Number.isFinite(n) || n <= 0) return '';
+  if (!isPositiveNumber(n)) return '';
   if (n < 1000) return String(Math.round(n));
   if (n < 10_000) return (n / 1000).toFixed(1) + 'K';
   if (n < 1_000_000) return Math.round(n / 1000) + 'K';
@@ -15,8 +15,14 @@ export function formatTokens(n) {
 // formatPercent prints a context-window fill to one decimal, or nothing when
 // the daemon reported none.
 export function formatPercent(p) {
-  if (!Number.isFinite(p) || p <= 0) return '';
+  if (!isPositiveNumber(p)) return '';
   return p.toFixed(1) + '%';
+}
+
+// isPositiveNumber is a figure formatTokens and formatPercent print: a finite
+// number above 0 (absent, NaN, Infinity, 0 and below all print nothing).
+function isPositiveNumber(n) {
+  return Number.isFinite(n) && n > 0;
 }
 
 // shortModel turns a model id into what fits a row: the vendor prefix and a
@@ -74,9 +80,7 @@ export function quotaBar(percent, width) {
 // Returns the text after the dot, the dot itself drawn by the caller in the
 // state's colour.
 export function fitRow(row, width) {
-  const tail = [];
-  if (row.adapterTag) tail.push(row.adapterTag);
-  if (row.isHere) tail.push('← here');
+  const tail = rowTail(row);
   const room = Math.max(0, width - 2); // "● " is drawn ahead of this text
   const compose = (branch, keep) =>
     [branch, ...keep.map(k => row[k]), ...tail].filter(Boolean).join(' ');
@@ -85,14 +89,28 @@ export function fitRow(row, width) {
   let keep = ['tokens', 'context', 'model'].filter(k => row[k]);
   const dropOrder = ['model', 'context', 'tokens'];
   for (;;) {
-    const fixed = compose('', keep);
-    const branchRoom = room - (fixed ? fixed.length + 1 : 0);
+    const branchRoom = room - spaceTaken(compose('', keep));
     if (branchRoom >= Math.min(branch.length, 6) || keep.length === 0) {
       return compose(shorten(branch, Math.max(1, branchRoom)), keep);
     }
     const drop = dropOrder.find(k => keep.includes(k));
     keep = keep.filter(k => k !== drop);
   }
+}
+
+// rowTail is what fitRow never drops, in the order it is drawn: the adapter
+// tag, then the here-marker.
+function rowTail(row) {
+  const tail = [];
+  if (row.adapterTag) tail.push(row.adapterTag);
+  if (row.isHere) tail.push('← here');
+  return tail;
+}
+
+// spaceTaken is how many columns `text` takes beside the branch, the space
+// that separates them included; none when there is no text.
+function spaceTaken(text) {
+  return text ? text.length + 1 : 0;
 }
 
 // shorten cuts `text` to `max` characters, the last an ellipsis, by code

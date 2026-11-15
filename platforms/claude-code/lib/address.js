@@ -28,24 +28,36 @@ export function splitHostPort(hostport) {
   if (typeof hostport !== 'string') return null;
   const i = hostport.lastIndexOf(':');
   if (i < 0) return null; // missing port in address
-  let host;
-  let j = 0;
-  let k = 0;
-  if (hostport[0] === '[') {
-    const end = hostport.indexOf(']');
-    if (end < 0) return null; // missing ']' in address
-    if (end + 1 === hostport.length) return null; // missing port
-    if (end + 1 !== i) return null; // too many colons, or ']' not followed by the last ':'
-    host = hostport.slice(1, end);
-    j = 1;
-    k = end + 1;
-  } else {
-    host = hostport.slice(0, i);
-    if (host.includes(':')) return null; // too many colons in address
-  }
-  if (hostport.slice(j).includes('[')) return null; // unexpected '['
-  if (hostport.slice(k).includes(']')) return null; // unexpected ']'
-  return { host, port: hostport.slice(i + 1) };
+  const span = hostport[0] === '[' ? bracketedHostSpan(hostport, i) : plainHostSpan(hostport, i);
+  if (!span || hasStrayBracket(hostport, span)) return null;
+  return { host: span.host, port: hostport.slice(i + 1) };
+}
+
+// hasStrayBracket is SplitHostPort's last two checks, run after either
+// branch: a '[' at or after j ("unexpected '[' in address"), or a ']' at or
+// after k ("unexpected ']' in address").
+function hasStrayBracket(hostport, { j, k }) {
+  return hostport.slice(j).includes('[') || hostport.slice(k).includes(']');
+}
+
+// bracketedHostSpan is SplitHostPort's `hostport[0] == '['` branch: the first
+// ']' must sit right before the last colon `i`. Returns the host and Go's j, k
+// (where hasStrayBracket's two checks start), or null where Go returns an
+// error.
+function bracketedHostSpan(hostport, i) {
+  const end = hostport.indexOf(']');
+  if (end < 0) return null; // missing ']' in address
+  if (end + 1 === hostport.length) return null; // missing port
+  if (end + 1 !== i) return null; // too many colons, or ']' not followed by the last ':'
+  return { host: hostport.slice(1, end), j: 1, k: end + 1 };
+}
+
+// plainHostSpan is SplitHostPort's unbracketed branch: the host is everything
+// before the last colon `i`, and must hold no colon of its own.
+function plainHostSpan(hostport, i) {
+  const host = hostport.slice(0, i);
+  if (host.includes(':')) return null; // too many colons in address
+  return { host, j: 0, k: 0 };
 }
 
 // goAtoi mirrors strconv.Atoi for base-10 input: an optional sign, then one
@@ -64,18 +76,25 @@ export function fixedPortOf(addr) {
   const parts = splitHostPort(addr);
   if (!parts) return null;
   const n = goAtoi(parts.port);
-  if (n === null || !(n > 0 && n <= 65535)) return null;
-  return n;
+  return isFixedPort(n) ? n : null;
+}
+
+// isFixedPort is fixedPortOf's range test on a goAtoi result: a number in
+// 1..65535, where null (not a number) and 0 (any port) both fail.
+function isFixedPort(n) {
+  return n !== null && n > 0 && n <= 65535;
 }
 
 // isGoSpace is unicode.IsSpace: the Latin-1 spaces plus the White_Space
 // property. Not String.prototype.trim's set, which differs on U+0085 (Go trims
-// it, JS does not) and U+FEFF (JS trims it, Go does not).
+// it, JS does not) and U+FEFF (JS trims it, Go does not). The set is the two
+// runs below plus the single code points beside them.
+const GO_SPACE_RUNS = [[0x09, 0x0d], [0x2000, 0x200a]];
+const GO_SPACE_POINTS = new Set([0x20, 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000]);
+
 function isGoSpace(ch) {
   const c = ch.codePointAt(0);
-  return (c >= 0x09 && c <= 0x0d) || c === 0x20 || c === 0x85 || c === 0xa0 ||
-    c === 0x1680 || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 ||
-    c === 0x202f || c === 0x205f || c === 0x3000;
+  return GO_SPACE_POINTS.has(c) || GO_SPACE_RUNS.some(([lo, hi]) => c >= lo && c <= hi);
 }
 
 // goTrimSpace mirrors strings.TrimSpace.
@@ -94,18 +113,27 @@ export function cleanPath(p) {
   if (p === '') return '.';
   const rooted = p.startsWith('/');
   const out = [];
-  for (const seg of p.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') {
-      if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
-      else if (!rooted) out.push('..');
-      continue;
-    }
-    out.push(seg);
-  }
+  for (const seg of p.split('/')) pushSegment(out, seg, rooted);
   const joined = out.join('/');
   if (rooted) return '/' + joined;
   return joined === '' ? '.' : joined;
+}
+
+// pushSegment is one turn of Clean's loop over `out`, the elements kept so
+// far: an empty element (a doubled slash) and `.` add nothing, `..` is
+// foldDotDot's, anything else is kept.
+function pushSegment(out, seg, rooted) {
+  if (seg === '' || seg === '.') return;
+  if (seg === '..') foldDotDot(out, rooted);
+  else out.push(seg);
+}
+
+// foldDotDot is Clean's `..` rule: it removes the element before it unless
+// that is a `..` too; with nothing to remove it is kept, except at the root,
+// where `/..` is `/`.
+function foldDotDot(out, rooted) {
+  if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
+  else if (!rooted) out.push('..');
 }
 
 // addrFilePath mirrors daemonaddr.AddrFilePath. `irrlichtHome` and `home` are
