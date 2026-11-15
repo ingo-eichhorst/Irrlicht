@@ -33,12 +33,12 @@ Answer `y` to add the marketplace, then pick a scope. From a shell, the same is 
 ## Open it
 
 - Type `/irrlicht`. That opens the pane at any width: docked beside the transcript in the full-screen layout, inline above the prompt otherwise.
-- In the full-screen layout the pane also opens on its own, as a sidebar, once the terminal is wide enough for one. Claude Code places a pane nobody asked for only from 144 columns (110 after you have opened it once). On the main screen (tmux's default, and `CLAUDE_CODE_NO_FLICKER=0`) it never opens on its own, so it never takes over the space above your prompt unasked.
+- In the full-screen layout the pane also opens on its own, as a sidebar, once the terminal is wide enough for one. Claude Code places a pane nobody asked for only from 144 columns, or from 110 once you have opened it yourself (measured on Claude Code 2.1.325). On the main screen (tmux's default, and `CLAUDE_CODE_NO_FLICKER=0`) it never opens on its own, so it never takes over the space above your prompt unasked.
 - Close it with its `✕` or ctrl+x x.
 
 ## What it shows
 
-- **Quota**: the windows (5h, 7d, …) of one quota bucket as bars, with the time to each reset. The bucket is the one the current session's own rate-limit sample lands in; without one, the most recently sampled bucket. Buckets follow the dashboard's and the menu bar's rule exactly (`<provider>|<confirmed account>`, or one `unconfirmed` bucket per provider), so all three show the same numbers. `lib/quota.parity.test.js` checks the rule against the dashboard's code.
+- **Quota**: the windows (5h, 7d, …) of one quota bucket as bars, with the time to each reset. The bucket is the one the current session's own rate-limit sample lands in; without one, the most recently sampled bucket. Buckets follow the dashboard's rule exactly (`<provider>|<confirmed account>`, or one `unconfirmed` bucket per provider, the key the menu bar uses too), over the same sessions the dashboard buckets: top-level projects' sessions and their subagents, not an orchestrator's nested groups. Bar colours follow the dashboard's thresholds. `lib/quota.parity.test.js` checks the rule and the colours against the dashboard's own code.
 - **Sessions**: every session the daemon watches, from every agent it supports, grouped by project. Each row shows a state dot (working, waiting, ready, error, in the dashboard's colours), the branch, tokens, context fill and model. The agent's name follows in brackets for sessions that are not Claude Code's, such as `[pi]` or `[codex]`, and subagents are indented under their parent.
 - **← here** marks the session the pane runs in, and only on an exact match of this session's id with the id the daemon lists. A session's id reaches the daemon with its transcript, so a brand-new session that has not written one yet shows no marker. The panel never guesses.
 - **Press a row** for its state, running time, estimated cost, and the question it is waiting on (or its last reply). Press it again to close it.
@@ -58,12 +58,12 @@ After a failed request the address is worked out again, so a daemon restarted on
 ## What it never does
 
 - It registers no hook on tool calls, prompts or permissions, so it cannot slow down or block the agent.
-- It polls every 3 s, and only while its pane is open. A request that has not been answered after 10 s is abandoned.
+- It polls every 3 s, and only while its pane is open, with never more than one request outstanding. If the daemon has not answered after 10 s, the pane says so. That request cannot be cancelled (the mod API has no abort for `$.http.fetch`), so the panel waits for it to end, for example when the daemon restarts, and only then asks again.
 - It writes nothing outside its own `$.state` in Claude Code.
 
 ## Develop
 
-Run a session with the mod loaded from this folder. It hot-reloads on save:
+From the repository root, run a session with the mod loaded from this folder. It hot-reloads on save:
 
 ```sh
 claude --plugin-dir platforms/claude-code
@@ -73,9 +73,9 @@ The folder holds two test suites, run by two runners:
 
 ```sh
 cd platforms/claude-code
-npm ci && npm test                       # vitest: lib/**/*.test.js
-claude plugin test platforms/claude-code # the mod against the engine: tests/*.test.tsx
-claude plugin validate platforms/claude-code
+npm ci && npm test        # vitest: lib/**/*.test.js
+claude plugin test .      # the mod against the engine: tests/*.test.tsx
+claude plugin validate .
 ```
 
 - `lib/` holds the data shaping as plain ES modules: the address ladder, session rows, the quota rule and formatting. The hooks module and vitest both import them. The `.d.ts` files beside them only type them for the hooks module.
@@ -83,6 +83,6 @@ claude plugin validate platforms/claude-code
 - `types/index.d.ts` is the mod's `$.state` contract.
 - `tests/panel.test.tsx` mounts the pane on the `terminal` and `desktop` surfaces through `claude-code/testing`.
 
-Claude Code writes its API's type declarations to `.claude-plugin/types/` each time it loads the mod from this folder. That folder ignores itself in git. `tsconfig.json` extends it, so `npx -p typescript tsc -p platforms/claude-code` type-checks the mod after one `claude --plugin-dir` run.
+Claude Code writes its API's type declarations to `.claude-plugin/types/` each time it loads the mod from this folder. That folder ignores itself in git. `tsconfig.json` extends it, so `npx -p typescript tsc -p .` in this folder type-checks the mod after one `claude --plugin-dir` run.
 
 Never run `npm install` in this tree, because it rewrites `package-lock.json`. Use `npm ci`.

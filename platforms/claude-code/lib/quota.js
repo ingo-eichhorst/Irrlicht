@@ -184,9 +184,11 @@ export function barTone(used, pace) {
   return 'green';
 }
 
-// formatTimeUntil mirrors quotaChips.js formatTimeUntil, with the clock
-// passed in. Relative on purpose: the hooks runtime's time zone is not the
-// person's to rely on, and "resets in 2h 14m" reads the same everywhere.
+// formatTimeUntil is adapted from quotaChips.js formatTimeUntil: the clock is
+// passed in, and a days branch is added ("3d 4h"), since the panel shows a
+// 7d window's reset on one short line where the dashboard's tooltip prints
+// "76h 12m". Relative on purpose: the hooks runtime's time zone is not the
+// person's to rely on, and "2h 14m" reads the same everywhere.
 export function formatTimeUntil(unixSec, nowMs) {
   let s = unixSec - nowMs / 1000;
   if (s < 0) s = 0;
@@ -241,10 +243,14 @@ export function bucketTitle(bucket) {
 export function quotaView(bucket, nowMs) {
   if (!bucket) return null;
   const windows = (bucket.snapshot.windows || []).filter(Boolean).map(w => {
-    const used = Math.round(w.used_percent || 0);
+    // The tone is decided on the raw figure, as the dashboard decides it
+    // (buildQuotaRowDOM: barColorClass(w.used_percent || 0, pace)); only the
+    // printed percent is rounded. Rounding first would turn 84.6 % at pace 80
+    // orange here while the dashboard shows it green.
+    const used = w.used_percent || 0;
     return {
       label: quotaWindowLabel(w.window_minutes || 0),
-      usedPercent: used,
+      usedPercent: Math.round(used),
       tone: barTone(used, paceFor(w, nowMs)),
       resetsIn: w.resets_at > 0 ? formatTimeUntil(w.resets_at, nowMs) : '',
     };

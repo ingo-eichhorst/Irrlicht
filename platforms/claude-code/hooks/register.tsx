@@ -4,12 +4,18 @@
 // dashboard and the menu bar read) and draws every session the daemon watches,
 // across agents, plus the quota of the account this session bills against.
 //
-// What it never does, by construction rather than by care:
-//   - gate anything: it hooks no tool, prompt or permission event, so it
-//     cannot slow down or block the agent;
-//   - write anything but its own `$.state` (no daemon writes, no settings,
-//     no `$.store`, no files);
-//   - throw out of a hook: every failure becomes the "not reachable" view.
+// What it is written never to do. `claude plugin validate .` lists what the
+// module hooks and calls, which is how to check the first two:
+//   - gate or hold up the agent: it hooks session.start, session.end, its own
+//     /irrlicht command.run, and two ui.render sites (AbovePrompt, handed on
+//     unchanged, and its own Pane); no tool, prompt or permission event. Its
+//     session.start starts the poller first and then awaits only the
+//     /irrlicht registration;
+//   - write anything but its own `$.state`: validate lists no `$.fs.write`,
+//     no `$.store` call and "env writes: nothing";
+//   - throw out of a hook: the poller catches every failure and draws it as
+//     the "not reachable" view, session.start catches a refused registration,
+//     and the session.start and command.run registrations carry a `.catch`.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
@@ -24,9 +30,11 @@ const TITLE = 'Irrlicht'
 const POLL_MS = 3000
 
 // `$.http.fetch` has no timeout or abort of its own (HttpInit carries neither
-// in this API), so a daemon that accepts a connection and never answers would
-// hold one request forever. A request older than this is abandoned: the view
-// says so, its late answer is ignored, and the next tick asks again.
+// in this API), so a daemon that accepts a connection and never answers holds
+// the request open until the connection ends. After this long the view says
+// "no answer", but no second request is started beside the first: one that
+// cannot be cancelled would stay open on the daemon, one more per stall. The
+// poller waits for the outstanding request to settle, then resumes.
 const STALL_MS = 10_000
 
 const view = atom({ plugin: 'irrlicht-panel', key: 'view' } as const, null)
@@ -40,8 +48,9 @@ let timer: Timer | undefined
 // The resolved address; cleared after any failed poll so the next one walks
 // the ladder again (a daemon restarted on another port is found again).
 let address: Address | undefined
-let inFlight: { generation: number; since: number } | undefined
-let generation = 0
+// The one outstanding request, if any: when it started, the daemon it asked,
+// and whether its stall has been drawn.
+let inFlight: { since: number; hostPort: string; isReported: boolean } | undefined
 let isAutoOpenTried = false
 
 // The reads the address ladder needs. `$.env.get` takes string literals only,
@@ -80,17 +89,20 @@ async function poll($: EngineInterface): Promise<void> {
   try {
     if (!(await isPaneShown($))) return
     const now = await $.clock.now()
-    if (inFlight && now - inFlight.since < STALL_MS) return
     if (inFlight) {
-      const stalled = address
-      inFlight = undefined
-      address = undefined
-      if (stalled) await publish($, unreachableView(hostPortOf(stalled), `no answer in ${STALL_MS / 1000} s`))
+      // One request at a time (STALL_MS says why): report a stall once, and
+      // otherwise leave the outstanding request to settle.
+      if (!inFlight.isReported && now - inFlight.since >= STALL_MS) {
+        inFlight.isReported = true
+        await publish($, unreachableView(inFlight.hostPort, `no answer in ${STALL_MS / 1000} s`))
+      }
+      return
     }
-    const mine = ++generation
-    inFlight = { generation: mine, since: now }
+    const request = { since: now, hostPort: address ? hostPortOf(address) : 'localhost', isReported: false }
+    inFlight = request
     try {
       const target = address ?? (address = await resolveDaemonAddress(addressIO($)))
+      request.hostPort = hostPortOf(target)
       let response: Awaited<ReturnType<EngineInterface['http']['fetch']>> | undefined
       let error: unknown
       try {
@@ -98,7 +110,6 @@ async function poll($: EngineInterface): Promise<void> {
       } catch (err) {
         error = err ?? 'rejected'
       }
-      if (mine !== generation) return // abandoned as stalled meanwhile
       // Read per poll, never cached: after a /clear the process goes on under
       // a new session id, and no session.start follows to say so.
       const hereSessionId = await $.session.id().catch(() => undefined)
@@ -108,7 +119,7 @@ async function poll($: EngineInterface): Promise<void> {
       if (next.status !== 'ok') address = undefined
       await publish($, next)
     } finally {
-      if (inFlight?.generation === mine) inFlight = undefined
+      if (inFlight === request) inFlight = undefined
     }
   } catch {
     // Never out of a timer: the pane keeps its last view, the next tick tries
@@ -121,17 +132,24 @@ const TONE_COLOR = { green: 'success', yellow: 'warning', orange: 'error' } as c
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'irrlicht',
-      description: 'Open the Irrlicht panel: every agent session Irrlicht watches, and your quota',
-    })
+    // The poller first, so nothing after it can keep it from running.
     timer?.cancel()
-    void poll($)
     timer = $.clock.every(POLL_MS, () => {
       void poll($)
     })
+    void poll($)
+    try {
+      await $.command.register({
+        name: 'irrlicht',
+        description: 'Open the Irrlicht panel: every agent session Irrlicht watches, and your quota',
+      })
+    } catch {
+      // Another mod or an organization's guard refused /irrlicht. The panel
+      // still polls; without the command, only the full-screen auto-open
+      // (below) opens the pane.
+    }
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('session.end', ($, e, next) => {
     // A /clear or a resume ends the conversation, not the process: "after a
@@ -158,7 +176,13 @@ export const register: Register = on => {
   // cannot tell (its input has no viewport); a render's `e.viewport.isFullscreen`
   // can, which is where the API's own example opens an unasked pane. This hook
   // draws nothing of its own: it answers what is beneath, unchanged. One try
-  // per load; the engine still holds an unasked pane back below 144 columns.
+  // per load. The engine then applies its own width floor to an unasked pane,
+  // measured on Claude Code 2.1.325 (tmux, CLAUDE_CODE_NO_FLICKER=1, the
+  // `--debug-file` log's `ui.open` line): 144 columns for a pane id the person
+  // has never opened (120: "waits unplaced (unasked below 144 columns …)",
+  // 150: "placed"), 110 once they have opened it (120: "placed", 100: "waits
+  // unplaced (unasked below 110 columns (100 now, an id the person opened
+  // before) …)"), as the API's UiOpenResult doc describes.
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
     if (!isAutoOpenTried && e.viewport?.isFullscreen === true) {
       isAutoOpenTried = true

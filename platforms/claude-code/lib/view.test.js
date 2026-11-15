@@ -74,3 +74,37 @@ describe('buildView over the synthetic payload', () => {
       .toEqual({ status: 'ok', hostPort: HOST, quota: null, sections: [], sessionCount: 0, dayCost: '$0' });
   });
 });
+
+// Red-first for the review finding that the panel bucketed quota over a
+// different set of sessions than the dashboard: the dashboard feeds
+// bucketChips every top-level group's agents and their children
+// (collectFlatSessions, platforms/web/irrlicht.js:600-615) and never walks a
+// nested group. A rate-limit sample that lives only in a nested group must not
+// pick the bucket the panel shows, or the panel and the dashboard disagree.
+describe('the quota is bucketed over the sessions the dashboard buckets', () => {
+  const NOW_S = NOW_MS / 1000;
+  const sample = (ref, sampledAt) => ({
+    windows: [{ used_percent: 20, window_minutes: 300, resets_at: NOW_S + 3600 }],
+    sampled_at: sampledAt, provider: 'anthropic', attribution_quality: 'confirmed', confirmed_account_ref: ref,
+  });
+  const payload = {
+    groups: [
+      { name: 'orchard', agents: [{ session_id: 'sess-top-0001', state: 'ready', metrics: { rate_limit: sample('acct-test-top1', NOW_S - 100) } }] },
+      {
+        name: 'fleet', type: 'gastown', agents: [],
+        groups: [{ name: 'rig-a', agents: [{ session_id: 'sess-rig-0002', state: 'working', metrics: { rate_limit: sample('acct-test-rig2', NOW_S - 1) } }] }],
+      },
+    ],
+  };
+
+  test("a nested group's newer sample does not change the selected bucket", () => {
+    const v = buildView(payload, { hostPort: HOST, hereSessionId: undefined, nowMs: NOW_MS });
+    expect(v.quota.title).toBe('Anthropic · …top1');
+  });
+
+  test('the nested session is still listed', () => {
+    const v = buildView(payload, { hostPort: HOST, hereSessionId: undefined, nowMs: NOW_MS });
+    expect(v.sections.map(s => s.name)).toEqual(['orchard', 'fleet / rig-a']);
+    expect(v.sessionCount).toBe(2);
+  });
+});

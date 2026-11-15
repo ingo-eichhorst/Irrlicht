@@ -130,6 +130,30 @@ export function flattenSessions(payload) {
   return out;
 }
 
+// quotaSessions is the set of sessions the quota is bucketed over, which must
+// be the dashboard's so the two show the same bucket: every TOP-LEVEL group's
+// agents and their children at any depth, and no nested group's
+// (collectFlatSessions, platforms/web/irrlicht.js:600-615, visits
+// `dashboardGroups[].agents` and `children` only). The session list itself
+// walks nested groups too (flattenSessions, sessionSections).
+//
+// The macOS app draws its set differently again: every session it holds,
+// nested groups included (flattenAgents, SessionManager+GroupComposition
+// .swift), minus children whose parent it holds (SessionManager+WebSocket
+// .swift). The panel follows the dashboard, the one the parity test pins.
+export function quotaSessions(payload) {
+  const out = [];
+  const visit = agents => {
+    for (const a of agents) {
+      if (!isSession(a)) continue;
+      out.push(a);
+      visit(childrenOf(a));
+    }
+  };
+  for (const g of groupsOf(payload)) visit(agentsOf(g));
+  return out;
+}
+
 // sessionSections turns the group tree into the panel's sections: one per
 // group that holds sessions, nested groups as their own sections named
 // "<parent> / <child>", children as indented rows under their parent.

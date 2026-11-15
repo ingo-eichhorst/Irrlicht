@@ -21,11 +21,11 @@
 // every run.
 import '../../web/vitest.setup.js';
 import '../../web/irrlicht.js';
-import { bucketChips as webBucketChips } from '../../web/quotaChips.js';
+import { bucketChips as webBucketChips, buildQuotaRowDOM } from '../../web/quotaChips.js';
 
 import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, test } from 'vitest';
-import { bucketChips, makeBucketChips, providerKeyFor, selectBucket } from './quota.js';
+import { bucketChips, makeBucketChips, providerKeyFor, quotaView, selectBucket } from './quota.js';
 
 const NOW_MS = 1_900_000_000_000;
 const NOW_S = NOW_MS / 1000;
@@ -160,5 +160,38 @@ describe('selectBucket', () => {
 
   test('nothing to show', () => {
     expect(selectBucket([], undefined)).toBe(null);
+  });
+});
+
+// Red-first for the review finding that the panel coloured a bar from the
+// ROUNDED percent while the dashboard colours it from the raw one
+// (buildQuotaRowDOM: `barColorClass(w.used_percent || 0, pace)`): 84.6 % used
+// an hour before a 5h reset (pace 80) is green on the dashboard and was orange
+// here. The dashboard's own row builder is the reference, read off the class
+// it puts on the bar's fill.
+describe("a window's bar tone is the dashboard's", () => {
+  const webTone = w => {
+    const fill = buildQuotaRowDOM(w, 'normal', NOW_MS).querySelector('.quota-bar-fill');
+    const m = /quota-bar-fill--(\w+)/.exec(fill?.className || '');
+    if (!m) throw new Error('no tone class on the dashboard bar: ' + (fill?.className ?? 'no fill'));
+    return m[1];
+  };
+  const panelTone = w => quotaView({ snapshot: { windows: [w] }, providerKey: 'anthropic', accountRef: '', isStale: false }, NOW_MS).windows[0].tone;
+  const cases = {
+    '84.6 % an hour before a 5h reset (pace 80)': { used_percent: 84.6, window_minutes: 300, resets_at: NOW_S + 3600 },
+    '69.5 % with no pace (no reset time)': { used_percent: 69.5, window_minutes: 300, resets_at: 0 },
+    '49.5 % with no pace (no window length)': { used_percent: 49.5, window_minutes: 0, resets_at: NOW_S + 3600 },
+    '90 % (absolute orange)': { used_percent: 90, window_minutes: 300, resets_at: NOW_S + 3600 },
+    '40 % just after a 7d reset (pace near 0)': { used_percent: 40, window_minutes: 10080, resets_at: NOW_S + 10080 * 60 - 60 },
+    '10 % an hour before a 5h reset': { used_percent: 10, window_minutes: 300, resets_at: NOW_S + 3600 },
+  };
+  for (const [name, w] of Object.entries(cases)) {
+    test(name, () => {
+      expect(panelTone(w)).toBe(webTone(w));
+    });
+  }
+  test('the displayed figure is still the rounded one', () => {
+    expect(quotaView({ snapshot: { windows: [cases['84.6 % an hour before a 5h reset (pace 80)']] }, providerKey: 'anthropic', accountRef: '', isStale: false }, NOW_MS)
+      .windows[0].usedPercent).toBe(85);
   });
 });

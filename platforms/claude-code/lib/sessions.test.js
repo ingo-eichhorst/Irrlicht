@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  SESSION_STATES, adapterTag, dayCostUSD, flattenSessions, sessionDetail, sessionSections, stateColor,
+  SESSION_STATES, adapterTag, dayCostUSD, flattenSessions, quotaSessions, sessionDetail, sessionSections, stateColor,
 } from './sessions.js';
 import { HERE_ID, SESSIONS_PAYLOAD } from './testdata/sessions.fixture.js';
 
@@ -16,6 +16,14 @@ describe('flattenSessions', () => {
 
   test('a payload with no groups (a nil slice serialises as null)', () => {
     expect(flattenSessions({ groups: null })).toEqual([]);
+  });
+});
+
+describe('quotaSessions is the dashboard\'s set', () => {
+  test('top-level groups\' agents and their children; no nested group', () => {
+    expect(quotaSessions(SESSIONS_PAYLOAD).map(s => s.session_id)).toEqual([
+      'sess-here-0001', 'sess-child-0002', 'sess-other-0003', 'sess-pi-0004',
+    ]);
   });
 });
 

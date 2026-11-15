@@ -4,7 +4,7 @@
 
 import { formatUsd } from './format.js';
 import { bucketChips, quotaView, selectBucket } from './quota.js';
-import { dayCostUSD, flattenSessions, sessionSections } from './sessions.js';
+import { dayCostUSD, flattenSessions, quotaSessions, sessionSections } from './sessions.js';
 
 // unreachableView is what the panel shows when it could not get a usable
 // answer from the daemon at `hostPort`, with the reason in a few words.
@@ -17,8 +17,10 @@ export function unreachableView(hostPort, reason) {
 // staleness and reset countdowns are measured against.
 export function buildView(payload, { hostPort, hereSessionId, nowMs }) {
   const sessions = flattenSessions(payload);
+  // The current session is looked up among every listed session; the buckets
+  // are built over the dashboard's set only (quotaSessions says why).
   const current = hereSessionId ? sessions.find(s => s.session_id === hereSessionId) : undefined;
-  const bucket = selectBucket(bucketChips(sessions, nowMs), current);
+  const bucket = selectBucket(bucketChips(quotaSessions(payload), nowMs), current);
   return {
     status: 'ok',
     hostPort,

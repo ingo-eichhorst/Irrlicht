@@ -37,6 +37,8 @@ const BAND_PROPS = {
 type Answer = { status: number; ok: boolean; text: string }
 type World = {
   env?: Record<string, string>
+  /** Refuse `$.command.register`, as another mod or an organization's guard may. */
+  denyRegister?: boolean
   hereId?: string
   paneOpen?: boolean
   files?: Record<string, string>
@@ -55,7 +57,8 @@ function world(on: On, w: World = {}) {
   mock.env(on, w.env ?? { HOME: '/home/test' })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
-  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('command.register', (_$, e) =>
+    w.denyRegister ? { deny: 'command registration refused by policy' } : { value: { command: e.name } })
   on('session.id', () => ({ value: w.hereId ?? HERE_ID }))
   on('ui.panes', () => ({
     value: w.paneOpen === false ? [] : [{ id: PANE, title: 'Irrlicht', isShown: true, isFocused: false, isPlaced: true }],
@@ -264,24 +267,68 @@ test('unasked, the pane opens only where the surface docks it, once', async ($, 
   expect(opened).toEqual([PANE]) // one try, not one per drawing
 })
 
-test('a request that never answers is abandoned after 10 s', async ($, on) => {
-  let isHanging = true
+// Red-first for the review finding that abandoned requests piled up: an
+// unanswered `$.http.fetch` cannot be aborted (HttpInit has no signal), so
+// starting a new request every 10 s left one more open connection on the
+// daemon each time (11 after two minutes). One request at a time, always.
+test('one request at a time: an unanswered one is reported, never piled on', async ($, on) => {
+  let release: () => void = () => undefined
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let isFirst = true
   const { clock, fetched } = world(on, {
     answer: async () => {
-      if (isHanging) await clock.sleep(600_000)
+      if (isFirst) {
+        isFirst = false
+        await gate
+      }
       return okAnswer()
     },
   })
   await $.session.start({ cwd: '/home/test/src/orchard', surface: 'terminal', isInteractive: true })
   await clock.settle()
-  await clock.advance(9000) // three ticks while the first request hangs
-  expect(fetched).toHaveLength(1)
+  await clock.advance(120_000) // two minutes, forty ticks, the first request still open
+  expect(fetched, 'requests issued while the first never answered').toHaveLength(1)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: PANE_PROPS })
+    expect(await ui.find({ type: 'Text', text: 'Irrlicht daemon not reachable at localhost:7837' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /no answer in 10 s/ })).toBeDefined()
+    await ui.unmount()
+  }
 
-  isHanging = false
-  await clock.advance(3000) // 12 s: past the stall bound, a fresh request goes out
-  expect(fetched).toHaveLength(2)
+  // The request settles at last (a restarted daemon drops the connection, or
+  // answers): its answer is drawn, and polling resumes at the usual pace.
+  release()
+  await clock.settle()
   const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: PANE, props: PANE_PROPS })
   expect(await ui.find({ type: 'Text', text: 'orchard (3)' })).toBeDefined()
+  await ui.unmount()
+  await clock.advance(3000)
+  expect(fetched).toHaveLength(2)
+})
+
+// Red-first for the review finding that session.start awaited
+// `$.command.register` before starting the timer: a registration another mod
+// or an organization's guard refuses made the hook throw, so the panel never
+// polled and sat on "Asking the Irrlicht daemon…" for good.
+test('a refused /irrlicht registration still polls and keeps the view current', async ($, on) => {
+  let answer: () => Answer = okAnswer
+  const { clock, fetched } = world(on, { denyRegister: true, answer: () => answer() })
+  await $.session.start({ cwd: '/home/test/src/orchard', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(fetched, 'the first poll').toHaveLength(1)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: PANE_PROPS })
+    expect(await ui.find({ type: 'Text', text: 'orchard (3)' })).toBeDefined()
+    await ui.unmount()
+  }
+
+  answer = () => ({ status: 503, ok: false, text: 'unavailable' })
+  await clock.advance(3000)
+  expect(fetched, 'the timer runs').toHaveLength(2)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: PANE, props: PANE_PROPS })
+  expect(await ui.find({ type: 'Text', text: /HTTP 503/ })).toBeDefined()
   await ui.unmount()
 })
 
