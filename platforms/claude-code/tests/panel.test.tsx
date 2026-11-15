@@ -171,7 +171,7 @@ test('every failure draws "not reachable at <host:port>", on both surfaces', asy
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: PANE_PROPS })
       expect(await ui.find({ type: 'Text', text: 'Irrlicht daemon not reachable at localhost:7837' }), name).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: reason }), name).toBeDefined()
+      expect((await ui.find({ type: 'Text', text: reason }))?.text, name).toMatch(/; trying again every 3 s\.$/)
       expect(await ui.findAll({ type: 'Button' }), name).toHaveLength(0)
       await ui.unmount()
     }
@@ -293,7 +293,11 @@ test('one request at a time: an unanswered one is reported, never piled on', asy
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: PANE_PROPS })
     expect(await ui.find({ type: 'Text', text: 'Irrlicht daemon not reachable at localhost:7837' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /no answer in 10 s/ })).toBeDefined()
+    // It waits for the outstanding request, so it must not claim a retry
+    // every 3 s, which it no longer does while one is open.
+    expect((await ui.find({ type: 'Text', text: /no answer in 10 s/ }))?.text)
+      .toBe('no answer in 10 s; waiting for it to end.')
+    expect(await ui.find({ type: 'Text', text: /trying again/ })).toBeUndefined()
     await ui.unmount()
   }
 

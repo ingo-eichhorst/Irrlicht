@@ -58,7 +58,7 @@ After a failed request the address is worked out again, so a daemon restarted on
 ## What it never does
 
 - It registers no hook on tool calls, prompts or permissions, so it cannot slow down or block the agent.
-- It polls every 3 s, and only while its pane is open, with never more than one request outstanding. If the daemon has not answered after 10 s, the pane says so. That request cannot be cancelled (the mod API has no abort for `$.http.fetch`), so the panel waits for it to end, for example when the daemon restarts, and only then asks again.
+- It polls every 3 s, and only while its pane is open, with never more than one request outstanding. If the daemon has not answered after 10 s, the pane says so. That request cannot be cancelled (the mod API has no abort for `$.http.fetch`), so the pane says it is waiting for it to end and the panel asks again only once it has. On Claude Code 2.1.325 the host itself ended such a request after about 30 s (measured against a server that never answered); that is one build's behaviour, not a guarantee.
 - It writes nothing outside its own `$.state` in Claude Code.
 
 ## Develop

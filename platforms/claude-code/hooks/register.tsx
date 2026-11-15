@@ -29,12 +29,20 @@ const PANE = 'irrlicht'
 const TITLE = 'Irrlicht'
 const POLL_MS = 3000
 
-// `$.http.fetch` has no timeout or abort of its own (HttpInit carries neither
-// in this API), so a daemon that accepts a connection and never answers holds
-// the request open until the connection ends. After this long the view says
-// "no answer", but no second request is started beside the first: one that
-// cannot be cancelled would stay open on the daemon, one more per stall. The
-// poller waits for the outstanding request to settle, then resumes.
+// `$.http.fetch` has no timeout or abort the plugin can set (HttpInit carries
+// neither in this API), so a daemon that accepts a connection and never
+// answers holds the request open until the connection ends. After this long
+// the view says "no answer", but no second request is started beside the
+// first: one that cannot be cancelled would stay open on the daemon, one more
+// per stall. The poller waits for the outstanding request to settle, then
+// resumes.
+//
+// How long that wait is, is the host's to decide. Measured on Claude Code
+// 2.1.325 against a server that accepts and never answers (the debug log, and
+// a BrokenPipe on the server when it later tried to answer): the host ended
+// the request after about 30 s (GET at 11:44:23.519, the next request at
+// 11:44:53.548). That is an observation of one build, not a guarantee, and
+// nothing here relies on it.
 const STALL_MS = 10_000
 
 const view = atom({ plugin: 'irrlicht-panel', key: 'view' } as const, null)
@@ -94,7 +102,7 @@ async function poll($: EngineInterface): Promise<void> {
       // otherwise leave the outstanding request to settle.
       if (!inFlight.isReported && now - inFlight.since >= STALL_MS) {
         inFlight.isReported = true
-        await publish($, unreachableView(inFlight.hostPort, `no answer in ${STALL_MS / 1000} s`))
+        await publish($, unreachableView(inFlight.hostPort, `no answer in ${STALL_MS / 1000} s`, true))
       }
       return
     }
@@ -211,7 +219,8 @@ export const register: Register = on => {
             Irrlicht daemon not reachable at {current.hostPort}
           </Text>
           <Text dimColor wrap="wrap">
-            {current.reason}; trying again every {POLL_MS / 1000} s.
+            {current.reason};{' '}
+            {current.isAwaitingAnswer ? 'waiting for it to end.' : `trying again every ${POLL_MS / 1000} s.`}
           </Text>
         </Box>
       )

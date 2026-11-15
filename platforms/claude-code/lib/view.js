@@ -8,8 +8,10 @@ import { dayCostUSD, flattenSessions, quotaSessions, sessionSections } from './s
 
 // unreachableView is what the panel shows when it could not get a usable
 // answer from the daemon at `hostPort`, with the reason in a few words.
-export function unreachableView(hostPort, reason) {
-  return { status: 'unreachable', hostPort, reason };
+// `isAwaitingAnswer` marks the one case where the panel is not about to ask
+// again: a request is still open, and the poller waits for it to end.
+export function unreachableView(hostPort, reason, isAwaitingAnswer = false) {
+  return { status: 'unreachable', hostPort, reason, isAwaitingAnswer };
 }
 
 // buildView shapes a parsed /api/v1/sessions payload. `hereSessionId` is this

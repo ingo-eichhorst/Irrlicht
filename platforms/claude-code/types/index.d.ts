@@ -60,7 +60,13 @@ export type IrrlichtPanelView =
       sessionCount: number
       dayCost: string
     }
-  | { status: 'unreachable'; hostPort: string; reason: string }
+  | {
+      status: 'unreachable'
+      hostPort: string
+      reason: string
+      /** True while a request is still open and the panel waits for it rather than asking again. */
+      isAwaitingAnswer: boolean
+    }
 
 declare module 'claude-code' {
   interface PluginState {
