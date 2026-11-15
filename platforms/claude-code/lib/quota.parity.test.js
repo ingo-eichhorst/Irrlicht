@@ -21,11 +21,11 @@
 // every run.
 import '../../web/vitest.setup.js';
 import '../../web/irrlicht.js';
-import { bucketChips as webBucketChips, buildQuotaRowDOM } from '../../web/quotaChips.js';
+import { bucketChips as webBucketChips, buildQuotaRowDOM, productLabel as webProductLabel } from '../../web/quotaChips.js';
 
 import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, test } from 'vitest';
-import { bucketChips, makeBucketChips, providerKeyFor, quotaView, selectBucket } from './quota.js';
+import { bucketChips, bucketTitle, makeBucketChips, providerKeyFor, quotaView, selectBucket } from './quota.js';
 
 const NOW_MS = 1_900_000_000_000;
 const NOW_S = NOW_MS / 1000;
@@ -194,4 +194,18 @@ describe("a window's bar tone is the dashboard's", () => {
     expect(quotaView({ snapshot: { windows: [cases['84.6 % an hour before a 5h reset (pace 80)']] }, providerKey: 'anthropic', accountRef: '', isStale: false }, NOW_MS)
       .windows[0].usedPercent).toBe(85);
   });
+});
+
+// LOCK: a product the panel has no label for is capitalised word by word, as
+// the dashboard's productLabel does. No test reached that branch before the
+// CodeScene refactor (#2144) moved its capitalisation into a shared helper;
+// this one was seen red with productLabel's `.map(capitalize)` replaced by
+// `.map(w => w)`.
+describe("a bucket's product label is the dashboard's", () => {
+  for (const product of ['claude_max', 'some_new_plan', 'two__words_']) {
+    test(product, () => {
+      expect(bucketTitle({ snapshot: { product }, providerKey: 'anthropic', accountRef: '' }))
+        .toBe(webProductLabel(product) + ' · unconfirmed');
+    });
+  }
 });
