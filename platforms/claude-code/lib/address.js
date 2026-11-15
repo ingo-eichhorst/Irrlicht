@@ -111,9 +111,19 @@ export function cleanPath(p) {
 // addrFilePath mirrors daemonaddr.AddrFilePath. `irrlichtHome` and `home` are
 // the values of IRRLICHT_HOME and HOME (os.UserHomeDir reads $HOME on Unix);
 // unset and empty are the same thing to Go's os.Getenv.
+//
+// The /tmp/irrlicht rung (SonarQube javascript:S5443, "publicly writable
+// directory") is daemonaddr.AddrFilePath's own fallback
+// (core/pkg/daemonaddr/daemonaddr.go:289), taken only when HOME is empty, and
+// the panel handles it as follows (read off the code below, not promised
+// beyond it): the file is only ever read, never written or created;
+// resolveDaemonAddress reads it only after `$.fs.stat` answers
+// isReadableAddrFile (`isLink === false && kind === 'file'`); and all it takes
+// from the text is a port number in 1..65535 (fixedPortOf), the host always
+// being localhost (hostPortOf).
 export function addrFilePath({ irrlichtHome, home }) {
   if (irrlichtHome) return cleanPath(irrlichtHome + '/' + ADDR_FILE_NAME);
-  if (!home) return cleanPath('/tmp/irrlicht/' + ADDR_FILE_NAME);
+  if (!home) return cleanPath('/tmp/irrlicht/' + ADDR_FILE_NAME); // NOSONAR (javascript:S5443) — see comment above
   return cleanPath(home + '/.local/share/irrlicht/' + ADDR_FILE_NAME);
 }
 
@@ -181,7 +191,13 @@ export function hostPortOf(resolved) {
   return 'localhost:' + resolved.port;
 }
 
-// sessionsURL is the endpoint the panel polls.
+// sessionsURL is the endpoint the panel polls. Plain http on purpose
+// (SonarQube javascript:S5332): the daemon serves no TLS at all, only plain
+// HTTP over the TCP listener in core/cmd/irrlichd (net.Listen at
+// startup.go:519, srv.Serve(tcpL) at main.go:804; no crypto/tls in that
+// package), bound to 127.0.0.1:7837 unless IRRLICHT_BIND_ADDR says otherwise
+// (daemonaddr.go:93). The panel dials localhost whatever host that names
+// (hostPortOf), so the request never leaves the machine.
 export function sessionsURL(resolved) {
-  return 'http://' + hostPortOf(resolved) + '/api/v1/sessions';
+  return 'http://' + hostPortOf(resolved) + '/api/v1/sessions'; // NOSONAR (javascript:S5332) — see comment above
 }
