@@ -338,7 +338,7 @@ the Step 7b race-guard check and the Step 6 smoke test.
 tools/security-scan.sh
 ```
 
-This checks, across every module in `go.work` and both web trees:
+This checks, across every module in `go.work` and every web tree:
 
 - Open GitHub Dependabot alerts (Critical/High severity)
 - Open GitHub CodeQL code-scanning alerts (Critical/High severity)
@@ -348,8 +348,8 @@ This checks, across every module in `go.work` and both web trees:
   doesn't block
 - `gosec` — High-severity + High-confidence findings are blocking; lower
   severity/confidence findings are logged for visibility
-- `npm audit --audit-level=high` in `platforms/web` and
-  `tools/onboarding-factory/internal/viewer/web`
+- `npm audit --audit-level=high` in `platforms/web`,
+  `tools/onboarding-factory/internal/viewer/web` and `platforms/claude-code`
 
 **Abort the release on any non-zero exit.** The script names the failing
 tool, the specific finding (alert URL, OSV/CVE id, or gosec rule), and a
