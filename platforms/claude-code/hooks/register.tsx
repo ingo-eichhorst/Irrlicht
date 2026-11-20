@@ -145,12 +145,15 @@ export const register: Register = (on, options) => {
   // The manifest's `autoOpen` field (default true; in `/config`, "Open the
   // panel by itself · irrlicht-panel"). Options are fixed for one load, and a
   // change in `/config` reloads the module with the new ones, so reading them
-  // here honours a change without a restart. That is read from the API's
-  // Register doc and the plugin-authoring reference ("a change there reloads
-  // the module with the new `options`"), not measured. The reload also resets
-  // this flag: turned on mid-session, the pane opens on the next full-screen
-  // render; turned off, a pane already open stays open. Absent (a host that
-  // fills in no defaults) counts as on.
+  // here honours a change without a restart. Measured on Claude Code 2.1.329
+  // (`--debug-file`, `/config irrlicht-panel.autoOpen=false` and back): the
+  // log reads "hooks module irrlicht-panel@inline reloaded" and
+  // "session.start: raised for irrlicht-panel (loaded later)", so the poller
+  // above is started again and the GETs went on every 3 s. The reload also
+  // resets this flag: turned back on, the pane opened on the next full-screen
+  // render ("ui.open … (unasked, 170 columns): placed"); turned off, a pane
+  // already open stays open. Absent (a host that fills in no defaults) counts
+  // as on.
   isAutoOpenDue = options.autoOpen !== false
 
   on('session.start', async ($, e, next) => {

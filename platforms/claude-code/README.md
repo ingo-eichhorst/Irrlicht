@@ -40,7 +40,7 @@ Answer `y` to add the marketplace, then pick a scope. From a shell, the same is 
 
 The panel has one setting, `autoOpen`, on by default. Off, the pane opens only when you type `/irrlicht`, which works either way.
 
-- In `/config`, search for `irrlicht` and switch **Open the panel by itself · irrlicht-panel** off. Claude Code reloads the panel with the new value, so no restart is needed (that is how its mod API documents a change to a plugin's options). Turning it off does not close a pane that is already open.
+- In `/config`, search for `irrlicht` and switch **Open the panel by itself · irrlicht-panel** off. Claude Code reloads the panel with the new value, and the panel keeps updating, so no restart is needed (measured on Claude Code 2.1.329). Turning it off does not close a pane that is already open.
 - Or in `~/.claude/settings.json`. Claude Code reads plugin options from user, `--settings` and managed settings, never from a project's settings:
 
   ```json
