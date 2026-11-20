@@ -195,11 +195,10 @@ echo "== env rendering =="
 assert_eq "no env → no lines" "" "$(recipe_runtime_env_lines '{}')"
 assert_eq "plain env" "ANTHROPIC_API_KEY=sk-mock" \
   "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_API_KEY":"sk-mock"}}')"
-# The two assertions below with an http:// literal are each ONE physical line
-# on purpose: Sonar reported shell:S5332 for each on the command's FIRST line
-# (the issue's textRange started on the backslash-continued line while they
-# were split across two), and a NOSONAR covers only the line it sits on. The
-# URLs are loopback fixtures, substituted and compared, never fetched (#2147).
+# The two assertions below carrying a loopback URL are one physical line each:
+# a NOSONAR covers only its own line, and a `\`-continued line cannot carry
+# one. Sonar's shell:S5332 issues on the split form started on such a line
+# (textRanges 198-199 and 209-210 at 452333613). Never fetched (#2147).
 assert_eq "MOCK_ADDR substitution" "ANTHROPIC_BASE_URL=http://127.0.0.1:18767" "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' '127.0.0.1:18767')" # NOSONAR (shell:S5332) — loopback test fixture, never fetched
 assert_eq "MOCK_PORT substitution" "PORT=18767" \
   "$(recipe_runtime_env_lines '{"env":{"PORT":"{{MOCK_PORT}}"}}' '127.0.0.1:18767')"

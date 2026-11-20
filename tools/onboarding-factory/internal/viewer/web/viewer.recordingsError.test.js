@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'vitest'
+import { json, notOk } from './viewerFetch.testutil.js'
 
 // The recordings endpoint 500s a cell whose recording manifests it cannot
 // read (an unparseable manifest, or one naming an unknown execution profile).
@@ -9,32 +10,12 @@ import { describe, test, expect } from 'vitest'
 // Its own file so viewer.js gets a fresh module registry: the bootstrap runs
 // once per importing file.
 
-if (typeof Element.prototype.scrollIntoView !== 'function') {
-  Element.prototype.scrollIntoView = function scrollIntoViewStub() {}
-}
 
 const CELL = { agent: 'claudecode', subtree: 'scenarios', id: 'broken-cell' }
 const CELL_PATH = '/api/scenarios/claudecode/scenarios/broken-cell'
 const FAILURE = 'cannot read recording manifests: unknown execution profile "desktop"'
 
-function json(body) {
-  return Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve(body),
-    text: () => Promise.resolve(JSON.stringify(body)),
-    headers: { get: () => null },
-  })
-}
-
-function serverError(text) {
-  return Promise.resolve({
-    ok: false,
-    status: 500,
-    json: () => Promise.resolve(null),
-    text: () => Promise.resolve(text),
-    headers: { get: () => null },
-  })
-}
+const serverError = (text) => notOk(500, text)
 
 async function waitFor(selector, timeoutMs = 3000) {
   const start = Date.now()

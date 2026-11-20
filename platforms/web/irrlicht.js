@@ -2010,9 +2010,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       const hasOrchestrator = dashboardGroups.some(g =>
         g && (g.type === 'gastown' || g.groups?.length));
       setTimeout(() => {
-        // The .catch goes after .finally on purpose: the next poll must be
-        // scheduled even when this one fails, and the failure should still be
-        // logged (#2147).
+        // .catch last, so a throw from scheduleRehydratePoll is logged too
+        // (checked in node: with .catch first it surfaced unhandled) (#2147).
         rehydratePoll()
           .finally(scheduleRehydratePoll)
           .catch(err => console.error('irrlicht: rehydrate poll failed', err));
@@ -2573,9 +2572,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // notification tap sent here (R6).
     // A function declaration, not a call site: the settings handler above runs
     // earlier in this scope and needs to re-render the panel, and hoisting is
-    // what lets both reach the one definition. It returns nothing: both callers
-    // fire it and move on, so a rejection from initElfdans is logged here
-    // rather than handed back to be dropped (#2147).
+    // what lets both reach the one definition. Fire-and-forget: a rejection
+    // from initElfdans is logged, and this returns nothing (#2147).
     function renderElfdansPanel() {
       initElfdans({
         relayToken: () => settings.relayToken,

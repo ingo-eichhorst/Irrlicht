@@ -224,13 +224,9 @@ export function refreshPermissions() {
     });
 }
 
-// refreshPermissionsInBackground is the fire-and-forget form of
-// refreshPermissions, for callers that only need the refresh to happen.
-// refreshPermissions maps a failed request to null, but its render step runs
-// in a later `.then` and can still throw; that lands in the console here
-// instead of being dropped. Deliberately returns nothing, so its callers hold
-// no promise to forget (#2147). refreshPermissions itself keeps returning its
-// promise for the callers that wait on it.
+// refreshPermissionsInBackground: fire-and-forget refreshPermissions — a
+// rejection (its render step can throw after the fetch) is logged, and it
+// returns nothing. Callers that wait use refreshPermissions itself (#2147).
 export function refreshPermissionsInBackground() {
   refreshPermissions().catch(err => console.error('irrlicht: permissions refresh failed', err));
 }

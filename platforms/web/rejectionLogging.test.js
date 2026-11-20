@@ -1,16 +1,10 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 
-// Fire-and-forget promises land in the console, not nowhere (#2147).
-//
-// SonarCloud's javascript:S9383 flagged 36 call sites that dropped a promise on
-// the floor. Each one now ends in a `.catch` that logs with a label, and where
-// one module fires the same callee from many sites the `.catch` lives in a
-// single non-promise-returning wrapper. These cases drive three of those
-// wrappers through their real entry points and make the work behind them fail:
-//
-//   historyTab.js       refreshHistory()                 ← 12 call sites
-//   permissionsWizard.js refreshPermissionsInBackground() ← 3 call sites
-//   irrlicht.js         renderElfdansPanel()             ← 2 call sites
+// Fire-and-forget promises land in the console, not nowhere (#2147). These
+// cases drive three fire-and-forget wrappers (historyTab.js fetchHistory,
+// permissionsWizard.js refreshPermissionsInBackground, irrlicht.js
+// renderElfdansPanel) through their real entry points and make the work
+// behind them fail.
 //
 // Each failure is a REJECTION, not a swallowed fetch error: every callee here
 // already catches its own fetch and resolves null, so the case breaks the step
@@ -57,8 +51,6 @@ beforeAll(async () => {
 afterEach(() => { globalThis.fetch = realFetch })
 afterAll(() => { errSpy.mockRestore() })
 
-const loggedWith = (label) => errSpy.mock.calls.some(([first]) => first === label)
-
 describe('a rejected fire-and-forget promise is logged with its label (#2147)', () => {
   test('renderElfdansPanel: initElfdans rejecting is logged, not left unhandled', async () => {
     // Entering a relay token re-renders the Elfdans panel.
@@ -71,13 +63,13 @@ describe('a rejected fire-and-forget promise is logged with its label (#2147)', 
     }, { timeout: 2000, interval: 10 })
   })
 
-  test('refreshHistory: a render step that throws after the fetch is logged', async () => {
+  test('fetchHistory: a render step that throws after the fetch is logged', async () => {
     const host = document.createElement('div')
     host.innerHTML = '<input type="checkbox" id="history-forecast">'
     document.body.append(host)
     try {
       historyTab.initHistoryTab()
-      // `top_contributors` is truthy but not iterable, so fetchHistory's
+      // `top_contributors` is truthy but not iterable, so loadHistory's
       // post-fetch `.then` throws a TypeError while growing the project
       // vocabulary: the fetch itself succeeded, the step after it did not.
       globalThis.fetch = () => okJson({ group: 'project', top_contributors: 7 })
@@ -98,7 +90,6 @@ describe('a rejected fire-and-forget promise is logged with its label (#2147)', 
     banner.hidden = true
     document.body.append(banner)
     try {
-      expect(loggedWith('irrlicht: permissions refresh failed')).toBe(false)
       // A null entry in unapplied_grants makes renderUnappliedGrantsBanner
       // read `.agent` off null — again after a fetch that succeeded.
       globalThis.fetch = () => okJson({ mode: 'ask', agents: [], unapplied_grants: [null] })

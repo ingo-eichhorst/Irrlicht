@@ -3,10 +3,7 @@ window.InstallBlock = function InstallBlock() {
   const [copied, setCopied] = React.useState(false);
   const cmd = 'brew install --cask ingo-eichhorst/tap/irrlicht';
   const copy = () => {
-    // Logged rather than dropped: writeText's promise can reject, e.g. when
-    // clipboard access is denied. Where the API is absent, `?.` short-circuits the whole
-    // chain, `.catch` included (checked in node: the expression is undefined
-    // and nothing throws) (#2147).
+    // writeText can reject (clipboard access denied); log it (#2147).
     navigator.clipboard?.writeText(cmd).catch(err => console.error('InstallBlock: clipboard write failed', err));
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);

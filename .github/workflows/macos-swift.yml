@@ -143,7 +143,7 @@ jobs:
       # dependencies come only from the committed Package.resolved, and a stale
       # one fails the build instead of being silently re-resolved to whatever
       # is newest (SonarCloud githubactions:S7694, #2147). tools/preflight.sh's
-      # swift gate passes the same flag, so local and CI resolve identically.
+      # swift gate passes the same flag, so the local gate resolves as CI does.
       - name: Build (app + tests)
         run: swift build --build-tests --force-resolved-versions
 

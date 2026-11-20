@@ -115,9 +115,8 @@ export function createElfdansDashboard(host) {
     }
   }
 
-  // reportElfdansSessionMissing is the fire-and-forget form both callers use:
-  // the notice is async (it reads the ledger first), and a rejection from it
-  // is logged here rather than dropped. Deliberately returns nothing (#2147).
+  // Fire-and-forget: the notice is async (it reads the ledger first); a
+  // rejection is logged, and this returns nothing (#2147).
   function reportElfdansSessionMissing(bareId) {
     showElfdansSessionMissing(bareId)
       .catch(err => console.error('irrlicht: elfdans missing-session notice failed', err));

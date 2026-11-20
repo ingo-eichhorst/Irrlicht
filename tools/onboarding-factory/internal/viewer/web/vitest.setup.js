@@ -1,4 +1,11 @@
 // Minimum DOM required for viewer.js top-level wiring
+// jsdom implements no scrolling, and viewer.js scrolls the active sidebar
+// button into view on every navigation. Stubbed here rather than guarded in
+// production code: the absence is the test environment's, not the SPA's.
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = function scrollIntoViewStub() {}
+}
+
 document.body.innerHTML = `
   <div id="scenarios"></div>
   <div id="title"></div>
