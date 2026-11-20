@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"irrlicht/core/domain/orchestrator"
@@ -66,48 +67,39 @@ func orchRig(t *testing.T, sessions []*SessionState, orch *orchestrator.State, r
 // order.
 func wantUnattached(t *testing.T, rigGroup map[string]any, want ...string) {
 	t.Helper()
-	if got := unattachedNames(rigGroup); !equalStrings(got, want) {
+	if got := unattachedNames(rigGroup); !slices.Equal(got, want) {
 		t.Errorf("rig %v unattached = %v, want %v", rigGroup["name"], got, want)
 	}
 }
 
-// unattachedNames lists the worker_name of every unattached_workers entry in
-// g, in order.
+// fieldList returns the string field of every object in g's listKey array,
+// in order ("" for an object without it).
+func fieldList(g map[string]any, listKey, field string) []string {
+	items, _ := g[listKey].([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		v, _ := m[field].(string)
+		out = append(out, v)
+	}
+	return out
+}
+
 func unattachedNames(g map[string]any) []string {
-	ws, _ := g["unattached_workers"].([]any)
-	names := make([]string, 0, len(ws))
-	for _, w := range ws {
-		if m, ok := w.(map[string]any); ok {
-			name, _ := m["worker_name"].(string)
-			names = append(names, name)
-		}
-	}
-	return names
+	return fieldList(g, "unattached_workers", "worker_name")
 }
 
-// agentIDs lists the session_id of every direct agent in g, in order.
-func agentIDs(g map[string]any) []string {
-	as, _ := g["agents"].([]any)
-	ids := make([]string, 0, len(as))
-	for _, a := range as {
-		if m, ok := a.(map[string]any); ok {
-			id, _ := m["session_id"].(string)
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
+func agentIDs(g map[string]any) []string { return fieldList(g, "agents", "session_id") }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+// wantNoWorkerState requires every unattached worker in rigGroup to omit
+// worker_state.
+func wantNoWorkerState(t *testing.T, rigGroup map[string]any) {
+	t.Helper()
+	for _, st := range fieldList(rigGroup, "unattached_workers", "worker_state") {
+		if st != "" {
+			t.Errorf("rig %v: a worker whose session ended carries worker_state %q, want none", rigGroup["name"], st)
 		}
 	}
-	return true
 }
 
 // gasTown builds a running Gas Town state rooted at /gt with the given rigs.
@@ -151,7 +143,7 @@ func TestBuildDashboard_UnattachedWorkerOnWire(t *testing.T) {
 
 	rigGroup := orchRig(t, sessions, orch, "irrlicht")
 
-	if got := agentIDs(rigGroup); !equalStrings(got, []string{"pole-1"}) {
+	if got := agentIDs(rigGroup); !slices.Equal(got, []string{"pole-1"}) {
 		t.Errorf("rig agents = %v, want [pole-1] — a free worker must never enter agents", got)
 	}
 	ws, _ := rigGroup["unattached_workers"].([]any)
@@ -217,7 +209,7 @@ func TestBuildDashboard_UnattachedSkewNewSessionDrawnOnce(t *testing.T) {
 	))
 
 	rigGroup := orchRig(t, sessions, orch, "irrlicht")
-	if got := agentIDs(rigGroup); !equalStrings(got, []string{"new-1"}) {
+	if got := agentIDs(rigGroup); !slices.Equal(got, []string{"new-1"}) {
 		t.Errorf("rig agents = %v, want [new-1]", got)
 	}
 	// fix-42 already has its session row.
@@ -230,7 +222,11 @@ func TestBuildDashboard_UnattachedSkewNewSessionDrawnOnce(t *testing.T) {
 func TestBuildDashboard_UnattachedSkewEndedSessionStillShown(t *testing.T) {
 	orch := gasTown(rig("irrlicht", nil, polecat("fix-42", "GH-42", "gone-1", "working")))
 
-	wantUnattached(t, orchRig(t, nil, orch, "irrlicht"), "fix-42")
+	rigGroup := orchRig(t, nil, orch, "irrlicht")
+	wantUnattached(t, rigGroup, "fix-42")
+	// "working" is the vanished session's state, which the poller copied onto
+	// the worker; it is not the orchestrator's own state for a free slot.
+	wantNoWorkerState(t, rigGroup)
 }
 
 // Crew is named too, so the rule covers it: a crew worker whose session ended
@@ -241,7 +237,9 @@ func TestBuildDashboard_UnattachedStaleCrewFollowsTheRule(t *testing.T) {
 	crew := orchestrator.Worker{Role: "crew", Name: "alice", SessionID: "gone-crew", State: "ready"}
 	orch := gasTown(rig("irrlicht", []orchestrator.Worker{crew}))
 
-	wantUnattached(t, orchRig(t, nil, orch, "irrlicht"), "alice")
+	rigGroup := orchRig(t, nil, orch, "irrlicht")
+	wantUnattached(t, rigGroup, "alice")
+	wantNoWorkerState(t, rigGroup)
 }
 
 // Rigs with sessions come first (session order), then rigs whose only workers
@@ -257,12 +255,8 @@ func TestBuildDashboard_UnattachedOnlyRigsFollowSessionRigs(t *testing.T) {
 	)
 
 	wire := wireGroups(t, BuildDashboard(sessions, orch))
-	subs, _ := wire[0]["groups"].([]any)
-	var order []string
-	for _, s := range subs {
-		order = append(order, s.(map[string]any)["name"].(string))
-	}
-	if !equalStrings(order, []string{"beta", "alpha", "gamma"}) {
+	order := fieldList(wire[0], "groups", "name")
+	if !slices.Equal(order, []string{"beta", "alpha", "gamma"}) {
 		t.Errorf("rig order = %v, want [beta alpha gamma]", order)
 	}
 }

@@ -1405,28 +1405,25 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       el.className = 'worker-row';
       el.innerHTML =
         '<span class="worker-row-glyph" title="No session">\u25CB</span>' +
-        '<span class="worker-row-icon"></span>' +
-        '<span class="worker-row-name"></span>' +
-        '<span class="worker-row-id" style="display:none"></span>' +
+        '<span class="worker-row-icon" style="display:none"></span>' +
+        '<span class="row-worker-name" style="display:none"></span>' +
+        '<span class="row-worker-id" style="display:none"></span>' +
         '<span class="worker-row-state" style="display:none"></span>';
       updateWorkerRow(el, worker, depth);
       return el;
     }
 
+    // The name and work item reuse the session row's .row-worker-* chips, so
+    // free and busy workers in one rig share their widths.
     function updateWorkerRow(el, worker, depth) {
       el.classList.toggle('nested', !!depth);
       const role = worker.role || '';
-      const iconEl = el.querySelector('.worker-row-icon');
-      const icon = worker.icon || '';
-      if (iconEl.textContent !== icon) iconEl.textContent = icon;
-      iconEl.title = worker.description || role;
-      const nameEl = el.querySelector('.worker-row-name');
       const name = worker.worker_name || '';
-      if (nameEl.textContent !== name) nameEl.textContent = name;
-      nameEl.title = role ? role + ' ' + name : name;
       const wid = worker.worker_id || '';
-      setWorkerChip(el.querySelector('.worker-row-id'), workItemShort(wid), wid);
-      setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state || '', '');
+      setWorkerChip(el.querySelector('.worker-row-icon'), worker.icon, worker.description || role);
+      setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
+      setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
+      setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
     }
 
     function createAlertRow(pressure) {

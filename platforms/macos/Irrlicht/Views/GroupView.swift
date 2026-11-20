@@ -185,9 +185,10 @@ struct GroupView: View {
 /// One orchestrator worker with no session: a free polecat, an idle pool slot.
 /// Deliberately not a `SessionRowView` — there is no session behind it, so it
 /// has no session state icon, no click-to-focus, and it never reaches
-/// `sessionMap`, the menu bar or a notification. The leading columns mirror the
-/// session row's (state slot, role icon, worker name capped at 60pt, work item
-/// shortened to 8 characters) so free and busy workers line up in one rig.
+/// `sessionMap`, the menu bar or a notification. The leading columns are meant
+/// to line up with `SessionRowView`'s (state slot, role icon, worker name
+/// capped at 60pt, work item shortened to 8 characters); the two are kept in
+/// step by hand, so a change to that block there belongs here too.
 struct UnattachedWorkerRowView: View {
     let worker: SessionManager.UnattachedWorker
 

@@ -38,17 +38,17 @@ extension SessionManager {
         let name: String
         let type: String?
         let status: String?
-        let agents: [SessionState]?
-        let groups: [AgentGroup]?
+        // `var` so `patchGroup` / `pruneGroup` copy the group and replace only
+        // these two: every other field then survives a rebuild by construction.
+        var agents: [SessionState]?
+        var groups: [AgentGroup]?
         /// Trailing-window cost totals (USD) keyed by timeframe string
         /// ("day", "week", "month", "year"). Present on non-orchestrator
         /// top-level groups.
         let costs: [String: Double]?
         /// Orchestrator workers in this group that no session is attached to
         /// (#2140): a free polecat, an idle pool slot. Not sessions — they
-        /// never enter `sessionMap`, the menu bar or notifications. Every
-        /// rebuild of a group (`patchGroup`, `pruneGroup`) must carry this
-        /// through, or the rows vanish until the next hydrate.
+        /// never enter `sessionMap`, the menu bar or notifications.
         let unattachedWorkers: [UnattachedWorker]?
 
         var id: String { name }
@@ -91,15 +91,6 @@ extension SessionManager {
             case workerName = "worker_name"
             case workerID = "worker_id"
             case workerState = "worker_state"
-        }
-
-        init(role: String? = nil, icon: String? = nil, description: String? = nil, workerName: String, workerID: String? = nil, workerState: String? = nil) {
-            self.role = role
-            self.icon = icon
-            self.description = description
-            self.workerName = workerName
-            self.workerID = workerID
-            self.workerState = workerState
         }
     }
 
@@ -231,16 +222,10 @@ extension SessionManager {
                 return agent
             }
             : group.agents
-        let patchedGroups = hasNestedMatch ? group.groups?.map { patchGroup($0, with: session) } : group.groups
-        return AgentGroup(
-            name: group.name,
-            type: group.type,
-            status: group.status,
-            agents: patchedAgents,
-            groups: patchedGroups,
-            costs: group.costs,
-            unattachedWorkers: group.unattachedWorkers
-        )
+        var patched = group
+        patched.agents = patchedAgents
+        if hasNestedMatch { patched.groups = group.groups?.map { patchGroup($0, with: session) } }
+        return patched
     }
 
     func groupContains(_ group: AgentGroup, sessionId: String) -> Bool {
@@ -282,15 +267,10 @@ extension SessionManager {
             && (group.unattachedWorkers?.isEmpty ?? true)
         if isEmpty && !group.isGasTown { return nil }
 
-        return AgentGroup(
-            name: group.name,
-            type: group.type,
-            status: group.status,
-            agents: prunedAgents,
-            groups: prunedGroups,
-            costs: group.costs,
-            unattachedWorkers: group.unattachedWorkers
-        )
+        var pruned = group
+        pruned.agents = prunedAgents
+        pruned.groups = prunedGroups
+        return pruned
     }
 
     // MARK: - Project Group Order Management

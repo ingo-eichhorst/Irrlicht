@@ -54,7 +54,7 @@ const sessionsFetch = (body) => (url) => {
 }
 
 const workerRows = () => [...document.querySelectorAll('#session-list .worker-row')]
-const workerNames = () => workerRows().map((el) => el.querySelector('.worker-row-name')?.textContent)
+const workerNames = () => workerRows().map((el) => el.querySelector('.row-worker-name')?.textContent)
 
 let irr
 
@@ -79,8 +79,8 @@ describe('unattached orchestrator workers (#2140)', () => {
   test('each free worker gets its own row after its rig\'s sessions', () => {
     expect(workerNames()).toEqual(['free-2', 'free-3'])
     const [w2] = workerRows()
-    expect(w2.querySelector('.worker-row-id').textContent).toBe('proj-zz9')
-    expect(w2.querySelector('.worker-row-id').title).toBe('proj-zz99yy88')
+    expect(w2.querySelector('.row-worker-id').textContent).toBe('proj-zz9')
+    expect(w2.querySelector('.row-worker-id').title).toBe('proj-zz99yy88')
     expect(w2.querySelector('.worker-row-state').textContent).toBe('idle')
     expect(w2.querySelector('.worker-row-icon').textContent).toBe('👷')
     expect(w2.classList.contains('nested')).toBe(true)
