@@ -1300,6 +1300,21 @@
     .worker-row-glyph { width: 12px; flex-shrink: 0; text-align: center; }
     .worker-row-icon { flex-shrink: 0; }
     .worker-row-state { font-size: 9px; flex-shrink: 0; white-space: nowrap; }
+    /* A worker's row-only indications (#2148): "stale" on the amber wash and
+       "failed · exit N" on the red one — the token pairs .row-confidence and
+       .row-error already use, whose contrast irrlicht.confidence.test.js and
+       sessionError.test.js assert. */
+    .worker-row-tag {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      white-space: nowrap;
+      cursor: default;
+    }
+    .worker-row-stale { background: var(--waiting-dim); color: var(--waiting); }
+    .worker-row-failed { background: var(--error-dim); color: var(--error); }
     /* Origin glyph (#538) — a cloud marking a session delivered by a relay
        (remote daemon). Hidden for local sessions, so a local-only dashboard
        is visually unchanged. Muted to read as secondary metadata. */
