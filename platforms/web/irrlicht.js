@@ -1254,6 +1254,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       if (taskProgress) items.push(taskProgress);
     }
 
+    // emitWorkerRowItems pushes one row per orchestrator worker with no
+    // session (#2140), keyed by group path and worker name, after the group's
+    // session rows. Not sessions: no agent number, never in sessionIndex,
+    // never counted in a header or the state summary.
+    function emitWorkerRowItems(items, g, groupKey, depth) {
+      for (const w of (g.unattached_workers || [])) {
+        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth});
+      }
+    }
+
     function isAlertPressure(pressure) {
       return pressure === 'high' || pressure === 'warning' || pressure === 'critical';
     }
@@ -1311,12 +1321,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             agentNum++;
             emitAgentRowItems(items, a, agentNum, depth);
           }
-          // Orchestrator workers with no session (#2140), after the group's
-          // session rows. Not sessions: no agent number, never in
-          // sessionIndex, never counted in a header or the state summary.
-          for (const w of (g.unattached_workers || [])) {
-            items.push({type: 'worker', key: 'w:' + key + '/' + w.worker_name, worker: w, depth: depth});
-          }
+          emitWorkerRowItems(items, g, key, depth);
           for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
         for (const g of dashboardGroups) emitGroup(g, '', 0);
