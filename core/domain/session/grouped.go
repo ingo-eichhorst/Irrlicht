@@ -260,19 +260,14 @@ type rigWorkerKey struct{ rig, name string }
 //
 // Unnamed workers (witness, refinery) and global agents (mayor, deacon,
 // boot) never qualify: the Gas Town poller emits them whether or not a
-// session matched, as "idle" when none did (buildMainWorkers,
-// buildGlobalAgents in gastown/poller.go), so rows for them would be
-// permanent placeholders.
+// session matched (buildMainWorkers with gt's own rig.Witness/rig.Refinery
+// state, buildGlobalAgents with "idle" for an unmatched mayor or deacon, in
+// gastown/poller.go), so rows for them would be permanent placeholders.
 func unattachedWorkersByRig(orch *orchestrator.State, sessions []*SessionState, workerMap map[string]*workerInfo) map[string][]*UnattachedWorker {
 	if orch == nil || !orch.Running {
 		return nil
 	}
-	attached := make(map[rigWorkerKey]bool)
-	for _, s := range sessions {
-		if wi, ok := workerMap[s.SessionID]; ok && wi.Rig != "" && wi.Name != "" {
-			attached[rigWorkerKey{wi.Rig, wi.Name}] = true
-		}
-	}
+	attached := attachedWorkerKeys(sessions, workerMap)
 	out := make(map[string][]*UnattachedWorker)
 	for _, cb := range orch.Codebases {
 		if ws := rigUnattachedWorkers(cb, attached); len(ws) > 0 {
@@ -282,17 +277,39 @@ func unattachedWorkersByRig(orch *orchestrator.State, sessions []*SessionState, 
 	return out
 }
 
+// attachedWorkerKeys returns the rig workers some session in sessions is
+// attached to, by either workerMap source.
+func attachedWorkerKeys(sessions []*SessionState, workerMap map[string]*workerInfo) map[rigWorkerKey]bool {
+	attached := make(map[rigWorkerKey]bool)
+	for _, s := range sessions {
+		if key, ok := workerMap[s.SessionID].rigWorker(); ok {
+			attached[key] = true
+		}
+	}
+	return attached
+}
+
+// rigWorker returns the rig worker wi names, and false for a global agent or
+// an unnamed role (wi may be nil).
+func (wi *workerInfo) rigWorker() (rigWorkerKey, bool) {
+	if wi == nil || wi.Name == "" {
+		return rigWorkerKey{}, false
+	}
+	return rigWorkerKey{wi.Rig, wi.Name}, wi.Rig != ""
+}
+
 // rigUnattachedWorkers lists cb's named workers that are not in attached, once
-// per name: clients key a worker row by group and name.
+// per name: clients key a worker row by group and name, so a name listed here
+// is added to attached and its later duplicates are skipped like attached ones.
 func rigUnattachedWorkers(cb orchestrator.Codebase, attached map[rigWorkerKey]bool) []*UnattachedWorker {
 	var out []*UnattachedWorker
-	seen := make(map[string]bool)
 	for _, wt := range cb.Worktrees {
 		for _, w := range wt.Workers {
-			if w.Name == "" || seen[w.Name] || attached[rigWorkerKey{cb.Name, w.Name}] {
+			key := rigWorkerKey{cb.Name, w.Name}
+			if w.Name == "" || attached[key] {
 				continue
 			}
-			seen[w.Name] = true
+			attached[key] = true
 			out = append(out, &UnattachedWorker{
 				Role:        w.Role,
 				Icon:        w.Icon,

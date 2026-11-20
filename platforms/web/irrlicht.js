@@ -1986,13 +1986,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
               if (a.children) agents(a.children);
             }
           })(g.agents);
-          for (const w of (g.unattached_workers || [])) {
-            parts.push('w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || ''));
-          }
+          parts.push(...unattachedWorkerSignatures(g));
           if (g.groups) walk(g.groups, depth + 1);
         }
       })(groups);
       return parts.join('|');
+    }
+    // One structureSignature part per unattached worker of g (#2140).
+    function unattachedWorkerSignatures(g) {
+      return (g.unattached_workers || []).map(w =>
+        'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || ''));
     }
     // Periodic re-hydration. Two jobs, one fetch:
     //   1. STRUCTURE — if the daemon's group tree / role metadata changed

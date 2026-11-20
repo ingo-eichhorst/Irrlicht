@@ -33,17 +33,42 @@ func wireGroups(t *testing.T, groups []*AgentGroup) []map[string]any {
 }
 
 // subGroup returns the nested group called name under g, failing the test
-// when it is absent.
+// unless exactly one sub-group has that name: a rig listed twice would draw
+// its header and rows twice under one client key.
 func subGroup(t *testing.T, g map[string]any, name string) map[string]any {
 	t.Helper()
 	subs, _ := g["groups"].([]any)
+	var found []map[string]any
 	for _, s := range subs {
 		if m, ok := s.(map[string]any); ok && m["name"] == name {
-			return m
+			found = append(found, m)
 		}
 	}
-	t.Fatalf("group %q has no sub-group %q (sub-groups: %v)", g["name"], name, subs)
-	return nil
+	if len(found) != 1 {
+		t.Fatalf("group %q has %d sub-groups named %q, want 1 (sub-groups: %v)", g["name"], len(found), name, subs)
+	}
+	return found[0]
+}
+
+// orchRig builds the dashboard for sessions and orch, requires the
+// orchestrator group to be the only top-level group, and returns its rig
+// sub-group called rigName.
+func orchRig(t *testing.T, sessions []*SessionState, orch *orchestrator.State, rigName string) map[string]any {
+	t.Helper()
+	wire := wireGroups(t, BuildDashboard(sessions, orch))
+	if len(wire) != 1 {
+		t.Fatalf("got %d top-level groups, want the orchestrator group alone", len(wire))
+	}
+	return subGroup(t, wire[0], rigName)
+}
+
+// wantUnattached requires rigGroup's unattached worker names to be want, in
+// order.
+func wantUnattached(t *testing.T, rigGroup map[string]any, want ...string) {
+	t.Helper()
+	if got := unattachedNames(rigGroup); !equalStrings(got, want) {
+		t.Errorf("rig %v unattached = %v, want %v", rigGroup["name"], got, want)
+	}
 }
 
 // unattachedNames lists the worker_name of every unattached_workers entry in
@@ -124,11 +149,7 @@ func TestBuildDashboard_UnattachedWorkerOnWire(t *testing.T) {
 		polecat("free-2", "GH-2", "", "idle"),
 	))
 
-	wire := wireGroups(t, BuildDashboard(sessions, orch))
-	if len(wire) != 1 {
-		t.Fatalf("got %d top-level groups, want 1 (the orchestrator group)", len(wire))
-	}
-	rigGroup := subGroup(t, wire[0], "irrlicht")
+	rigGroup := orchRig(t, sessions, orch, "irrlicht")
 
 	if got := agentIDs(rigGroup); !equalStrings(got, []string{"pole-1"}) {
 		t.Errorf("rig agents = %v, want [pole-1] — a free worker must never enter agents", got)
@@ -172,9 +193,7 @@ func TestBuildDashboard_UnattachedAllIdleKeepsOrchestratorGroup(t *testing.T) {
 		t.Errorf("top group = name %v type %v, want gt/gastown", wire[0]["name"], wire[0]["type"])
 	}
 	rigGroup := subGroup(t, wire[0], "irrlicht")
-	if got := unattachedNames(rigGroup); !equalStrings(got, []string{"free-1"}) {
-		t.Errorf("unattached = %v, want [free-1]", got)
-	}
+	wantUnattached(t, rigGroup, "free-1")
 	if rigGroup["status"] != "operational" {
 		t.Errorf("rig status = %v, want operational", rigGroup["status"])
 	}
@@ -197,14 +216,12 @@ func TestBuildDashboard_UnattachedSkewNewSessionDrawnOnce(t *testing.T) {
 		polecat("free-9", "GH-9", "", "idle"),
 	))
 
-	wire := wireGroups(t, BuildDashboard(sessions, orch))
-	rigGroup := subGroup(t, wire[0], "irrlicht")
+	rigGroup := orchRig(t, sessions, orch, "irrlicht")
 	if got := agentIDs(rigGroup); !equalStrings(got, []string{"new-1"}) {
 		t.Errorf("rig agents = %v, want [new-1]", got)
 	}
-	if got := unattachedNames(rigGroup); !equalStrings(got, []string{"free-9"}) {
-		t.Errorf("unattached = %v, want [free-9] — fix-42 already has its session row", got)
-	}
+	// fix-42 already has its session row.
+	wantUnattached(t, rigGroup, "free-9")
 }
 
 // Skew, ended session: a session that ended since the last poll leaves a
@@ -213,14 +230,7 @@ func TestBuildDashboard_UnattachedSkewNewSessionDrawnOnce(t *testing.T) {
 func TestBuildDashboard_UnattachedSkewEndedSessionStillShown(t *testing.T) {
 	orch := gasTown(rig("irrlicht", nil, polecat("fix-42", "GH-42", "gone-1", "working")))
 
-	wire := wireGroups(t, BuildDashboard(nil, orch))
-	if len(wire) != 1 {
-		t.Fatalf("got %d groups, want the orchestrator group", len(wire))
-	}
-	rigGroup := subGroup(t, wire[0], "irrlicht")
-	if got := unattachedNames(rigGroup); !equalStrings(got, []string{"fix-42"}) {
-		t.Errorf("unattached = %v, want [fix-42]", got)
-	}
+	wantUnattached(t, orchRig(t, nil, orch, "irrlicht"), "fix-42")
 }
 
 // Crew is named too, so the rule covers it: a crew worker whose session ended
@@ -231,13 +241,7 @@ func TestBuildDashboard_UnattachedStaleCrewFollowsTheRule(t *testing.T) {
 	crew := orchestrator.Worker{Role: "crew", Name: "alice", SessionID: "gone-crew", State: "ready"}
 	orch := gasTown(rig("irrlicht", []orchestrator.Worker{crew}))
 
-	wire := wireGroups(t, BuildDashboard(nil, orch))
-	if len(wire) != 1 {
-		t.Fatalf("got %d groups, want the orchestrator group", len(wire))
-	}
-	if got := unattachedNames(subGroup(t, wire[0], "irrlicht")); !equalStrings(got, []string{"alice"}) {
-		t.Errorf("unattached = %v, want [alice]", got)
-	}
+	wantUnattached(t, orchRig(t, nil, orch, "irrlicht"), "alice")
 }
 
 // Rigs with sessions come first (session order), then rigs whose only workers
@@ -273,19 +277,14 @@ func TestBuildDashboard_UnattachedNamesUniquePerRig(t *testing.T) {
 	}
 	orch := gasTown(rig("irrlicht", mainWorkers))
 
-	wire := wireGroups(t, BuildDashboard(nil, orch))
-	if len(wire) != 1 {
-		t.Fatalf("got %d groups, want the orchestrator group", len(wire))
-	}
-	if got := unattachedNames(subGroup(t, wire[0], "irrlicht")); !equalStrings(got, []string{"alice"}) {
-		t.Errorf("unattached = %v, want one alice", got)
-	}
+	wantUnattached(t, orchRig(t, nil, orch, "irrlicht"), "alice")
 }
 
 // LOCK (passes before #2140 by construction): unnamed role singletons
-// (witness, refinery) and global agents (mayor, deacon, boot) are always
-// emitted by the poller, as "idle" when unmatched. Rows for them would be
-// permanent placeholders, so they never become worker rows.
+// (witness, refinery) and global agents (mayor, deacon, boot) are emitted by
+// the poller whether or not a session matched (see unattachedWorkersByRig).
+// Rows for them would be permanent placeholders, so they never become worker
+// rows.
 func TestBuildDashboard_UnattachedExcludesUnnamedAndGlobalAgents(t *testing.T) {
 	sessions := []*SessionState{
 		{SessionID: "pole-1", State: StateWorking},
