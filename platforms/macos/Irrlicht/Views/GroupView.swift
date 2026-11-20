@@ -47,7 +47,7 @@ struct GroupView: View {
     /// Returns "$0 / <frame>" when data exists for other frames but not this one,
     /// so the toggle remains visible and clickable.
     private var formattedCost: String? {
-        guard showCostDisplay, isTopLevel, !group.isGasTown else { return nil }
+        guard showCostDisplay, isTopLevel, !group.isOrchestrator else { return nil }
         guard let costs = group.costs, !costs.isEmpty else { return nil }
         let v = costs[costTimeframe.rawValue] ?? 0
         guard v > 0 else { return "$0" + costTimeframe.suffix }
@@ -231,10 +231,42 @@ struct UnattachedWorkerRowView: View {
                     .lineLimit(1)
             }
 
+            // Row-only indications (#2148) — never a session state, a count
+            // or a notification. The washes and text colours are the
+            // question pill's and the error line's (Tokens.swift).
+            if worker.isStale {
+                WorkerTag(text: "stale", tint: IrrColors.waiting, textColor: IrrColors.waitingPillText,
+                          tooltip: "No heartbeat for three heartbeat intervals \u{2014} the worker may have stopped reporting")
+            }
+            if let code = worker.failedExitCode {
+                WorkerTag(text: "failed \u{00B7} exit \(code)", tint: IrrColors.error, textColor: IrrColors.errorPillText,
+                          tooltip: "Last run ended with exit code \(code)")
+            }
+
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .accessibilityIdentifier("unattached-worker-\(worker.workerName)")
+    }
+}
+
+/// A small tag on an unattached worker row (#2148): text on a notice wash.
+private struct WorkerTag: View {
+    let text: String
+    let tint: Color
+    let textColor: Color
+    let tooltip: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(textColor)
+            .lineLimit(1)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(IrrColors.noticeWash(tint))
+            .cornerRadius(IrrRadius.xs)
+            .tooltip(tooltip)
     }
 }

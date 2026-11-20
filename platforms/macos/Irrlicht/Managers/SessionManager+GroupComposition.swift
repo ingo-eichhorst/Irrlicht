@@ -52,7 +52,12 @@ extension SessionManager {
         let unattachedWorkers: [UnattachedWorker]?
 
         var id: String { name }
+        /// Gas Town's own group — for its branding only (the ⛽ glyph, the
+        /// tooltip, the menu-bar badge). Structure keys on `isOrchestrator`.
         var isGasTown: Bool { type == "gastown" }
+        /// Any orchestrator's top-level group — Gas Town or a worker list
+        /// (#2148): the daemon sets `type` on those and on nothing else.
+        var isOrchestrator: Bool { !(type ?? "").isEmpty }
 
         // Explicit because the wire key is snake_case and the decoder in
         // SessionManager+Hydration.swift is a plain `JSONDecoder()`.
@@ -82,15 +87,30 @@ extension SessionManager {
         let workerName: String
         let workerID: String?
         let workerState: String?
+        /// Row-only indications (#2148): the busy slot stopped reporting, and
+        /// the exit code of its last completed run. Both omitted by the daemon
+        /// when unset; `var` with a nil default so a payload or a test fixture
+        /// without them still builds.
+        var stale: Bool? = nil
+        var lastExit: Int? = nil
 
         /// The daemon lists a name at most once per group.
         var id: String { workerName }
 
+        var isStale: Bool { stale == true }
+        /// The last run's exit code when it failed (non-zero), else nil — an
+        /// exit of 0 and no completed run both show nothing.
+        var failedExitCode: Int? {
+            guard let code = lastExit, code != 0 else { return nil }
+            return code
+        }
+
         enum CodingKeys: String, CodingKey {
-            case role, icon, description
+            case role, icon, description, stale
             case workerName = "worker_name"
             case workerID = "worker_id"
             case workerState = "worker_state"
+            case lastExit = "last_exit"
         }
     }
 
@@ -248,8 +268,9 @@ extension SessionManager {
         recomposeApiGroups()
     }
 
-    /// Returns `nil` when the group has nothing left to render — except
-    /// gas-town, which keeps its top-level row even with no rigs. Free
+    /// Returns `nil` when the group has nothing left to render — except an
+    /// orchestrator's group (Gas Town, a worker list), which keeps its
+    /// top-level row even with no rigs. Free
     /// orchestrator workers (#2140) count as something to render, so a rig
     /// whose last session left keeps its row while it still lists them.
     func pruneGroup(_ group: AgentGroup, removing sessionId: String) -> AgentGroup? {
@@ -265,7 +286,7 @@ extension SessionManager {
 
         let isEmpty = (prunedAgents?.isEmpty ?? true) && (prunedGroups?.isEmpty ?? true)
             && (group.unattachedWorkers?.isEmpty ?? true)
-        if isEmpty && !group.isGasTown { return nil }
+        if isEmpty && !group.isOrchestrator { return nil }
 
         var pruned = group
         pruned.agents = prunedAgents
