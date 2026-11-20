@@ -1,0 +1,19 @@
+{
+  "description": "One team, three free slots, written just now. Every slot shows as an idle unattached worker and the team is operational.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "teams": [
+      "team-a"
+    ],
+    "worker_states": [
+      "idle",
+      "idle",
+      "idle"
+    ],
+    "stale_workers": []
+  }
+}

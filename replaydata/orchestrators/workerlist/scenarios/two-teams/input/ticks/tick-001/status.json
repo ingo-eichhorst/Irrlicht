@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "updated": "2026-11-11T15:40:00Z",
+  "heartbeat_interval_seconds": 60,
+  "name": "Build pool",
+  "teams": [
+    {
+      "name": "team-a",
+      "updated": "2026-11-11T15:40:00Z",
+      "workers": [
+        {
+          "name": "team-a-m1-1",
+          "busy": false
+        },
+        {
+          "name": "team-a-m1-2",
+          "busy": true,
+          "work_item": "proj-a1b2",
+          "last_heartbeat": "2026-11-11T15:39:50Z"
+        }
+      ]
+    },
+    {
+      "name": "team-b",
+      "updated": "2026-11-11T15:39:40Z",
+      "workers": [
+        {
+          "name": "team-b-m2-1",
+          "busy": true,
+          "work_item": "proj-e5f6",
+          "last_heartbeat": "2026-11-11T15:39:55Z"
+        },
+        {
+          "name": "team-b-m2-2",
+          "busy": false
+        }
+      ]
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -390,9 +391,8 @@ func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store
 // permissions that actually write them.
 //
 // It projects the full consent catalog rather than agents.All(): the kitty
-// patch is one of five daemon-wide declarations appended outside the adapter
-// registry (#2002 added endpoint-route observation as the 4th, #2007 Muse's
-// account-quota permission as the 5th), and projecting only the registry is
+// patch is one of seven daemon-wide declarations appended outside the adapter
+// registry (consentCatalog lists them), and projecting only the registry is
 // how it stayed unprotected.
 //
 // An empty result is an error, not an empty list: the rig would read "nothing
@@ -726,6 +726,11 @@ func runDaemon() {
 	museAPI := museAccountAPIEffects(logger)
 
 	home, _ := os.UserHomeDir()
+	// The worker-list watcher (#2148), consent-gated like Gas Town. Its path
+	// is resolved once, at startup: $IRRLICHT_WORKERLIST_FILE, else
+	// workerlist.json in the data directory.
+	startWorkerlist, stopWorkerlist := workerlistEffects(orchCtx, orchMonitor,
+		workerlist.ResolvePath(dataDir(home)), logger)
 	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
 		DemoMode:         demoMode,
 		PWPort:           pwPort,
@@ -741,17 +746,20 @@ func runDaemon() {
 		AutonomySpans:    autonomySpans,
 		HistoryTracker:   historyTracker,
 	}, setupPermissionServiceDeps{
-		Push:         push,
-		Logger:       logger,
-		Cfg:          cfg,
-		AllAgents:    allAgents,
-		DemoMode:     demoMode,
-		Home:         home,
-		StartGastown: startGastown,
-		StopGastown:  stopGastown,
-
-		StartMuseAccountAPI: museAPI.Start,
-		StopMuseAccountAPI:  museAPI.Stop,
+		Push:      push,
+		Logger:    logger,
+		Cfg:       cfg,
+		AllAgents: allAgents,
+		DemoMode:  demoMode,
+		Home:      home,
+		Effects: consentEffects{
+			StartGastown:        startGastown,
+			StopGastown:         stopGastown,
+			StartMuseAccountAPI: museAPI.Start,
+			StopMuseAccountAPI:  museAPI.Stop,
+			StartWorkerlist:     startWorkerlist,
+			StopWorkerlist:      stopWorkerlist,
+		},
 	})
 
 	// Register API endpoints that need orchMonitor.

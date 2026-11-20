@@ -1,0 +1,14 @@
+{
+  "description": "Last-run outcomes: a free slot whose last run exited 1, a busy slot whose last run exited 0, a free slot whose run ended with a null exit, and a slot whose run has not ended. Only completed runs with an exit code carry last_exit; a non-zero one is the failed indication.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "last_exit": {
+      "team-a-m1-1": 1,
+      "team-a-m1-2": 0
+    }
+  }
+}

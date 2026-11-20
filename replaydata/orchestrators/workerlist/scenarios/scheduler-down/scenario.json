@@ -1,0 +1,17 @@
+{
+  "description": "The file was just written (top-level updated is fresh) but team-a's scheduler died at 15:30: team-a's own updated is 10 minutes old, so team-a is stale and its busy slot is stale despite a fresh heartbeat copied by the merge. team-b is fresh and operational.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "team_status": [
+      "stale",
+      "operational"
+    ],
+    "stale_workers": [
+      "team-a-m1-1"
+    ]
+  }
+}

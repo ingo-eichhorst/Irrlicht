@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "updated": "2026-11-11T15:40:00Z",
+  "heartbeat_interval_seconds": 60,
+  "teams": [
+    {
+      "name": "team-a",
+      "updated": "2026-11-11T15:40:00Z",
+      "workers": [
+        {
+          "name": "team-a-m1-1",
+          "busy": false,
+          "last_run": {
+            "start": "2026-11-11T14:10:00Z",
+            "end": "2026-11-11T14:52:00Z",
+            "exit": 1,
+            "note": "tests failed"
+          }
+        },
+        {
+          "name": "team-a-m1-2",
+          "busy": true,
+          "work_item": "proj-c3d4",
+          "last_heartbeat": "2026-11-11T15:39:45Z",
+          "last_run": {
+            "start": "2026-11-11T13:00:00Z",
+            "end": "2026-11-11T13:30:00Z",
+            "exit": 0,
+            "note": null
+          }
+        },
+        {
+          "name": "team-a-m1-3",
+          "busy": false,
+          "last_run": {
+            "start": "2026-11-11T12:00:00Z",
+            "end": "2026-11-11T12:10:00Z",
+            "exit": null
+          }
+        },
+        {
+          "name": "team-a-m1-4",
+          "busy": false,
+          "last_run": {
+            "start": "2026-11-11T15:00:00Z",
+            "end": null,
+            "exit": null
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "description": "One busy slot with a work item and a fresh heartbeat beside a free slot. The busy slot shows busy with its work item and is not stale.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "worker_states": [
+      "busy",
+      "idle"
+    ],
+    "worker_ids": [
+      "proj-a1b2",
+      ""
+    ],
+    "stale_workers": []
+  }
+}

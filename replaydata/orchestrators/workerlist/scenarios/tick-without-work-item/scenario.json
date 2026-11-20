@@ -1,0 +1,31 @@
+{
+  "description": "At the start of a tick a slot is busy with no work item and no heartbeat yet. It shows busy with an empty work item, and its team's updated decides staleness: fresh on tick 1; on tick 2 the same file is 181 s old, so team and slot are stale.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    },
+    {
+      "now": "2026-11-11T15:43:01Z"
+    }
+  ],
+  "verify": {
+    "worker_states": [
+      "busy",
+      "idle"
+    ],
+    "stale_workers_per_tick": [
+      [],
+      [
+        "team-a-m1-1"
+      ]
+    ],
+    "team_status_per_tick": [
+      [
+        "operational"
+      ],
+      [
+        "stale"
+      ]
+    ]
+  }
+}

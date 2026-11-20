@@ -28,6 +28,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
+	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	permissionshandler "irrlicht/core/adapters/inbound/permissions"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	"irrlicht/core/adapters/outbound/filesystem"
@@ -559,42 +560,73 @@ func setupOrchestratorMonitor(push outbound.PushBroadcaster, logger outbound.Log
 	return orchMonitor, orchCtx, orchCancel
 }
 
-// gastownEffects builds the start/stop effect closures for the
-// "gastown/state" permission (#570): even constructing the adapter reads
-// ~/gt state files, so nothing is built until the permission is granted —
-// the PermissionService runs these as that permission's Apply/Remove
-// effects. The service serializes effect execution, so no extra locking is
-// needed around the watch-cancel state captured here.
-func gastownEffects(orchCtx context.Context, orchMonitor *services.OrchestratorMonitor, gtPath string, cachedRepo outbound.SessionRepository, logger outbound.Logger) (start, stop func() error) {
-	var gtWatchCancel context.CancelFunc
+// orchestratorEffects builds the start/stop effect closures of one
+// orchestrator's consent permission (#570): start builds the watcher — build
+// returns nil when there is nothing to watch — registers it with orchMonitor
+// and runs it; stop cancels both. Building happens only in start, because
+// constructing a watcher may already read the orchestrator's files. The
+// PermissionService runs these as the permission's Apply/Remove effects and
+// serializes them, so no extra locking is needed around the watch-cancel
+// state captured here.
+//
+// The watch context is also the monitor registration: once stop has
+// cancelled it, the monitor no longer serves this orchestrator's snapshot
+// (OrchestratorMonitor.AddWatcher, #2148), so a revoke takes the group off
+// /api/v1/sessions at once.
+func orchestratorEffects(orchCtx context.Context, orchMonitor *services.OrchestratorMonitor, build func() inbound.OrchestratorWatcher, logger outbound.Logger) (start, stop func() error) {
+	var watchCancel context.CancelFunc
 	start = func() error {
-		if gtWatchCancel != nil {
+		if watchCancel != nil {
 			return nil
 		}
+		w := build()
+		if w == nil {
+			return nil
+		}
+		watchCtx, cancel := context.WithCancel(orchCtx)
+		watchCancel = cancel
+		orchMonitor.AddWatcher(watchCtx, w)
+		go func() {
+			if err := w.Watch(watchCtx); err != nil && err != context.Canceled {
+				logger.LogError("orchestrator-watcher", "", fmt.Sprintf("%s watcher error: %v", w.Name(), err))
+			}
+		}()
+		return nil
+	}
+	stop = func() error {
+		if watchCancel != nil {
+			watchCancel()
+			watchCancel = nil
+		}
+		return nil
+	}
+	return start, stop
+}
+
+// gastownEffects builds the "gastown/state" permission's effects: even
+// constructing the adapter reads ~/gt state files, so nothing is built until
+// the permission is granted.
+func gastownEffects(orchCtx context.Context, orchMonitor *services.OrchestratorMonitor, gtPath string, cachedRepo outbound.SessionRepository, logger outbound.Logger) (start, stop func() error) {
+	return orchestratorEffects(orchCtx, orchMonitor, func() inbound.OrchestratorWatcher {
 		gtAdapter := gastownadapter.NewAdapter(gtPath, cachedRepo, logger)
 		if !gtAdapter.Detected() {
 			logger.LogInfo("permissions", "", "gastown granted but no Gas Town root detected — nothing to watch")
 			return nil
 		}
 		logger.LogInfo("permissions", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
-		watchCtx, cancel := context.WithCancel(orchCtx)
-		gtWatchCancel = cancel
-		orchMonitor.AddWatcher(watchCtx, gtAdapter)
-		go func() {
-			if err := gtAdapter.Watch(watchCtx); err != nil && err != context.Canceled {
-				logger.LogError("orchestrator-watcher", "", fmt.Sprintf("watcher error: %v", err))
-			}
-		}()
-		return nil
-	}
-	stop = func() error {
-		if gtWatchCancel != nil {
-			gtWatchCancel()
-			gtWatchCancel = nil
-		}
-		return nil
-	}
-	return start, stop
+		return gtAdapter
+	}, logger)
+}
+
+// workerlistEffects builds the "workerlist/state" permission's effects
+// (#2148). The watcher starts whether or not the status file exists yet: it
+// watches the file's directory, so a pool that starts writing after the
+// grant appears without a re-grant.
+func workerlistEffects(orchCtx context.Context, orchMonitor *services.OrchestratorMonitor, path string, logger outbound.Logger) (start, stop func() error) {
+	return orchestratorEffects(orchCtx, orchMonitor, func() inbound.OrchestratorWatcher {
+		logger.LogInfo("permissions", "", fmt.Sprintf("worker list granted — watching %s", path))
+		return workerlist.NewAdapter(path, logger)
+	}, logger)
 }
 
 // registerSessionRoutesDeps bundles registerSessionRoutes' dependencies.
@@ -812,15 +844,9 @@ type setupPermissionServiceDeps struct {
 	WatcherFactories map[string]services.WatcherFactory
 	DemoMode         bool
 	Home             string
-	StartGastown     func() error
-	StopGastown      func() error
-	// StartMuseAccountAPI/StopMuseAccountAPI are Muse's account-quota
-	// permission effects (issue #2007, museaccountapi_effects.go's
-	// museAccountAPIEffects) — the same "daemon wiring builds what a
-	// pseudo-adapter package cannot construct for itself" shape as
-	// StartGastown/StopGastown above.
-	StartMuseAccountAPI func() error
-	StopMuseAccountAPI  func() error
+	// Effects are the grant/revoke effects only the daemon's runtime wiring
+	// can build (consentEffects).
+	Effects consentEffects
 }
 
 // herdrPaneRecorder returns the seam that stores the herdr pane a pi session
@@ -892,11 +918,11 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		hasLive = processlifecycle.HasLiveProcess
 	}
 	// consentCatalog (consentcatalog.go) composes the agent adapters with the
-	// four daemon-wide entries. It is shared with the --print-managed-files
+	// seven daemon-wide entries. It is shared with the --print-managed-files
 	// and --uninstall-hooks flag paths on purpose: what the wizard offers is
 	// what grant-all grants, so it has to be the same list the recorder's
 	// protected file set is projected from (#1383).
-	permissionAgents := consentCatalog(allAgents, deps.StartGastown, deps.StopGastown, deps.StartMuseAccountAPI, deps.StopMuseAccountAPI)
+	permissionAgents := consentCatalog(allAgents, deps.Effects)
 	permService := services.NewPermissionService(services.PermissionServiceDeps{
 		Agents:    permissionAgents,
 		Store:     permStore,
@@ -917,6 +943,10 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// Gas Town is detected by root-directory presence (stat-only), not by
 	// a live process matcher.
 	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
+	// The worker list is detected by its status file's presence (stat-only):
+	// $IRRLICHT_WORKERLIST_FILE, else workerlist.json in the data directory.
+	workerlistDataDir := dataDir(deps.Home)
+	permService.SetDetectionProbe(workerlist.Name, func() bool { return workerlist.FileDetected(workerlistDataDir) })
 	// Launcher and endpoint-route capture are both relevant whenever ANY
 	// agent runs, so each wizard row appears alongside the first detected
 	// agent's. Short-circuits on the first live match, and the detection

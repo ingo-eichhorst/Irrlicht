@@ -16,6 +16,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
+	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
@@ -388,12 +389,12 @@ func TestUninstallHookConfigsSurvivesOneFailingAdapter(t *testing.T) {
 // the same shape as #1383 point 4, one field over.
 //
 // A permission whose Apply writes nothing therefore has to be named here with
-// its reason, rather than falling out silently. Today there is exactly one:
-// gastown/state, whose Apply starts a filesystem watcher. A permission whose
+// its reason, rather than falling out silently (applyWritesNoUserFile below
+// lists each with its reason). A permission whose
 // Apply is nil falls outside by construction, which is the shape to prefer.
 //
-// It runs over the FULL consent catalog — agents.All() PLUS the three
-// daemon-wide declarations — because that is what the wizard offers and
+// It runs over the FULL consent catalog — agents.All() PLUS the daemon-wide
+// declarations consentCatalog appends — because that is what the wizard offers and
 // therefore what grant-all grants. Scoping it to the adapter slice is how the
 // kitty config patch stayed invisible to both lists (#1383 point 4).
 //
@@ -444,6 +445,8 @@ func TestEveryModifyPermissionDeclaresTheFileItWrites(t *testing.T) {
 // than silence.
 var applyWritesNoUserFile = map[string]string{
 	"gastown/state": "Apply starts and stops the Gas Town watcher; it reads ~/gt and writes nothing",
+	"workerlist/state": "Apply starts and stops the worker-list watcher; it reads one status file " +
+		"($IRRLICHT_WORKERLIST_FILE or workerlist.json in the data directory) and writes nothing (issue #2148)",
 	"muse-account-api/account-api": "Apply performs one best-effort credential resolve (async, to fail fast " +
 		"on a broken setup without blocking the grant) and writes no shared user file; it reads " +
 		"~/.config/muse/auth.json (or the macOS Keychain) and nothing else (issue #2007)",
@@ -507,7 +510,7 @@ func TestConsentCatalogMatchesThePermissionWizard(t *testing.T) {
 			t.Errorf("the consent catalog omits the %q adapter", a.Identity.Name)
 		}
 	}
-	for _, name := range []string{gastownadapter.Name, processlifecycle.LauncherName, processlifecycle.KittyName} {
+	for _, name := range []string{gastownadapter.Name, processlifecycle.LauncherName, processlifecycle.KittyName, workerlist.Name} {
 		if !got[name] {
 			t.Errorf("the consent catalog omits the daemon-wide %q declaration, which setupPermissionService "+
 				"offers in the wizard — anything it writes would be invisible to --print-managed-files (#1383)", name)

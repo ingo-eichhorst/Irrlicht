@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "updated": "2026-11-11T15:40:00Z",
+  "heartbeat_interval_seconds": 60,
+  "teams": [
+    {
+      "name": "team-a",
+      "updated": "2026-11-11T15:40:00Z",
+      "last_tick": "2026-11-11T15:40:00Z",
+      "workers": [
+        {
+          "name": "team-a-m1-1",
+          "busy": true
+        },
+        {
+          "name": "team-a-m1-2",
+          "busy": false
+        }
+      ]
+    }
+  ]
+}
