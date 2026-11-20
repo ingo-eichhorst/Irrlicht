@@ -44,17 +44,62 @@ extension SessionManager {
         /// ("day", "week", "month", "year"). Present on non-orchestrator
         /// top-level groups.
         let costs: [String: Double]?
+        /// Orchestrator workers in this group that no session is attached to
+        /// (#2140): a free polecat, an idle pool slot. Not sessions — they
+        /// never enter `sessionMap`, the menu bar or notifications. Every
+        /// rebuild of a group (`patchGroup`, `pruneGroup`) must carry this
+        /// through, or the rows vanish until the next hydrate.
+        let unattachedWorkers: [UnattachedWorker]?
 
         var id: String { name }
         var isGasTown: Bool { type == "gastown" }
 
-        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil, costs: [String: Double]? = nil) {
+        // Explicit because the wire key is snake_case and the decoder in
+        // SessionManager+Hydration.swift is a plain `JSONDecoder()`.
+        enum CodingKeys: String, CodingKey {
+            case name, type, status, agents, groups, costs
+            case unattachedWorkers = "unattached_workers"
+        }
+
+        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil, costs: [String: Double]? = nil, unattachedWorkers: [UnattachedWorker]? = nil) {
             self.name = name
             self.type = type
             self.status = status
             self.agents = agents
             self.groups = groups
             self.costs = costs
+            self.unattachedWorkers = unattachedWorkers
+        }
+    }
+
+    /// One `unattached_workers` entry: an orchestrator worker with no
+    /// session. `workerState` is the orchestrator's own state string, shown
+    /// as text — never mapped onto `SessionState.State`.
+    struct UnattachedWorker: Decodable, Equatable, Identifiable {
+        let role: String?
+        let icon: String?
+        let description: String?
+        let workerName: String
+        let workerID: String?
+        let workerState: String?
+
+        /// The daemon lists a name at most once per group.
+        var id: String { workerName }
+
+        enum CodingKeys: String, CodingKey {
+            case role, icon, description
+            case workerName = "worker_name"
+            case workerID = "worker_id"
+            case workerState = "worker_state"
+        }
+
+        init(role: String? = nil, icon: String? = nil, description: String? = nil, workerName: String, workerID: String? = nil, workerState: String? = nil) {
+            self.role = role
+            self.icon = icon
+            self.description = description
+            self.workerName = workerName
+            self.workerID = workerID
+            self.workerState = workerState
         }
     }
 
@@ -193,7 +238,8 @@ extension SessionManager {
             status: group.status,
             agents: patchedAgents,
             groups: patchedGroups,
-            costs: group.costs
+            costs: group.costs,
+            unattachedWorkers: group.unattachedWorkers
         )
     }
 
@@ -218,7 +264,9 @@ extension SessionManager {
     }
 
     /// Returns `nil` when the group has nothing left to render — except
-    /// gas-town, which keeps its top-level row even with no rigs.
+    /// gas-town, which keeps its top-level row even with no rigs. Free
+    /// orchestrator workers (#2140) count as something to render, so a rig
+    /// whose last session left keeps its row while it still lists them.
     func pruneGroup(_ group: AgentGroup, removing sessionId: String) -> AgentGroup? {
         let prunedAgents: [SessionState]? = group.agents?.compactMap { agent in
             if agent.id == sessionId { return nil }
@@ -231,6 +279,7 @@ extension SessionManager {
         let prunedGroups: [AgentGroup]? = group.groups?.compactMap { pruneGroup($0, removing: sessionId) }
 
         let isEmpty = (prunedAgents?.isEmpty ?? true) && (prunedGroups?.isEmpty ?? true)
+            && (group.unattachedWorkers?.isEmpty ?? true)
         if isEmpty && !group.isGasTown { return nil }
 
         return AgentGroup(
@@ -239,7 +288,8 @@ extension SessionManager {
             status: group.status,
             agents: prunedAgents,
             groups: prunedGroups,
-            costs: group.costs
+            costs: group.costs,
+            unattachedWorkers: group.unattachedWorkers
         )
     }
 
