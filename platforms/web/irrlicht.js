@@ -1123,14 +1123,19 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     }
 
     // setWorkerChip shows text in chip (hidden when empty) with title as its
-    // tooltip. Shared by session rows and unattached-worker rows.
+    // tooltip. Shared by session rows and unattached-worker rows, whose
+    // templates both create every chip it is handed.
     function setWorkerChip(chip, text, title) {
-      if (!chip) return;
       const t = text || '';
-      const display = t ? '' : 'none';
-      if (chip.style.display !== display) chip.style.display = display;
-      if (chip.textContent !== t) chip.textContent = t;
-      if (chip.title !== (title || '')) chip.title = title || '';
+      setIfChanged(chip.style, 'display', t ? '' : 'none');
+      setIfChanged(chip, 'textContent', t);
+      setIfChanged(chip, 'title', title || '');
+    }
+
+    // setIfChanged writes target[prop] only when it differs, so an unchanged
+    // re-render costs no DOM write.
+    function setIfChanged(target, prop, value) {
+      if (target[prop] !== value) target[prop] = value;
     }
 
     function workItemShort(id) {
