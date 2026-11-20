@@ -285,6 +285,32 @@ test('unasked, the pane opens only where the surface docks it, once', async ($, 
   expect(opened).toEqual([PANE]) // one try, not one per drawing
 })
 
+// Red-first for the review request to turn the auto-open off: with the
+// manifest's `autoOpen` field declared and set to false, the module opened the
+// pane all the same on the first full-screen render. The default (the test
+// above, which passes no options) is its lock: unset, the pane still opens.
+test('with autoOpen off, no pane opens unasked, and /irrlicht still opens it', { options: { autoOpen: false } }, async ($, on) => {
+  const { clock, opened } = world(on)
+  await $.session.start({ cwd: '/home/test/src/orchard', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({
+      plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS,
+      viewport: { columns: 160, rows: 50, isFullscreen: true },
+    })
+    expect(await band.keepsBeneath()).toBe(true)
+    await band.unmount()
+  }
+  await clock.settle()
+  expect(opened, 'panes opened unasked').toEqual([])
+
+  const ran = await $.command.run({
+    command: 'irrlicht', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 },
+  })
+  expect(ran.text).toBe('Irrlicht panel opened.')
+  expect(opened).toEqual([PANE])
+})
+
 // Red-first for the review finding that abandoned requests piled up: an
 // unanswered `$.http.fetch` cannot be aborted (HttpInit has no signal), so
 // starting a new request every 10 s left one more open connection on the

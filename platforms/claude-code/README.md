@@ -33,8 +33,22 @@ Answer `y` to add the marketplace, then pick a scope. From a shell, the same is 
 ## Open it
 
 - Type `/irrlicht`. That opens the pane at any width: docked beside the transcript in the full-screen layout, inline above the prompt otherwise.
-- In the full-screen layout the pane also opens on its own, as a sidebar, once the terminal is wide enough for one. Claude Code places a pane nobody asked for only from 144 columns, or from 110 once you have opened it yourself (measured on Claude Code 2.1.325). On the main screen (tmux's default, and `CLAUDE_CODE_NO_FLICKER=0`) it never opens on its own, so it never takes over the space above your prompt unasked.
+- In the full-screen layout the pane also opens on its own, as a sidebar, once the terminal is wide enough for one. Claude Code places a pane nobody asked for only from 144 columns, or from 110 once you have opened it yourself (measured on Claude Code 2.1.325). On the main screen (tmux's default, and `CLAUDE_CODE_NO_FLICKER=0`) it never opens on its own, so it never takes over the space above your prompt unasked. To stop it opening on its own, turn its setting off (below).
 - Close it with its `✕` or ctrl+x x.
+
+### Turn the auto-open off
+
+The panel has one setting, `autoOpen`, on by default. Off, the pane opens only when you type `/irrlicht`, which works either way.
+
+- In `/config`, search for `irrlicht` and switch **Open the panel by itself · irrlicht-panel** off. Claude Code reloads the panel with the new value, so no restart is needed (that is how its mod API documents a change to a plugin's options). Turning it off does not close a pane that is already open.
+- Or in `~/.claude/settings.json`. Claude Code reads plugin options from user, `--settings` and managed settings, never from a project's settings:
+
+  ```json
+  { "pluginConfigs": { "irrlicht-panel@irrlicht": { "options": { "autoOpen": false } } } }
+  ```
+
+  `irrlicht-panel@irrlicht` is the key for the panel installed from this repository's `irrlicht` marketplace. A `claude --plugin-dir` session reads the key `irrlicht-panel` instead.
+- Or at install: `claude plugin install irrlicht-panel --marketplace ingo-eichhorst/Irrlicht --config autoOpen=false`.
 
 ## What it shows
 

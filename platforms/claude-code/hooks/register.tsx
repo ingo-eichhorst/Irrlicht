@@ -58,7 +58,9 @@ let address: DaemonAddress | undefined
 // The one outstanding request, if any: when it started, the daemon it asked,
 // and whether its stall has been drawn.
 let inFlight: { since: number; hostPort: string; isReported: boolean } | undefined
-let isAutoOpenTried = false
+// Whether this load's one unasked open is still to be tried: set by `register`
+// from the `autoOpen` option, and cleared once it is tried.
+let isAutoOpenDue = true
 
 // The reads the address ladder needs. `$.env.get` takes string literals only,
 // which is why they are spelled out here and not in lib/address.js.
@@ -139,7 +141,18 @@ async function poll($: EngineInterface): Promise<void> {
 
 const TONE_COLOR = { green: 'success', yellow: 'warning', orange: 'error' } as const
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // The manifest's `autoOpen` field (default true; in `/config`, "Open the
+  // panel by itself · irrlicht-panel"). Options are fixed for one load, and a
+  // change in `/config` reloads the module with the new ones, so reading them
+  // here honours a change without a restart. That is read from the API's
+  // Register doc and the plugin-authoring reference ("a change there reloads
+  // the module with the new `options`"), not measured. The reload also resets
+  // this flag: turned on mid-session, the pane opens on the next full-screen
+  // render; turned off, a pane already open stays open. Absent (a host that
+  // fills in no defaults) counts as on.
+  isAutoOpenDue = options.autoOpen !== false
+
   on('session.start', async ($, e, next) => {
     // The poller first, so nothing after it can keep it from running.
     timer?.cancel()
@@ -155,7 +168,7 @@ export const register: Register = on => {
     } catch {
       // Another mod or an organization's guard refused /irrlicht. The panel
       // still polls; without the command, only the full-screen auto-open
-      // (below) opens the pane.
+      // (below, unless `autoOpen` is off) opens the pane.
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -185,16 +198,17 @@ export const register: Register = on => {
   // cannot tell (its input has no viewport); a render's `e.viewport.isFullscreen`
   // can, which is where the API's own example opens an unasked pane. This hook
   // draws nothing of its own: it answers what is beneath, unchanged. One try
-  // per load. The engine then applies its own width floor to an unasked pane,
-  // measured on Claude Code 2.1.325 (tmux, CLAUDE_CODE_NO_FLICKER=1, the
-  // `--debug-file` log's `ui.open` line): 144 columns for a pane id the person
+  // per load, none where the person turned `autoOpen` off. The engine then
+  // applies its own width floor to an unasked pane, measured on Claude Code
+  // 2.1.325 (tmux, CLAUDE_CODE_NO_FLICKER=1, the `--debug-file` log's
+  // `ui.open` line): 144 columns for a pane id the person
   // has never opened (120: "waits unplaced (unasked below 144 columns …)",
   // 150: "placed"), 110 once they have opened it (120: "placed", 100: "waits
   // unplaced (unasked below 110 columns (100 now, an id the person opened
   // before) …)"), as the API's UiOpenResult doc describes.
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
-    if (!isAutoOpenTried && e.viewport?.isFullscreen === true) {
-      isAutoOpenTried = true
+    if (isAutoOpenDue && e.viewport?.isFullscreen === true) {
+      isAutoOpenDue = false
       void $.ui.open({ id: PANE, title: TITLE }).then(
         () => poll($),
         () => undefined,

@@ -16,5 +16,13 @@
     "quota",
     "pane"
   ],
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the panel by itself",
+      "description": "In the full-screen layout, open the Irrlicht panel as a sidebar by itself when the terminal is wide enough. Off: it opens only when you type /irrlicht, which always works.",
+      "default": true
+    }
+  },
   "types": "./types/index.d.ts"
 }
