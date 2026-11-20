@@ -138,8 +138,14 @@ jobs:
       # code fails the gate too — without running anything. That is deliberate:
       # test code is where most of this repo's macOS churn lands, and a test
       # file that no longer compiles is invisible to every other check.
+      #
+      # --force-resolved-versions (here and on both `swift test` steps below):
+      # dependencies come only from the committed Package.resolved, and a stale
+      # one fails the build instead of being silently re-resolved to whatever
+      # is newest (SonarCloud githubactions:S7694, #2147). tools/preflight.sh's
+      # swift gate passes the same flag, so local and CI resolve identically.
       - name: Build (app + tests)
-        run: swift build --build-tests
+        run: swift build --build-tests --force-resolved-versions
 
   swift-test:
     runs-on: macos-latest
@@ -293,7 +299,7 @@ jobs:
 
           log="$RUNNER_TEMP/swift-test.log"
           ( cd platforms/macos && swift_suite_run "$log" \
-              swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
+              swift test --force-resolved-versions --skip LauncherTestHarness --skip LauncherHarnessTests \
                          --skip DaemonErrorBannerRenderTests \
                          --skip ElfdansPairingViewSnapshotTests \
                          --skip GroupViewSnapshotTests \
@@ -439,7 +445,7 @@ jobs:
           export SNAPSHOT_ARTIFACTS="$RUNNER_TEMP/snapshot-artifacts"
           mkdir -p "$SNAPSHOT_ARTIFACTS"
           ( cd platforms/macos && swift_suite_run "$log" \
-              swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
+              swift test --force-resolved-versions --skip LauncherTestHarness --skip LauncherHarnessTests \
                          --filter DaemonErrorBannerRenderTests \
                          --filter ElfdansPairingViewSnapshotTests \
                          --filter GroupViewSnapshotTests \

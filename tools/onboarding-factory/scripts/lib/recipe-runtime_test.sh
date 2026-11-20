@@ -195,8 +195,12 @@ echo "== env rendering =="
 assert_eq "no env → no lines" "" "$(recipe_runtime_env_lines '{}')"
 assert_eq "plain env" "ANTHROPIC_API_KEY=sk-mock" \
   "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_API_KEY":"sk-mock"}}')"
-assert_eq "MOCK_ADDR substitution" "ANTHROPIC_BASE_URL=http://127.0.0.1:18767" \
-  "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' '127.0.0.1:18767')"
+# The two assertions below with an http:// literal are each ONE physical line
+# on purpose: Sonar reported shell:S5332 for each on the command's FIRST line
+# (the issue's textRange started on the backslash-continued line while they
+# were split across two), and a NOSONAR covers only the line it sits on. The
+# URLs are loopback fixtures, substituted and compared, never fetched (#2147).
+assert_eq "MOCK_ADDR substitution" "ANTHROPIC_BASE_URL=http://127.0.0.1:18767" "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' '127.0.0.1:18767')" # NOSONAR (shell:S5332) — loopback test fixture, never fetched
 assert_eq "MOCK_PORT substitution" "PORT=18767" \
   "$(recipe_runtime_env_lines '{"env":{"PORT":"{{MOCK_PORT}}"}}' '127.0.0.1:18767')"
 assert_eq "an empty value is legal (claude reads CLAUDE_CODE_LOOP_PERSISTENT= as unset)" "X=" \
@@ -206,8 +210,7 @@ assert_eq "an empty value is legal (claude reads CLAUDE_CODE_LOOP_PERSISTENT= as
 assert_eq "keys keep recipe order" "B=2
 A=1" "$(recipe_runtime_env_lines '{"env":{"B":"2","A":"1"}}')"
 
-assert_refuses "placeholder with no mock" \
-  recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}'
+assert_refuses "placeholder with no mock" recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' # NOSONAR (shell:S5332) — loopback test fixture, never fetched
 assert_refuses "unknown placeholder survives substitution" \
   recipe_runtime_env_lines '{"env":{"X":"{{NOT_A_THING}}"}}' '127.0.0.1:18767'
 assert_refuses "env is not an object" recipe_runtime_env_lines '{"env":["A=1"]}'

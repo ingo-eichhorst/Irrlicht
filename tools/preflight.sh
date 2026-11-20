@@ -782,7 +782,7 @@ swift_suite() {
     return 1
   fi
 
-  ( cd platforms/macos && swift build ) || return 1
+  ( cd platforms/macos && swift build --force-resolved-versions ) || return 1
 
   # The suite runs through tools/lib/swift-suite.sh rather than being invoked
   # directly, because this gate's exit code was not a sufficient signal and the
@@ -819,7 +819,7 @@ swift_suite() {
   swift_suite_witness_before "$witness"
 
   ( cd platforms/macos && swift_suite_run "$log" \
-      swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
+      swift test --force-resolved-versions --skip LauncherTestHarness --skip LauncherHarnessTests )
   rc=$?
   # No `cat "$log"` here: swift_suite_run streams the run live as well as
   # capturing it, so re-printing would double every line.

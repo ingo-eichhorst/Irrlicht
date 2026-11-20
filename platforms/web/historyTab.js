@@ -237,7 +237,7 @@ function setHistoryTab(on) {
     btn.title = on ? 'Back to live sessions' : 'Show historical cost analytics';
   }
   localStorage.setItem(ACTIVE_TAB_KEY, on ? 'history' : 'live');
-  if (on) fetchHistory();
+  if (on) refreshHistory();
 }
 
 // setHistoryWindowParams writes whichever window selector the active chart
@@ -342,6 +342,15 @@ function fetchHistory() {
       }
       renderHistory();
     });
+}
+
+// refreshHistory is how every control fires a history fetch: it starts
+// fetchHistory and lands a rejection in the console instead of dropping it.
+// fetchHistory already maps a failed request to null, but its render step
+// runs in a later `.then` and can still throw. Deliberately returns nothing,
+// so its callers hold no promise to forget (#2147).
+function refreshHistory() {
+  fetchHistory().catch(err => console.error('irrlicht: history refresh failed', err));
 }
 
 // syncHistoryCO2Info shows the "how is this calculated" methodology link
@@ -2594,7 +2603,7 @@ function toggleHistoryFilter(dim, val, on) {
   if (on) cur.add(val); else cur.delete(val);
   historyState.filters[dim] = [...cur];
   historyState.scope = null; // a filter change invalidates any drilldown
-  fetchHistory();
+  refreshHistory();
 }
 
 // drillInto re-scopes the view to one contributor and re-groups by the next
@@ -2607,7 +2616,7 @@ function drillInto(field, value) {
   historyState.group = next;
   historyState.chart = 'cost';
   syncHistorySelectors();
-  fetchHistory();
+  refreshHistory();
 }
 
 function renderHistoryBreadcrumb() {
@@ -2635,7 +2644,7 @@ function clearHistoryDrilldown() {
   historyState.scope = null;
   historyState.group = field; // return to the axis we drilled from
   syncHistorySelectors();
-  fetchHistory();
+  refreshHistory();
 }
 
 // syncActivityChartVisibility reflects the Activity beta toggle (#1075) onto the
@@ -2658,7 +2667,7 @@ export function leaveActivityChartIfSelected() {
   historyState.chart = 'cost';
   historyState.scope = null;
   syncHistorySelectors();
-  fetchHistory();
+  refreshHistory();
 }
 
 // syncHistorySelectors reflects historyState.chart/group onto the segmented
@@ -2996,7 +3005,7 @@ export function initHistoryTab() {
     historyState.range = r;
     historyState.start = null;
     historyState.end = null;
-    fetchHistory();
+    refreshHistory();
   });
 
   const histApplyBtn = document.getElementById('history-custom-apply');
@@ -3010,7 +3019,7 @@ export function initHistoryTab() {
     historyState.range = 'custom';
     historyState.start = start;
     historyState.end = end;
-    fetchHistory();
+    refreshHistory();
   });
 
   // Shared by both chart-button groups (#history-chart-sel and the
@@ -3030,7 +3039,7 @@ export function initHistoryTab() {
     else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
     historyState.scope = null; // a new metric resets any drilldown
     syncHistorySelectors();
-    fetchHistory();
+    refreshHistory();
   };
   const histChartSeg = document.getElementById('history-chart-sel');
   if (histChartSeg) histChartSeg.addEventListener('click', handleChartClick);
@@ -3051,7 +3060,7 @@ export function initHistoryTab() {
       if (!b) return;
       for (const x of seg.querySelectorAll('button')) x.classList.toggle('active', x === b);
       historyState[stateKey] = b.dataset[dataKey];
-      fetchHistory();
+      refreshHistory();
     });
   };
   wireAutonomyPicker('history-autonomy-range-sel', 'autonomy-range', 'autonomyRange', 'autonomyRange');
@@ -3059,7 +3068,7 @@ export function initHistoryTab() {
   const histDoraProjectSel = document.getElementById('history-dora-project');
   if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {
     historyState.doraProject = histDoraProjectSel.value || null;
-    fetchHistory();
+    refreshHistory();
   });
 
   const histGranularitySeg = document.getElementById('history-granularity-sel');
@@ -3068,7 +3077,7 @@ export function initHistoryTab() {
     if (!b) return;
     for (const x of histGranularitySeg.querySelectorAll('button')) x.classList.toggle('active', x === b);
     historyState.granularity = b.dataset.granularity;
-    fetchHistory();
+    refreshHistory();
   });
 
   const histGroupSeg = document.getElementById('history-group-sel');
@@ -3088,13 +3097,13 @@ export function initHistoryTab() {
     if (historyState.filters[historyState.group]) historyState.filters[historyState.group] = [];
     historyState.scope = null;
     syncHistorySelectors();
-    fetchHistory();
+    refreshHistory();
   });
 
   const histForecastChk = document.getElementById('history-forecast');
   if (histForecastChk) histForecastChk.addEventListener('change', () => {
     historyState.forecast = histForecastChk.checked;
-    fetchHistory();
+    refreshHistory();
   });
 
   const histCsvBtn = document.getElementById('history-export-csv');

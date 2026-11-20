@@ -375,7 +375,8 @@ function route() {
 
   let m = /^#\/scenario\/([^/]+)\/?$/.exec(pathPart);
   if (m) {
-    loadCoverageDetail(decodeURIComponent(m[1]));
+    loadCoverageDetail(decodeURIComponent(m[1]))
+      .catch(err => console.error("route: loadCoverageDetail failed", err));
     return;
   }
   m = /^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathPart);
@@ -390,7 +391,8 @@ function route() {
       navigate("#/");
       return;
     }
-    loadScenario(rec, archive, focus, profile);
+    loadScenario(rec, archive, focus, profile)
+      .catch(err => console.error("route: loadScenario failed", err));
     return;
   }
   // Default: overview. Strip any unknown hash content from the title.
@@ -2418,6 +2420,13 @@ function renderRecordingHistory(opts) {
     renderRecordingPanels(archData, /*archiveName=*/value);
   }
 
+  // refreshSelection is how the dropdown fires selectionChanged: an older
+  // recording's detail is fetched, and a rejection from that lands in the
+  // console instead of being dropped. Deliberately returns nothing (#2147).
+  function refreshSelection() {
+    selectionChanged().catch(err => console.error("recording selection failed", err));
+  }
+
   function renderRecordingPanels(d, archiveName) {
     below.innerHTML = "";
     // Assessment and Recipe are now rendered at the page level in
@@ -2452,11 +2461,11 @@ function renderRecordingHistory(opts) {
     if (location.hash !== next) {
       history.replaceState(null, "", next);
     }
-    selectionChanged();
+    refreshSelection();
   });
   // Initial render reflects the default selection (Latest or the
   // archive named in the URL).
-  selectionChanged();
+  refreshSelection();
 
   return wrap;
 }
@@ -2958,7 +2967,7 @@ function renderPlayback(s, detailData, archiveName) {
   btnPause.onclick = async () => {
     const isResume = btnPause.textContent.startsWith("▶");
     await (isResume ? resumeReplay() : pauseReplay());
-    updateStatus();
+    updateStatus().catch(err => console.error("replay status refresh failed", err));
   };
   btnStop.onclick = async () => {
     await stopReplay();
@@ -3011,7 +3020,7 @@ function renderPlayback(s, detailData, archiveName) {
   // Auto-start playback when the scenario opens. The user can still
   // Stop and re-Play; they just don't have to click Play to see the
   // dashboard for the first time.
-  startPlayback();
+  startPlayback().catch(err => console.error("replay autostart failed", err));
 
   return p;
 }

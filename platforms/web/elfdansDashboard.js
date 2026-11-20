@@ -115,7 +115,15 @@ export function createElfdansDashboard(host) {
     }
   }
 
-  async function reportElfdansSessionMissing(bareId) {
+  // reportElfdansSessionMissing is the fire-and-forget form both callers use:
+  // the notice is async (it reads the ledger first), and a rejection from it
+  // is logged here rather than dropped. Deliberately returns nothing (#2147).
+  function reportElfdansSessionMissing(bareId) {
+    showElfdansSessionMissing(bareId)
+      .catch(err => console.error('irrlicht: elfdans missing-session notice failed', err));
+  }
+
+  async function showElfdansSessionMissing(bareId) {
     elfdansFocusedSessionId = '';
     paintElfdansFocus();
     let entry = null;
@@ -154,7 +162,7 @@ export function createElfdansDashboard(host) {
       // skipped because the set has not changed since.
       publishLedgerSnapshot(rows).then((published) => {
         elfdansPublishedSignature = published ? signature : null;
-      });
+      }).catch(err => console.error('irrlicht: elfdans ledger publish failed', err));
     }, ELFDANS_PUBLISH_DEBOUNCE_MS);
   }
 
