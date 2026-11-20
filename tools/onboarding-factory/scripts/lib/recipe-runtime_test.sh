@@ -195,8 +195,11 @@ echo "== env rendering =="
 assert_eq "no env → no lines" "" "$(recipe_runtime_env_lines '{}')"
 assert_eq "plain env" "ANTHROPIC_API_KEY=sk-mock" \
   "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_API_KEY":"sk-mock"}}')"
-assert_eq "MOCK_ADDR substitution" "ANTHROPIC_BASE_URL=http://127.0.0.1:18767" \
-  "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' '127.0.0.1:18767')"
+# The two assertions below carrying a loopback URL are one physical line each:
+# a NOSONAR covers only its own line, and a `\`-continued line cannot carry
+# one. Sonar's shell:S5332 issues on the split form started on such a line
+# (textRanges 198-199 and 209-210 at 452333613). Never fetched (#2147).
+assert_eq "MOCK_ADDR substitution" "ANTHROPIC_BASE_URL=http://127.0.0.1:18767" "$(recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' '127.0.0.1:18767')" # NOSONAR (shell:S5332) — loopback test fixture, never fetched
 assert_eq "MOCK_PORT substitution" "PORT=18767" \
   "$(recipe_runtime_env_lines '{"env":{"PORT":"{{MOCK_PORT}}"}}' '127.0.0.1:18767')"
 assert_eq "an empty value is legal (claude reads CLAUDE_CODE_LOOP_PERSISTENT= as unset)" "X=" \
@@ -206,8 +209,7 @@ assert_eq "an empty value is legal (claude reads CLAUDE_CODE_LOOP_PERSISTENT= as
 assert_eq "keys keep recipe order" "B=2
 A=1" "$(recipe_runtime_env_lines '{"env":{"B":"2","A":"1"}}')"
 
-assert_refuses "placeholder with no mock" \
-  recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}'
+assert_refuses "placeholder with no mock" recipe_runtime_env_lines '{"env":{"ANTHROPIC_BASE_URL":"http://{{MOCK_ADDR}}"}}' # NOSONAR (shell:S5332) — loopback test fixture, never fetched
 assert_refuses "unknown placeholder survives substitution" \
   recipe_runtime_env_lines '{"env":{"X":"{{NOT_A_THING}}"}}' '127.0.0.1:18767'
 assert_refuses "env is not an object" recipe_runtime_env_lines '{"env":["A=1"]}'

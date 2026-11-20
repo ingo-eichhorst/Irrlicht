@@ -174,11 +174,7 @@ export function renderUnappliedGrantsBanner(snap) {
   btn.type = 'button';
   btn.className = 'settings-action-btn perm-unapplied-review';
   btn.textContent = 'Review permissions';
-  btn.addEventListener('click', () => {
-    refreshPermissions().then(() => {
-      if (permissionsSnapshot) openPermissionsWizard('review');
-    });
-  });
+  btn.addEventListener('click', refreshThenReview);
   el.appendChild(btn);
   el.hidden = false;
 }
@@ -226,6 +222,24 @@ export function refreshPermissions() {
       renderUnappliedGrantsBanner(snap);
       updatePermissionsWizard();
     });
+}
+
+// refreshPermissionsInBackground: fire-and-forget refreshPermissions — a
+// rejection (its render step can throw after the fetch) is logged, and it
+// returns nothing. Callers that wait use refreshPermissions itself (#2147).
+export function refreshPermissionsInBackground() {
+  refreshPermissions().catch(err => console.error('irrlicht: permissions refresh failed', err));
+}
+
+// refreshThenReview re-fetches so the review view reflects the live state,
+// then opens it. Shared by the banner's "Review permissions" button and the
+// Settings entry.
+function refreshThenReview() {
+  refreshPermissions()
+    .then(() => {
+      if (permissionsSnapshot) openPermissionsWizard('review');
+    })
+    .catch(err => console.error('irrlicht: permissions review failed', err));
 }
 
 // updatePermissionsWizard reconciles overlay visibility with the
@@ -386,7 +400,7 @@ function retryPermissionEffect(agentName, permKey, grant, box, btn) {
     // wizard's own open/closed state still has to be reconciled: a retry
     // that fixed the last outstanding problem should let it close.
     updatePermissionsWizard();
-  });
+  }).catch(err => console.error('irrlicht: permission retry failed', err));
 }
 
 function renderPermissionRow(a, p) {
@@ -474,7 +488,7 @@ function submitPermissionsWizard() {
     }
     if (review) closePermissionsWizard();
     updatePermissionsWizard();
-  });
+  }).catch(err => console.error('irrlicht: permission apply failed', err));
 }
 
 
@@ -496,11 +510,8 @@ export function initPermissionsWizard() {
   const review = document.getElementById('settings-review-permissions');
   if (review) review.addEventListener('click', () => {
     closeSettings();
-    // Re-fetch so the review view reflects the live state, then open.
-    refreshPermissions().then(() => {
-      if (permissionsSnapshot) openPermissionsWizard('review');
-    });
+    refreshThenReview();
   });
 
-  refreshPermissions();
+  refreshPermissionsInBackground();
 }

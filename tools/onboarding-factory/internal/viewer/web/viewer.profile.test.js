@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'vitest'
+import { json, notOk } from './viewerFetch.testutil.js'
 
 // Wiring test for the execution-profile split (#1889). The pure rendering
 // rules are covered in profileView.test.js; this file proves the SPA actually
@@ -9,12 +10,6 @@ import { describe, test, expect } from 'vitest'
 // fresh module registry: viewer.js's bootstrap runs once per importing file
 // and reads location.hash at import time.
 
-// jsdom implements no scrolling, and viewer.js scrolls the active sidebar
-// button into view on every navigation. Stub it rather than guarding the
-// production call: the absence is the test environment's, not the SPA's.
-if (typeof Element.prototype.scrollIntoView !== 'function') {
-  Element.prototype.scrollIntoView = function scrollIntoViewStub() {}
-}
 
 const CELL = { agent: 'claudecode', subtree: 'scenarios', id: 'desktop-cell' }
 const CELL_PATH = '/api/scenarios/claudecode/scenarios/desktop-cell'
@@ -71,24 +66,6 @@ function profileOf(url) {
   return new URLSearchParams(url.slice(q + 1)).get('profile') || 'cli-local'
 }
 
-function json(body) {
-  return Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve(body),
-    text: () => Promise.resolve(JSON.stringify(body)),
-    headers: { get: () => null },
-  })
-}
-
-function unavailable() {
-  return Promise.resolve({
-    ok: false,
-    status: 404,
-    json: () => Promise.resolve(null),
-    text: () => Promise.resolve('no replay in this fixture'),
-    headers: { get: () => null },
-  })
-}
 
 function installFetchStub() {
   requested.length = 0
@@ -99,7 +76,7 @@ function installFetchStub() {
     // This fixture is about profile plumbing, not playback, so the replay
     // endpoints answer "nothing to play" — the path viewer.js handles by
     // logging and bailing, exactly as for an un-recorded deep link.
-    if (path.startsWith('/api/replay/')) return unavailable()
+    if (path.startsWith('/api/replay/')) return notOk(404, 'no replay in this fixture')
     if (path === '/api/scenarios') return json([CELL])
     if (path === '/api/catalog') return json({ agents: [], scenarios: [] })
     if (path === '/api/recipes') return json({ scenarios: [] })

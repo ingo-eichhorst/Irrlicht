@@ -314,7 +314,7 @@ function fetchAutonomy() {
   });
 }
 
-function fetchHistory() {
+function loadHistory() {
   if (historyState.chart === 'autonomy') return fetchAutonomy();
   // DORA needs exactly one project — with none selected, there's nothing
   // to fetch at all (a distinct empty state, not a load failure or a
@@ -342,6 +342,13 @@ function fetchHistory() {
       }
       renderHistory();
     });
+}
+
+// fetchHistory is how every control fires loadHistory: fire-and-forget, a
+// rejection (its render step can throw after the fetch) is logged, and it
+// returns nothing (#2147).
+function fetchHistory() {
+  loadHistory().catch(err => console.error('irrlicht: history refresh failed', err));
 }
 
 // syncHistoryCO2Info shows the "how is this calculated" methodology link

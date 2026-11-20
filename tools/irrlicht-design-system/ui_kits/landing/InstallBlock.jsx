@@ -3,7 +3,8 @@ window.InstallBlock = function InstallBlock() {
   const [copied, setCopied] = React.useState(false);
   const cmd = 'brew install --cask ingo-eichhorst/tap/irrlicht';
   const copy = () => {
-    navigator.clipboard?.writeText(cmd);
+    // writeText can reject (clipboard access denied); log it (#2147).
+    navigator.clipboard?.writeText(cmd).catch(err => console.error('InstallBlock: clipboard write failed', err));
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
   };

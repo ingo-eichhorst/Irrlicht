@@ -1,7 +1,7 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, getSummaryMode, toggleSummaryMode } from './collapsedSummaries.js';
 import { initHistoryTab, syncActivityChartVisibility, leaveActivityChartIfSelected } from './historyTab.js';
-import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
+import { initPermissionsWizard, refreshPermissionsInBackground } from './permissionsWizard.js';
 import {
   showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings,
 } from './quotaChips.js';
@@ -1758,7 +1758,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       ingestInitialSessions(resp);
       render();
       repaintHistory();
-    });
+    }).catch(err => console.error('irrlicht: initial load failed', err));
 
     function ingestAgentRegistry(entries) {
       if (!Array.isArray(entries)) return;
@@ -2010,7 +2010,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       const hasOrchestrator = dashboardGroups.some(g =>
         g && (g.type === 'gastown' || g.groups?.length));
       setTimeout(() => {
-        rehydratePoll().finally(scheduleRehydratePoll);
+        // .catch last, so a throw from scheduleRehydratePoll is logged too
+        // (checked in node: with .catch first it surfaced unhandled) (#2147).
+        rehydratePoll()
+          .finally(scheduleRehydratePoll)
+          .catch(err => console.error('irrlicht: rehydrate poll failed', err));
       }, hasOrchestrator ? 2500 : 30000);
     }
     scheduleRehydratePoll();
@@ -2134,7 +2138,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // open dashboard shows a stale, healthy-looking picture until the
         // user reloads by hand — which is exactly the restart scenario the
         // aggregate exists for.
-        refreshPermissions();
+        refreshPermissionsInBackground();
       };
       ws.onmessage = function(evt) {
         let msg;
@@ -2194,7 +2198,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       const now = Date.now();
       if (now - lastSeqGapRehydrate < 1000) return;
       lastSeqGapRehydrate = now;
-      rehydratePoll();
+      rehydratePoll().catch(err => console.error('irrlicht: gap rehydrate failed', err));
     }
 
     function handleSourceFrame(src, msg) {
@@ -2277,7 +2281,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // Consent state changed (agent detected, or the other surface
         // answered the wizard). Dataless by design — re-fetch and let
         // updatePermissionsWizard open/dismiss the overlay (#570).
-        refreshPermissions();
+        refreshPermissionsInBackground();
         return;
       }
       if (msg.type === HISTORY_MSG.snapshot && msg.session_id && msg.history) {
@@ -2546,7 +2550,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     fetch('/api/v1/version').then(r => r.ok ? r.json() : null).catch(() => null).then(v => {
       const el = document.getElementById('app-version');
       if (el && v?.version) el.textContent = 'v' + v.version;
-    });
+    }).catch(err => console.error('irrlicht: version display failed', err));
 
     // Permission wizard (issue #570) — its state, wizard rendering, and POST
     // flow all live in permissionsWizard.js; this call wires it up (and fires
@@ -2568,13 +2572,14 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // notification tap sent here (R6).
     // A function declaration, not a call site: the settings handler above runs
     // earlier in this scope and needs to re-render the panel, and hoisting is
-    // what lets both reach the one definition.
+    // what lets both reach the one definition. Fire-and-forget: a rejection
+    // from initElfdans is logged, and this returns nothing (#2147).
     function renderElfdansPanel() {
-      return initElfdans({
+      initElfdans({
         relayToken: () => settings.relayToken,
         liveView: { read: readSourceSettings, write: writeSourceSettings },
         openSession: focusSessionFromNotification,
-      });
+      }).catch(err => console.error('irrlicht: elfdans panel render failed', err));
     }
     renderElfdansPanel();
 
