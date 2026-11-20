@@ -47,6 +47,29 @@ func TestAttachGroupCosts_GastownSumsDistinctProjects(t *testing.T) {
 	}
 }
 
+// Issue #2148, red-first on 796a07307: attachGroupCosts sent every group whose
+// type was not "gastown" to regularGroupCosts, which prices a group by its
+// NAME. A worker-list pool named like a project then showed that project's
+// spend although none of its rows is a session. Any orchestrator group is
+// priced from the sessions beneath it — here none, so no cost at all.
+func TestAttachGroupCosts_OtherOrchestratorIsNotPricedByName(t *testing.T) {
+	pool := &session.AgentGroup{
+		Name: "proj-c",
+		Type: "workerlist",
+		Groups: []*session.AgentGroup{{
+			Name:              "team-a",
+			UnattachedWorkers: []*session.UnattachedWorker{{WorkerName: "team-a-m1-1"}},
+		}},
+	}
+	byTf := map[string]map[string]float64{"day": {"proj-c": 9.00}}
+
+	attachGroupCosts([]*session.AgentGroup{pool}, byTf)
+
+	if pool.Costs != nil {
+		t.Errorf("workerlist group named like a project got that project's cost: %v", pool.Costs)
+	}
+}
+
 // TestProviderCostsByProvider_UnattributedBucketPreservesTotal is #1996's
 // red-first proof: a cost row with no confirmed billing attribution must
 // still surface in provider_costs — under the reserved "unattributed" key
