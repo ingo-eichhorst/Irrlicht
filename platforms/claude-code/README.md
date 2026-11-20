@@ -56,7 +56,7 @@ The panel has one setting, `autoOpen`, on by default. Off, the pane opens only w
 - **Sessions**: every session the daemon watches, from every agent it supports, grouped by project. Each row shows a state dot (working, waiting, ready, error, in the dashboard's colours), the branch, tokens, context fill and model. The agent's name follows in brackets for sessions that are not Claude Code's, such as `[pi]` or `[codex]`, and subagents are indented under their parent.
 - **← here** marks the session the pane runs in, and only on an exact match of this session's id with the id the daemon lists. A session's id reaches the daemon with its transcript, so a brand-new session that has not written one yet shows no marker. The panel never guesses.
 - **Press a row** for its state, running time, estimated cost, and the question it is waiting on (or its last reply). Press it again to close it.
-- **24h $X**: the spend of the trailing 24 hours across every provider, unattributed included. This is the daemon's rolling `day` window, not the calendar day.
+- **24h $X**: the spend of the trailing 24 hours across every provider, unattributed included. This is the daemon's rolling `day` window, not the calendar day. In a pane too narrow for both, `press a session for details` goes on a line of its own below it.
 - If the daemon cannot be reached, or answers with something that is not a sessions payload, the pane says `Irrlicht daemon not reachable at localhost:<port>` and why, then tries again every 3 s.
 
 ## Which daemon it asks

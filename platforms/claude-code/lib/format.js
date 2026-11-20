@@ -98,6 +98,21 @@ export function fitRow(row, width) {
   }
 }
 
+// DETAILS_HINT is the only place the pane says its rows can be pressed.
+const DETAILS_HINT = 'press a session for details';
+
+// footerLines lays the pane's footer out in `width` columns: the 24h spend and
+// the hint on one line where both fit, else the hint on a line of its own
+// below, never dropped (a docked sidebar of about 30 columns is common). The
+// hint is returned whole even where it is wider than the pane; the Text that
+// draws it wraps it. Measured in UTF-16 units, which is columns here: the
+// spend is formatUsd's ASCII and the separator one narrow character.
+export function footerLines(dayCost, width) {
+  const cost = '24h ' + dayCost;
+  const both = cost + ' · ' + DETAILS_HINT;
+  return both.length <= width ? [both] : [cost, DETAILS_HINT];
+}
+
 // rowTail is what fitRow never drops, in the order it is drawn: the adapter
 // tag, then the here-marker.
 function rowTail(row) {

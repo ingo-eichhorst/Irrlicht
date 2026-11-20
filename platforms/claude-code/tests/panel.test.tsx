@@ -145,6 +145,29 @@ test('sessions render on both surfaces, and a row press shows its detail', async
   }
 })
 
+// Red-first for the review finding that a docked sidebar of about 30 columns
+// never showed the hint: below 40 columns it was dropped, not moved. At 60 the
+// footer is one line as before (a lock: it passed before the change too).
+test('the details hint moves to its own line in a narrow pane, never away', async ($, on) => {
+  const { clock } = world(on)
+  await $.session.start({ cwd: '/home/test/src/orchard', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const cases: ReadonlyArray<readonly [number, readonly string[]]> = [
+    [60, ['24h $16.50 · press a session for details']],
+    [30, ['24h $16.50', 'press a session for details']],
+  ]
+  for (const [bodyColumns, footer] of cases) {
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({
+        plugin: PLUGIN, surface, component: 'Pane', requestId: PANE, props: { ...PANE_PROPS, bodyColumns },
+      })
+      const lines = await ui.findAll({ type: 'Text', text: /^24h |^press a session/ })
+      expect(lines.map(l => l.text), `${surface}, ${bodyColumns} columns`).toEqual(footer)
+      await ui.unmount()
+    }
+  }
+})
+
 test('"← here" is drawn only on an exact session-id match', async ($, on) => {
   // The id is read per poll, so one world with a changing id serves; that
   // is also what a /clear looks like to the panel.

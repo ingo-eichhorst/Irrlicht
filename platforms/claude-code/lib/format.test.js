@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { fitRow, fmtDuration, formatTokens, formatUsd, oneLine, quotaBar, shortModel } from './format.js';
+import { fitRow, fmtDuration, footerLines, formatTokens, formatUsd, oneLine, quotaBar, shortModel } from './format.js';
 import { barTone, formatTimeUntil, quotaWindowLabel } from './quota.js';
 
 describe('formatting', () => {
@@ -73,5 +73,32 @@ describe('fitRow', () => {
 
   test('a row with no branch shows a dash', () => {
     expect(fitRow({ tokens: '1K' }, 40)).toBe('— 1K');
+  });
+});
+
+describe('footerLines', () => {
+  const hint = 'press a session for details';
+
+  // A lock, not red-first: where the spend and the hint fit, they stay one
+  // line, as the footer always was. 40 is the fixture's line to the column.
+  test('the spend and the hint share a line where they fit', () => {
+    expect(footerLines('$16.50', 60)).toEqual(['24h $16.50 · ' + hint]);
+    expect(footerLines('$16.50', 40)).toEqual(['24h $16.50 · ' + hint]);
+  });
+
+  // Red-first for the review finding: a docked sidebar of about 30 columns
+  // never showed the hint, which was dropped below 40 columns, not moved.
+  test('in a narrow pane the hint goes on a line of its own, never away', () => {
+    expect(footerLines('$16.50', 39)).toEqual(['24h $16.50', hint]);
+    expect(footerLines('$16.50', 30)).toEqual(['24h $16.50', hint]);
+    // Narrower than the hint itself (the pane's floor is 16): it is still
+    // there, whole, for the Text that draws it to wrap.
+    expect(footerLines('$16.50', 16)).toEqual(['24h $16.50', hint]);
+  });
+
+  test('the fit is measured on the line itself, not on a fixed width', () => {
+    expect(footerLines('$0', 36)).toEqual(['24h $0 · ' + hint]);
+    expect(footerLines('$0', 35)).toEqual(['24h $0', hint]);
+    expect(footerLines('<$0.01', 39)).toEqual(['24h <$0.01', hint]);
   });
 });

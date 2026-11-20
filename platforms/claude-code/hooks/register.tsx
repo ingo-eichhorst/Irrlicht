@@ -23,7 +23,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { IrrlichtPanelRow, IrrlichtPanelView } from '../types'
 import { hostPortOf, resolveDaemonAddress, sessionsURL } from '../lib/address.js'
 import type { DaemonAddress } from '../lib/address.js'
-import { fitRow, quotaBar } from '../lib/format.js'
+import { fitRow, footerLines, quotaBar } from '../lib/format.js'
 import { unreachableView, viewFromResponse } from '../lib/view.js'
 
 const PANE = 'irrlicht'
@@ -305,10 +305,11 @@ export const register: Register = (on, options) => {
             {section.rows.map(row)}
           </Box>
         ))}
-        <Text dimColor wrap="truncate-end">
-          24h {current.dayCost}
-          {width >= 40 ? ' · press a session for details' : ''}
-        </Text>
+        {footerLines(current.dayCost, width).map(line => (
+          <Text dimColor wrap="wrap">
+            {line}
+          </Text>
+        ))}
       </Box>
     )
   })

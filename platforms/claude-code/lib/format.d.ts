@@ -6,3 +6,4 @@ import type { IrrlichtPanelRow } from '../types'
 
 export function fitRow(row: Pick<IrrlichtPanelRow, 'branch' | 'tokens' | 'context' | 'model' | 'adapterTag' | 'isHere'>, width: number): string
 export function quotaBar(percent: number, width: number): string
+export function footerLines(dayCost: string, width: number): string[]
