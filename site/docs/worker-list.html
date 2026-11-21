@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worker List — Irrlicht Docs</title>
+<meta name="description" content="The worker-list status file: show any pool of agents (containers, VMs, CI runners, a home-grown scheduler) in Irrlicht by writing one JSON file. Schema v1 reference.">
+<link rel="canonical" href="https://irrlicht.io/docs/worker-list.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Worker List — Irrlicht Docs">
+<meta property="og:description" content="The worker-list status file: show any pool of agents (containers, VMs, CI runners, a home-grown scheduler) in Irrlicht by writing one JSON file. Schema v1 reference.">
+<meta property="og:url" content="https://irrlicht.io/docs/worker-list.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Worker List — Irrlicht Docs">
+<meta name="twitter:description" content="The worker-list status file: show any pool of agents (containers, VMs, CI runners, a home-grown scheduler) in Irrlicht by writing one JSON file. Schema v1 reference.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar" aria-label="Documentation sections">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html">CO2 Methodology</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="macos-setup.html">macOS Setup</a>
+      <a href="elfdans.html">Phone Notifications</a>
+      <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+      <a href="worker-list.html" class="active">Worker List</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+      <a href="claude-support.html">Claude Surfaces &amp; Support</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Project</h4>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Worker List</h1>
+      <p class="page-subtitle">Show any pool of agents in Irrlicht by writing one JSON status file.</p>
+
+      <!-- ── When to use ── -->
+      <h2>When to use it</h2>
+
+      <p>Irrlicht finds most agents by itself, from the transcripts and processes on the machine it runs on. Some setups hide exactly that: agents in containers or micro-VMs, CI runner fleets, a home-grown scheduler that hands work to slots. What such a setup does know is which workers exist, whether each one is busy, what it works on, and whether it is alive. The worker list is how it tells Irrlicht.</p>
+
+      <p>A program you run (the <em>writer</em>, typically your scheduler or supervisor) keeps one JSON file up to date. Irrlicht reads it and shows one group per pool, one sub-group per team, and one row per worker: busy or free, its work item, a <code>stale</code> tag when it stops reporting, a <code>failed</code> tag after a failed run, and a <code>waiting</code> row with a notification when its agent waits for a person. No transcript, prompt or output ever needs to reach Irrlicht.</p>
+
+      <!-- ── Location and consent ── -->
+      <h2>Where the file goes</h2>
+
+      <ul>
+        <li><strong>Path.</strong> <code>workerlist.json</code> in Irrlicht's data directory: <code>~/.local/share/irrlicht</code> (also on macOS), or <code>$IRRLICHT_HOME</code> when it is set.</li>
+        <li><strong>Override.</strong> <code>IRRLICHT_WORKERLIST_FILE</code> points the daemon at another path. A daemon started by Irrlicht.app sees only the app's environment, which normally does not include your shell profile, so the default path is the one that needs no setup. See <a href="configuration.html">Configuration</a>.</li>
+        <li><strong>Consent.</strong> Grant <strong>Worker list</strong> in Irrlicht's permissions. Nothing is read before that, and revoking it removes the group at once.</li>
+        <li><strong>Writing.</strong> Replace the file atomically: write a temporary file next to it, then rename it over <code>workerlist.json</code>. The daemon watches the directory and also re-reads the file every 30 seconds, so a pool whose writer died still turns stale.</li>
+      </ul>
+
+      <!-- ── Schema ── -->
+      <h2>Schema v1</h2>
+
+<pre><code>{
+  "schema": 1,
+  "name": "VM tasks",
+  "heartbeat_interval_seconds": 60,
+  "teams": [{
+    "name": "lead-T100",
+    "updated": "2026-11-21T15:40:00Z",
+    "workers": [
+      {"name": "T101", "busy": true, "work_item": "T101",
+       "last_heartbeat": "2026-11-21T15:39:30Z"},
+      {"name": "T102", "busy": true, "state": "waiting", "work_item": "T102",
+       "last_heartbeat": "2026-11-21T15:39:30Z"},
+      {"name": "T103", "busy": false,
+       "last_run": {"end": "2026-11-21T14:52:00Z", "exit": 1}}
+    ]
+  }]
+}</code></pre>
+
+      <h3>Document</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>schema</code></td>
+            <td>integer, required</td>
+            <td>Must be <code>1</code>.</td>
+          </tr>
+          <tr>
+            <td><code>name</code></td>
+            <td>string</td>
+            <td>The group header. Default: &ldquo;Worker pool&rdquo;.</td>
+          </tr>
+          <tr>
+            <td><code>heartbeat_interval_seconds</code></td>
+            <td>integer</td>
+            <td>How often your writer reports. Above 0; default 60. A worker or team is stale after three intervals without a report.</td>
+          </tr>
+          <tr>
+            <td><code>teams</code></td>
+            <td>array, required</td>
+            <td>One entry per team. Team names must be unique in the file.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Team</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>name</code></td>
+            <td>string, required</td>
+            <td>The sub-group header.</td>
+          </tr>
+          <tr>
+            <td><code>updated</code></td>
+            <td>RFC 3339, required</td>
+            <td>Stamped by the team's own writer on every write. If you merge several teams into one file, copy each team's <code>updated</code> unchanged; restamping it would hide a team whose scheduler died.</td>
+          </tr>
+          <tr>
+            <td><code>workers</code></td>
+            <td>array, required</td>
+            <td>One entry per worker. Worker names must be unique within the team.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Worker</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>name</code></td>
+            <td>string, required</td>
+            <td>The worker's row label.</td>
+          </tr>
+          <tr>
+            <td><code>busy</code></td>
+            <td>boolean, required</td>
+            <td><code>true</code> while the worker holds work.</td>
+          </tr>
+          <tr>
+            <td><code>state</code></td>
+            <td>string</td>
+            <td>Only <code>"waiting"</code>, and only on a busy worker: its agent waits for a person. Omit it otherwise.</td>
+          </tr>
+          <tr>
+            <td><code>work_item</code></td>
+            <td>string</td>
+            <td>What the worker works on. Rows show the first 8 characters, the full value in the tooltip.</td>
+          </tr>
+          <tr>
+            <td><code>last_heartbeat</code></td>
+            <td>RFC 3339</td>
+            <td>The worker's last sign of life.</td>
+          </tr>
+          <tr>
+            <td><code>last_run</code></td>
+            <td>object</td>
+            <td><code>{"end": RFC 3339, "exit": integer or null}</code>, the worker's last completed run.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Unknown fields are accepted and ignored, so your own bookkeeping can stay in the file. So are a top-level <code>updated</code>, a team's <code>last_tick</code>, and a worker's <code>activity</code>, <code>last_run.start</code> and <code>last_run.note</code>.</p>
+
+      <!-- ── Rules ── -->
+      <h2>What Irrlicht shows</h2>
+
+      <ul>
+        <li><strong>Busy and free.</strong> Each worker row shows its name, its work item and <code>busy</code> or <code>idle</code>. A team with only free workers stays visible.</li>
+        <li><strong>Stale.</strong> A busy worker is stale when its <code>last_heartbeat</code> is older than three heartbeat intervals (180 seconds at the default 60). A busy worker without a heartbeat falls back to its team's <code>updated</code>. A team whose <code>updated</code> is that old shows <code>stale</code> in its header, and so do all its busy workers. A free worker is never stale.</li>
+        <li><strong>Failed.</strong> A <code>last_run</code> with an <code>end</code> and a non-zero <code>exit</code> shows a <code>failed &middot; exit N</code> tag on the row. It sends no notification.</li>
+        <li><strong>Waiting.</strong> A worker with <code>"state": "waiting"</code> is painted in the waiting colour with a filled dot. When a worker Irrlicht has already seen turns waiting, the macOS app and the web dashboard send <em>Worker waiting for input</em>, under the same notification setting as a waiting session. A worker first seen already waiting, after a restart for example, does not notify. While a pool is listed, the macOS app and the web dashboard re-check every 2.5 seconds; the dashboard's first check after it loads comes after 30 seconds.</li>
+        <li><strong>Unreadable.</strong> A file that does not parse, misses a required field, repeats a name, uses another <code>schema</code> or another <code>state</code> value is refused as a whole. Irrlicht keeps showing the last good file with every team marked <code>unreadable</code>, and logs the reason. With no file at all there is no group.</li>
+        <li><strong>Lifetime.</strong> A worker is shown exactly as long as it is in the file. Drop finished work from the file when it should disappear.</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <p><strong>Relayed sessions.</strong> When a worker runs its own Irrlicht daemon and forwards through <code>irrlichtrelay</code>, a forwarded session whose daemon label equals the worker's name is shown in that worker's row, with its live state, tokens and cost. The worker list does not need it: a worker that sends nothing but this file is still listed.</p>
+      </div>
+
+      <!-- ── Example ── -->
+      <h2>Example: agents in isolated VMs</h2>
+
+      <p>One coding agent runs per task in its own VM or container, and a lead task hands work to several of them. Only results leave the VM. A host-side supervisor knows each task's id, its lead, and its lifecycle, and writes:</p>
+
+      <ul>
+        <li>each lead task as a <strong>team</strong>, and each task as a <strong>worker</strong> in it;</li>
+        <li>a running task as <code>"busy": true</code> with a fresh <code>last_heartbeat</code>;</li>
+        <li>a task whose agent asks a question as <code>"busy": true, "state": "waiting"</code>;</li>
+        <li>a finished task as <code>"busy": false</code> with its <code>last_run</code>, until the supervisor drops it.</li>
+      </ul>
+
+      <p>The supervisor learns that an agent waits from a signal that carries no content, for example an agent hook inside the VM that writes the single word <code>waiting</code> to a file the host can read.</p>
+
+      <!-- ── Bottom nav ── -->
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
+        <a href="api-reference.html">
+          <span class="label">Previous</span>
+          API Reference
+        </a>
+        <a href="architecture.html" style="text-align:right">
+          <span class="label">Next</span>
+          System Design &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>

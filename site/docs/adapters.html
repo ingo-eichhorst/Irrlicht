@@ -63,6 +63,7 @@
       <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html">API Reference</a>
+      <a href="worker-list.html">Worker List</a>
     </div>
 
     <div class="sidebar-section">
@@ -324,6 +325,15 @@
         <li>Watches daemon state file + polls <code>gt</code> CLI</li>
         <li>Role detection from session CWD paths</li>
         <li><strong>State model:</strong> global agents, codebases, worktrees, workers, work units</li>
+      </ul>
+
+      <h3>Worker List Orchestrator</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/orchestrators/workerlist/</code></li>
+        <li>Watches one JSON status file that any pool, scheduler or supervisor writes</li>
+        <li>One group per pool, a sub-group per team, a row per worker: busy or free, stale, failed, waiting</li>
+        <li><strong>Schema:</strong> <a href="worker-list.html">Worker List</a></li>
       </ul>
 
       <h2 id="adapter-interfaces">Adapter Interfaces</h2>
