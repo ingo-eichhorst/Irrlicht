@@ -26,7 +26,7 @@ function rowLabel(a) {
 // one this panel follows.)
 export function shortModelName(model) {
   const tail = String(model || '').split('/').pop();
-  return tail.split('claude-').join('').replace(/-(\d+)$/, '.$1');
+  return tail.replaceAll('claude-', '').replace(/-(\d+)$/, '.$1');
 }
 
 // unmatchedReason says, in the tooltip, why a row has no context line.

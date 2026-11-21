@@ -29,13 +29,13 @@ export const STATE_LABEL = Object.freeze({
   unknown: 'Unknown state',
 });
 
-const own = (map, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key);
+const KNOWN = new Set(Object.keys(STATE_HUE));
 
 // irrlichtState is a daemon state as the panel draws it: one it knows, else
 // `unknown`, never a guess (the Swift app's #1797 rule: an unreadable state is
 // never painted green).
 export function irrlichtState(raw) {
-  return own(STATE_HUE, raw) ? raw : 'unknown';
+  return KNOWN.has(raw) ? raw : 'unknown';
 }
 
 // What a row no Irrlicht session matched shows: Herdr's agent status read onto
