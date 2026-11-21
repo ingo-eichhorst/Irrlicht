@@ -23,8 +23,8 @@ import (
 // response carries no account identifier (probe comment §1), so nothing
 // could show that they do. This is #1977 §3.2's credential identity, not an
 // account identity, and the manifest says so.
-// tools/lib/zai-account-sweep-mutations_test.sh collapses this to a fixed
-// Account and requires TestZaiAccountSweep_DifferentKeysNeverShareAReading
+// tools/lib/zai-coding-plan-mutations_test.sh (S1) collapses this to a
+// fixed Account and requires TestZaiAccountSweep_DifferentKeysNeverShareAReading
 // to go red.
 func ZaiAccountQuotaKey(fingerprint string) AccountQuotaKey {
 	return AccountQuotaKey{

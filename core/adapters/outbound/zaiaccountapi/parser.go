@@ -194,8 +194,9 @@ func parseWindow(l limitJSON) (Window, bool, error) {
 // A window with no reported reset is not published. The domain cannot hold
 // "no reset": session.RateLimitWindow.ResetsAt is a plain int64, and both
 // clients read 0 as stale — platforms/web/quotaChips.js bucketChips marks a
-// snapshot stale when any window has resets_at*1000 <= now, "to match
-// Swift's mergeIntoBuckets stale rule exactly". Publishing the first
+// snapshot stale when any window has resets_at*1000 <= now, and the macOS
+// app's SessionListView.snapshotIsStale when any window's resetsAt <= now.
+// Publishing the first
 // probe's unstarted five-hour window as 0 would mark the whole reading
 // stale, and any computed time would be invented. Leaving it out says the
 // truth the probe measured: that window has not started. Parse keeps it,
