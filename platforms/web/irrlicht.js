@@ -8,6 +8,7 @@ import {
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
+import { withoutRemoteSessions, remoteRootSessions } from './relayRows.js';
 import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, relayWsUrl } from './connectionProtocol.js';
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
@@ -1981,10 +1982,28 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     function ingestInitialSessions(resp) {
       if (!resp) return;
       elfdansDash.noteLiveData();
-      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-      normalizeGroupAgents(dashboardGroups);
+      adoptLocalTree(Array.isArray(resp) ? resp : (resp.groups || []));
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
       renderDaemonErrorBanner(resp);
+    }
+
+    // adoptLocalTree makes the local daemon's REST groups the tree, carrying
+    // every relay row across (#2149). Relay sessions live in this same tree
+    // but never in a REST payload, so a plain replace dropped them until their
+    // daemon's next push — which then re-inserted them through
+    // insertNewSession and notified again. Both replacing paths come here: the
+    // first load (whose fetch can land after the relay replay, since
+    // rebuildSources() runs beside it) and a rehydrate that adopts a changed
+    // structure. The carry places a row by project name, as insertNewSession
+    // does, and does not notify.
+    //
+    // Normalized first: the daemon omits an empty `agents` (omitempty), so a
+    // same-named orchestrator group would otherwise have nothing to push onto.
+    function adoptLocalTree(fresh) {
+      const carried = remoteRootSessions(dashboardGroups);
+      dashboardGroups = fresh;
+      normalizeGroupAgents(dashboardGroups);
+      for (const a of carried) findOrCreateGroup(a.project_name || 'unknown').agents.push(a);
       rebuildIndex();
     }
     // structureSignature captures the daemon-computed shape of the group tree:
@@ -2042,11 +2061,12 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // branch would mean a banner that never goes away once shown.
         renderDaemonErrorBanner(resp);
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
-        // Structure / role metadata changed → adopt the daemon's tree.
-        if (structureSignature(fresh) !== structureSignature(dashboardGroups)) {
-          dashboardGroups = fresh;
+        // Structure / role metadata changed → adopt the daemon's tree. The
+        // payload never holds relay rows, so they are left out of the
+        // comparison (#2149) — otherwise every poll would adopt.
+        if (structureSignature(fresh) !== structureSignature(withoutRemoteSessions(dashboardGroups))) {
+          adoptLocalTree(fresh);
           if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
-          rebuildIndex();
           render();
           repaintHistory();
           return;

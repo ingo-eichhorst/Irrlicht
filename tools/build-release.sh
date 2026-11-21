@@ -52,6 +52,7 @@ WEB_FILES=(
     permissionsWizard.js
     pair-handoff.js
     quotaChips.js
+    relayRows.js
     sessionIdentity.js
     sw.js
 )
