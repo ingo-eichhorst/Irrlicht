@@ -25,6 +25,8 @@
 #   S2 the key read before the grant is checked
 #   S3 the key used after its settings file stopped naming api.z.ai
 #   S4 the route matched by substring instead of exact hostname
+#   S5 the grant read once per sweep instead of before every key read
+#   S6 an old key's reading left on the session after a key change
 #
 # Shape follows tools/lib/endpoint-route-mutations_test.sh: tools/mutate.sh
 # applies each mutation and restores byte-for-byte without touching git.
@@ -333,6 +335,26 @@ assert_go_test_goes_red \
   "$ZAI_PKG" \
   "TestIsZaiRoute" \
   'IsZaiRoute("https://api.z.ai.example.com/anthropic") = true, want false'
+
+# S5: #2161 review finding 3 — a revoke mid-sweep must stop the next key read.
+assert_go_test_goes_red \
+  "S5 reading the grant once per sweep reddens the revoke-mid-sweep test" \
+  "$SWEEP_GO" \
+  $'\tfor _, st := range sessions {\n\t\tif ctx.Err() != nil {\n\t\t\treturn\n\t\t}\n\t\tif !zaiRouted(st) {\n\t\t\tcontinue\n\t\t}\n\t\tseen[st.SessionID] = true\n\t\tlisted := listedProviderSnapshot(st, session.ProviderZai)\n\t\t// Read live for every session, immediately before its key read: a\n\t\t// fetch can block for the transport timeout, and a revoke that lands\n\t\t// meanwhile must stop the next key read, not the next sweep\'s\n\t\t// (#2161 review; TestZaiAccountSweep_RevokeMidSweepStopsTheNextKeyRead\n\t\t// was seen red against a once-per-sweep read).\n\t\tif !s.deps.Granted() {' \
+  $'\tgrantedOnce := s.deps.Granted() // mutated: grant read once per sweep (#2010 fixture)\n\tfor _, st := range sessions {\n\t\tif ctx.Err() != nil {\n\t\t\treturn\n\t\t}\n\t\tif !zaiRouted(st) {\n\t\t\tcontinue\n\t\t}\n\t\tseen[st.SessionID] = true\n\t\tlisted := listedProviderSnapshot(st, session.ProviderZai)\n\t\t// Read live for every session, immediately before its key read: a\n\t\t// fetch can block for the transport timeout, and a revoke that lands\n\t\t// meanwhile must stop the next key read, not the next sweep\'s\n\t\t// (#2161 review; TestZaiAccountSweep_RevokeMidSweepStopsTheNextKeyRead\n\t\t// was seen red against a once-per-sweep read).\n\t\tif !grantedOnce {' \
+  "$SERVICES_PKG" \
+  "TestZaiAccountSweep_RevokeMidSweepStopsTheNextKeyRead" \
+  'the second session'"'"'s key was read after the permission was revoked'
+
+# S6: #2161 review finding 2 — a reading is never left standing as another key's.
+assert_go_test_goes_red \
+  "S6 keeping a reading the poller has none for reddens the key-change test" \
+  "$SWEEP_GO" \
+  $'\t\tcase listed != nil:' \
+  $'\t\tcase listed != nil && false: // mutated: old reading kept (#2010 fixture)' \
+  "$SERVICES_PKG" \
+  "TestZaiAccountSweep_KeyChangeNeverKeepsTheOldKeysReading" \
+  'want key A'"'"'s reading cleared once key B'"'"'s first poll failed'
 
 if [[ $fails -gt 0 ]]; then
   echo "zai-coding-plan-mutations: $fails mutation(s) did not behave as required" >&2
