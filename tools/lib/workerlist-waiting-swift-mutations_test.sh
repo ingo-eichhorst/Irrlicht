@@ -107,8 +107,8 @@ assert_swift_test_goes_red \
 assert_swift_test_goes_red \
   "ignoring orchestrator_updated never re-fetches the sessions" \
   "$WS" \
-  $'                // it through the debounced rehydrate.\n                scheduleRehydration()' \
-  $'                // it through the debounced rehydrate.\n                break' \
+  $'            // rehydrate.\n            scheduleRehydration()' \
+  $'            // rehydrate.\n            break' \
   "SessionManagerHydrateTests/testAnOrchestratorUpdatePushRefetchesTheSessions" \
   'orchestrator_updated did not re-fetch /api/v1/sessions'
 

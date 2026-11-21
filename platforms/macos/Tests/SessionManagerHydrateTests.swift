@@ -63,6 +63,15 @@ final class SessionManagerHydrateTests: XCTestCase {
         HeldSessionsProtocol.answer(0, body: Self.pool("waiting"))
     }
 
+    /// LOCK: permissions_updated still re-fetches the permissions after it
+    /// moved, with orchestrator_updated, into handleDatalessFrame (#2145).
+    func testAPermissionsUpdatePushStillRefetchesThePermissions() async {
+        sut.handleWsMessage(#"{"type":"permissions_updated"}"#)
+        guard await waitForHeld(1, what: "permissions_updated did not re-fetch") else { return }
+        XCTAssertEqual(HeldSessionsProtocol.path(0), "/api/v1/permissions")
+        HeldSessionsProtocol.answer(0, status: 500, body: Data())
+    }
+
     /// Two overlapping hydrates whose responses arrive out of order: the
     /// older one must not be installed over the newer one.
     func testAnOlderResponseIsNotInstalledOverANewerOne() async {
@@ -106,6 +115,8 @@ final class HeldSessionsProtocol: URLProtocol {
         p.client?.urlProtocol(p, didLoad: body)
         p.client?.urlProtocolDidFinishLoading(p)
     }
+
+    static func path(_ index: Int) -> String? { request(index).request.url?.path }
 
     static func fail(_ index: Int) {
         let p = request(index)

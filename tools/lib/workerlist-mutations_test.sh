@@ -298,8 +298,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "accepting a repeated slot name reddens the duplicate-worker row" \
   "$WL/document.go" \
-  $'\t\tcase seen[w.Name]:' \
-  $'\t\tcase false && seen[w.Name]:' \
+  $'\t\tif seen[w.Name] {' \
+  $'\t\tif false && seen[w.Name] {' \
   "./$WL/" \
   "TestDecodeDocument_RefusesInvalid" \
   "TestDecodeDocument_RefusesInvalid/duplicate_worker"
@@ -308,8 +308,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "accepting any state value reddens the unknown-state row" \
   "$WL/document.go" \
-  $'\t\tcase w.State != "" && w.State != workerWaiting:' \
-  $'\t\tcase false && w.State != "" && w.State != workerWaiting:' \
+  $'\tcase w.State != "" && w.State != workerWaiting:' \
+  $'\tcase false && w.State != "" && w.State != workerWaiting:' \
   "./$WL/" \
   "TestDecodeDocument_RefusesInvalid" \
   "TestDecodeDocument_RefusesInvalid/worker_with_an_unknown_state"
@@ -318,8 +318,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "accepting a waiting free slot reddens the waiting-free row" \
   "$WL/document.go" \
-  $'\t\tcase w.State == workerWaiting && !*w.Busy:' \
-  $'\t\tcase false && w.State == workerWaiting && !*w.Busy:' \
+  $'\tcase w.State == workerWaiting && !*w.Busy:' \
+  $'\tcase false && w.State == workerWaiting && !*w.Busy:' \
   "./$WL/" \
   "TestDecodeDocument_RefusesInvalid" \
   "TestDecodeDocument_RefusesInvalid/waiting_worker_that_is_free"

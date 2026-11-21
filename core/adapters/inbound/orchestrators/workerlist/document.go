@@ -137,22 +137,32 @@ func (t team) validate() error {
 	}
 	seen := make(map[string]bool, len(*t.Workers))
 	for i, w := range *t.Workers {
-		switch {
-		case w.Name == "":
-			return fmt.Errorf("workers[%d]: missing name", i)
-		case w.Busy == nil:
-			return fmt.Errorf("workers[%d]: missing busy", i)
-		case w.State != "" && w.State != workerWaiting:
-			return fmt.Errorf("workers[%d]: unsupported state %q (want %q or none)", i, w.State, workerWaiting)
-		case w.State == workerWaiting && !*w.Busy:
-			// A waiting agent still holds its slot.
-			return fmt.Errorf("workers[%d]: state waiting requires busy", i)
-		case seen[w.Name]:
+		if err := w.validate(); err != nil {
+			return fmt.Errorf("workers[%d]: %w", i, err)
+		}
+		if seen[w.Name] {
 			// The dashboard lists a name once per team, so a repeated
 			// slot would vanish without a word.
 			return fmt.Errorf("workers[%d]: duplicate worker name %q", i, w.Name)
 		}
 		seen[w.Name] = true
+	}
+	return nil
+}
+
+// validate checks one slot on its own; team.validate adds that its name is
+// unique in the team.
+func (w worker) validate() error {
+	switch {
+	case w.Name == "":
+		return errors.New("missing name")
+	case w.Busy == nil:
+		return errors.New("missing busy")
+	case w.State != "" && w.State != workerWaiting:
+		return fmt.Errorf("unsupported state %q (want %q or none)", w.State, workerWaiting)
+	case w.State == workerWaiting && !*w.Busy:
+		// A waiting agent still holds its slot.
+		return errors.New("state waiting requires busy")
 	}
 	return nil
 }
