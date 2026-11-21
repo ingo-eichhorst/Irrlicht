@@ -85,20 +85,38 @@ func TestSessionDetector_SweptChildIsRetained(t *testing.T) {
 		t.Fatalf("records after the sweep removed the child: %+v, want one", recs)
 	}
 	r := recs[0]
-	if r.SessionID != "stuck-child" || r.ParentSessionID != "parent-waiting" || r.Adapter != "claude-code" ||
-		r.FirstSeen != now-30 || r.FinishedAt == 0 {
+	if !isStuckChildRecord(r, now) {
 		t.Errorf("record = %+v, want stuck-child under parent-waiting with its FirstSeen and a FinishedAt", r)
 	}
-	if r.Usage == nil || r.Usage.CumInputTokens != 42 || r.Usage.CumOutputTokens != 7 ||
-		r.Usage.EstimatedCostUSD != 0.02 || r.Usage.PricingSource != "litellm@2026-11-20" {
+	if !isStuckChildsFinalUsage(r.Usage) {
 		t.Errorf("usage = %+v, want the child's final 42/7 tokens, $0.02 and its pricing source", r.Usage)
 	}
-	if r.Usage != nil && (r.Usage.LastAssistantText != "" || r.Usage.LastEventType != "") {
+	if carriesNonUsageFields(r.Usage) {
 		t.Errorf("the record carries non-usage fields: %+v", r.Usage)
 	}
 	if got, _ := repo.Load("parent-waiting"); got == nil || got.Subagents != nil {
 		t.Errorf("parent summary after the sweep: %+v, want cleared (#593)", got)
 	}
+}
+
+// isStuckChildRecord reports stuck-child under parent-waiting with its
+// FirstSeen (now-30) and a FinishedAt.
+func isStuckChildRecord(r session.FinishedSubagent, now int64) bool {
+	return r.SessionID == "stuck-child" && r.ParentSessionID == "parent-waiting" && r.Adapter == "claude-code" &&
+		r.FirstSeen == now-30 && r.FinishedAt != 0
+}
+
+// isStuckChildsFinalUsage reports the child's final 42/7 tokens, $0.02 and
+// its pricing source.
+func isStuckChildsFinalUsage(u *session.SessionMetrics) bool {
+	return u != nil && u.CumInputTokens == 42 && u.CumOutputTokens == 7 &&
+		u.EstimatedCostUSD == 0.02 && u.PricingSource == "litellm@2026-11-20"
+}
+
+// carriesNonUsageFields reports a record whose usage kept fields that are not
+// usage: the assistant's text or the last event type.
+func carriesNonUsageFields(u *session.SessionMetrics) bool {
+	return u != nil && (u.LastAssistantText != "" || u.LastEventType != "")
 }
 
 // TestSessionDetector_RemovedRootKeepsItsRecords: removing a root (here the
@@ -243,9 +261,14 @@ func TestSessionDetector_RetainedUsageReadsTheTranscriptTail(t *testing.T) {
 		fresh: &session.SessionMetrics{CumInputTokens: 50, CumOutputTokens: 9, PricingSource: "litellm@2026-11-20"},
 	}
 	rec := sweepRetainOne(t, metrics, nil)
-	if rec.Usage.CumInputTokens != 50 || rec.Usage.CumOutputTokens != 9 || rec.Usage.PricingSource != "litellm@2026-11-20" {
+	if !isTranscriptTailUsage(rec.Usage) {
 		t.Errorf("usage = %+v, want the transcript's 50/9 tokens and source, not the stored 5/1", rec.Usage)
 	}
+}
+
+// isTranscriptTailUsage reports the transcript's 50/9 tokens and source.
+func isTranscriptTailUsage(u *session.SessionMetrics) bool {
+	return u.CumInputTokens == 50 && u.CumOutputTokens == 9 && u.PricingSource == "litellm@2026-11-20"
 }
 
 // TestSessionDetector_RetainedUsageHonoursObserveConsent: with the adapter's

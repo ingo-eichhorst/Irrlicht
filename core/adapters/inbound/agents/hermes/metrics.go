@@ -324,9 +324,13 @@ func firstNonEmpty(v, fallback string) string {
 func priceSession(cm *capacity.CapacityManager, rawModel string, m *session.SessionMetrics) {
 	priced := false
 	if cm != nil && m.ModelName != "" {
-		m.EstimatedCostUSD, priced = cm.PricedCostUSD(
-			m.ModelName, m.CumInputTokens, m.CumOutputTokens,
-			m.CumCacheReadTokens, m.CumCacheCreationTokens)
+		m.EstimatedCostUSD, priced = cm.PricedCostUSD(capacity.Tokens{
+			Model:         m.ModelName,
+			Input:         m.CumInputTokens,
+			Output:        m.CumOutputTokens,
+			CacheRead:     m.CumCacheReadTokens,
+			CacheCreation: m.CumCacheCreationTokens,
+		})
 	}
 	if m.CumInputTokens+m.CumOutputTokens+m.CumCacheReadTokens+m.CumCacheCreationTokens == 0 {
 		return

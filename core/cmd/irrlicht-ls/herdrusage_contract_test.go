@@ -84,36 +84,45 @@ func TestHerdrUsage_GoldensMatchFactorysSchema(t *testing.T) {
 		t.Fatalf("found %d goldens, want every case's (10); the glob must have missed them", len(goldens))
 	}
 	for _, path := range goldens {
-		t.Run(path, func(t *testing.T) {
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.DisallowUnknownFields()
-			var doc factorySessionUsage
-			if err := dec.Decode(&doc); err != nil {
-				t.Fatalf("does not match Factory's schema 1: %v", err)
-			}
-			if doc.Schema != 1 {
-				t.Errorf("schema = %d, want 1 (SessionUsage::parse refuses anything else)", doc.Schema)
-			}
-			if doc.Sessions == nil {
-				t.Error("sessions is absent; an empty pane must still say sessions: []")
-			}
-			var generic map[string]any
-			if err := json.Unmarshal(raw, &generic); err != nil {
-				t.Fatal(err)
-			}
-			sessions, _ := generic["sessions"].([]any)
-			for i, s := range doc.Sessions {
-				for key := range s.Unavailable {
-					if v, ok := lookupDotted(sessions[i], key); !ok || v != nil {
-						t.Errorf("sessions[%d].unavailable names %q, which is %v (present %t), not null", i, key, v, ok)
-					}
-				}
-			}
-		})
+		t.Run(path, func(t *testing.T) { checkGoldenMatchesFactory(t, path) })
+	}
+}
+
+// checkGoldenMatchesFactory decodes one golden into the mirror and checks it.
+func checkGoldenMatchesFactory(t *testing.T, path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var doc factorySessionUsage
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("does not match Factory's schema 1: %v", err)
+	}
+	if doc.Schema != 1 {
+		t.Errorf("schema = %d, want 1 (SessionUsage::parse refuses anything else)", doc.Schema)
+	}
+	if doc.Sessions == nil {
+		t.Error("sessions is absent; an empty pane must still say sessions: []")
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	sessions, _ := generic["sessions"].([]any)
+	for i, s := range doc.Sessions {
+		checkUnavailableKeysAreNull(t, sessions, i, s.Unavailable)
+	}
+}
+
+// checkUnavailableKeysAreNull checks that each key of sessions[i]'s
+// unavailable map names a field that is null in sessions[i].
+func checkUnavailableKeysAreNull(t *testing.T, sessions []any, i int, unavailable map[string]string) {
+	for key := range unavailable {
+		if v, ok := lookupDotted(sessions[i], key); !ok || v != nil {
+			t.Errorf("sessions[%d].unavailable names %q, which is %v (present %t), not null", i, key, v, ok)
+		}
 	}
 }
 
@@ -122,30 +131,42 @@ func TestHerdrUsage_GoldensMatchFactorysSchema(t *testing.T) {
 func lookupDotted(v any, path string) (any, bool) {
 	cur := v
 	for _, part := range strings.Split(path, ".") {
-		switch node := cur.(type) {
-		case map[string]any:
-			next, ok := node[part]
-			if !ok {
-				return nil, false
-			}
-			cur = next
-		case []any:
-			i := 0
-			for _, c := range part {
-				if c < '0' || c > '9' {
-					return nil, false
-				}
-				i = i*10 + int(c-'0')
-			}
-			if i >= len(node) {
-				return nil, false
-			}
-			cur = node[i]
-		default:
+		next, ok := dottedChild(cur, part)
+		if !ok {
 			return nil, false
 		}
+		cur = next
 	}
 	return cur, true
+}
+
+// dottedChild reads one part of a dotted path from a decoded JSON object or
+// array. ok is false when the node has no such member or element.
+func dottedChild(node any, part string) (any, bool) {
+	switch n := node.(type) {
+	case map[string]any:
+		next, ok := n[part]
+		return next, ok
+	case []any:
+		i, ok := dottedIndex(part)
+		if !ok || i >= len(n) {
+			return nil, false
+		}
+		return n[i], true
+	}
+	return nil, false
+}
+
+// dottedIndex reads a path part of decimal digits as an array index.
+func dottedIndex(part string) (int, bool) {
+	i := 0
+	for _, c := range part {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		i = i*10 + int(c-'0')
+	}
+	return i, true
 }
 
 // TestHerdrUsage_ContractMirrorRefusesStrayFields proves the mirror check

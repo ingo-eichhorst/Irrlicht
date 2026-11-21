@@ -43,18 +43,34 @@ func TestComputeMetrics_StampsTheSessionAdaptersOwnCoverage(t *testing.T) {
 		FallbackName:  "declared",
 	})
 
+	checkStampsACopyOfTheDeclaration(t, a, declared)
+	checkUndeclaredAdapterGetsNoCoverage(t, a)
+}
+
+// checkStampsACopyOfTheDeclaration: a session of the declared adapter carries
+// its declaration, as a copy.
+func checkStampsACopyOfTheDeclaration(t *testing.T, a *Adapter, declared *session.UsageCoverage) {
 	got, err := a.ComputeMetrics(writeUsageTranscript(t), "declared")
 	if err != nil || got == nil {
 		t.Fatalf("ComputeMetrics = (%v, %v), want metrics", got, err)
 	}
-	if got.UsageCoverage == nil || !got.UsageCoverage.ExcludesSubagents ||
-		!got.UsageCoverage.Observes(session.TokenOutput) || got.UsageCoverage.Observes(session.TokenCacheRead) {
+	if !isTheDeclaredInputOutputCoverage(got.UsageCoverage) {
 		t.Fatalf("UsageCoverage = %+v, want the declared one", got.UsageCoverage)
 	}
 	if got.UsageCoverage == declared {
 		t.Error("the stamped coverage aliases the registry's declaration; it must be a copy")
 	}
+}
 
+// isTheDeclaredInputOutputCoverage reports the test's declaration: output
+// read, cache reads not, subagents excluded.
+func isTheDeclaredInputOutputCoverage(c *session.UsageCoverage) bool {
+	return c != nil && c.ExcludesSubagents && c.Observes(session.TokenOutput) && !c.Observes(session.TokenCacheRead)
+}
+
+// checkUndeclaredAdapterGetsNoCoverage: a session whose adapter declared
+// nothing gets no coverage, though its parser is the fallback adapter's.
+func checkUndeclaredAdapterGetsNoCoverage(t *testing.T, a *Adapter) {
 	other, err := a.ComputeMetrics(writeUsageTranscript(t), "undeclared")
 	if err != nil || other == nil {
 		t.Fatalf("ComputeMetrics(undeclared) = (%v, %v), want metrics via the fallback parser", other, err)

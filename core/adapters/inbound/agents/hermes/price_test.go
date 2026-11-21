@@ -18,7 +18,7 @@ func TestPriceSession_RecordsCostProvenance(t *testing.T) {
 
 	priced := &session.SessionMetrics{ModelName: "priced-model", CumInputTokens: 1_000_000}
 	priceSession(cm, "priced-model", priced)
-	if priced.EstimatedCostUSD != 2 || priced.PricingSource != "litellm" || len(priced.UnpricedModels) != 0 {
+	if !isPricedFromTheTable(priced) {
 		t.Errorf("priced: cost %v, source %q, unpriced %q; want 2, litellm, none",
 			priced.EstimatedCostUSD, priced.PricingSource, priced.UnpricedModels)
 	}
@@ -34,4 +34,10 @@ func TestPriceSession_RecordsCostProvenance(t *testing.T) {
 	if empty.PricingSource != "" || len(empty.UnpricedModels) != 0 {
 		t.Errorf("no tokens: source %q, unpriced %q; want neither", empty.PricingSource, empty.UnpricedModels)
 	}
+}
+
+// isPricedFromTheTable reports the priced session's $2, named for the
+// undated test table, with no model unpriced.
+func isPricedFromTheTable(m *session.SessionMetrics) bool {
+	return m.EstimatedCostUSD == 2 && m.PricingSource == "litellm" && len(m.UnpricedModels) == 0
 }

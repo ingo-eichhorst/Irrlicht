@@ -58,9 +58,7 @@ func runUsage(env herdrUsageEnv) (code int, stdout, stderr string) {
 // /api/v1/sessions bodies in, committed schema-1 documents out. Every golden
 // is also decoded by TestHerdrUsage_GoldensMatchFactorysSchema.
 func TestHerdrUsage_Goldens(t *testing.T) {
-	cases := []struct {
-		name, fixture, pane, socket, golden string
-	}{
+	cases := []usageGoldenCase{
 		// A complete Claude Code session: every token type, a table price, a
 		// rate-limit snapshot whose throughput window is not a schema-1 window.
 		{"complete", "complete", "w1:p1", "", "want.json"},
@@ -92,31 +90,47 @@ func TestHerdrUsage_Goldens(t *testing.T) {
 		{"empty pane", "two-panes", "w9:p9", "", "want-empty.json"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := filepath.Join("testdata", "herdr-usage", tc.fixture)
-			srv := serveFixture(t, filepath.Join(dir, "sessions.json"))
-			code, stdout, stderr := runUsage(usageEnv(srv.URL+"/api/v1/sessions", tc.pane, tc.socket))
-			if code != 0 || stderr != "" {
-				t.Fatalf("exit %d, stderr %q; want 0 and nothing", code, stderr)
-			}
-			goldenPath := filepath.Join(dir, tc.golden)
-			if updateUsageGoldens {
-				if err := os.WriteFile(goldenPath, []byte(stdout), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want, err := os.ReadFile(goldenPath)
-			if err != nil {
-				t.Fatalf("golden %s: %v (regenerate with UPDATE_HERDR_USAGE_GOLDENS=1)", goldenPath, err)
-			}
-			if stdout != string(want) {
-				t.Errorf("document differs from %s\n--- got ---\n%s\n--- want ---\n%s", goldenPath, stdout, want)
-			}
-			if strings.Contains(stdout, "prompt text") {
-				t.Error("the document carries transcript text; it must carry usage fields only")
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { checkUsageGolden(t, tc) })
 	}
+}
+
+// usageGoldenCase is one TestHerdrUsage_Goldens case: the fixture directory
+// under testdata/herdr-usage, the pane and socket asked for, and the golden
+// in that directory the document must equal.
+type usageGoldenCase struct {
+	name, fixture, pane, socket, golden string
+}
+
+func checkUsageGolden(t *testing.T, tc usageGoldenCase) {
+	dir := filepath.Join("testdata", "herdr-usage", tc.fixture)
+	srv := serveFixture(t, filepath.Join(dir, "sessions.json"))
+	code, stdout, stderr := runUsage(usageEnv(srv.URL+"/api/v1/sessions", tc.pane, tc.socket))
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit %d, stderr %q; want 0 and nothing", code, stderr)
+	}
+	goldenPath := filepath.Join(dir, tc.golden)
+	want := readUsageGolden(t, goldenPath, []byte(stdout))
+	if stdout != string(want) {
+		t.Errorf("document differs from %s\n--- got ---\n%s\n--- want ---\n%s", goldenPath, stdout, want)
+	}
+	if strings.Contains(stdout, "prompt text") {
+		t.Error("the document carries transcript text; it must carry usage fields only")
+	}
+}
+
+// readUsageGolden reads a golden, first rewriting it from got when
+// UPDATE_HERDR_USAGE_GOLDENS=1.
+func readUsageGolden(t *testing.T, goldenPath string, got []byte) []byte {
+	if updateUsageGoldens {
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("golden %s: %v (regenerate with UPDATE_HERDR_USAGE_GOLDENS=1)", goldenPath, err)
+	}
+	return want
 }
 
 // TestHerdrUsage_SamePaneOnTwoServersIsRefused: with no socket to tell them
@@ -209,7 +223,8 @@ func TestHerdrUsage_PanicIsContained(t *testing.T) {
 	env := usageEnv("http://127.0.0.1:1/api/v1/sessions", "w1:p1", "")
 	env.client = nil // fetchSessions dereferences it
 	code, stdout, stderr := runUsage(env)
-	if code != 1 || stdout != "" || !strings.Contains(stderr, "internal error") || strings.Count(stderr, "\n") != 1 {
+	contained := code == 1 && stdout == "" && strings.Contains(stderr, "internal error") && strings.Count(stderr, "\n") == 1
+	if !contained {
 		t.Errorf("exit %d, stdout %q, stderr %q; want 1, nothing, one internal-error line", code, stdout, stderr)
 	}
 }
@@ -242,7 +257,8 @@ func TestHerdrUsage_DocumentIsValidJSONWithSchemaOne(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, stdout)
 	}
-	if doc["schema"] != float64(1) || doc["pane_id"] != "w1:p2" || doc["sampled_at"] != "2026-11-21T12:00:00Z" {
+	envelope := doc["schema"] == float64(1) && doc["pane_id"] == "w1:p2" && doc["sampled_at"] == "2026-11-21T12:00:00Z"
+	if !envelope {
 		t.Errorf("envelope = schema %v, pane_id %v, sampled_at %v", doc["schema"], doc["pane_id"], doc["sampled_at"])
 	}
 }

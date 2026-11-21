@@ -35,54 +35,12 @@ var subagentFixture = filepath.Join("..", "..", "..", "..", "..", "replaydata", 
 // and both together turned it red. tools/mutate.sh takes one anchor, so
 // tools/lib/herdr-usage-mutations_test.sh carries no fixture for it.
 func TestUsageCoverage_ParentIgnoresSubagentUsageSummary(t *testing.T) {
-	f, err := os.Open(subagentFixture)
-	if err != nil {
-		t.Fatalf("the subagent recording must be readable: %v", err)
-	}
-	defer f.Close()
-
-	var asRecorded, inflated []byte
-	summaries := 0
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
-	for sc.Scan() {
-		line := append([]byte(nil), sc.Bytes()...)
-		asRecorded = append(append(asRecorded, line...), '\n')
-		var raw map[string]any
-		if err := json.Unmarshal(line, &raw); err != nil {
-			t.Fatalf("recording line does not parse: %v", err)
-		}
-		if tur, ok := raw["toolUseResult"].(map[string]any); ok {
-			if usage, ok := tur["usage"].(map[string]any); ok {
-				summaries++
-				inflateCounts(usage)
-				if line, err = json.Marshal(raw); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		inflated = append(append(inflated, line...), '\n')
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
-	}
+	asRecorded, inflated, summaries := readWithInflatedSummaries(t, subagentFixture)
 	if summaries == 0 {
 		t.Fatal("the recording carries no toolUseResult.usage; this test would prove nothing")
 	}
 
-	totals := func(name string, body []byte) [5]float64 {
-		p := filepath.Join(t.TempDir(), name)
-		if err := os.WriteFile(p, body, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		m, err := newCCTailer(p).TailAndProcess()
-		if err != nil {
-			t.Fatalf("TailAndProcess(%s): %v", name, err)
-		}
-		return [5]float64{float64(m.CumInputTokens), float64(m.CumOutputTokens),
-			float64(m.CumCacheReadTokens), float64(m.CumCacheCreationTokens), m.EstimatedCostUSD}
-	}
-	base, grown := totals("recorded.jsonl", asRecorded), totals("inflated.jsonl", inflated)
+	base, grown := parentTotals(t, "recorded.jsonl", asRecorded), parentTotals(t, "inflated.jsonl", inflated)
 	if base[2] == 0 {
 		t.Fatalf("the parent counted no cache reads at all (%v); the fixture no longer exercises this", base)
 	}
@@ -95,6 +53,69 @@ func TestUsageCoverage_ParentIgnoresSubagentUsageSummary(t *testing.T) {
 	}
 }
 
+// readWithInflatedSummaries reads a recording twice over — as recorded, and
+// with every count in every toolUseResult.usage inflated — and counts the
+// usage summaries it found.
+func readWithInflatedSummaries(t *testing.T, path string) (asRecorded, inflated []byte, summaries int) {
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("the subagent recording must be readable: %v", err)
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
+	for sc.Scan() {
+		line := append([]byte(nil), sc.Bytes()...)
+		asRecorded = append(append(asRecorded, line...), '\n')
+		inflatedLine, found := inflateUsageSummary(t, line)
+		if found {
+			summaries++
+		}
+		inflated = append(append(inflated, inflatedLine...), '\n')
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return asRecorded, inflated, summaries
+}
+
+// inflateUsageSummary returns line with the counts in its
+// toolUseResult.usage inflated, and whether it carried one; a line without
+// one comes back as it was.
+func inflateUsageSummary(t *testing.T, line []byte) ([]byte, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatalf("recording line does not parse: %v", err)
+	}
+	tur, _ := raw["toolUseResult"].(map[string]any)
+	usage, ok := tur["usage"].(map[string]any)
+	if !ok {
+		return line, false
+	}
+	inflateCounts(usage)
+	out, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out, true
+}
+
+// parentTotals parses body as a parent transcript and returns its token
+// totals and cost.
+func parentTotals(t *testing.T, name string, body []byte) [5]float64 {
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := newCCTailer(p).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess(%s): %v", name, err)
+	}
+	return [5]float64{float64(m.CumInputTokens), float64(m.CumOutputTokens),
+		float64(m.CumCacheReadTokens), float64(m.CumCacheCreationTokens), m.EstimatedCostUSD}
+}
+
 // inflateCounts multiplies every number under v by 1000, nested maps and
 // arrays included: the summary carries its counts twice, at the top level and
 // in usage.iterations, and extractAnthropicContribution reads the iterations
@@ -102,20 +123,30 @@ func TestUsageCoverage_ParentIgnoresSubagentUsageSummary(t *testing.T) {
 func inflateCounts(v any) {
 	switch node := v.(type) {
 	case map[string]any:
-		for k, child := range node {
-			if n, ok := child.(float64); ok {
-				node[k] = n * 1000
-				continue
-			}
-			inflateCounts(child)
-		}
+		inflateMembers(node)
 	case []any:
-		for i, child := range node {
-			if n, ok := child.(float64); ok {
-				node[i] = n * 1000
-				continue
-			}
-			inflateCounts(child)
-		}
+		inflateElements(node)
 	}
+}
+
+func inflateMembers(node map[string]any) {
+	for k, child := range node {
+		node[k] = inflated(child)
+	}
+}
+
+func inflateElements(node []any) {
+	for i, child := range node {
+		node[i] = inflated(child)
+	}
+}
+
+// inflated returns a number multiplied by 1000, or any other value as it is
+// after inflating the numbers under it in place.
+func inflated(v any) any {
+	if n, ok := v.(float64); ok {
+		return n * 1000
+	}
+	inflateCounts(v)
+	return v
 }

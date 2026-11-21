@@ -84,12 +84,18 @@ func NewFinishedSubagentStoreWithDir(dir string) *FinishedSubagentStore {
 			continue
 		}
 		var r finishedRoot
-		if json.Unmarshal(data, &r) != nil || r.Version != finishedSubagentsFileVersion || r.Root == "" {
+		if json.Unmarshal(data, &r) != nil || !r.loadable() {
 			continue
 		}
 		s.roots[r.Root] = &r
 	}
 	return s
+}
+
+// loadable reports whether a decoded root file is one this version wrote
+// and names its root.
+func (r *finishedRoot) loadable() bool {
+	return r.Version == finishedSubagentsFileVersion && r.Root != ""
 }
 
 // Retain records one removed child under its root, replacing an earlier

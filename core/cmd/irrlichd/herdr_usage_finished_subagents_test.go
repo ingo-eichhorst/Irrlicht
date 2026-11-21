@@ -40,13 +40,6 @@ func (fsuProcessWatcher) Unwatch(int)                   {}
 func (fsuProcessWatcher) Run(ctx context.Context) error { <-ctx.Done(); return nil }
 func (fsuProcessWatcher) Close() error                  { return nil }
 
-type fsuLogger struct{}
-
-func (fsuLogger) LogInfo(_, _, _ string)                                  {}
-func (fsuLogger) LogError(_, _, _ string)                                 {}
-func (fsuLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (fsuLogger) Close() error                                            { return nil }
-
 type fsuGit struct{}
 
 func (fsuGit) GetBranch(context.Context, string) (string, bool)      { return "main", true }
@@ -88,16 +81,57 @@ func fsuUsage(input, output int64, cost float64) *session.SessionMetrics {
 
 func TestHerdrUsage_ListsSubagentsTheDaemonHasRemoved(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	f := newFSUFixture(t)
+	f.runUntilChildRemoved(t, f.seedParentWithFinishedChild(t))
+
+	// Dashboards: the parent's subagent summary stays cleared (#593).
+	if parent, _ := f.repo.Load("parent-pane-a"); parent.Subagents != nil {
+		t.Errorf("parent subagent summary = %+v after cleanup, want nil", parent.Subagents)
+	}
+
+	root := f.herdrUsageRootForPaneA(t)
+	if root.SessionID != "parent-pane-a" || !int64Is(root.Tokens.Input, 1200) {
+		t.Errorf("root = %s with input %v, want parent-pane-a's own 1200 (parent totals exclude subagents)",
+			root.SessionID, root.Tokens.Input)
+	}
+	if len(root.Subagents) != 1 {
+		t.Fatalf("subagents = %+v, want child-of-a: a subagent the daemon removed at parent-ready must still be listed", root.Subagents)
+	}
+	if sub := root.Subagents[0]; !sub.isChildOfAsFinalUsage() {
+		t.Errorf("subagent = %+v, want child-of-a with its final 10/20 tokens and $0.01 with a pricing source", sub)
+	}
+}
+
+// fsuFixture is a session detector over a real session repository and
+// finished-subagent store, fed by a watcher the test sends events on.
+type fsuFixture struct {
+	dir     string
+	repo    *filesystem.SessionRepository
+	store   *filesystem.FinishedSubagentStore
+	watcher *fsuWatcher
+	det     *services.SessionDetector
+}
+
+func newFSUFixture(t *testing.T) *fsuFixture {
 	dir := t.TempDir()
-	repo := filesystem.NewWithDir(filepath.Join(dir, "instances"))
-	store := filesystem.NewFinishedSubagentStoreWithDir(filepath.Join(dir, "finished-subagents"))
-
-	watcher := &fsuWatcher{ch: make(chan agent.Event, 16)}
-	det := services.NewSessionDetector([]inbound.Watcher{watcher}, services.SessionDetectorDeps{
-		PW: fsuProcessWatcher{}, Repo: repo, Log: fsuLogger{}, Git: fsuGit{}, Metrics: fsuMetrics{}, Version: "test",
+	f := &fsuFixture{
+		dir:     dir,
+		repo:    filesystem.NewWithDir(filepath.Join(dir, "instances")),
+		store:   filesystem.NewFinishedSubagentStoreWithDir(filepath.Join(dir, "finished-subagents")),
+		watcher: &fsuWatcher{ch: make(chan agent.Event, 16)},
+	}
+	f.det = services.NewSessionDetector([]inbound.Watcher{f.watcher}, services.SessionDetectorDeps{
+		PW: fsuProcessWatcher{}, Repo: f.repo, Log: e2eLog{}, Git: fsuGit{}, Metrics: fsuMetrics{}, Version: "test",
 	})
-	det.SetFinishedSubagentStore(store)
+	f.det.SetFinishedSubagentStore(f.store)
+	return f
+}
 
+// seedParentWithFinishedChild saves a working parent in herdr pane w1:p1 and
+// its child, whose transcript has been quiet for a while: it finished. It
+// returns the parent's transcript path.
+func (f *fsuFixture) seedParentWithFinishedChild(t *testing.T) string {
+	dir := f.dir
 	now := time.Now().Unix()
 	parentPath := filepath.Join(dir, "parent.jsonl")
 	childPath := filepath.Join(dir, "child.jsonl")
@@ -114,13 +148,7 @@ func TestHerdrUsage_ListsSubagentsTheDaemonHasRemoved(t *testing.T) {
 	parentMetrics := fsuUsage(1200, 340, 0.42)
 	parentMetrics.LastEventType = "assistant"
 	parentMetrics.LastAssistantText = "All done."
-	mustSave := func(s *session.SessionState) {
-		t.Helper()
-		if err := repo.Save(s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mustSave(&session.SessionState{
+	f.mustSave(t, &session.SessionState{
 		SessionID: "parent-pane-a", State: session.StateWorking, Adapter: "claude-code",
 		TranscriptPath: parentPath, CWD: dir, FirstSeen: now - 60, UpdatedAt: now, EventCount: 10,
 		Launcher: &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr-test/herdr.sock"},
@@ -128,45 +156,84 @@ func TestHerdrUsage_ListsSubagentsTheDaemonHasRemoved(t *testing.T) {
 	})
 	childMetrics := fsuUsage(10, 20, 0.01)
 	childMetrics.LastEventType = "assistant"
-	mustSave(&session.SessionState{
+	f.mustSave(t, &session.SessionState{
 		SessionID: "child-of-a", State: session.StateWorking, Adapter: "claude-code",
 		ParentSessionID: "parent-pane-a", TranscriptPath: childPath, CWD: dir,
 		FirstSeen: now - 30, UpdatedAt: now, EventCount: 5, Metrics: childMetrics,
 	})
+	return parentPath
+}
 
+func (f *fsuFixture) mustSave(t *testing.T, s *session.SessionState) {
+	t.Helper()
+	if err := f.repo.Save(s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runUntilChildRemoved runs the detector, sends the parent's activity, and
+// polls the subject to a deadline: the child's session is gone and the parent
+// is ready. The detector is stopped before it returns.
+func (f *fsuFixture) runUntilChildRemoved(t *testing.T, parentPath string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	watcher.ch <- agent.Event{
+	go func() { done <- f.det.Run(ctx) }()
+	f.watcher.ch <- agent.Event{
 		Type: agent.EventActivity, SessionID: "parent-pane-a", ProjectDir: "-demo", TranscriptPath: parentPath,
 	}
-	// Poll the subject to a deadline: the child's session is gone and the
-	// parent is ready.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		parent, _ := repo.Load("parent-pane-a")
-		child, _ := repo.Load("child-of-a")
-		if parent != nil && parent.State == session.StateReady && child == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			cancel()
-			<-done
-			t.Fatalf("after 10s: parent %+v, child still present %t — the cleanup this test needs never ran", parent, child != nil)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	var parent, child *session.SessionState
+	removed := pollUntil(t, 10*time.Second, 20*time.Millisecond, func() bool {
+		parent, _ = f.repo.Load("parent-pane-a")
+		child, _ = f.repo.Load("child-of-a")
+		return parent != nil && parent.State == session.StateReady && child == nil
+	})
 	cancel()
 	<-done
-
-	// Dashboards: the parent's subagent summary stays cleared (#593).
-	if parent, _ := repo.Load("parent-pane-a"); parent.Subagents != nil {
-		t.Errorf("parent subagent summary = %+v after cleanup, want nil", parent.Subagents)
+	if !removed {
+		t.Fatalf("after 10s: parent %+v, child still present %t — the cleanup this test needs never ran", parent, child != nil)
 	}
+}
 
+// fsuSubagent and fsuRoot are the parts of the usage document this test reads.
+type fsuSubagent struct {
+	SessionID string `json:"session_id"`
+	Tokens    struct {
+		Input  *int64 `json:"input"`
+		Output *int64 `json:"output"`
+	} `json:"tokens"`
+	Cost struct {
+		USD           *float64 `json:"usd"`
+		PricingSource *string  `json:"pricing_source"`
+	} `json:"cost"`
+}
+
+type fsuRoot struct {
+	SessionID string `json:"session_id"`
+	Tokens    struct {
+		Input *int64 `json:"input"`
+	} `json:"tokens"`
+	Subagents []fsuSubagent `json:"subagents"`
+}
+
+// isChildOfAsFinalUsage reports child-of-a with its final 10/20 tokens and
+// $0.01 with a pricing source.
+func (s fsuSubagent) isChildOfAsFinalUsage() bool {
+	return s.SessionID == "child-of-a" && int64Is(s.Tokens.Input, 10) && int64Is(s.Tokens.Output, 20) &&
+		s.Cost.USD != nil && *s.Cost.USD == 0.01 && s.Cost.PricingSource != nil
+}
+
+func int64Is(p *int64, want int64) bool {
+	return p != nil && *p == want
+}
+
+// herdrUsageRootForPaneA serves the fixture's repository and store on the
+// real /api/v1/sessions handler, runs a freshly built `irrlicht-ls
+// --herdr-usage` for pane w1:p1 against it, and returns the document's one
+// session.
+func (f *fsuFixture) herdrUsageRootForPaneA(t *testing.T) fsuRoot {
 	push := services.NewPushService()
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, services.NewOrchestratorMonitor(nil, push, nil), nil, nil, nil, store))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(f.repo, services.NewOrchestratorMonitor(nil, push, nil), nil, nil, nil, f.store))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
@@ -183,41 +250,12 @@ func TestHerdrUsage_ListsSubagentsTheDaemonHasRemoved(t *testing.T) {
 		t.Fatalf("irrlicht-ls --herdr-usage: %v", err)
 	}
 	var doc struct {
-		Sessions []struct {
-			SessionID string `json:"session_id"`
-			Tokens    struct {
-				Input *int64 `json:"input"`
-			} `json:"tokens"`
-			Subagents []struct {
-				SessionID string `json:"session_id"`
-				Tokens    struct {
-					Input  *int64 `json:"input"`
-					Output *int64 `json:"output"`
-				} `json:"tokens"`
-				Cost struct {
-					USD           *float64 `json:"usd"`
-					PricingSource *string  `json:"pricing_source"`
-				} `json:"cost"`
-			} `json:"subagents"`
-		} `json:"sessions"`
+		Sessions []fsuRoot `json:"sessions"`
 	}
 	if err := json.Unmarshal(stdout, &doc); err != nil || len(doc.Sessions) != 1 {
 		t.Fatalf("document = %s (%v), want one session", stdout, err)
 	}
-	root := doc.Sessions[0]
-	if root.SessionID != "parent-pane-a" || root.Tokens.Input == nil || *root.Tokens.Input != 1200 {
-		t.Errorf("root = %s with input %v, want parent-pane-a's own 1200 (parent totals exclude subagents)",
-			root.SessionID, root.Tokens.Input)
-	}
-	if len(root.Subagents) != 1 {
-		t.Fatalf("subagents = %+v, want child-of-a: a subagent the daemon removed at parent-ready must still be listed", root.Subagents)
-	}
-	sub := root.Subagents[0]
-	if sub.SessionID != "child-of-a" || sub.Tokens.Input == nil || *sub.Tokens.Input != 10 ||
-		sub.Tokens.Output == nil || *sub.Tokens.Output != 20 ||
-		sub.Cost.USD == nil || *sub.Cost.USD != 0.01 || sub.Cost.PricingSource == nil {
-		t.Errorf("subagent = %+v, want child-of-a with its final 10/20 tokens and $0.01 with a pricing source", sub)
-	}
+	return doc.Sessions[0]
 }
 
 // TestHandleGetSessions_FinishedSubagentsOnlyOnRequest: the records are served
@@ -243,8 +281,13 @@ func TestHandleGetSessions_FinishedSubagentsOnlyOnRequest(t *testing.T) {
 		t.Error("finished_subagents served without being asked for; the dashboard payload must not change")
 	}
 	raw, ok := get("/api/v1/sessions?include=finished_subagents")["finished_subagents"]
-	var recs []session.FinishedSubagent
-	if !ok || json.Unmarshal(raw, &recs) != nil || len(recs) != 1 || recs[0].SessionID != "gone" {
+	if !ok || !isOnlyTheGoneRecord(raw) {
 		t.Errorf("?include=finished_subagents served %s, want the one retained record", raw)
 	}
+}
+
+// isOnlyTheGoneRecord reports whether raw holds exactly one record, gone's.
+func isOnlyTheGoneRecord(raw json.RawMessage) bool {
+	var recs []session.FinishedSubagent
+	return json.Unmarshal(raw, &recs) == nil && len(recs) == 1 && recs[0].SessionID == "gone"
 }

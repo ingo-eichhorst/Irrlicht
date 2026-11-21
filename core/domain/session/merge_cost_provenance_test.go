@@ -84,17 +84,30 @@ func TestMergeMetrics_CoverageSurvivesAnUnstampedPass(t *testing.T) {
 // TestUsageCoverage_Observes covers the nil and partial declarations a
 // consumer reads.
 func TestUsageCoverage_Observes(t *testing.T) {
+	checkNilAndPartialCoverage(t)
+	if !(&UsageCoverage{TokenTypes: TokenTypes()}).ObservesAll() {
+		t.Error("a full declaration must observe all")
+	}
+	checkTokenTypeVocabularyIsClosed(t)
+}
+
+// checkNilAndPartialCoverage: a nil declaration observes nothing, and a
+// partial one only what it lists.
+func checkNilAndPartialCoverage(t *testing.T) {
 	var none *UsageCoverage
 	if none.Observes(TokenInput) || none.ObservesAll() {
 		t.Error("a nil coverage must observe nothing")
 	}
 	partial := &UsageCoverage{TokenTypes: []TokenType{TokenInput, TokenOutput}}
-	if !partial.Observes(TokenOutput) || partial.Observes(TokenCacheWrite) || partial.ObservesAll() {
+	answeredRightly := partial.Observes(TokenOutput) && !partial.Observes(TokenCacheWrite) && !partial.ObservesAll()
+	if !answeredRightly {
 		t.Errorf("partial coverage answered wrongly: %+v", partial)
 	}
-	if !(&UsageCoverage{TokenTypes: TokenTypes()}).ObservesAll() {
-		t.Error("a full declaration must observe all")
-	}
+}
+
+// checkTokenTypeVocabularyIsClosed: every member of TokenTypes is a token
+// type, and nothing else is.
+func checkTokenTypeVocabularyIsClosed(t *testing.T) {
 	for _, tt := range TokenTypes() {
 		if !IsTokenType(tt) {
 			t.Errorf("IsTokenType(%q) = false for a member of TokenTypes", tt)

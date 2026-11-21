@@ -29,10 +29,7 @@ import (
 //
 // It returns the findings and how many columns it checked.
 func usageCoverageFindings(model *matrix.CapabilityModel, all []agent.Agent) (findings []string, checked int) {
-	byName := make(map[string]agent.Agent, len(all))
-	for _, a := range all {
-		byName[a.Identity.Name] = a
-	}
+	byName := adaptersByName(all)
 	for _, column := range model.AdapterNames() {
 		name := shard.DaemonAdapterForSlug(column)
 		a, ok := byName[name]
@@ -41,21 +38,38 @@ func usageCoverageFindings(model *matrix.CapabilityModel, all []agent.Agent) (fi
 			continue
 		}
 		checked++
-		if a.Usage == nil {
-			continue
-		}
-		for _, tt := range a.Usage.TokenTypes {
-			if !session.IsTokenType(tt) {
-				findings = append(findings, fmt.Sprintf("adapter %q declares unknown token type %q", name, tt))
-			}
-		}
-		if model.CapabilityState(column, "token_usage") == matrix.CapabilityAbsent && len(a.Usage.TokenTypes) > 0 {
-			findings = append(findings, fmt.Sprintf(
-				"adapter %q declares token types %v, but column %q says token_usage is absent",
-				name, a.Usage.TokenTypes, column))
-		}
+		findings = append(findings, declarationFindings(model, column, a)...)
 	}
 	return findings, checked
+}
+
+func adaptersByName(all []agent.Agent) map[string]agent.Agent {
+	byName := make(map[string]agent.Agent, len(all))
+	for _, a := range all {
+		byName[a.Identity.Name] = a
+	}
+	return byName
+}
+
+// declarationFindings checks one registered adapter's usage declaration
+// against its column; an adapter that declares nothing has nothing to check.
+func declarationFindings(model *matrix.CapabilityModel, column string, a agent.Agent) []string {
+	if a.Usage == nil {
+		return nil
+	}
+	name := a.Identity.Name
+	var findings []string
+	for _, tt := range a.Usage.TokenTypes {
+		if !session.IsTokenType(tt) {
+			findings = append(findings, fmt.Sprintf("adapter %q declares unknown token type %q", name, tt))
+		}
+	}
+	if model.CapabilityState(column, "token_usage") == matrix.CapabilityAbsent && len(a.Usage.TokenTypes) > 0 {
+		findings = append(findings, fmt.Sprintf(
+			"adapter %q declares token types %v, but column %q says token_usage is absent",
+			name, a.Usage.TokenTypes, column))
+	}
+	return findings
 }
 
 // TestUsageCoverage_AgreesWithTheCapabilityModel runs the check against the
@@ -81,15 +95,20 @@ func TestUsageCoverage_AgreesWithTheCapabilityModel(t *testing.T) {
 		t.Errorf("checked %d of %d columns; every column must resolve to a registered adapter",
 			checked, len(model.AdapterNames()))
 	}
+	if countDeclaringUsage(coreagents.All()) == 0 {
+		t.Error("no registered adapter declares usage coverage; the check compared nothing")
+	}
+}
+
+// countDeclaringUsage counts the adapters that declare usage coverage.
+func countDeclaringUsage(all []agent.Agent) int {
 	declared := 0
-	for _, a := range coreagents.All() {
+	for _, a := range all {
 		if a.Usage != nil {
 			declared++
 		}
 	}
-	if declared == 0 {
-		t.Error("no registered adapter declares usage coverage; the check compared nothing")
-	}
+	return declared
 }
 
 // TestUsageCoverage_AbsentColumnMustDeclareNothing proves the rule on a
@@ -110,6 +129,24 @@ func TestUsageCoverage_AbsentColumnMustDeclareNothing(t *testing.T) {
 		`column "ghost" maps to adapter "ghost", which is not registered`,
 		`adapter "pi" declares unknown token type "reasoning"`,
 	}
+	checkFindingsEqual(t, findings, want)
+	if checked != 2 {
+		t.Errorf("checked = %d, want 2", checked)
+	}
+
+	// The same absent column with no declaration is fine.
+	all[0].Usage = nil
+	findings, _ = usageCoverageFindings(model, all)
+	for _, f := range findingsNaming(findings, "claude-code") {
+		t.Errorf("an absent column with no declaration must pass, got %q", f)
+	}
+	if len(findings) != 2 {
+		t.Errorf("findings = %q, want only the ghost column and pi's unknown type", findings)
+	}
+}
+
+// checkFindingsEqual requires findings to be want, in order.
+func checkFindingsEqual(t *testing.T, findings, want []string) {
 	if len(findings) != len(want) {
 		t.Fatalf("findings = %q, want %q", findings, want)
 	}
@@ -118,19 +155,15 @@ func TestUsageCoverage_AbsentColumnMustDeclareNothing(t *testing.T) {
 			t.Errorf("finding %d = %q, want %q", i, findings[i], want[i])
 		}
 	}
-	if checked != 2 {
-		t.Errorf("checked = %d, want 2", checked)
-	}
+}
 
-	// The same absent column with no declaration is fine.
-	all[0].Usage = nil
-	findings, _ = usageCoverageFindings(model, all)
+// findingsNaming returns the findings that mention s.
+func findingsNaming(findings []string, s string) []string {
+	var out []string
 	for _, f := range findings {
-		if strings.Contains(f, "claude-code") {
-			t.Errorf("an absent column with no declaration must pass, got %q", f)
+		if strings.Contains(f, s) {
+			out = append(out, f)
 		}
 	}
-	if len(findings) != 2 {
-		t.Errorf("findings = %q, want only the ghost column and pi's unknown type", findings)
-	}
+	return out
 }

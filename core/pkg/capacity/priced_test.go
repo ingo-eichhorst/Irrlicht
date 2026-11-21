@@ -10,21 +10,8 @@ func TestPricedCost_TellsUnpricedFromFree(t *testing.T) {
 		"free":   {ContextWindow: 1000, Pricing: &ModelPricing{}},
 	})
 
-	if cost, ok := cm.PricedCostUSD("priced", 1_000_000, 0, 0, 0); !ok || cost != 2 {
-		t.Errorf("PricedCostUSD(priced) = (%v, %v), want (2, true)", cost, ok)
-	}
-	if cost, ok := cm.PricedCostUSD("free", 1_000_000, 0, 0, 0); !ok || cost != 0 {
-		t.Errorf("PricedCostUSD(free) = (%v, %v), want (0, true): a free model is priced", cost, ok)
-	}
-	if cost, ok := cm.PricedCostUSD("absent", 1_000_000, 0, 0, 0); ok || cost != 0 {
-		t.Errorf("PricedCostUSD(absent) = (%v, %v), want (0, false): an absent model is unpriced", cost, ok)
-	}
-	if _, ok := cm.PricedCostFromBreakdown("absent", 1, 1, 1, 1, 1); ok {
-		t.Error("PricedCostFromBreakdown(absent) reported a price")
-	}
-	if cost, ok := cm.PricedCostFromBreakdown("priced", 0, 1_000_000, 0, 0, 0); !ok || cost != 10 {
-		t.Errorf("PricedCostFromBreakdown(priced) = (%v, %v), want (10, true)", cost, ok)
-	}
+	checkPricedCostUSD(t, cm)
+	checkPricedCostFromBreakdown(t, cm)
 
 	// Lock: the float-only wrappers still answer exactly what they did.
 	if got := cm.EstimateCostUSD("priced", 1_000_000, 0, 0, 0); got != 2 {
@@ -32,6 +19,32 @@ func TestPricedCost_TellsUnpricedFromFree(t *testing.T) {
 	}
 	if got := cm.EstimateCostFromBreakdown("absent", 1, 1, 1, 1, 1); got != 0 {
 		t.Errorf("EstimateCostFromBreakdown(absent) = %v, want 0", got)
+	}
+}
+
+// checkPricedCostUSD: a priced, a free and an absent model through
+// PricedCostUSD.
+func checkPricedCostUSD(t *testing.T, cm *CapacityManager) {
+	if cost, ok := cm.PricedCostUSD(Tokens{Model: "priced", Input: 1_000_000}); !ok || cost != 2 {
+		t.Errorf("PricedCostUSD(priced) = (%v, %v), want (2, true)", cost, ok)
+	}
+	if cost, ok := cm.PricedCostUSD(Tokens{Model: "free", Input: 1_000_000}); !ok || cost != 0 {
+		t.Errorf("PricedCostUSD(free) = (%v, %v), want (0, true): a free model is priced", cost, ok)
+	}
+	if cost, ok := cm.PricedCostUSD(Tokens{Model: "absent", Input: 1_000_000}); ok || cost != 0 {
+		t.Errorf("PricedCostUSD(absent) = (%v, %v), want (0, false): an absent model is unpriced", cost, ok)
+	}
+}
+
+// checkPricedCostFromBreakdown: an absent and a priced model through
+// PricedCostFromBreakdown.
+func checkPricedCostFromBreakdown(t *testing.T, cm *CapacityManager) {
+	absent := TokenBreakdown{Model: "absent", Input: 1, Output: 1, CacheRead: 1, CacheCreate5m: 1, CacheCreate1h: 1}
+	if _, ok := cm.PricedCostFromBreakdown(absent); ok {
+		t.Error("PricedCostFromBreakdown(absent) reported a price")
+	}
+	if cost, ok := cm.PricedCostFromBreakdown(TokenBreakdown{Model: "priced", Output: 1_000_000}); !ok || cost != 10 {
+		t.Errorf("PricedCostFromBreakdown(priced) = (%v, %v), want (10, true)", cost, ok)
 	}
 }
 

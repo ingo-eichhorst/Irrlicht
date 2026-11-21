@@ -445,8 +445,14 @@ func (t *TranscriptTailer) computeCumulativeTokensPriced(pending *PerTurnContrib
 		totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
 		priced := false
 		if t.capacityMgr != nil && model != "" {
-			cost, ok := t.capacityMgr.PricedCostFromBreakdown(
-				model, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+			cost, ok := t.capacityMgr.PricedCostFromBreakdown(capacity.TokenBreakdown{
+				Model:         model,
+				Input:         bd.Input,
+				Output:        bd.Output,
+				CacheRead:     bd.CacheRead,
+				CacheCreate5m: bd.CacheCreation5m,
+				CacheCreate1h: bd.CacheCreation1h,
+			})
 			pricedCost += cost
 			priced = ok
 		}
@@ -496,9 +502,13 @@ func (t *TranscriptTailer) computeCumulativeTokensLegacy() {
 	priced := false
 	if t.metrics.ModelName != "" {
 		if t.capacityMgr != nil {
-			t.metrics.EstimatedCostUSD, priced = t.capacityMgr.PricedCostUSD(
-				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-				effectiveCumCacheRead, effectiveCumCacheCreate)
+			t.metrics.EstimatedCostUSD, priced = t.capacityMgr.PricedCostUSD(capacity.Tokens{
+				Model:         t.metrics.ModelName,
+				Input:         effectiveCumInput,
+				Output:        effectiveCumOutput,
+				CacheRead:     effectiveCumCacheRead,
+				CacheCreation: effectiveCumCacheCreate,
+			})
 		}
 		grams, tier := capacity.EstimateCO2Grams(t.metrics.ModelName,
 			effectiveCumInput+effectiveCumOutput+effectiveCumCacheRead+effectiveCumCacheCreate)

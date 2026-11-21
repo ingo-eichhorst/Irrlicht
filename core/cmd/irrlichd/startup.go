@@ -784,9 +784,9 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 	if deps.AutonomySpans != nil {
 		detector.SetAutonomySpanStore(deps.AutonomySpans)
 	}
-	if deps.FinishedSubagents != nil {
-		detector.SetFinishedSubagentStore(deps.FinishedSubagents)
-	}
+	// SetFinishedSubagentStore is a bare field assignment, so a nil store
+	// leaves the detector's nil default: nothing is retained.
+	detector.SetFinishedSubagentStore(deps.FinishedSubagents)
 	detector.SetHistoryTracker(deps.HistoryTracker)
 
 	// Cache-creation regression detector (#374): per-project baseline from the

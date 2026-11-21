@@ -116,6 +116,36 @@ func runPlugin(t *testing.T, extra ...string) (code int, stdout, stderr string) 
 	return code, out.String(), errb.String()
 }
 
+// pluginRun is one run of the manifest's command.
+type pluginRun struct {
+	code           int
+	stdout, stderr string
+}
+
+// failedWithOneLine reports a run that exited with code, wrote nothing to
+// stdout, and wrote exactly one stderr line, containing want.
+func (r pluginRun) failedWithOneLine(code int, want string) bool {
+	return r.code == code && r.stdout == "" && strings.Count(r.stderr, "\n") == 1 && strings.Contains(r.stderr, want)
+}
+
+// sampledAt matches a document's sample time, the one field a golden taken at
+// a fixed clock cannot share with a run on the real one.
+var sampledAt = regexp.MustCompile(`"sampled_at": "[^"]+"`)
+
+func withoutSampledAt(doc string) string {
+	return sampledAt.ReplaceAllString(doc, `"sampled_at": "X"`)
+}
+
+// completeGolden reads testdata/herdr-usage/complete/want.json.
+func completeGolden(t *testing.T) []byte {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("testdata", "herdr-usage", "complete", "want.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return want
+}
+
 func TestHerdrPlugin_RunsIrrlichtLsForThePane(t *testing.T) {
 	bin := buildIrrlichtLs(t)
 	srv := serveFixture(t, filepath.Join("testdata", "herdr-usage", "complete", "sessions.json"))
@@ -128,20 +158,16 @@ func TestHerdrPlugin_RunsIrrlichtLsForThePane(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", "herdr-usage", "complete", "want.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	want := completeGolden(t)
 	// The golden was taken at a fixed clock; this run used the real one.
-	sampled := regexp.MustCompile(`"sampled_at": "[^"]+"`)
-	if got, wantS := sampled.ReplaceAllString(stdout, `"sampled_at": "X"`), sampled.ReplaceAllString(string(want), `"sampled_at": "X"`); got != wantS {
+	if got, wantS := withoutSampledAt(stdout), withoutSampledAt(string(want)); got != wantS {
 		t.Errorf("plugin output differs from complete/want.json\n--- got ---\n%s", stdout)
 	}
 
 	// The daemon gone — the demo's daemon-stop step: non-zero, one line.
 	srv.Close()
 	code, stdout, stderr = runPlugin(t, "IRRLICHT_LS="+bin, "IRRLICHT_BIND_ADDR="+u.Host, "PATH=/usr/bin:/bin")
-	if code != 1 || stdout != "" || strings.Count(stderr, "\n") != 1 || !strings.Contains(stderr, "daemon unreachable") {
+	if !(pluginRun{code, stdout, stderr}).failedWithOneLine(1, "daemon unreachable") {
 		t.Errorf("daemon gone: exit %d, stdout %q, stderr %q; want 1, nothing, one 'daemon unreachable' line", code, stdout, stderr)
 	}
 }
@@ -151,7 +177,7 @@ func TestHerdrPlugin_RunsIrrlichtLsForThePane(t *testing.T) {
 // binary; without it, irrlicht-ls on PATH runs, with --herdr-usage.
 func TestHerdrPlugin_FindsIrrlichtLs(t *testing.T) {
 	code, stdout, stderr := runPlugin(t, "IRRLICHT_LS=/nonexistent/irrlicht-ls", "PATH=/usr/bin:/bin")
-	if code != 127 || stdout != "" || strings.Count(stderr, "\n") != 1 || !strings.Contains(stderr, "IRRLICHT_LS=/nonexistent/irrlicht-ls") {
+	if !(pluginRun{code, stdout, stderr}).failedWithOneLine(127, "IRRLICHT_LS=/nonexistent/irrlicht-ls") {
 		t.Errorf("bad IRRLICHT_LS: exit %d, stdout %q, stderr %q; want 127, nothing, one line naming it", code, stdout, stderr)
 	}
 

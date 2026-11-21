@@ -193,8 +193,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "reading a removed child's transcript without observe consent" \
   "core/application/services/session_detector.go" \
-  $'\tif d.metrics == nil || state.TranscriptPath == "" || !d.observeAllowed(state.Adapter) {\n' \
-  $'\tif d.metrics == nil || state.TranscriptPath == "" {\n' \
+  $'\tif !d.observeAllowed(state.Adapter) {\n\t\treturn state.Metrics\n\t}\n' \
+  $'\n' \
   "./core/application/services/" "TestSessionDetector_RetainedUsageHonoursObserveConsent" \
   "with observe consent withheld"
 
@@ -240,8 +240,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "matching sessions regardless of pane answers for every pane" \
   "core/cmd/irrlicht-ls/herdrusage.go" \
-  $'\t\tif l == nil || l.HerdrPaneID != paneID {\n' \
-  $'\t\tif l == nil {\n' \
+  $'\tif l == nil || l.HerdrPaneID != p.paneID {\n' \
+  $'\tif l == nil {\n' \
   "$LS_PKG" "TestHerdrUsage_Goldens/two_panes" \
   "document differs from testdata/herdr-usage/two-panes/want-p"
 

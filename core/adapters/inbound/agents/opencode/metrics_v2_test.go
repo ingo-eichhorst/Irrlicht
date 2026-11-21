@@ -46,30 +46,14 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		if m.EstimatedCostUSD != 0.0421 {
 			t.Errorf("EstimatedCostUSD = %v, want session_v2.cost 0.0421", m.EstimatedCostUSD)
 		}
-		// #2061: the cost is opencode's own, and this path declares all four
-		// token columns it reads.
-		if m.PricingSource != session.PricingSourceProviderReported || len(m.UnpricedModels) != 0 || m.TokensUnobserved {
-			t.Errorf("provenance = (%q, %q, %t), want (provider-reported, none, false)",
-				m.PricingSource, m.UnpricedModels, m.TokensUnobserved)
-		}
-		if m.UsageCoverage == nil || !m.UsageCoverage.ObservesAll() || m.UsageCoverage.ExcludesSubagents {
-			t.Errorf("UsageCoverage = %+v, want all four token types, subagent exclusion undeclared", m.UsageCoverage)
-		}
+		checkV2ReportedCostProvenance(t, m)
 	})
 
 	t.Run("tokens_with_no_reported_cost_are_unpriced_not_free", func(t *testing.T) {
 		w, db := newV2Store(t)
 		loadV2Fixture(t, db, v2StoreRows) // the fixture's local model: session_v2.cost 0
 		m := metricsFor(t, w, sesToolTurn)
-		if m.EstimatedCostUSD != 0 {
-			t.Fatalf("lock: EstimatedCostUSD = %v, want session_v2.cost 0", m.EstimatedCostUSD)
-		}
-		// #2061: a zero cost beside counted tokens cannot say "free"; the row
-		// does not tell a model that costs nothing from one opencode had no
-		// price for.
-		if want := []string{tailer.NormalizeModelName("qwen3.8-27b-splash")}; m.PricingSource != "" || !reflect.DeepEqual(m.UnpricedModels, want) {
-			t.Errorf("provenance = (%q, %q), want (\"\", %q)", m.PricingSource, m.UnpricedModels, want)
-		}
+		checkV2ZeroCostIsUnpriced(t, m)
 		if want := tailer.NormalizeModelName("qwen3.8-27b-splash"); m.ModelName != want {
 			t.Errorf("ModelName = %q, want %q (the assistant row's data.model.id)", m.ModelName, want)
 		}
@@ -144,6 +128,40 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 			t.Errorf("ComputeMetrics(unknown) = %+v, %v; want nil, nil", m, err)
 		}
 	})
+}
+
+// checkV2ReportedCostProvenance (#2061): the cost is opencode's own, and this
+// path declares all four token columns it reads.
+func checkV2ReportedCostProvenance(t *testing.T, m *session.SessionMetrics) {
+	t.Helper()
+	if !isProviderReportedOverCountedTokens(m) {
+		t.Errorf("provenance = (%q, %q, %t), want (provider-reported, none, false)",
+			m.PricingSource, m.UnpricedModels, m.TokensUnobserved)
+	}
+	if !declaresAllTokenTypesNotExclusion(m.UsageCoverage) {
+		t.Errorf("UsageCoverage = %+v, want all four token types, subagent exclusion undeclared", m.UsageCoverage)
+	}
+}
+
+func isProviderReportedOverCountedTokens(m *session.SessionMetrics) bool {
+	return m.PricingSource == session.PricingSourceProviderReported && len(m.UnpricedModels) == 0 && !m.TokensUnobserved
+}
+
+func declaresAllTokenTypesNotExclusion(c *session.UsageCoverage) bool {
+	return c != nil && c.ObservesAll() && !c.ExcludesSubagents
+}
+
+// checkV2ZeroCostIsUnpriced (#2061): a zero cost beside counted tokens cannot
+// say "free"; the row does not tell a model that costs nothing from one
+// opencode had no price for.
+func checkV2ZeroCostIsUnpriced(t *testing.T, m *session.SessionMetrics) {
+	t.Helper()
+	if m.EstimatedCostUSD != 0 {
+		t.Fatalf("lock: EstimatedCostUSD = %v, want session_v2.cost 0", m.EstimatedCostUSD)
+	}
+	if want := []string{tailer.NormalizeModelName("qwen3.8-27b-splash")}; m.PricingSource != "" || !reflect.DeepEqual(m.UnpricedModels, want) {
+		t.Errorf("provenance = (%q, %q), want (\"\", %q)", m.PricingSource, m.UnpricedModels, want)
+	}
 }
 
 // TestComputeMetrics_V2CountsUserTurns pins SessionMetrics.UserTurns on the

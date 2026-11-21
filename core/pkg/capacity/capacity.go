@@ -156,73 +156,27 @@ func (cm *CapacityManager) logPricingMiss(modelName string) {
 // zero-pricing is observable in daemon logs. A caller that must tell an
 // unpriced model from a free one uses PricedCostUSD instead (#2061).
 func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
-	cost, _ := cm.PricedCostUSD(modelName, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+	cost, _ := cm.PricedCostUSD(Tokens{
+		Model:         modelName,
+		Input:         inputTokens,
+		Output:        outputTokens,
+		CacheRead:     cacheReadTokens,
+		CacheCreation: cacheCreationTokens,
+	})
 	return cost
-}
-
-// PricedCostUSD is EstimateCostUSD plus whether the price table had an entry
-// for modelName at all: (0, false) is an unpriced model, (0, true) a free one.
-// The two read identically as a float, which is how an unpriced model came to
-// show as costing nothing (#2061).
-func (cm *CapacityManager) PricedCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) (float64, bool) {
-	cap := cm.GetModelCapacity(modelName)
-	if cap.Pricing == nil {
-		cm.logPricingMiss(modelName)
-		return 0, false
-	}
-	p := cap.Pricing
-	cost := float64(inputTokens)*p.InputPerMTok +
-		float64(outputTokens)*p.OutputPerMTok +
-		float64(cacheReadTokens)*p.CacheReadPerMTok +
-		float64(cacheCreationTokens)*p.CacheCreationPerMTok
-	return cost / 1_000_000, true
 }
 
 // EstimateCostFromBreakdown calculates USD cost using per-bucket token counts
 // including separate 5m and 1h Anthropic cache-write rates. Falls back to the
 // legacy single-bucket CacheCreationPerMTok when sub-rates are not populated.
 func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, output, cacheRead, cacheCreate5m, cacheCreate1h int64) float64 {
-	cost, _ := cm.PricedCostFromBreakdown(modelName, input, output, cacheRead, cacheCreate5m, cacheCreate1h)
+	cost, _ := cm.PricedCostFromBreakdown(TokenBreakdown{
+		Model:         modelName,
+		Input:         input,
+		Output:        output,
+		CacheRead:     cacheRead,
+		CacheCreate5m: cacheCreate5m,
+		CacheCreate1h: cacheCreate1h,
+	})
 	return cost
-}
-
-// PricedCostFromBreakdown is EstimateCostFromBreakdown plus whether the price
-// table had an entry for modelName — see PricedCostUSD.
-func (cm *CapacityManager) PricedCostFromBreakdown(modelName string, input, output, cacheRead, cacheCreate5m, cacheCreate1h int64) (float64, bool) {
-	cap := cm.GetModelCapacity(modelName)
-	if cap.Pricing == nil {
-		cm.logPricingMiss(modelName)
-		return 0, false
-	}
-	p := cap.Pricing
-
-	// Choose cache-creation rate: prefer sub-rates when populated.
-	var cacheCreateCost float64
-	if p.CacheCreation5mPerMTok > 0 || p.CacheCreation1hPerMTok > 0 {
-		cacheCreateCost = float64(cacheCreate5m)*p.CacheCreation5mPerMTok +
-			float64(cacheCreate1h)*p.CacheCreation1hPerMTok
-	} else {
-		cacheCreateCost = float64(cacheCreate5m+cacheCreate1h) * p.CacheCreationPerMTok
-	}
-
-	cost := float64(input)*p.InputPerMTok +
-		float64(output)*p.OutputPerMTok +
-		float64(cacheRead)*p.CacheReadPerMTok +
-		cacheCreateCost
-	return cost / 1_000_000, true
-}
-
-// PriceTableSource names the price table this manager prices from, for a
-// cost's provenance (#2061): "litellm@<date>", the date being the table's
-// own LastUpdated stamp (parseLiteLLMData sets it to the day the table was
-// fetched), or plain "litellm" for a table that carries no date — the
-// in-memory NewForTest one does not.
-func (cm *CapacityManager) PriceTableSource() string {
-	cm.maybeReload()
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	if cm.config == nil || cm.config.LastUpdated == "" {
-		return "litellm"
-	}
-	return "litellm@" + cm.config.LastUpdated
 }

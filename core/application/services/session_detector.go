@@ -571,7 +571,7 @@ func (d *SessionDetector) onSessionRemoved(state *session.SessionState) {
 // in-memory copy that pass holds — so a record written onto the parent's row
 // here would be overwritten by that save. The store has one writer: this.
 func (d *SessionDetector) retainFinishedSubagent(state *session.SessionState) {
-	if d.finishedSubagents == nil || state == nil || state.ParentSessionID == "" {
+	if d.finishedSubagents == nil || !isChildSession(state) {
 		return
 	}
 	err := d.finishedSubagents.Retain(session.FinishedSubagent{
@@ -594,11 +594,19 @@ func (d *SessionDetector) retainFinishedSubagent(state *session.SessionState) {
 // waits on the adapter's observe consent; without it the stored metrics are
 // what is kept.
 func (d *SessionDetector) finalMetrics(state *session.SessionState) *session.SessionMetrics {
-	if d.metrics == nil || state.TranscriptPath == "" || !d.observeAllowed(state.Adapter) {
+	if d.metrics == nil || state.TranscriptPath == "" {
+		return state.Metrics
+	}
+	if !d.observeAllowed(state.Adapter) {
 		return state.Metrics
 	}
 	fresh, _ := d.metrics.ComputeMetrics(state.TranscriptPath, state.Adapter)
 	return session.MergeMetrics(fresh, state.Metrics)
+}
+
+// isChildSession reports whether state is a session with a parent.
+func isChildSession(state *session.SessionState) bool {
+	return state != nil && state.ParentSessionID != ""
 }
 
 // pruneFinishedSubagents drops the retained records of roots that have been

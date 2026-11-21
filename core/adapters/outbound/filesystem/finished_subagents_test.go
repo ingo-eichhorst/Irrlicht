@@ -3,6 +3,7 @@ package filesystem
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,12 +44,18 @@ func TestFinishedSubagentStore_SurvivesARestart(t *testing.T) {
 	mustRetain(t, a, finished("child-1", "root", now.Add(2*time.Second), 11))
 
 	got := NewFinishedSubagentStoreWithDir(dir).List()
-	if len(got) != 2 || got[0].SessionID != "child-2" || got[1].SessionID != "child-1" {
+	if !slices.Equal(ids(got), []string{"child-2", "child-1"}) {
 		t.Fatalf("after restart: %v, want [child-2 child-1] (oldest removal first)", ids(got))
 	}
-	if got[1].Usage == nil || got[1].Usage.CumInputTokens != 11 || got[1].Usage.PricingSource != "litellm@2026-11-20" {
+	if !isReplacingUsage(got[1].Usage) {
 		t.Errorf("child-1 usage after restart = %+v, want the replacing record's 11 tokens and its source", got[1].Usage)
 	}
+}
+
+// isReplacingUsage reports the replacing child-1 record's 11 tokens and its
+// pricing source.
+func isReplacingUsage(u *session.SessionMetrics) bool {
+	return u != nil && u.CumInputTokens == 11 && u.PricingSource == "litellm@2026-11-20"
 }
 
 // TestFinishedSubagentStore_OneFilePerRoot: a grandchild whose parent is
