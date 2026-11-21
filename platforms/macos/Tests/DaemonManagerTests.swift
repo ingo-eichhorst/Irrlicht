@@ -66,15 +66,39 @@ final class DaemonManagerTests: XCTestCase {
         XCTAssertEqual(env["PATH"], "/usr/bin", "unrelated base vars must be preserved")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
-    func testPublishSettingsDidChangeDoesNotRelaunchDaemon() {
-        // The toggle now POSTs to the running daemon instead of relaunching it.
+    func testPublishSettingsDidChangeDoesNotRelaunchDaemon() async {
+        // The toggle now PUTs to the running daemon instead of relaunching it.
         // Under xctest there's no daemon binary and no app-owned process, so the
-        // call must be a safe fire-and-forget no-op — never spawn or crash.
+        // call must be a safe fire-and-forget — never spawn or crash. The
+        // publish itself goes to an injected recorder: before the publisher
+        // seam this test fired two real PUTs at whatever daemon was listening on
+        // the default port, i.e. the developer's production daemon.
+        let recorder = RecordingRelayPublisher()
+        let defaults = InMemoryDefaults()
+        defaults.set(true, forKey: "publishToRelay")
+        defaults.set("  wss://relay.example.test  ", forKey: "relayServerURL")
+        let keychain = KeychainSecrets(backend: InMemoryKeychainBackend())
+        keychain.set(" tok-123 ", account: "relayToken")
+        let manager = DaemonManager(publisher: recorder, defaults: defaults, keychain: keychain)
+        defer { manager.stop() }
+
         XCTAssertNil(manager.currentProcessForTesting, "precondition: no app-owned daemon")
         manager.publishSettingsDidChange()
         manager.publishSettingsDidChange()
         XCTAssertFalse(manager.daemonRunning, "publishSettingsDidChange must not launch a daemon")
         XCTAssertNil(manager.currentProcessForTesting, "publishSettingsDidChange must not spawn a process")
+
+        // The publish runs on a detached task: poll the recorder to a deadline
+        // rather than sleeping, and fail with the elapsed time.
+        let start = Date()
+        while recorder.published.count < 2, Date().timeIntervalSince(start) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        let expected = PublishClient.Config(enabled: true, url: "wss://relay.example.test", token: "tok-123")
+        XCTAssertEqual(recorder.published, [expected, expected],
+                       "two settings nudges must publish the trimmed current config twice "
+                       + "(observed \(recorder.published.count) after \(String(format: "%.2f", elapsed))s)")
     }
 
     // MARK: - Bundle Path Tests

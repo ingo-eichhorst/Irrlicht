@@ -20,6 +20,42 @@ final class DaemonManager: ObservableObject {
 
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "DaemonManager")
 
+    /// Where `pushPublishConfig()` sends the publish config. In the app this is
+    /// `LiveRelayPublisher` — the daemon's loopback `PUT /api/v1/relay/publish`.
+    /// In a test process it defaults to a `RecordingRelayPublisher`, because the
+    /// live one has no way to tell the production daemon on :7837 from a test
+    /// fixture: before this seam, `DaemonManagerTests` sent the xctest
+    /// domain's publish settings (and a token read from the real keychain) to
+    /// whatever daemon was listening. `DaemonManagerPublisherGuardTests` is the
+    /// guard.
+    let publisher: RelayPublishing
+
+    /// Where the publish flags are read. `.standard` in the app; a test injects
+    /// a store it controls so the recorded config is deterministic.
+    private let defaults: UserDefaults
+
+    /// Where the relay token is read. `KeychainStore.shared` in the app.
+    private let keychain: KeychainSecrets
+
+    /// - Parameters:
+    ///   - publisher: defaults to `defaultPublisher(underXCTest:)` evaluated
+    ///     against `AppHome.isRunningTests`, i.e. live in the app and a
+    ///     recorder in a test process.
+    init(publisher: RelayPublishing = DaemonManager.defaultPublisher(underXCTest: AppHome.isRunningTests),
+         defaults: UserDefaults = .standard,
+         keychain: KeychainSecrets = KeychainStore.shared) {
+        self.publisher = publisher
+        self.defaults = defaults
+        self.keychain = keychain
+    }
+
+    /// The publisher a default-constructed manager uses. A pure function so
+    /// the rule can be asserted without constructing — let alone calling — the
+    /// live publisher.
+    nonisolated static func defaultPublisher(underXCTest: Bool) -> RelayPublishing {
+        underXCTest ? RecordingRelayPublisher() : LiveRelayPublisher()
+    }
+
     /// Test-only view of the app-owned daemon process (nil when none), so tests
     /// can assert the POST-based publish reconfigure never spawns or relaunches
     /// a daemon (issue #722). Internal: visible only via `@testable import`.
@@ -30,9 +66,9 @@ final class DaemonManager: ObservableObject {
     /// Relay-publish settings (issue #718). URL + enabled flag live in
     /// UserDefaults (shared with the relay *subscribe* direction); the token
     /// lives in the Keychain — same store the subscribe path uses.
-    private var publishEnabled: Bool { UserDefaults.standard.bool(forKey: "publishToRelay") }
+    private var publishEnabled: Bool { defaults.bool(forKey: "publishToRelay") }
     private var relayURL: String {
-        (UserDefaults.standard.string(forKey: "relayServerURL") ?? "")
+        (defaults.string(forKey: "relayServerURL") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -80,11 +116,14 @@ final class DaemonManager: ObservableObject {
     private func pushPublishConfig() {
         let enabled = publishEnabled
         let url = relayURL
+        let publisher = publisher
+        let keychain = keychain
         Task.detached {
-            let token = KeychainStore.get(account: "relayToken")
+            let token = keychain.get(account: "relayToken")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let config = PublishClient.Config(enabled: enabled, url: url, token: token)
             for attempt in 0..<3 {
-                if await PublishClient.apply(enabled: enabled, url: url, token: token) {
+                if await publisher.publish(config) {
                     return
                 }
                 if attempt < 2 { try? await Task.sleep(nanoseconds: 300_000_000) }
