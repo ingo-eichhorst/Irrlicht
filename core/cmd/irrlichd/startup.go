@@ -1216,6 +1216,9 @@ type startBackgroundLoopsDeps struct {
 	// MuseAccountSweeper polls Meta's account API for live Muse sessions
 	// (#2057); nil when its transport could not be built.
 	MuseAccountSweeper *services.MuseAccountSweeper
+	// ZaiAccountSweeper polls the Z.ai quota for Z.ai-routed sessions
+	// (#2010); nil when its parts could not be built.
+	ZaiAccountSweeper *services.ZaiAccountSweeper
 }
 
 func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
@@ -1249,6 +1252,9 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 		// outside demo mode.
 		if deps.MuseAccountSweeper != nil {
 			go deps.MuseAccountSweeper.Run(detectorCtx)
+		}
+		if deps.ZaiAccountSweeper != nil {
+			go deps.ZaiAccountSweeper.Run(detectorCtx)
 		}
 		// Hooks are delivered by Claude Code's native `type: http` transport
 		// straight to the daemon (#1161) — no curl, no shell — so there is no

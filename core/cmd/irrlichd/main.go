@@ -723,9 +723,15 @@ func runDaemon() {
 	// wire into the permission catalog below; its per-session sweep (#2057)
 	// is started with the other background loops once the detector exists.
 	museAPI := museAccountAPIEffects(logger)
+	// Z.ai's coding-plan quota (#2010): its own poller, consent-gated by its
+	// own permission, polled per Z.ai-routed session by its sweep.
+	zaiAPI := zaiAccountAPIEffects(logger)
 
 	home, _ := os.UserHomeDir()
-	effects := consentEffects{StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop}
+	effects := consentEffects{
+		StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop,
+		StartZaiAccountAPI: zaiAPI.Start, StopZaiAccountAPI: zaiAPI.Stop,
+	}
 	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
 	// is resolved once, at startup.
@@ -825,6 +831,7 @@ func runDaemon() {
 		DemoMode:           demoMode,
 		Logger:             logger,
 		MuseAccountSweeper: museAPI.sweeper(detector, cachedRepo, permService, logger),
+		ZaiAccountSweeper:  zaiAPI.sweeper(detector, cachedRepo, permService, logger),
 	})()
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
