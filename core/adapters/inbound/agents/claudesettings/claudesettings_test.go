@@ -115,7 +115,7 @@ func TestSources_UnresolvableGitFileIsOpaque(t *testing.T) {
 	wt := t.TempDir()
 	write(t, filepath.Join(wt, ".git"), "not a gitdir line\n")
 	got := localSources(Inputs{CWD: wt})
-	if len(got) != 1 || !got[0].Opaque {
+	if len(got) != 1 || !got[0].Opaque() {
 		t.Fatalf("localSources = %+v, want one opaque local source", got)
 	}
 }
@@ -152,11 +152,11 @@ func TestSources_PrecedenceOrder(t *testing.T) {
 	got := Sources(Inputs{CWD: cwd, Home: home, ManagedDir: managed, MDMProfiles: []string{mdm}, CLIOpaque: true})
 
 	want := []Source{
-		{Layer: LayerManaged, Opaque: true},
+		{Layer: LayerManaged},
 		{Layer: LayerManaged, Path: filepath.Join(managed, "managed-settings.d", "20-b.json")},
 		{Layer: LayerManaged, Path: filepath.Join(managed, "managed-settings.d", "10-a.json")},
 		{Layer: LayerManaged, Path: filepath.Join(managed, "managed-settings.json")},
-		{Layer: LayerCLI, Opaque: true},
+		{Layer: LayerCLI},
 		{Layer: LayerLocal, Path: filepath.Join(cwd, ".claude", "settings.local.json")},
 		{Layer: LayerProject, Path: filepath.Join(cwd, ".claude", "settings.json")},
 		{Layer: LayerUser, Path: filepath.Join(home, ".claude", "settings.json")},
@@ -176,8 +176,8 @@ func TestLookup_OpaqueSourceStopsTheWalk(t *testing.T) {
 
 	r := Lookup(Sources(Inputs{CWD: cwd, Home: t.TempDir(), MDMProfiles: []string{mdm}}), "K")
 
-	if r.Status != StatusOpaque || r.Source.Layer != LayerManaged {
-		t.Fatalf("Lookup = %+v, want opaque managed", r)
+	if r.Status != StatusUnreadable || !r.Source.Opaque() || r.Source.Layer != LayerManaged {
+		t.Fatalf("Lookup = %+v, want unreadable, at the opaque managed source", r)
 	}
 }
 
@@ -193,7 +193,7 @@ func TestSources_BareRepositoryWorktreeIsOpaque(t *testing.T) {
 
 	got := localSources(Inputs{CWD: wt, Home: t.TempDir()})
 
-	if len(got) != 1 || !got[0].Opaque {
+	if len(got) != 1 || !got[0].Opaque() {
 		t.Fatalf("localSources = %+v, want one opaque local source for a bare-repository worktree", got)
 	}
 }

@@ -97,21 +97,5 @@ func MuseAccountRefresh(
 		}
 		return nil, errors.New("services: Muse account quota not available yet")
 	}
-	snap, perr := museaccountapi.BuildSnapshot(obs.Body, obs.FetchedAt)
-	if perr != nil {
-		return nil, fmt.Errorf("services: parsing Muse account quota: %w", perr)
-	}
-	if !obs.LastAttempt.IsZero() {
-		snap.LastAttemptAt = obs.LastAttempt.Unix()
-	}
-	if obs.Stale {
-		snap.RetrievalFailure = obs.FailureReason
-		if err == nil {
-			err = fmt.Errorf("services: Muse account quota is stale: %s", obs.FailureReason)
-		} else {
-			err = fmt.Errorf("services: polling Muse account quota (serving the last reading): %w", err)
-		}
-		return &snap, err
-	}
-	return &snap, nil
+	return snapshotFromObservation(obs, err, "Muse account quota", museaccountapi.BuildSnapshot)
 }

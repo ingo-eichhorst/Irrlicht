@@ -13,11 +13,11 @@ import (
 
 func newTestReader(t *testing.T) *CredentialReader {
 	t.Helper()
-	fp, err := NewFingerprinter()
+	r, err := NewCredentialReader(claudesettings.ReadEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewCredentialReader(claudesettings.ReadEnv, fp)
+	return r
 }
 
 func settingsFile(t *testing.T, body string) string {
@@ -70,11 +70,10 @@ func TestCredentialReader_ReadsTheRouteFilesToken(t *testing.T) {
 	}
 }
 
-// Two daemons (two salts) never fingerprint one key alike: the fingerprint
-// identifies a key only inside the process that drew the salt.
-func TestFingerprinter_SaltIsPerInstance(t *testing.T) {
-	a, _ := NewFingerprinter()
-	b, _ := NewFingerprinter()
+// Two readers (two daemons, two salts) never fingerprint one key alike: the
+// fingerprint identifies a key only inside the process that drew the salt.
+func TestCredentialReader_SaltIsPerInstance(t *testing.T) {
+	a, b := newTestReader(t), newTestReader(t)
 	if a.fingerprint("k") == b.fingerprint("k") {
 		t.Fatal("two salts produced one fingerprint")
 	}

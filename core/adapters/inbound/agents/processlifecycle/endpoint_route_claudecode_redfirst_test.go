@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/claudesettings"
 	"irrlicht/core/domain/session"
 )
 
@@ -16,11 +17,11 @@ const zaiAnthropicEndpoint = "https://api.z.ai/api/anthropic"
 // directory at fresh empty temp dirs, so a test reads only the files it
 // writes — never this machine's ~/.claude/settings.json or
 // /Library/Application Support/ClaudeCode.
-func withClaudeSettingsHost(t *testing.T) settingsHost {
+func withClaudeSettingsHost(t *testing.T) claudesettings.Inputs {
 	t.Helper()
-	h := settingsHost{Home: t.TempDir(), ManagedDir: t.TempDir()}
+	h := claudesettings.Inputs{Home: t.TempDir(), ManagedDir: t.TempDir()}
 	prev := claudeSettingsHost
-	claudeSettingsHost = func() settingsHost { return h }
+	claudeSettingsHost = func() claudesettings.Inputs { return h }
 	t.Cleanup(func() { claudeSettingsHost = prev })
 	return h
 }

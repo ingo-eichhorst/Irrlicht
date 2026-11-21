@@ -59,9 +59,12 @@ type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 // re-evaluated. That is exact for the process env, which is fixed at exec
 // time. It is not exact for settings: Claude Code applies a saved change to
 // a settings file's env block in the running session (its env-var
-// documentation), and nothing here re-reads the files afterwards, so a
-// mid-session edit is not reflected until the daemon observes the session
-// again. Always returns a non-nil observation — the reader itself
+// documentation), and nothing re-reads the files: captureRoute and
+// backfillRoute leave any informative route in place, so a mid-session edit
+// is never reflected for that session (a new session reads afresh).
+// zaiaccountapi.CredentialReader re-checks the route file's base URL before
+// each key read, which covers an edit away from api.z.ai, not one towards
+// it. Always returns a non-nil observation — the reader itself
 // distinguishes denied/unreadable/absent/malformed/observed
 // (processlifecycle.ObserveRoute / ObserveClaudeCodeRoute) rather than
 // collapsing any of them to nil. The real implementation lives in the

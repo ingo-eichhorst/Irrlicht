@@ -76,14 +76,13 @@ import (
 // cached. The other drop is the one re-read after Meta rejects the
 // credential: AccountPoller.doFetch reports each fetch's outcome to the
 // cache (services.CredentialFeedback), and a rejection calls InvalidateOnce.
-func museAccountAPIEffects(logger outbound.Logger) museAccountAPI {
-	return newMuseAccountAPI(logger, museaccountapi.NewCredentialResolver(museaccountapi.AuthPath))
+func museAccountAPIEffects(logger outbound.Logger, poller *services.AccountPoller) museAccountAPI {
+	return newMuseAccountAPI(logger, poller, museaccountapi.NewCredentialResolver(museaccountapi.AuthPath))
 }
 
 // newMuseAccountAPI is museAccountAPIEffects over a given credential
 // resolver, so a test can count the reads the wiring makes.
-func newMuseAccountAPI(logger outbound.Logger, credentials outbound.CredentialResolver) museAccountAPI {
-	poller := services.NewAccountPoller()
+func newMuseAccountAPI(logger outbound.Logger, poller *services.AccountPoller, credentials outbound.CredentialResolver) museAccountAPI {
 	resolver := services.NewGrantCredentialCache(credentials, func(err error) bool {
 		return errors.Is(err, museaccountapi.ErrKeychainRead)
 	})

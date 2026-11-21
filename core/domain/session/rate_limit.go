@@ -210,6 +210,13 @@ type RateLimitWindow struct {
 
 	// ResetsAt is the wall-clock time (Unix seconds) at which the window
 	// rolls over and UsedPercent returns to zero.
+	//
+	// Both clients treat ResetsAt <= now — including 0 — as a stale
+	// snapshot (platforms/web/quotaChips.js bucketChips; the macOS app's
+	// SessionListView.snapshotIsStale), so 0 does not read as "not
+	// reported". zaiaccountapi.BuildSnapshot therefore omits a window whose
+	// provider reports no reset (issue #2010); museaccountapi still
+	// publishes 0 for an absent resets_at.
 	ResetsAt int64 `json:"resets_at"`
 
 	// Measure names the explicit unit this window's usage is counted in

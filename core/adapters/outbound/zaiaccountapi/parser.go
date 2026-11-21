@@ -228,12 +228,16 @@ func BuildSnapshot(body []byte, fetchedAt time.Time) (session.RateLimitSnapshot,
 		return session.RateLimitSnapshot{}, ErrNoQuotaWindows
 	}
 	return session.RateLimitSnapshot{
-		Windows:             windows,
-		PlanType:            q.Level,
-		SampledAt:           fetchedAt.Unix(),
-		Provider:            session.ProviderZai,
-		Product:             Product,
-		ConfirmedAccountRef: accountRef(),
+		Windows:   windows,
+		PlanType:  q.Level,
+		SampledAt: fetchedAt.Unix(),
+		Provider:  session.ProviderZai,
+		Product:   Product,
+		// ConfirmedAccountRef stays "": the probe found no account
+		// identifier anywhere in the response (probe comment §1). A
+		// fingerprint of the key is credential identity, not account
+		// identity (#1977 §3.2), and keys only the poll
+		// (services.ZaiAccountQuotaKey); it is never published here.
 		AttributionEvidence: "zai_account_api",
 		ObservationSource:   "account_api",
 		AttributionQuality:  session.AttributionQualityConfirmed,
@@ -249,13 +253,4 @@ func publishedReset(w Window) (int64, bool) {
 		return 0, false
 	}
 	return w.ResetsAt.Unix(), true
-}
-
-// accountRef is the only place ConfirmedAccountRef is decided for a Z.ai
-// snapshot, and it is always "": the probe found no account identifier
-// anywhere in the response (probe comment §1). A fingerprint of the key is
-// credential identity, not account identity (#1977 §3.2), and is used only
-// to key the poll (services.ZaiAccountQuotaKey), never published here.
-func accountRef() string {
-	return ""
 }

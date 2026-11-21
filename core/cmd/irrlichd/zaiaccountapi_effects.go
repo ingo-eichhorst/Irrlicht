@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudesettings"
 	"irrlicht/core/adapters/outbound/accountquota"
@@ -24,27 +23,27 @@ type zaiAccountAPI struct {
 	transport   outbound.AccountQuotaTransport
 }
 
-// zaiAccountAPIEffects builds the production parts: the reviewed transport
-// to zaiaccountapi.Destination() only, and a credential reader over
-// claudesettings.ReadEnv with a fresh per-daemon fingerprint salt. A
-// construction failure is a coding mistake (a fixed destination) or a
-// failed random read; it is logged once and leaves transport nil, so no
-// sweep starts.
-func zaiAccountAPIEffects(logger outbound.Logger) zaiAccountAPI {
+// zaiAccountAPIEffects builds the production parts over the daemon's shared
+// poller: the reviewed transport to zaiaccountapi.Destination() only, and a
+// credential reader over claudesettings.ReadEnv with a fresh per-daemon
+// fingerprint salt. A construction failure is a coding mistake (a fixed
+// destination) or a failed random read; it is logged once and leaves the
+// parts nil, so no sweep starts.
+func zaiAccountAPIEffects(logger outbound.Logger, poller *services.AccountPoller) zaiAccountAPI {
 	var transport outbound.AccountQuotaTransport
 	var credentials services.ZaiCredentialReader
 	t, terr := accountquota.NewHTTPTransport([]outbound.FixedDestination{zaiaccountapi.Destination()})
-	fp, ferr := zaiaccountapi.NewFingerprinter()
+	reader, rerr := zaiaccountapi.NewCredentialReader(claudesettings.ReadEnv)
 	switch {
 	case terr != nil:
 		logger.LogError("permissions", "", fmt.Sprintf("zaiaccountapi: building the account-quota transport: %v", terr))
-	case ferr != nil:
-		logger.LogError("permissions", "", fmt.Sprintf("zaiaccountapi: %v", ferr))
+	case rerr != nil:
+		logger.LogError("permissions", "", fmt.Sprintf("zaiaccountapi: %v", rerr))
 	default:
 		transport = t
-		credentials = zaiaccountapi.NewCredentialReader(claudesettings.ReadEnv, fp)
+		credentials = reader
 	}
-	return newZaiAccountAPI(transport, credentials)
+	return newZaiAccountAPI(poller, transport, credentials)
 }
 
 // newZaiAccountAPI is zaiAccountAPIEffects over given parts, so a test can
@@ -56,8 +55,7 @@ func zaiAccountAPIEffects(logger outbound.Logger) zaiAccountAPI {
 // Z.ai poll key — AccountPoller.Revoke deletes by AccountQuotaKey.Provider,
 // which services.ZaiAccountQuotaKey stamps as session.ProviderZai — and the
 // sweep's next tick clears each session's zai snapshot.
-func newZaiAccountAPI(transport outbound.AccountQuotaTransport, credentials services.ZaiCredentialReader) zaiAccountAPI {
-	poller := services.NewAccountPoller()
+func newZaiAccountAPI(poller *services.AccountPoller, transport outbound.AccountQuotaTransport, credentials services.ZaiCredentialReader) zaiAccountAPI {
 	return zaiAccountAPI{
 		Start: func() error { return nil },
 		Stop: func() error {
@@ -70,10 +68,10 @@ func newZaiAccountAPI(transport outbound.AccountQuotaTransport, credentials serv
 	}
 }
 
-// zaiAccountSweepInterval matches museAccountSweepInterval: it bounds how
-// long a revoke or a lost write takes to settle, not the account-API call
-// rate, which AccountPoller's fresh window bounds.
-const zaiAccountSweepInterval = time.Minute
+// zaiAccountSweepInterval is museAccountSweepInterval: it bounds how long a
+// revoke or a lost write takes to settle, not the account-API call rate,
+// which AccountPoller's fresh window bounds.
+const zaiAccountSweepInterval = museAccountSweepInterval
 
 // sweeper builds the per-session sweep, gated on the permission
 // zaiaccountapi.PermissionDeclaration declares, or nil when the parts could

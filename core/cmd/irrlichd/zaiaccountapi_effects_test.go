@@ -18,7 +18,7 @@ import (
 )
 
 func TestZaiAccountAPI_SweeperIsBuiltWhenThePartsAre(t *testing.T) {
-	api := zaiAccountAPIEffects(e2eLog{})
+	api := zaiAccountAPIEffects(e2eLog{}, services.NewAccountPoller())
 	if api.transport == nil || api.credentials == nil {
 		t.Fatal("zaiAccountAPIEffects built no transport or credential reader for the fixed Z.ai destination")
 	}
@@ -28,7 +28,7 @@ func TestZaiAccountAPI_SweeperIsBuiltWhenThePartsAre(t *testing.T) {
 }
 
 func TestZaiAccountAPI_NoSweeperWithoutParts(t *testing.T) {
-	if got := newZaiAccountAPI(nil, nil).sweeper(nil, nil, nil, e2eLog{}); got != nil {
+	if got := newZaiAccountAPI(services.NewAccountPoller(), nil, nil).sweeper(nil, nil, nil, e2eLog{}); got != nil {
 		t.Fatal("sweeper() built a sweep with nothing to poll through")
 	}
 }
@@ -79,9 +79,9 @@ func (g *loopbackOnlyDials) snapshot() ([]string, int) {
 	return append([]string(nil), g.refused...), g.allowed
 }
 
-type zaiTestSessions []*session.SessionState
+type fakeSessionList []*session.SessionState
 
-func (s zaiTestSessions) ListAll() ([]*session.SessionState, error) { return s, nil }
+func (s fakeSessionList) ListAll() ([]*session.SessionState, error) { return s, nil }
 
 type zaiTestWriter struct {
 	mu     sync.Mutex
@@ -105,7 +105,7 @@ func (w *zaiTestWriter) SetProviderRateLimit(string, string, *session.RateLimitS
 // Z.ai even when it runs the code that would.
 func TestZaiAccountAPI_ProductionPathNeverLeavesLoopback(t *testing.T) {
 	guard := installLoopbackOnlyDials(t)
-	api := zaiAccountAPIEffects(e2eLog{})
+	api := zaiAccountAPIEffects(e2eLog{}, services.NewAccountPoller())
 	if api.transport == nil || api.credentials == nil {
 		t.Fatal("production parts were not built")
 	}
@@ -118,7 +118,7 @@ func TestZaiAccountAPI_ProductionPathNeverLeavesLoopback(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic","ANTHROPIC_AUTH_TOKEN":"not-a-real-key"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sessions := zaiTestSessions{{
+	sessions := fakeSessionList{{
 		SessionID: "z1", Adapter: "claude-code", CWD: dir,
 		Route: &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.z.ai/api/anthropic",
 			Source: "settings:local", SettingsFile: settings},
@@ -185,7 +185,7 @@ func (c *countingZaiTransport) Fetch(context.Context, outbound.AccountQuotaReque
 // again; Apply (Start) does nothing and never fails the grant.
 func TestZaiAccountAPI_StopRevokesZaiKeys(t *testing.T) {
 	transport := &countingZaiTransport{}
-	api := newZaiAccountAPI(transport, nil)
+	api := newZaiAccountAPI(services.NewAccountPoller(), transport, nil)
 	if err := api.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ package services
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"irrlicht/core/adapters/outbound/zaiaccountapi"
@@ -54,16 +55,13 @@ type ZaiAccountSweeper struct {
 	// failure streak, logged once. Touched only from the sweep goroutine.
 	keys    map[AccountQuotaKey]bool
 	failing map[string]bool
-	// written is the key fingerprint each session's current zai reading was
-	// fetched under, so a reading is never left standing as another key's.
-	written map[string]string
 	// listFailing marks a session-listing failure streak, logged once.
 	listFailing bool
 }
 
 // NewZaiAccountSweeper builds a sweeper; Run starts it.
 func NewZaiAccountSweeper(deps ZaiAccountSweeperDeps) *ZaiAccountSweeper {
-	return &ZaiAccountSweeper{deps: deps, keys: map[AccountQuotaKey]bool{}, failing: map[string]bool{}, written: map[string]string{}}
+	return &ZaiAccountSweeper{deps: deps, keys: map[AccountQuotaKey]bool{}, failing: map[string]bool{}}
 }
 
 // Run sweeps once immediately, then every Interval, until ctx is done.
@@ -136,14 +134,14 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 			if listed == nil || !sameRateLimitReading(listed, snap) {
 				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderZai, snap)
 			}
-			s.written[st.SessionID] = cred.Fingerprint
-		case listed != nil && s.written[st.SessionID] != cred.Fingerprint:
-			// The reading on the session was not fetched with this key — the
-			// key changed, or the reading predates this daemon's salt — and
-			// this key has none yet. Clear it rather than show another key's
-			// figures as this one's (#2161 review;
+		case listed != nil:
+			// The poller holds no reading for this key, so whatever the
+			// session shows was not fetched with it — the key changed, or the
+			// reading predates this daemon's salt. Clear it rather than show
+			// it as this key's (#2161 review;
 			// TestZaiAccountSweep_KeyChangeNeverKeepsTheOldKeysReading was
-			// seen red before this branch existed).
+			// seen red before this branch existed). A stale reading under the
+			// same key is not this case: ZaiAccountRefresh returns it, marked.
 			s.clear(st.SessionID, listed)
 		}
 	}
@@ -152,33 +150,14 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 			s.deps.Poller.Forget(key)
 		}
 	}
-	for id := range s.failing {
-		if !seen[id] {
-			delete(s.failing, id)
-		}
-	}
-	for id := range s.written {
-		if !seen[id] {
-			delete(s.written, id)
-		}
-	}
+	maps.DeleteFunc(s.failing, func(id string, _ bool) bool { return !seen[id] })
 }
 
 // clear removes the session's zai reading, if the listed copy holds one.
 func (s *ZaiAccountSweeper) clear(sessionID string, listed *session.RateLimitSnapshot) {
-	delete(s.written, sessionID)
 	if listed != nil {
 		s.deps.Writer.SetProviderRateLimit(sessionID, session.ProviderZai, nil)
 	}
-}
-
-// listedProviderSnapshot returns st's rate-limit snapshot when it is
-// provider's.
-func listedProviderSnapshot(st *session.SessionState, provider string) *session.RateLimitSnapshot {
-	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != provider {
-		return nil
-	}
-	return st.Metrics.RateLimit
 }
 
 func (s *ZaiAccountSweeper) logFailure(sessionID string, err error) {

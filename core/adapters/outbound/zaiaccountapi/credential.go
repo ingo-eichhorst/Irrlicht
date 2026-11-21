@@ -56,41 +56,35 @@ func (e *CredentialUnavailableError) Error() string {
 // Credential is a resolved key and the fingerprint the poll is keyed by.
 type Credential struct {
 	Key outbound.Credential
-	// Fingerprint identifies the key within this daemon's lifetime only:
-	// see Fingerprinter. It is credential identity, not account identity.
+	// Fingerprint identifies the key within one CredentialReader's — one
+	// daemon's — lifetime only. It is credential identity, not account
+	// identity.
 	Fingerprint string
 }
 
-// Fingerprinter derives a key's poll identity: HMAC-SHA256 under a random
-// salt drawn once per daemon. The salt is never persisted or logged, so a
-// fingerprint cannot be matched against a key outside this process, and the
-// key itself is never retained by it.
-type Fingerprinter struct{ salt []byte }
+// CredentialReader reads the key for a Z.ai-routed session and fingerprints
+// it: HMAC-SHA256 under a random salt drawn when the reader is built, once
+// per daemon. The salt is never persisted or logged, so a fingerprint cannot
+// be matched against a key outside this process, and the key itself is
+// never retained by the reader.
+type CredentialReader struct {
+	read EnvFileReader
+	salt []byte
+}
 
-// NewFingerprinter draws a fresh 32-byte salt.
-func NewFingerprinter() (*Fingerprinter, error) {
+// NewCredentialReader builds a reader over read with a fresh 32-byte salt.
+func NewCredentialReader(read EnvFileReader) (*CredentialReader, error) {
 	salt := make([]byte, 32)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("zaiaccountapi: drawing the fingerprint salt: %w", err)
 	}
-	return &Fingerprinter{salt: salt}, nil
+	return &CredentialReader{read: read, salt: salt}, nil
 }
 
-func (f *Fingerprinter) fingerprint(key string) string {
-	mac := hmac.New(sha256.New, f.salt)
+func (r *CredentialReader) fingerprint(key string) string {
+	mac := hmac.New(sha256.New, r.salt)
 	mac.Write([]byte(key))
 	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// CredentialReader reads the key for a Z.ai-routed session.
-type CredentialReader struct {
-	read EnvFileReader
-	fp   *Fingerprinter
-}
-
-// NewCredentialReader builds a reader over read and fp.
-func NewCredentialReader(read EnvFileReader, fp *Fingerprinter) *CredentialReader {
-	return &CredentialReader{read: read, fp: fp}
 }
 
 // Read returns the key from the settings file route names
@@ -120,5 +114,5 @@ func (r *CredentialReader) Read(route *session.RouteObservation) (Credential, er
 	if key == "" {
 		return Credential{}, &CredentialUnavailableError{Reason: ReasonNoKey}
 	}
-	return Credential{Key: outbound.NewCredential(key), Fingerprint: r.fp.fingerprint(key)}, nil
+	return Credential{Key: outbound.NewCredential(key), Fingerprint: r.fingerprint(key)}, nil
 }

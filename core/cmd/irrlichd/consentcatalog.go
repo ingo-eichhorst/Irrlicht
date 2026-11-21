@@ -12,7 +12,7 @@ import (
 )
 
 // consentCatalog returns every declaration the permission wizard offers: the
-// agent adapters in agents.All() plus eight daemon-wide entries with no
+// agent adapters in agents.All() plus the daemon-wide entries with no
 // Source/Process axes — the Gas Town orchestrator (reads ~/gt), launcher-identity
 // capture (reads whitelisted env vars from agent processes for click-to-focus),
 // the kitty remote-control config patch (writes kitty.conf for tab-precise

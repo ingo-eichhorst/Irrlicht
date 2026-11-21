@@ -617,11 +617,12 @@ below.
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
   All three project the **full consent catalog** (`consentCatalog` in
-  `core/cmd/irrlichd`), not `agents.All()`: eight daemon-wide declarations —
+  `core/cmd/irrlichd`), not `agents.All()`: the daemon-wide declarations —
   gastown, launcher, kitty, endpoint, Muse's account API (#2007), the
   Claude Code account permission (#2095), the worker-list orchestrator
-  (#2148), and Z.ai's coding-plan quota (#2010) — are appended outside the
-  adapter registry (`consentCatalog` is the list; this sentence is not), and
+  (#2148), and Z.ai's coding-plan quota (#2010) at the time of writing;
+  `consentCatalog` is the list — are appended outside the adapter registry,
+  and
   projecting only the registry is exactly how the kitty config patch was
   offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is

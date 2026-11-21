@@ -3,6 +3,7 @@ package services
 import (
 	"testing"
 
+	"irrlicht/core/adapters/outbound/zaiaccountapi"
 	"irrlicht/core/domain/session"
 )
 
@@ -13,8 +14,8 @@ func zaiAccountAPISnapshot(sampledAt int64) *session.RateLimitSnapshot {
 	return &session.RateLimitSnapshot{
 		Windows:             []session.RateLimitWindow{{UsedPercent: 1, WindowMinutes: 300}},
 		SampledAt:           sampledAt,
-		Provider:            "zai",
-		Product:             "GLM Coding Plan",
+		Provider:            session.ProviderZai,
+		Product:             zaiaccountapi.Product,
 		ObservationSource:   "account_api",
 		AttributionEvidence: "zai_account_api",
 		AttributionQuality:  session.AttributionQualityConfirmed,
@@ -41,7 +42,7 @@ func TestAccountBinder_LeavesAnotherProvidersSnapshotAlone(t *testing.T) {
 		if rl.ConfirmedAccountRef != "" {
 			t.Errorf("ConfirmedAccountRef = %q on a zai snapshot; the Anthropic login is not its account", rl.ConfirmedAccountRef)
 		}
-		if rl.Product != "GLM Coding Plan" {
+		if rl.Product != zaiaccountapi.Product {
 			t.Errorf("Product = %q, want GLM Coding Plan kept (the binder must not restamp another provider's product)", rl.Product)
 		}
 	})
@@ -53,7 +54,7 @@ func TestAccountBinder_LeavesAnotherProvidersSnapshotAlone(t *testing.T) {
 
 		g.b.Stamp(s)
 
-		if got := s.Metrics.RateLimit.Product; got != "GLM Coding Plan" {
+		if got := s.Metrics.RateLimit.Product; got != zaiaccountapi.Product {
 			t.Errorf("Product = %q, want GLM Coding Plan kept: the scrub on a revoked identity read is for the binder's own stamp, not another provider's", got)
 		}
 	})

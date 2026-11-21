@@ -717,15 +717,16 @@ func runDaemon() {
 	orchMonitor, orchCtx, orchCancel := setupOrchestratorMonitor(push, logger)
 	defer orchCancel()
 
-	// Muse's account-quota poller (issue #2007) is constructed once inside
-	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
-	// "exactly one AccountPoller per daemon" design. Its grant/revoke effects
-	// wire into the permission catalog below; its per-session sweep (#2057)
+	// The daemon's one AccountPoller (accountpoller.go: "exactly one
+	// AccountPoller per daemon"), shared by every account-quota provider:
+	// Muse (issue #2007) and Z.ai's coding plan (issue #2010). Revoke and
+	// Forget act only on a provider's own keys, so the providers cannot
+	// disturb each other's cached readings. Each provider's grant/revoke
+	// effects wire into the permission catalog below; its per-session sweep
 	// is started with the other background loops once the detector exists.
-	museAPI := museAccountAPIEffects(logger)
-	// Z.ai's coding-plan quota (#2010): its own poller, consent-gated by its
-	// own permission, polled per Z.ai-routed session by its sweep.
-	zaiAPI := zaiAccountAPIEffects(logger)
+	accountPoller := services.NewAccountPoller()
+	museAPI := museAccountAPIEffects(logger, accountPoller)
+	zaiAPI := zaiAccountAPIEffects(logger, accountPoller)
 
 	home, _ := os.UserHomeDir()
 	effects := consentEffects{

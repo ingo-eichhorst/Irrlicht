@@ -15,7 +15,7 @@ import (
 
 // ZaiAccountQuotaKey is the one function that decides the AccountQuotaKey a
 // Z.ai poll is admitted under: scoped to the CREDENTIAL, by the key's
-// salted in-memory fingerprint (zaiaccountapi.Fingerprinter).
+// salted in-memory fingerprint (zaiaccountapi.CredentialReader).
 //
 // Not session-scoped: two sessions sending the same key are billed to the
 // same plan and share one poll and one reading. Never provider-wide: two
@@ -79,21 +79,5 @@ func ZaiAccountRefresh(
 		}
 		return nil, errors.New("services: Z.ai quota not available yet")
 	}
-	snap, perr := zaiaccountapi.BuildSnapshot(obs.Body, obs.FetchedAt)
-	if perr != nil {
-		return nil, fmt.Errorf("services: parsing the Z.ai quota: %w", perr)
-	}
-	if !obs.LastAttempt.IsZero() {
-		snap.LastAttemptAt = obs.LastAttempt.Unix()
-	}
-	if obs.Stale {
-		snap.RetrievalFailure = obs.FailureReason
-		if err == nil {
-			err = fmt.Errorf("services: Z.ai quota is stale: %s", obs.FailureReason)
-		} else {
-			err = fmt.Errorf("services: polling the Z.ai quota (serving the last reading): %w", err)
-		}
-		return &snap, err
-	}
-	return &snap, nil
+	return snapshotFromObservation(obs, err, "the Z.ai quota", zaiaccountapi.BuildSnapshot)
 }

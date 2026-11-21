@@ -64,15 +64,17 @@ const (
 type Source struct {
 	// Layer is one of the Layer* constants.
 	Layer string
-	// Path is the settings file. Empty when Opaque.
+	// Path is the settings file, or "" for an opaque source (see Opaque).
 	Path string
-	// Opaque marks a source Claude Code applies whose content this package
-	// cannot reconstruct: an MDM profile, a --settings argument, or a layer
-	// whose file could not be located (no working directory, a relative
-	// CLAUDE_CONFIG_DIR, an unreadable drop-in directory). A lookup that
-	// reaches one before finding the variable cannot know the answer.
-	Opaque bool
 }
+
+// Opaque reports a source Claude Code applies whose content this package
+// cannot reconstruct: an MDM profile, a --settings argument, or a layer
+// whose file could not be located (no working directory, a relative
+// CLAUDE_CONFIG_DIR, an unreadable drop-in directory). A lookup that
+// reaches one before finding the variable cannot know the answer. Derived
+// from Path, so a Source with no file can never be read as one to skip.
+func (s Source) Opaque() bool { return s.Path == "" }
 
 // Inputs is what locating a session's settings files needs.
 type Inputs struct {
@@ -105,11 +107,11 @@ func Sources(in Inputs) []Source {
 	var out []Source
 	out = append(out, managedSources(in)...)
 	if in.CLIOpaque {
-		out = append(out, Source{Layer: LayerCLI, Opaque: true})
+		out = append(out, Source{Layer: LayerCLI})
 	}
 	out = append(out, localSources(in)...)
 	if in.CWD == "" {
-		out = append(out, Source{Layer: LayerProject, Opaque: true})
+		out = append(out, Source{Layer: LayerProject})
 	} else {
 		out = append(out, Source{Layer: LayerProject, Path: filepath.Join(in.CWD, ".claude", "settings.json")})
 	}
@@ -122,7 +124,7 @@ func managedSources(in Inputs) []Source {
 	for _, p := range in.MDMProfiles {
 		if _, err := os.Stat(p); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			// Present, or could not tell: either way its content is unknown.
-			out = append(out, Source{Layer: LayerManaged, Opaque: true})
+			out = append(out, Source{Layer: LayerManaged})
 			break
 		}
 	}
@@ -146,7 +148,7 @@ func managedSources(in Inputs) []Source {
 			out = append(out, Source{Layer: LayerManaged, Path: filepath.Join(dropins, name)})
 		}
 	case !errors.Is(err, fs.ErrNotExist):
-		out = append(out, Source{Layer: LayerManaged, Opaque: true})
+		out = append(out, Source{Layer: LayerManaged})
 	}
 	return append(out, Source{Layer: LayerManaged, Path: filepath.Join(in.ManagedDir, "managed-settings.json")})
 }
@@ -157,12 +159,12 @@ func managedSources(in Inputs) []Source {
 // one left in the starting directory, the root's value winning.
 func localSources(in Inputs) []Source {
 	if in.CWD == "" {
-		return []Source{{Layer: LayerLocal, Opaque: true}}
+		return []Source{{Layer: LayerLocal}}
 	}
 	startFile := Source{Layer: LayerLocal, Path: filepath.Join(in.CWD, ".claude", "settings.local.json")}
 	root, ok := repoRoot(in.CWD)
 	if !ok {
-		return []Source{{Layer: LayerLocal, Opaque: true}}
+		return []Source{{Layer: LayerLocal}}
 	}
 	if root == "" || samePath(root, in.Home) {
 		return []Source{startFile}
@@ -177,14 +179,14 @@ func localSources(in Inputs) []Source {
 func userSource(in Inputs) Source {
 	switch {
 	case in.ConfigDirUnknown:
-		return Source{Layer: LayerUser, Opaque: true}
+		return Source{Layer: LayerUser}
 	case in.ConfigDir != "":
 		if !filepath.IsAbs(in.ConfigDir) {
-			return Source{Layer: LayerUser, Opaque: true}
+			return Source{Layer: LayerUser}
 		}
 		return Source{Layer: LayerUser, Path: filepath.Join(in.ConfigDir, "settings.json")}
 	case in.Home == "":
-		return Source{Layer: LayerUser, Opaque: true}
+		return Source{Layer: LayerUser}
 	}
 	return Source{Layer: LayerUser, Path: filepath.Join(in.Home, ".claude", "settings.json")}
 }
@@ -260,10 +262,8 @@ func worktreeMainRoot(d string) (string, bool) {
 // which can be inline JSON holding a credential — is kept or returned.
 func FlagsTouchSettings(argv []string) bool {
 	for _, a := range argv {
-		for _, flag := range []string{"--settings", "--setting-sources"} {
-			if a == flag || strings.HasPrefix(a, flag+"=") {
-				return true
-			}
+		if name, _, _ := strings.Cut(a, "="); name == "--settings" || name == "--setting-sources" {
+			return true
 		}
 	}
 	return false
@@ -352,11 +352,9 @@ const (
 	// StatusNotSet: every source was read and none sets the variable.
 	StatusNotSet = "not-set"
 	// StatusUnreadable: a source that outranks every hit exists but could
-	// not be read or parsed.
+	// not be read or parsed, or cannot be reconstructed at all
+	// (Result.Source.Opaque() tells the two apart).
 	StatusUnreadable = "unreadable"
-	// StatusOpaque: a source that outranks every hit cannot be
-	// reconstructed (Source.Opaque).
-	StatusOpaque = "opaque"
 )
 
 // Result is the outcome of Lookup.
@@ -377,8 +375,8 @@ type Result struct {
 func Lookup(sources []Source, key string) Result {
 	keys := map[string]struct{}{key: {}}
 	for _, s := range sources {
-		if s.Opaque {
-			return Result{Status: StatusOpaque, Source: s}
+		if s.Opaque() {
+			return Result{Status: StatusUnreadable, Source: s}
 		}
 		env, err := ReadEnv(s.Path, keys)
 		if errors.Is(err, fs.ErrNotExist) {

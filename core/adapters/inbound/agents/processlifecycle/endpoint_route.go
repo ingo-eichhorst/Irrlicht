@@ -35,6 +35,11 @@ var endpointEnvKeys = map[string]struct{}{
 	claudeConfigDirKey: {},
 }
 
+// routeEnvKeys is the part of endpointEnvKeys the env-only ObserveRoute
+// reads: a non-Claude process's CLAUDE_CONFIG_DIR locates nothing, so it is
+// not read there at all.
+var routeEnvKeys = map[string]struct{}{endpointSourceKey: {}}
+
 // endpointSourceKey is the endpoint override key in endpointEnvKeys.
 const endpointSourceKey = "ANTHROPIC_BASE_URL"
 
@@ -56,7 +61,7 @@ func ObserveRoute(pid int, granted bool) *session.RouteObservation {
 	if !granted {
 		return &session.RouteObservation{Status: session.RouteDenied}
 	}
-	env, err := osProc.EnvOf(pid, endpointEnvKeys)
+	env, err := osProc.EnvOf(pid, routeEnvKeys)
 	return routeFromEnv(env, err)
 }
 

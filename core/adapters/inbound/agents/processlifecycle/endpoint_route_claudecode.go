@@ -7,19 +7,14 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// settingsHost is where a Claude Code session's settings files live on this
-// machine, apart from the ones under its working directory.
-type settingsHost struct {
-	Home        string
-	ManagedDir  string
-	MDMProfiles []string
-}
-
-// claudeSettingsHost is the seam tests replace so no test reads this
-// machine's real ~/.claude or managed-settings directory.
-var claudeSettingsHost = func() settingsHost {
+// claudeSettingsHost returns where a Claude Code session's settings files
+// live on this machine apart from the ones under its working directory: the
+// Home, ManagedDir and MDMProfiles of claudesettings.Inputs. It is the seam
+// tests replace so no test reads this machine's real ~/.claude or
+// managed-settings directory.
+var claudeSettingsHost = func() claudesettings.Inputs {
 	home, _ := os.UserHomeDir()
-	return settingsHost{Home: home, ManagedDir: claudesettings.ManagedDir(), MDMProfiles: claudesettings.MDMProfiles()}
+	return claudesettings.Inputs{Home: home, ManagedDir: claudesettings.ManagedDir(), MDMProfiles: claudesettings.MDMProfiles()}
 }
 
 // ObserveClaudeCodeRoute is ObserveRoute for a Claude Code session (issue
