@@ -49,7 +49,8 @@ const NONE = { kind: 'none' };
 // tokenGauge is the row's figure when the context window is unknown: the
 // Swift row's token text, "31.0K / ?", never a percentage.
 function tokenGauge(facts) {
-  if (!(facts.tokens > 0)) return NONE;
+  const hasTokens = facts.tokens > 0;
+  if (!hasTokens) return NONE;
   const text = tokenCount(facts.tokens) + ' / ' + windowCount(facts.contextWindow);
   return { kind: 'tokens', text, detail: formatTokens(facts.tokens) + ' tokens, context window unknown' };
 }

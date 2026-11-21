@@ -39,11 +39,11 @@ function topLevelSessions(payload) {
   const visit = (groups, top) => {
     for (const g of arrayOf(groups)) {
       const owner = top || g;
-      for (const a of arrayOf(g && g.agents)) if (isSession(a)) out.push({ session: a, group: owner });
-      visit(g && g.groups, owner);
+      for (const a of arrayOf(g?.agents)) if (isSession(a)) out.push({ session: a, group: owner });
+      visit(g?.groups, owner);
     }
   };
-  visit(payload && payload.groups, null);
+  visit(payload?.groups, null);
   return out;
 }
 
@@ -129,7 +129,7 @@ function placedFacts({ session, group }, order) {
 // (core/domain/session/grouped.go) starts from `var result []*AgentGroup`.
 export function readSessions(payload) {
   if (!isSessionsPayload(payload)) return null;
-  return topLevelSessions(payload).map(placedFacts);
+  return topLevelSessions(payload).map((placed, order) => placedFacts(placed, order));
 }
 
 function isSessionsPayload(payload) {

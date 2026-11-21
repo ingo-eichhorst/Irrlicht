@@ -154,13 +154,29 @@ const REPO = new URL('../../../../../', import.meta.url);
 export const DESIGN_CSS = new URL('tools/irrlicht-design-system/colors_and_type.css', REPO);
 export const SESSION_GO = new URL('core/domain/session/session.go', REPO);
 
+// declaration is the `--name: value` a `;`-separated chunk of CSS ends with,
+// as [name, value], or null. Read by hand rather than with one regex over the
+// file, whose overlapping quantifiers could backtrack super-linearly
+// (SonarCloud javascript:S8786); on colors_and_type.css both read the same 76
+// tokens in the same order with the same values (compared once by a scratch
+// script, not committed, when this replaced the regex).
+const TOKEN_NAME = /^[a-z0-9-]+$/i;
+
+function declaration(chunk) {
+  const line = chunk.slice(chunk.lastIndexOf('\n') + 1).trim();
+  const colon = line.indexOf(':');
+  if (!line.startsWith('--') || colon < 0) return null;
+  const name = line.slice(2, colon).trim();
+  return TOKEN_NAME.test(name) ? [name, line.slice(colon + 1).trim()] : null;
+}
+
 // cssTokens is the `--name: value;` declarations of the design system's CSS,
 // the first of each name. It fails rather than answer an empty map, so a file
 // this cannot read never passes for one that agrees.
 export function cssTokens(css) {
   const tokens = new Map();
-  for (const m of css.matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/gi)) {
-    if (!tokens.has(m[1])) tokens.set(m[1], m[2].trim());
+  for (const found of css.split(';').map(declaration)) {
+    if (found && !tokens.has(found[0])) tokens.set(found[0], found[1]);
   }
   expect(tokens.size, 'no --token declarations were read from colors_and_type.css').toBeGreaterThan(10);
   return tokens;
@@ -186,7 +202,7 @@ export function canonicalStates(goSource) {
   const literal = /canonicalStates\s*=\s*\[\]string\{([^}]*)\}/.exec(goSource);
   expect(literal, 'no canonicalStates literal in session.go').not.toBeNull();
   const names = literal[1].split(',').map((s) => s.trim()).filter(Boolean).map((ident) => {
-    const value = new RegExp(`^\\s*${ident}\\s*=\\s*"([a-z_]+)"`, 'm').exec(goSource);
+    const value = new RegExp(String.raw`^\s*${ident}\s*=\s*"([a-z_]+)"`, 'm').exec(goSource);
     expect(value, `${ident} has no string value in session.go`).not.toBeNull();
     return value[1];
   });
@@ -197,5 +213,6 @@ export function canonicalStates(goSource) {
 // coversCanonicalStates: `map` is keyed by exactly the daemon's states plus
 // `unknown`, the fallback for a state this panel cannot read.
 export function coversCanonicalStates(map, goSource) {
-  expect(Object.keys(map).sort()).toEqual([...canonicalStates(goSource), 'unknown'].sort());
+  const sorted = (names) => names.sort((a, b) => a.localeCompare(b));
+  expect(sorted(Object.keys(map))).toEqual(sorted([...canonicalStates(goSource), 'unknown']));
 }

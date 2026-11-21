@@ -56,7 +56,8 @@ function pressureNote(facts) {
   if (!STILL_GOING.has(facts.state)) return null;
   // The Swift check also asks for a fill above 0 (an unknown window reads
   // 0); with a threshold above 0, as this fixed one is, `>=` excludes it too.
-  if (!(facts.percent >= PRESSURE_ALERT_PERCENT)) return null;
+  const nearLimit = facts.percent >= PRESSURE_ALERT_PERCENT;
+  if (!nearLimit) return null;
   return {
     kind: 'pressure',
     text: 'Switch to a fresh session soon',

@@ -5,7 +5,14 @@
 // checks no layout: Herdr's own `herdr-app check` and a look at the window
 // are what do that.
 
-export class View {}
+// View is the class a mod's default export extends; Herdr calls the mod's own
+// init() and render() on it, so the stand-in needs nothing of its own but a
+// way to tell it from the real one.
+export class View {
+  get stub() {
+    return true;
+  }
+}
 
 // el is one element: `kind` ("div", "svg", ...), `arg` (an svg's path), the
 // `calls` made on it and its children (`kids`; not `children`, which is a
