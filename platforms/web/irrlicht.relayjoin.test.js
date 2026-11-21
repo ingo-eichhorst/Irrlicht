@@ -202,13 +202,7 @@ describe('a relayed session joins the worker row its daemon is named after (#214
   })
 
   test('turning the relay source off drops its rows and gives the workers back', async () => {
-    // The closed socket reconnects after its 1 s backoff; wait for the new one
-    // rather than faking timers (that deadlocks on irrlicht.js's own loops).
-    const closed = ws
-    const deadline = Date.now() + 3000
-    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    expect(global.lastMockWebSocket, `no reconnect within ${Date.now() - deadline + 3000} ms`).not.toBe(closed)
-    ws = global.lastMockWebSocket
+    ws = await waitForNewSocket(ws)
     ws.simulateOpen()
     // The relay's connect sequence: the snapshot, then the replay.
     ws.simulateMessage({ type: 'snapshot', daemons: [{ daemon_id: D3, daemon_label: 'team-a-m1-2', status: 'connected' }] })

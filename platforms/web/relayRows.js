@@ -27,19 +27,19 @@ export function withoutRelayOnlySessions(groups) {
     for (const g of (gs || [])) {
       const all = g.agents || [];
       const agents = all.filter(a => sessionOrigin(a) !== 'remote' || isShadowedRemote(a, localIds));
-      const sub = g.groups && strip(g.groups);
-      if (emptiedAway(g, all, agents, sub, g.unattached_workers)) continue;
-      out.push({ ...g, agents, groups: sub });
+      const next = { ...g, agents, groups: g.groups && strip(g.groups) };
+      if (!emptiedAway(all, next)) out.push(next);
     }
     return out;
   })(groups);
 }
 
-// emptiedAway: g lost every row it had (`before` → `after`) and nothing else
-// keeps it on screen — not an orchestrator type, sub-groups, or unattached
-// workers. A group that was already empty is not "emptied".
-function emptiedAway(g, before, after, sub, workers) {
-  return after.length === 0 && before.length > 0 && !g.type && !sub?.length && !workers?.length;
+// emptiedAway: the rebuilt group `next` lost every row it had (`before`) and
+// nothing else keeps it on screen — not an orchestrator type, sub-groups, or
+// unattached workers. A group that was already empty is not "emptied".
+function emptiedAway(before, next) {
+  return before.length > 0 && next.agents.length === 0 &&
+    !next.type && !next.groups?.length && !next.unattached_workers?.length;
 }
 
 // remoteRootSessions lists the remote-origin rows that sit directly in a
@@ -79,26 +79,20 @@ export function remoteRootSessions(groups) {
 // a copy carrying the worker's role, icon, description, worker_name and
 // worker_id; the worker leaves that group's unattached_workers; a project
 // group the move empties is dropped (emptiedAway). Returns `groups` itself
-// when nothing joins,
-// and never writes into it or into a session.
+// when nothing joins, and never writes into it or into a session.
 export function joinRelayWorkers(groups, labelOf) {
   const workers = workerCensus(groups);
   if (!workers.size) return groups;
   const localIds = localBareIds(groups);
   const winners = new Map(); // worker name → relay session
-  (function walk(gs) {
-    for (const g of (gs || [])) {
-      for (const a of (g.agents || [])) {
-        if (sessionOrigin(a) !== 'remote' || a.parent_session_id || isShadowedRemote(a, localIds)) continue;
-        const name = labelOf(sourceIdOf(a.session_id));
-        const w = name ? workers.get(name) : null;
-        if (!w || w.count !== 1 || !w.free) continue;
-        const held = winners.get(name);
-        if (!held || isNewer(a, held)) winners.set(name, a);
-      }
-      if (g.groups) walk(g.groups);
-    }
-  })(groups);
+  for (const a of remoteRootSessions(groups)) {
+    if (a.parent_session_id || isShadowedRemote(a, localIds)) continue;
+    const name = labelOf(sourceIdOf(a.session_id));
+    const w = name ? workers.get(name) : null;
+    if (!w || w.count !== 1 || !w.free) continue;
+    const held = winners.get(name);
+    if (!held || isNewer(a, held)) winners.set(name, a);
+  }
   if (!winners.size) return groups;
 
   const joinedIds = new Set();
@@ -117,11 +111,13 @@ export function joinRelayWorkers(groups, labelOf) {
     for (const g of gs) {
       const all = g.agents || [];
       const kept = all.filter(a => !joinedIds.has(a.session_id));
-      const agents = kept.concat(into.get(g) || []);
-      const sub = g.groups && rebuild(g.groups);
-      const workersLeft = g.unattached_workers && g.unattached_workers.filter(w => !winners.has(w.worker_name));
-      if (emptiedAway(g, all, agents, sub, workersLeft)) continue;
-      out.push({ ...g, agents, groups: sub, unattached_workers: workersLeft });
+      const next = {
+        ...g,
+        agents: kept.concat(into.get(g) || []),
+        groups: g.groups && rebuild(g.groups),
+        unattached_workers: g.unattached_workers && g.unattached_workers.filter(w => !winners.has(w.worker_name)),
+      };
+      if (!emptiedAway(all, next)) out.push(next);
     }
     return out;
   })(groups);

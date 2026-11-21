@@ -106,6 +106,19 @@ class MockWebSocket {
 }
 global.WebSocket = MockWebSocket;
 
+// waitForNewSocket resolves with the socket the dashboard opened after
+// `closed` (its reconnect timer fires 1 s after a close), polling rather than
+// faking timers — fake timers deadlock on irrlicht.js's own setInterval
+// loops. Fails with the elapsed time when none appears within `ms`.
+global.waitForNewSocket = async (closed, ms = 3000) => {
+  const start = Date.now();
+  while (global.lastMockWebSocket === closed) {
+    if (Date.now() - start > ms) throw new Error(`no reconnect within ${Date.now() - start} ms`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return global.lastMockWebSocket;
+};
+
 // Stub fetch — all call sites have .catch(() => null)
 global.fetch = () => Promise.reject(new Error('no server'));
 

@@ -109,11 +109,7 @@ describe('a publish that did not happen is not remembered as one', () => {
     // re-checks the connection when its debounce fires (#2149), and the timer
     // moving the source to 'reconnecting' inside that debounce would be read
     // as a disconnect.
-    const closed = ws
-    const deadline = Date.now() + 3000
-    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    expect(global.lastMockWebSocket, 'no reconnect within 3 s').not.toBe(closed)
-    ws = global.lastMockWebSocket
+    ws = await waitForNewSocket(ws)
     ws.simulateOpen()
     await settle()
 

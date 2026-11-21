@@ -599,9 +599,10 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     // relay is shown in its orchestrator worker's row. The join key is the
     // forwarding daemon's label (the container hostname), which equals the
     // worker's name. Red-first on 8d6279df7: six of the tests below fail
-    // there. Four pass there by construction, because nothing joins: the two
-    // `testLock…` tests, and the two whose comments name the rule they guard
-    // against a mutation (the no-label daemon, two workers sharing a name).
+    // there. Five pass there by construction, because nothing joins: the two
+    // `testLock…` tests, and the three whose comments name the rule they guard
+    // against a mutation (the no-label daemon, a name busy elsewhere, two
+    // workers sharing a name).
 
     private static func slot(_ name: String, job: String? = nil) -> SessionManager.UnattachedWorker {
         SessionManager.UnattachedWorker(
@@ -751,6 +752,21 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
         XCTAssertEqual(rig?.agents?.map(\.id), ["local-x"])
         XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/proc-1"])
+    }
+
+    /// Passes on the parent by construction; guards the census against the
+    /// mutation that stops it counting session rows, so a name that is free in
+    /// one rig and busy in another reads as unique.
+    func testAFreeWorkerWhoseNameIsBusyElsewhereJoinsNothing() {
+        var busy = makeSession(id: "pole-1")
+        busy.role = "polecat"
+        busy.workerName = "team-a-m1-1"
+        seedPool(extra: [AgentGroup(name: "gt", type: "gastown", groups: [AgentGroup(name: "rig", agents: [busy])])])
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+
+        XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/proc-1"])
+        XCTAssertEqual(rig?.unattachedWorkers?.count, 2)
     }
 
     /// Passes on the parent by construction; guards the one-worker-per-name

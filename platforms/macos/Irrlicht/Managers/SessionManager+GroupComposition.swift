@@ -159,7 +159,7 @@ extension SessionManager {
     ///   id. A label equal to the daemon id is the snapshot / `daemon_status`
     ///   arms' stand-in for a missing `daemon_label` and never joins;
     /// - it is a relay root (no parent) with no local copy by id — the same
-    ///   id-only filter as `relayGroups()`;
+    ///   id-only filter as `relayGroups(excluding:)`;
     /// - exactly one worker in the local groups is named X, counting session
     ///   rows with that `workerName` and `unattachedWorkers` entries alike,
     ///   and that one is unattached. A worker with a local session therefore
@@ -169,44 +169,40 @@ extension SessionManager {
     /// recompose and never written into `localApiGroups` or `relaySessionMap`.
     func relayWorkerJoins() -> [String: SessionState] {
         guard !relaySessionMap.isEmpty, !relayDaemons.isEmpty else { return [:] }
+        // Session rows are counted over the same walk that fills sessionMap.
         var count: [String: Int] = [:]
+        for s in localApiGroups.flatMap({ flattenAgents(from: $0) }) {
+            if let name = s.workerName { count[name, default: 0] += 1 }
+        }
         var free: [String: UnattachedWorker] = [:]
-        func census(_ group: AgentGroup) {
-            for agent in group.agents ?? [] {
-                for s in [agent] + (agent.children ?? []) {
-                    if let name = s.workerName { count[name, default: 0] += 1 }
-                }
-            }
+        func collectFree(_ group: AgentGroup) {
             for w in group.unattachedWorkers ?? [] {
                 count[w.workerName, default: 0] += 1
                 free[w.workerName] = w
             }
-            group.groups?.forEach(census)
+            group.groups?.forEach(collectFree)
         }
-        localApiGroups.forEach(census)
+        localApiGroups.forEach(collectFree)
         guard !free.isEmpty else { return [:] }
 
         let localIDs = Set(sessionMap.keys)
         var winners: [String: SessionState] = [:]
         for s in relaySessionMap.values where s.parentSessionId == nil && !localIDs.contains(s.id) {
             guard let daemon = s.daemonID, let name = relayDaemons[daemon], name != daemon,
-                  count[name] == 1, free[name] != nil else { continue }
+                  count[name] == 1, let w = free[name] else { continue }
             if let held = winners[name],
                s.firstSeen < held.firstSeen || (s.firstSeen == held.firstSeen && s.rowID > held.rowID) {
                 continue
             }
-            winners[name] = s
-        }
-        return winners.reduce(into: [:]) { out, pair in
-            guard let w = free[pair.key] else { return }
-            var copy = pair.value
+            var copy = s
             copy.role = w.role
             copy.roleIcon = w.icon
             copy.roleDescription = w.description
             copy.workerName = w.workerName
             copy.workerID = w.workerID
-            out[pair.key] = copy
+            winners[name] = copy
         }
+        return winners
     }
 
     /// `group` as displayed: each joined session appended to the session rows
@@ -239,7 +235,7 @@ extension SessionManager {
     /// row (#2149). No child nesting in v0; the common same-daemon case yields
     /// no relay-only rows, so this only renders a genuine second daemon's
     /// sessions.
-    func relayGroups(excluding joined: Set<String> = []) -> [AgentGroup] {
+    func relayGroups(excluding joined: Set<String>) -> [AgentGroup] {
         guard !relaySessionMap.isEmpty else { return [] }
         let localIDs = Set(sessionMap.keys)
         let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) && !joined.contains($0.rowID) }

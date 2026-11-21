@@ -159,11 +159,7 @@ describe('a socket that closes inside the publish debounce (#2149)', () => {
     // A closing relay socket drops the rows it delivered, and the debounce
     // timer scheduled while it was connected would otherwise fire after the
     // drop and publish the emptied list as the truth.
-    const closed = ws
-    const deadline = Date.now() + 3000
-    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    expect(global.lastMockWebSocket, 'no reconnect within 3 s').not.toBe(closed)
-    ws = global.lastMockWebSocket
+    ws = await waitForNewSocket(ws)
     mocks.publishLedgerSnapshot.mockClear()
     ws.simulateOpen() // the connect edge schedules a publish
     ws.simulateMessage(sessionFrame({ session_id: 'proc-10', state: 'waiting', project_name: 'irrlicht' }))

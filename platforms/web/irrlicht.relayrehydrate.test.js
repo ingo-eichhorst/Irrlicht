@@ -174,11 +174,7 @@ describe('relay rows survive a replaced local tree (#2149 phase 1)', () => {
     expect(rowFor(REMOTE_ID), 'a closed relay socket left its row behind').toBeNull()
     expect(rowFor('loc-1'), 'a local row went with the relay socket').not.toBeNull()
 
-    const closed = ws
-    const deadline = Date.now() + 3000
-    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    expect(global.lastMockWebSocket, 'no reconnect within 3 s').not.toBe(closed)
-    ws = global.lastMockWebSocket
+    ws = await waitForNewSocket(ws)
     ws.simulateOpen()
     ws.simulateMessage({ type: 'snapshot', daemons: [{ daemon_id: DAEMON, daemon_label: 'box-1', status: 'connected' }] })
     ws.simulateMessage(relayPush('waiting'))

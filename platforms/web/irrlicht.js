@@ -1993,14 +1993,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     }
 
     // adoptLocalTree makes the local daemon's REST groups the tree, carrying
-    // every relay row across (#2149). Relay sessions live in this same tree
-    // but never in a REST payload, so a plain replace dropped them until their
-    // daemon's next push — which then re-inserted them through
-    // insertNewSession and notified again. Both replacing paths come here: the
-    // first load (whose fetch can land after the relay replay, since
-    // rebuildSources() runs beside it) and a rehydrate that adopts a changed
-    // structure. The carry places a row by project name, as insertNewSession
-    // does, and does not notify.
+    // every relay row across (#2149): relay rows live in this tree but never
+    // in a REST payload. Both replacing paths come here — the first load
+    // (whose fetch can land after the relay replay) and a rehydrate that
+    // adopts. The carry places a row by project name, as insertNewSession
+    // does, but never notifies: the row is not new.
     //
     // Normalized first: the daemon omits an empty `agents` (omitempty), so a
     // same-named orchestrator group would otherwise have nothing to push onto.
@@ -2338,29 +2335,29 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     }
 
     // removeDaemonRows deletes one relay daemon's rows without rendering and
-    // returns how many it removed.
+    // says whether there were any.
     function removeDaemonRows(daemonId) {
       const ids = daemonSessionIds(dashboardGroups, daemonId);
       for (const sid of ids) applySessionDelete(sid);
-      return ids.length;
+      return ids.length > 0;
     }
 
     // dropSourceRows deletes every relay row a source delivered, once that
     // source is gone (its socket closed, or Settings dropped it), and says
-    // whether it removed any. The web's counterpart of macOS clearing
-    // relaySessionMap on link-down: a session that ended while the link was
-    // down would otherwise stay as a ghost row, since the relay's reconnect
-    // replay re-adds only the survivors. Until #2149 the rehydrate's
-    // every-poll adopt wiped relay rows as a side effect; it no longer does.
+    // whether it removed any — as macOS clears relaySessionMap on link-down. A
+    // session that ended while the link was down would otherwise stay as a
+    // ghost row, since the relay's reconnect replay re-adds only survivors.
     //
     // Keyed on the daemons the source's push frames named, not on its label
     // map: a row can arrive with no label (a dropped connect snapshot), and
     // another source closing must not take it.
     function dropSourceRows(src) {
-      let removed = 0;
-      for (const daemonId of src.deliveredDaemons) removed += removeDaemonRows(daemonId);
+      let removed = false;
+      for (const daemonId of src.deliveredDaemons) {
+        if (removeDaemonRows(daemonId)) removed = true;
+      }
       src.deliveredDaemons.clear();
-      return removed > 0;
+      return removed;
     }
 
     // trackPushSeq advances one daemon's seq cursor and, on a gap, triggers an
@@ -2400,6 +2397,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             if (msg.status === 'disconnected') {
               src.daemons.delete(msg.daemon_id);
               src.seqCursors.delete(msg.daemon_id);
+              src.deliveredDaemons.delete(msg.daemon_id);
               purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
             } else {
               src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
@@ -2519,17 +2517,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
 
     // displayedGroupOf is the displayed group a session's row sits in (its own
     // or a parent's), or null.
-    function displayedGroupOf(sessionId) {
+    function displayedGroupOf(sessionId, groups = displayedGroups) {
       const holds = (arr) => (arr || []).some(a => a.session_id === sessionId || holds(a.children));
-      let found = null;
-      (function walk(gs) {
-        for (const g of gs) {
-          if (found) return;
-          if (holds(g.agents)) found = g;
-          else if (g.groups) walk(g.groups);
-        }
-      })(displayedGroups);
-      return found;
+      for (const g of groups) {
+        const hit = holds(g.agents) ? g : (g.groups && displayedGroupOf(sessionId, g.groups));
+        if (hit) return hit;
+      }
+      return null;
     }
 
     // Kept as a named export because it IS the dashboard's entry point for a
