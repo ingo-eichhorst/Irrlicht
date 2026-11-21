@@ -34,7 +34,7 @@ function collectGroups(groups: unknown, out: SessionRecord[]): void {
 export class SessionStore {
   private sessions = new Map<string, SessionRecord>();
   private lastSeq = 0;
-  private listeners = new Set<() => void>();
+  private readonly listeners = new Set<() => void>();
 
   hydrate(sessionsResponse: unknown): void {
     const flat: SessionRecord[] = [];
@@ -45,24 +45,32 @@ export class SessionStore {
     this.fire();
   }
 
-  apply(msg: PushMessage): ApplyResult {
-    let result: ApplyResult = 'unchanged';
-    const id = msg.session?.session_id;
-    if (typeof id === 'string' && id !== '') {
-      if (msg.type === 'session_created' || msg.type === 'session_updated') {
-        this.sessions.set(id, msg.session as SessionRecord);
-        result = 'changed';
-      } else if (msg.type === 'session_deleted' && this.sessions.delete(id)) {
-        result = 'changed';
-      }
-    }
-    if (typeof msg.seq === 'number' && msg.seq > 0) {
-      const gap = this.lastSeq > 0 && msg.seq > this.lastSeq + 1;
-      this.lastSeq = msg.seq;
-      if (gap) result = 'gap';
-    }
-    if (result !== 'unchanged') this.fire();
+  /** Advances the seq cursor; true when the frame skipped ahead of it. Every frame must pass through here. */
+  trackSeq(msg: PushMessage): boolean {
+    if (typeof msg.seq !== 'number' || msg.seq <= 0) return false;
+    const gap = this.lastSeq > 0 && msg.seq > this.lastSeq + 1;
+    this.lastSeq = msg.seq;
+    return gap;
+  }
+
+  /** With newerOnly (replay over a snapshot) an upsert strictly older than the held record is dropped (a same-second tie applies). */
+  apply(msg: PushMessage, newerOnly = false): ApplyResult {
+    const changed = this.applySession(msg, newerOnly);
+    const gap = this.trackSeq(msg);
+    const result: ApplyResult = gap ? 'gap' : changed ? 'changed' : 'unchanged';
+    if (changed || gap) this.fire();
     return result;
+  }
+
+  private applySession(msg: PushMessage, newerOnly: boolean): boolean {
+    const id = msg.session?.session_id;
+    if (typeof id !== 'string' || id === '') return false;
+    if (msg.type === 'session_deleted') return this.sessions.delete(id);
+    if (msg.type !== 'session_created' && msg.type !== 'session_updated') return false;
+    const held = this.sessions.get(id)?.updated_at;
+    if (newerOnly && held !== undefined && held > (msg.session?.updated_at ?? 0)) return false;
+    this.sessions.set(id, msg.session as SessionRecord);
+    return true;
   }
 
   clear(): void {
@@ -92,7 +100,7 @@ export class SessionStore {
   }
 
   private fire(): void {
-    for (const l of [...this.listeners]) {
+    for (const l of this.listeners) {
       try { l(); } catch { /* a listener must not break the store */ }
     }
   }

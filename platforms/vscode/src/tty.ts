@@ -47,10 +47,35 @@ export function pairTerminals<K>(
 
 const RETRY_DELAYS_MS = [500, 1000, 2000];
 const RETRY_STEADY_MS = 5000;
+// Timed retries stop at this attempt count (3 fast + 9 steady = ~50s); a terminal
+// open/close or a store change may still trigger one more pass afterwards.
+export const MAX_RETRY_ATTEMPTS = 12;
 
 // Delay before retrying a still-unresolved TTY lookup; attempt counts from 0.
-export function nextRetryDelay(attempt: number): number {
+// Returns undefined once the cap is reached: stop scheduling timed retries.
+export function nextRetryDelay(attempt: number): number | undefined {
+  if (attempt >= MAX_RETRY_ATTEMPTS) return undefined;
   if (!Number.isFinite(attempt) || attempt < 0) return RETRY_DELAYS_MS[0];
   const i = Math.floor(attempt);
   return i < RETRY_DELAYS_MS.length ? RETRY_DELAYS_MS[i] : RETRY_STEADY_MS;
+}
+
+// Classifies a finished `ps -p` run. "no-match" is ps's normal answer when none of
+// the pids exist (exit 1, nothing printed anywhere); anything else that failed is a
+// real error (spawn failure such as ENOENT, stderr text, or another exit code).
+export function classifyPsFailure(
+  err: { code?: unknown } | null | undefined,
+  stdout: string,
+  stderr: string,
+): 'ok' | 'no-match' | 'error' {
+  if (!err || stdout.trim() !== '') return 'ok';
+  if (err.code === 1 && stderr.trim() === '') return 'no-match';
+  return 'error';
+}
+
+const PS_CANDIDATES = ['/bin/ps', '/usr/bin/ps'];
+
+// Resolves ps from fixed, unwritable directories instead of PATH (sonar S4036).
+export function resolvePsPath(exists: (p: string) => boolean): string | undefined {
+  return PS_CANDIDATES.find(exists);
 }

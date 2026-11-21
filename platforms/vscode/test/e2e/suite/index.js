@@ -38,7 +38,7 @@ class StubDaemon {
   async start(port) {
     const server = http.createServer((req, res) => {
       this.requests.push({ method: req.method, url: req.url, dest: req.headers['sec-fetch-dest'] });
-      const u = new URL(req.url, 'http://x');
+      const u = { pathname: String(req.url).split('?')[0] };
       if (req.method === 'GET' && u.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end('<!doctype html><title>stub</title><p>stub dashboard</p>');
@@ -136,12 +136,27 @@ async function run() {
     const tty = await ttyOf(pid);
     stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 2 });
     const pairing = () => api.getPairings().find((p) => p.terminalName === 'e2e-agent');
-    await poll('4d pairing e2e-agent working', () => pairing() && pairing().state === 'working',
+    await poll('4d pairing e2e-agent working', () => pairing()?.state === 'working',
       () => `tty=${tty} pairings=${JSON.stringify(api.getPairings())}`);
     stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', tty), seq: 3 });
-    await poll('4d pairing e2e-agent ready', () => pairing() && pairing().state === 'ready',
+    await poll('4d pairing e2e-agent ready', () => pairing()?.state === 'ready',
       () => `tty=${tty} pairings=${JSON.stringify(api.getPairings())}`);
     step('4d terminal pairing follows state', s);
+
+    // f. click-to-focus: a focus_requested frame raises the paired terminal
+    s = Date.now();
+    const other = vscode.window.createTerminal({ name: 'e2e-other' });
+    try {
+      other.show();
+      await poll('4f other terminal active', () => vscode.window.activeTerminal?.name === 'e2e-other',
+        () => `active=${vscode.window.activeTerminal?.name}`);
+      stub.push({ type: 'focus_requested', session: session('e2e-agent-session', 'ready', tty), seq: 4 });
+      await poll('4f focus_requested activates e2e-agent', () => vscode.window.activeTerminal?.name === 'e2e-agent',
+        () => `active=${vscode.window.activeTerminal?.name} pairings=${JSON.stringify(api.getPairings())}`);
+    } finally {
+      try { other.dispose(); } catch { /* ignore */ }
+    }
+    step('4f focus_requested activates paired terminal', s);
 
     // e. daemon goes away and comes back
     s = Date.now();
@@ -165,7 +180,7 @@ async function run() {
   } finally {
     try { if (terminal) terminal.dispose(); } catch { /* ignore */ }
     try { await cfg.update('daemonUrl', undefined, vscode.ConfigurationTarget.Global); } catch { /* ignore */ }
-    try { if (stub.server && stub.server.listening) await stub.stop(); } catch { /* ignore */ }
+    try { if (stub.server?.listening) await stub.stop(); } catch { /* ignore */ }
   }
   console.log(`[e2e] all steps passed in ${Date.now() - t0} ms`);
 }

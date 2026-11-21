@@ -110,7 +110,8 @@ describe('DaemonClient', () => {
     expect(r.fetchMock).toHaveBeenCalledTimes(2);
     resolveGet({ ok: true, json: async () => body(['fresh']) });
     await tick();
-    expect(r.store.all().map((x) => x.session_id)).toEqual(['fresh']);
+    // s1's frames arrived while the GET was in flight: they are replayed over the snapshot.
+    expect(r.store.all().map((x) => x.session_id).sort()).toEqual(['fresh', 's1']);
     expect(r.fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -226,5 +227,29 @@ describe('DaemonClient', () => {
     expect(r.client.state).toBe('offline');
     await tick(1000);
     expect(r.sockets).toHaveLength(2);
+  });
+
+  it('records the seq of focus_requested frames so a click does not look like a gap', async () => {
+    const r = rig();
+    r.client.start();
+    r.sockets[0].open();
+    await tick();
+    r.sockets[0].message({ type: 'session_updated', seq: 10, session: { session_id: 's1', state: 'ready' } });
+    r.sockets[0].message({ type: 'focus_requested', seq: 11, session: { session_id: 's1', state: 'ready' } });
+    r.sockets[0].message({ type: 'session_updated', seq: 12, session: { session_id: 's1', state: 'working' } });
+    await tick();
+    expect(r.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a stale hydrate snapshot clobber a newer push that arrived while it was in flight', async () => {
+    let resolveFetch!: (v: any) => void;
+    const r = rig(() => new Promise((res) => { resolveFetch = res; }));
+    r.client.start();
+    r.sockets[0].open();
+    await tick();
+    r.sockets[0].message({ type: 'session_updated', seq: 5, session: { session_id: 'X', state: 'waiting', updated_at: 200 } });
+    resolveFetch({ ok: true, json: async () => ({ groups: [{ name: 'g', agents: [{ session_id: 'X', state: 'working', updated_at: 100 }] }] }) });
+    await tick();
+    expect(r.store.all().find((x) => x.session_id === 'X')?.state).toBe('waiting');
   });
 });

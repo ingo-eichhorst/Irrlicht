@@ -155,3 +155,21 @@ describe('SessionStore.apply', () => {
     expect(s.counts()).toEqual({ working: 0, waiting: 0, ready: 0, error: 0 });
   });
 });
+
+describe('SessionStore.apply newerOnly (replay over a snapshot)', () => {
+  const snapshot = { groups: [{ name: 'g', agents: [{ session_id: 'x', state: 'working', updated_at: 100 }] }] };
+  it('a replayed push with the SAME updated_at second as the snapshot still applies', () => {
+    // updated_at has one-second granularity, so a transition in the same second
+    // the snapshot was read ties with it; the push is the later observation.
+    const s = new SessionStore();
+    s.hydrate(snapshot);
+    s.apply({ type: 'session_updated', session: { session_id: 'x', state: 'waiting', updated_at: 100 } }, true);
+    expect(s.all().find((r) => r.session_id === 'x')?.state).toBe('waiting');
+  });
+  it('a replayed push strictly older than the snapshot is dropped', () => {
+    const s = new SessionStore();
+    s.hydrate(snapshot);
+    s.apply({ type: 'session_updated', session: { session_id: 'x', state: 'ready', updated_at: 99 } }, true);
+    expect(s.all().find((r) => r.session_id === 'x')?.state).toBe('working');
+  });
+});

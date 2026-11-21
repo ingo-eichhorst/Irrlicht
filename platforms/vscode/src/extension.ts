@@ -31,6 +31,7 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi {
   const store = new SessionStore();
   const client = new DaemonClient({ getUrl, store, log });
   const pairing = new TerminalPairing(store, log);
+  pairing.start();
   const statusBar = createStatusBar(store, client, getUrl);
   const terminalsView = new AgentTerminalsView(pairing);
 
@@ -63,4 +64,6 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi {
   };
 }
 
-export function deactivate(): void {}
+export function deactivate(): void {
+  // Nothing to do: every resource is registered in ctx.subscriptions and disposed by VS Code.
+}

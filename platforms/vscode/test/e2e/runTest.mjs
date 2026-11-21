@@ -49,7 +49,7 @@ try {
   });
   console.log('e2e: PASSED');
 } catch (err) {
-  console.error('e2e: FAILED:', err && err.message ? err.message : err);
+  console.error('e2e: FAILED:', err?.message ?? err);
   code = 1;
 } finally {
   for (const d of [userDataDir, extensionsDir, fakeHome]) {

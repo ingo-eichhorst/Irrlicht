@@ -31,7 +31,7 @@ Build the `.vsix` from a repository checkout with `tools/build-release.sh --vsix
 ## Limitations
 
 - VS Code's extension API cannot recolour an existing terminal tab: `Terminal` has no setter for it, and the change-colour command only opens a picker. That is why the state colours live in the Agent Terminals view.
-- A terminal is paired with a session by joining the terminal's shell TTY with the session's TTY. An agent running inside tmux or herdr within a VS Code terminal does not pair.
+- A terminal is paired with a session by joining the terminal's shell TTY with the session's TTY. An agent running inside tmux does not pair (its TTY is the tmux pane's, not the terminal's). Under herdr the daemon records the TTY of the attached herdr client, so its sessions pair with the terminal running the herdr client, and that terminal's box follows the most recently updated pane. That herdr behaviour is not verified live.
 - Raising another VS Code window on click needs the Irrlicht macOS app, because VS Code has no window-raise API.
 - The embedded dashboard follows the operating system's light/dark appearance (or its own theme toggle), not the VS Code colour theme.
 - Local windows only: Remote-SSH, WSL and Codespaces are not supported.
@@ -42,7 +42,7 @@ Build the `.vsix` from a repository checkout with `tools/build-release.sh --vsix
 From `platforms/vscode`:
 
 - `npm ci` to install.
-- `npm test` runs the unit tests.
+- `npm test` type-checks (`tsc --noEmit`), validates the manifest (`vsce ls`, which also enforces `@types/vscode` <= `engines.vscode`) and runs the unit tests.
 - `npm run test:e2e` downloads VS Code and runs the end-to-end tests locally. On macOS the runner passes `--use-mock-keychain --use-inmemory-secretstorage` and a short `--user-data-dir`.
 - `npm run test:e2e:mutation` re-runs the frame-src mutation: it swaps the iframe CSP for `'none'` and passes only if the e2e fails at step 4b (needs a clean git tree).
 - `npm run build` bundles `dist/extension.js`.

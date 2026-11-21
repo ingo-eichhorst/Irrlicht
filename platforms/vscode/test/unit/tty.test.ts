@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput } from '../../src/tty';
+import { classifyPsFailure, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from '../../src/tty';
 import type { SessionRecord } from '../../src/sessionStore';
 
 const sess = (id: string, tty: string | undefined, updated_at?: number): SessionRecord => ({
@@ -103,10 +103,46 @@ describe('pairTerminals', () => {
 
 describe('nextRetryDelay', () => {
   it('backs off 0.5s, 1s, 2s then holds at 5s', () => {
-    expect([0, 1, 2, 3, 4, 50].map(nextRetryDelay)).toEqual([500, 1000, 2000, 5000, 5000, 5000]);
+    expect([0, 1, 2, 3, 4, 11].map(nextRetryDelay)).toEqual([500, 1000, 2000, 5000, 5000, 5000]);
   });
   it('clamps invalid attempts to the first delay', () => {
     expect(nextRetryDelay(-1)).toBe(500);
     expect(nextRetryDelay(NaN)).toBe(500);
+  });
+});
+
+describe('nextRetryDelay cap', () => {
+  it('stops timed retries once the attempt cap is reached', () => {
+    expect(nextRetryDelay(12)).toBeUndefined();
+    expect(nextRetryDelay(50)).toBeUndefined();
+    expect(nextRetryDelay(Infinity)).toBeUndefined();
+  });
+});
+
+describe('classifyPsFailure', () => {
+  it('treats exit 1 with no output as "no pid matched"', () => {
+    expect(classifyPsFailure({ code: 1 }, '', '')).toBe('no-match');
+  });
+  it('treats spawn failures as errors', () => {
+    expect(classifyPsFailure({ code: 'ENOENT' }, '', '')).toBe('error');
+    expect(classifyPsFailure({ code: 'EACCES' }, '', '')).toBe('error');
+  });
+  it('treats stderr text or other exit codes as errors', () => {
+    expect(classifyPsFailure({ code: 1 }, '', 'ps: illegal option')).toBe('error');
+    expect(classifyPsFailure({ code: 2 }, '', '')).toBe('error');
+  });
+  it('is ok when there is no error', () => {
+    expect(classifyPsFailure(null, '4242 ttys001\n', '')).toBe('ok');
+  });
+  it('is ok when ps printed output despite a non-zero exit', () => {
+    expect(classifyPsFailure({ code: 1 }, '4242 ttys001\n', '')).toBe('ok');
+  });
+});
+
+describe('resolvePsPath', () => {
+  it('prefers /bin/ps, then /usr/bin/ps, else undefined', () => {
+    expect(resolvePsPath(() => true)).toBe('/bin/ps');
+    expect(resolvePsPath((p) => p === '/usr/bin/ps')).toBe('/usr/bin/ps');
+    expect(resolvePsPath(() => false)).toBeUndefined();
   });
 });

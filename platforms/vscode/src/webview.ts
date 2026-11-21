@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import type { ResolvedDaemonUrl } from './config';
 import type { DaemonClient } from './daemonClient';

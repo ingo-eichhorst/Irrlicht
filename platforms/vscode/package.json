@@ -110,10 +110,10 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "tsc --noEmit && vsce ls --no-dependencies >/dev/null && vitest run",
     "test:e2e": "npm run build && node test/e2e/runTest.mjs",
     "test:e2e:mutation": "bash test/e2e/frame-src-mutation.sh",
-    "package": "npm run build && vsce package --no-dependencies"
+    "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://github.com/ingo-eichhorst/Irrlicht/raw/HEAD/platforms/vscode --baseContentUrl https://github.com/ingo-eichhorst/Irrlicht/blob/HEAD/platforms/vscode"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

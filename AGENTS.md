@@ -163,7 +163,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   **Never `npm install`** (rewrites `package-lock.json`) — use `npm ci`. The
   panel's mod itself is tested by `claude plugin test platforms/claude-code`,
   and the Herdr mod's `main.js` by `herdr-app check`; both need their app's
-  CLI and are not in CI. The VS Code extension's `npm test` is unit-only;
+  CLI and are not in CI. The VS Code extension's `npm test` also type-checks and validates the manifest;
   `npm run test:e2e` downloads VS Code into `platforms/vscode/.vscode-test`
   and runs a local smoke test, not in CI.
 - State vocabulary: `tools/state-vocabulary-lint.sh` (#1804) flags any single

@@ -22,8 +22,10 @@ export class DaemonClient {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delay: number;
   private rehydrating = false;
-  private statusListeners = new Set<Listener<ConnectionState>>();
-  private focusListeners = new Set<Listener<SessionRecord>>();
+  /** Session frames received while a hydrate GET is in flight; replayed over the snapshot. */
+  private pending: PushMessage[] | undefined;
+  private readonly statusListeners = new Set<Listener<ConnectionState>>();
+  private readonly focusListeners = new Set<Listener<SessionRecord>>();
   private readonly backoff: { initial: number; max: number };
 
   constructor(private readonly opts: DaemonClientOptions) {
@@ -45,6 +47,7 @@ export class DaemonClient {
     this.running = false;
     this.gen++;
     this.rehydrating = false;
+    this.pending = undefined;
     this.cancelTimer();
     this.closeSocket();
     this.setState('offline');
@@ -95,6 +98,7 @@ export class DaemonClient {
   }
 
   private async hydrate(gen: number, initial: boolean): Promise<void> {
+    this.pending = [];
     try {
       const url = this.opts.getUrl();
       const doFetch = this.opts.fetchImpl ?? fetch;
@@ -103,6 +107,9 @@ export class DaemonClient {
       const body: unknown = await res.json();
       if (gen !== this.gen) return;
       this.opts.store.hydrate(body);
+      const buffered = this.pending ?? [];
+      this.pending = undefined;
+      for (const m of buffered) this.opts.store.apply(m, true);
       this.delay = this.backoff.initial;
       if (initial) this.setState('online');
     } catch (e) {
@@ -110,6 +117,7 @@ export class DaemonClient {
       this.opts.log(`hydrate failed: ${String(e)}`);
       this.fail(gen);
     } finally {
+      if (gen === this.gen) this.pending = undefined;
       if (!initial && gen === this.gen) this.rehydrating = false;
     }
   }
@@ -120,20 +128,30 @@ export class DaemonClient {
       const msg = JSON.parse(raw) as PushMessage;
       if (typeof msg !== 'object' || msg === null || typeof msg.type !== 'string') return;
       if (msg.type === 'focus_requested') {
+        // Focus frames carry a seq from the same global counter as every other broadcast.
+        const gap = this.opts.store.trackSeq(msg);
         if (msg.session) this.emitFocus(msg.session);
+        if (gap) this.rehydrate(gen);
         return;
       }
-      if (this.opts.store.apply(msg) === 'gap' && !this.rehydrating) {
-        this.rehydrating = true;
-        void this.hydrate(gen, false);
+      if (this.pending) {
+        this.pending.push(msg);
+        return;
       }
+      if (this.opts.store.apply(msg) === 'gap') this.rehydrate(gen);
     } catch (e) {
       this.opts.log(`ignoring bad frame: ${String(e)}`);
     }
   }
 
+  private rehydrate(gen: number): void {
+    if (this.rehydrating) return;
+    this.rehydrating = true;
+    void this.hydrate(gen, false);
+  }
+
   private emitFocus(s: SessionRecord): void {
-    for (const l of [...this.focusListeners]) {
+    for (const l of this.focusListeners) {
       try { l(s); } catch (e) { this.opts.log(`focus listener failed: ${String(e)}`); }
     }
   }
@@ -142,6 +160,7 @@ export class DaemonClient {
     if (gen !== this.gen) return;
     this.gen++;
     this.rehydrating = false;
+    this.pending = undefined;
     this.closeSocket();
     this.setState('offline');
     this.opts.store.clear();
@@ -170,7 +189,7 @@ export class DaemonClient {
   private setState(s: ConnectionState): void {
     if (this._state === s) return;
     this._state = s;
-    for (const l of [...this.statusListeners]) {
+    for (const l of this.statusListeners) {
       try { l(s); } catch (e) { this.opts.log(`status listener failed: ${String(e)}`); }
     }
   }

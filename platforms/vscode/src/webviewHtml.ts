@@ -17,7 +17,7 @@ function assertCspSource(v: string): void {
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
 export function buildCsp(o: { daemonOrigin: string; cspSource: string; nonce: string }): string {
@@ -42,7 +42,7 @@ iframe { display: block; width: 100%; height: 100vh; border: 0; }
 #notice .hint { margin-top: 8px; color: var(--vscode-descriptionForeground); }
 `;
 
-const SCRIPT = `
+const SCRIPT = String.raw`
 const vscode = acquireVsCodeApi();
 const frame = document.getElementById('dashboard');
 const notice = document.getElementById('notice');
@@ -66,7 +66,7 @@ window.addEventListener('message', (e) => {
   } else {
     frame.hidden = true;
     if (loaded) { frame.src = 'about:blank'; loaded = false; }
-    setNotice('Irrlicht daemon not running at ' + url + ' \\u2014 retrying\\u2026', true);
+    setNotice('Irrlicht daemon not running at ' + url + ' \u2014 retrying\u2026', true);
   }
 });
 vscode.postMessage({ type: 'ready' });

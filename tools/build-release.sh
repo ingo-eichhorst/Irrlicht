@@ -57,7 +57,7 @@ build_vscode_extension() {
         echo "ERROR: VS Code extension build failed" >&2
         return 1
     }
-    if [ ! -s "$out" ]; then
+    if [[ ! -s "$out" ]]; then
         echo "ERROR: $out was not produced (or is empty)" >&2
         return 1
     fi
@@ -66,7 +66,7 @@ build_vscode_extension() {
 
 # --vsix-only: build just the extension and exit. Parsed before any other
 # work; with no arguments the script behaves exactly as it always has.
-if [ "${1:-}" = "--vsix-only" ]; then
+if [[ "${1:-}" = "--vsix-only" ]]; then
     echo "Building VS Code extension v$VERSION"
     build_vscode_extension || exit 1
     echo "$ROOT_DIR/$BUILD_DIR/$VSIX_NAME"
