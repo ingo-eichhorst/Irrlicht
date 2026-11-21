@@ -167,27 +167,52 @@ protocol KeychainBackend: AnyObject {
     func delete(account: String)
 }
 
-/// The real login keychain. This is the SecItem code `KeychainStore` carried
-/// before the backend seam, moved here unchanged: same service, account and
-/// accessibility attributes, same delete-then-add replace. No test is meant
-/// to read or write through it: under XCTest the shared store selects
+/// The real login keychain: service `ai.irrlicht.relay`, generic passwords,
+/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` — the same item
+/// attributes `KeychainStore` has always written. No test is meant to read or
+/// write through it: under XCTest the shared store selects
 /// `InMemoryKeychainBackend` instead, and the tests that need a backend build
-/// their own over a double.
+/// their own over a double. `SystemKeychainBackendAttributeTests` locks the
+/// attribute dictionaries below, which are pure and touch nothing.
+///
+/// # Update in place, add only when missing
+///
+/// `write` used to delete the item and add a new one. A re-created item gets
+/// the default access of a new item — trusting the application that created
+/// it — so a write from any binary other than the one the old ACL trusted
+/// silently changed who could read the token without a prompt. That is a
+/// plausible cause of readers being prompted again after a write; it has not
+/// been reproduced. `write` now calls `SecItemUpdate`, which changes the
+/// item's data and leaves the item and its ACL alone, and adds an item —
+/// with the attributes above — only when none exists (`errSecItemNotFound`).
+/// That this keeps the ACL is a property of `SecItemUpdate` as documented,
+/// not something a test here exercises: no test touches the real keychain.
 final class SystemKeychainBackend: KeychainBackend {
     /// Service identifier namespacing irrlicht's Keychain items.
-    private static let service = "ai.irrlicht.relay"
+    static let service = "ai.irrlicht.relay"
 
-    func write(_ value: String, account: String) -> Bool {
-        guard let data = value.data(using: .utf8) else { return false }
-        let query: [String: Any] = [
+    private let logger = Logger(subsystem: "io.irrlicht.app", category: "KeychainStore")
+
+    /// Identifies the item: class, service, account. The query for update,
+    /// read and delete.
+    static func itemQuery(account: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        // Replace: delete-then-add keeps the call idempotent without juggling
-        // SecItemUpdate's attributes-vs-query split.
-        SecItemDelete(query as CFDictionary)
-        var attrs = query
+    }
+
+    /// What an update changes: the data, and nothing else — no ACL, no
+    /// accessibility.
+    static func updateAttributes(data: Data) -> [String: Any] {
+        [kSecValueData as String: data]
+    }
+
+    /// A new item: the identifying attributes, the data and the accessibility
+    /// class it has always had.
+    static func addAttributes(account: String, data: Data) -> [String: Any] {
+        var attrs = itemQuery(account: account)
         attrs[kSecValueData as String] = data
         // Deliberately no SecAccessControl / biometric gate (SonarQube
         // swift:S6288): irrlichd reads this token unattended to auto-reconnect
@@ -198,17 +223,29 @@ final class SystemKeychainBackend: KeychainBackend {
         // that this never leaves the device (matches kSecAttrSynchronizable's
         // default of false, now explicit rather than incidental).
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly // NOSONAR (swift:S6288) — see comment above
-        return SecItemAdd(attrs as CFDictionary, nil) == errSecSuccess
+        return attrs
+    }
+
+    func write(_ value: String, account: String) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
+        let updated = SecItemUpdate(Self.itemQuery(account: account) as CFDictionary,
+                                    Self.updateAttributes(data: data) as CFDictionary)
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else {
+            logger.error("Keychain update for account \(account, privacy: .public) failed with OSStatus \(updated, privacy: .public)")
+            return false
+        }
+        let added = SecItemAdd(Self.addAttributes(account: account, data: data) as CFDictionary, nil)
+        if added != errSecSuccess {
+            logger.error("Keychain add for account \(account, privacy: .public) failed with OSStatus \(added, privacy: .public)")
+        }
+        return added == errSecSuccess
     }
 
     func read(account: String) -> (value: String?, status: OSStatus) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+        var query = Self.itemQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess,
@@ -220,12 +257,7 @@ final class SystemKeychainBackend: KeychainBackend {
     }
 
     func delete(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(Self.itemQuery(account: account) as CFDictionary)
     }
 }
 
