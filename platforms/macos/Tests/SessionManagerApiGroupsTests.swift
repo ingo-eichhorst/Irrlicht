@@ -301,6 +301,47 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                        "empty rig group must be pruned")
     }
 
+    /// #2148: a slot's `stale` and `last_exit` decode, and decide its two
+    /// tags — a non-zero exit is a failure, exit 0 and no completed run are
+    /// not. A worker without either key still decodes (the third entry, and
+    /// testDecodeFillsUnattachedWorkers). Mutation: seen red by removing
+    /// either key from UnattachedWorker.CodingKeys (it then decodes as nil),
+    /// and by dropping the `code != 0` guard in failedExitCode.
+    func testDecodeUnattachedWorkerStaleAndLastExit() throws {
+        let groups = try decodeGroups("""
+        {"groups":[{"name":"Build pool","type":"workerlist","groups":[{"name":"team-a","status":"stale",
+          "unattached_workers":[
+            {"role":"worker","worker_name":"team-a-m1-1","worker_id":"proj-a1b2","worker_state":"busy","stale":true,"last_exit":2},
+            {"role":"worker","worker_name":"team-a-m1-2","worker_state":"idle","last_exit":0},
+            {"role":"worker","worker_name":"team-a-m1-3","worker_state":"idle"}]}]}]}
+        """)
+        XCTAssertTrue(groups.first?.isOrchestrator ?? false)
+        XCTAssertFalse(groups.first?.isGasTown ?? true, "a worker list is not Gas Town's branding")
+        let workers = try XCTUnwrap(groups.first?.groups?.first?.unattachedWorkers)
+        XCTAssertEqual(workers.map(\.stale), [true, nil, nil])
+        XCTAssertEqual(workers.map(\.lastExit), [2, 0, nil])
+        XCTAssertEqual(workers.map(\.isStale), [true, false, false])
+        XCTAssertEqual(workers.map(\.failedExitCode), [2, nil, nil])
+    }
+
+    /// #2148, red-first on 796a07307: the keep-when-empty rule keyed on
+    /// `type == "gastown"`, so any other orchestrator's top-level row was
+    /// pruned with its last rig. Any typed group is an orchestrator's.
+    func testRemoveFromApiGroupsPreservesWorkerListGroupWhenEmpty() {
+        let rigSession = makeSession(id: "rig-1")
+        let team = AgentGroup(name: "team-a", agents: [rigSession])
+        let pool = AgentGroup(name: "Build pool", type: "workerlist", agents: nil, groups: [team])
+        sut.seedLocalApiGroups([pool])
+
+        sut.removeFromApiGroups(sessionId: "rig-1")
+
+        XCTAssertEqual(sut.apiGroups.count, 1,
+                       "a worker-list top-level group must survive empty rigs")
+        XCTAssertEqual(sut.apiGroups.first?.type, "workerlist")
+        XCTAssertEqual(sut.apiGroups.first?.groups?.count, 0,
+                       "empty team group must be pruned")
+    }
+
     func testRemoveFromApiGroupsRecursesIntoNestedNonGasTownGroup() {
         // Pins generic `group.groups` recursion — gas-town test exercises the
         // same path but trips the isGasTown carve-out.

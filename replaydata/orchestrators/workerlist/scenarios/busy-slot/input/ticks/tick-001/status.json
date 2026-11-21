@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "updated": "2026-11-11T15:40:00Z",
+  "heartbeat_interval_seconds": 60,
+  "teams": [
+    {
+      "name": "team-a",
+      "updated": "2026-11-11T15:40:00Z",
+      "workers": [
+        {
+          "name": "team-a-m1-1",
+          "busy": true,
+          "work_item": "proj-a1b2",
+          "activity": {
+            "text": "runs Claude Code",
+            "since": "2026-11-11T15:20:00Z"
+          },
+          "last_heartbeat": "2026-11-11T15:39:30Z"
+        },
+        {
+          "name": "team-a-m1-2",
+          "busy": false
+        }
+      ]
+    }
+  ]
+}

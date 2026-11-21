@@ -1,0 +1,15 @@
+{
+  "description": "Two teams merged into one file under a named pool. Each team becomes its own sub-group, in file order, under the pool's name.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "name": "Build pool",
+    "teams": [
+      "team-a",
+      "team-b"
+    ]
+  }
+}

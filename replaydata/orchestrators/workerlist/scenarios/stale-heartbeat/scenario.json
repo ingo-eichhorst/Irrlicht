@@ -1,0 +1,27 @@
+{
+  "description": "The team keeps writing but a busy slot's heartbeat stops at 15:37:00. Tick 1 is exactly 3 heartbeat intervals (180 s) later: not stale yet. Tick 2 is one second past that: stale. The team itself stays operational.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    },
+    {
+      "now": "2026-11-11T15:40:01Z"
+    }
+  ],
+  "verify": {
+    "stale_workers_per_tick": [
+      [],
+      [
+        "team-a-m1-1"
+      ]
+    ],
+    "team_status_per_tick": [
+      [
+        "operational"
+      ],
+      [
+        "operational"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "adapter": "workerlist",
+  "running": true,
+  "name": "Worker pool",
+  "codebases": [
+    {
+      "name": "team-a",
+      "status": "stale",
+      "worktrees": [
+        {
+          "path": "",
+          "is_main": false,
+          "workers": [
+            {
+              "role": "worker",
+              "icon": "🔧",
+              "description": "Pool worker slot",
+              "name": "team-a-m1-1",
+              "id": "proj-a1b2",
+              "state": "busy",
+              "stale": true
+            },
+            {
+              "role": "worker",
+              "icon": "🔧",
+              "description": "Pool worker slot",
+              "name": "team-a-m1-2",
+              "state": "idle"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "team-b",
+      "status": "operational",
+      "worktrees": [
+        {
+          "path": "",
+          "is_main": false,
+          "workers": [
+            {
+              "role": "worker",
+              "icon": "🔧",
+              "description": "Pool worker slot",
+              "name": "team-b-m2-1",
+              "state": "idle"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "updated_at": "2026-11-11T15:40:00Z"
+}

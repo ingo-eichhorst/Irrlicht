@@ -45,6 +45,11 @@ type UnattachedWorker struct {
 	WorkerName  string `json:"worker_name"`
 	WorkerID    string `json:"worker_id,omitempty"`
 	WorkerState string `json:"worker_state,omitempty"`
+	// Stale and LastExit copy orchestrator.Worker's row-only indications
+	// (#2148): a stale heartbeat, and the exit code of the last completed run
+	// (omitted when none completed; a non-zero value shows as failed).
+	Stale    bool `json:"stale,omitempty"`
+	LastExit *int `json:"last_exit,omitempty"`
 }
 
 // Agent is a session with optional orchestrator role and nested children.
@@ -58,7 +63,9 @@ type Agent struct {
 	Children    []*Agent `json:"children,omitempty"`
 }
 
-// workerInfo holds orchestrator metadata for a matched session.
+// workerInfo holds orchestrator metadata for a matched session. orch is the
+// index, among BuildDashboard's running orchestrators, of the one that
+// claimed the session.
 type workerInfo struct {
 	Role        string
 	Icon        string
@@ -66,41 +73,60 @@ type workerInfo struct {
 	Rig         string
 	Name        string
 	ID          string
+	orch        int
 }
 
 // BuildDashboard creates a recursive group hierarchy from a flat list of
-// sessions and optional orchestrator state.
+// sessions and the states of zero or more orchestrators (#2148). nil and
+// not-running states are skipped, so BuildDashboard(sessions, nil) means "no
+// orchestrator".
 //
-// With an orchestrator: returns [orchGroup, ...regularGroups] where orchGroup
-// contains global agents directly and rig agents in nested sub-groups.
-//
-// Without an orchestrator: returns [...projectGroups] grouped by ProjectName.
-func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*AgentGroup {
-	// 1. Build session-to-worker map, and list the workers no session in
-	// this call is attached to.
-	workerMap := map[string]*workerInfo{}
-	var unattached map[string][]*UnattachedWorker
-	if orch != nil && orch.Running {
-		workerMap = buildWorkerMap(orch, sessions)
-		unattached = unattachedWorkersByRig(orch, sessions, workerMap)
-	}
+// Each running orchestrator that has sessions or unattached workers gets one
+// top-level group — global agents directly, rig agents in nested sub-groups —
+// in argument order, ahead of the project groups. A session belongs to the
+// first orchestrator whose worker map claims it; the rest are grouped by
+// ProjectName.
+func BuildDashboard(sessions []*SessionState, orchs ...*orchestrator.State) []*AgentGroup {
+	running := runningOrchestrators(orchs)
+
+	// 1. Build the session-to-worker map across every running orchestrator.
+	workerMap := buildWorkerMaps(running, sessions)
 
 	// 2. Index sessions and identify parent-child relationships.
 	childIDs, parentChildren := indexParentChildren(sessions)
 
-	// 3. Partition top-level sessions into orchestrator vs regular.
-	partition := partitionSessions(sessions, workerMap, parentChildren, childIDs)
+	// 3. Partition top-level sessions into each orchestrator's vs regular.
+	partition := partitionSessions(sessions, workerMap, parentChildren, childIDs, len(running))
 
-	// 4. Assemble result.
+	// 4. Assemble result: one group per orchestrator, then the projects.
 	var result []*AgentGroup
-	if orchGroup := buildOrchGroup(orch, partition, unattached); orchGroup != nil {
-		result = append(result, orchGroup)
+	taken := make(map[string]bool, len(partition.regularOrder))
+	for _, key := range partition.regularOrder {
+		taken[key] = true
+	}
+	for i, orch := range running {
+		unattached := unattachedWorkersByRig(orch, i, sessions, workerMap)
+		if orchGroup := buildOrchGroup(orch, partition.orchs[i], unattached); orchGroup != nil {
+			orchGroup.Name = uniqueOrchGroupName(orch, orchGroup.Name, taken)
+			result = append(result, orchGroup)
+		}
 	}
 	for _, key := range partition.regularOrder {
 		result = append(result, partition.regularGroupMap[key])
 	}
 
 	return result
+}
+
+// runningOrchestrators returns the non-nil, running states of orchs, in order.
+func runningOrchestrators(orchs []*orchestrator.State) []*orchestrator.State {
+	var out []*orchestrator.State
+	for _, o := range orchs {
+		if o != nil && o.Running {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // indexParentChildren identifies parent-child relationships among sessions:
@@ -127,22 +153,31 @@ func indexParentChildren(sessions []*SessionState) (childIDs map[string]bool, pa
 }
 
 // dashboardPartition accumulates BuildDashboard's split of top-level
-// sessions into orchestrator-owned agents (global + per-rig) and regular
-// project groups, preserving first-seen order for deterministic output.
+// sessions into each orchestrator's agents and regular project groups,
+// preserving first-seen order for deterministic output.
 type dashboardPartition struct {
-	orchAgents      []*Agent            // global agents (no rig)
-	rigAgentMap     map[string][]*Agent // rig name → agents
-	rigOrder        []string
+	orchs           []*orchPartition // one per running orchestrator, by index
 	regularGroupMap map[string]*AgentGroup
 	regularOrder    []string
 }
 
+// orchPartition is one orchestrator's share of the top-level sessions.
+type orchPartition struct {
+	agents      []*Agent            // global agents (no rig)
+	rigAgentMap map[string][]*Agent // rig name → agents
+	rigOrder    []string
+}
+
 // partitionSessions builds an Agent tree for each top-level (non-child)
-// session and buckets it into the orchestrator or regular partition.
-func partitionSessions(sessions []*SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState, childIDs map[string]bool) *dashboardPartition {
+// session and buckets it into its orchestrator's partition (one of nOrchs)
+// or the regular one.
+func partitionSessions(sessions []*SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState, childIDs map[string]bool, nOrchs int) *dashboardPartition {
 	p := &dashboardPartition{
-		rigAgentMap:     map[string][]*Agent{},
+		orchs:           make([]*orchPartition, nOrchs),
 		regularGroupMap: map[string]*AgentGroup{},
+	}
+	for i := range p.orchs {
+		p.orchs[i] = &orchPartition{rigAgentMap: map[string][]*Agent{}}
 	}
 	for _, s := range sessions {
 		if childIDs[s.SessionID] {
@@ -151,7 +186,7 @@ func partitionSessions(sessions []*SessionState, workerMap map[string]*workerInf
 		agent := buildAgent(s, workerMap, parentChildren)
 
 		if wi, isOrch := workerMap[s.SessionID]; isOrch {
-			p.addOrchAgent(wi, agent)
+			p.orchs[wi.orch].add(wi, agent)
 		} else {
 			p.addRegularAgent(s, agent)
 		}
@@ -159,9 +194,9 @@ func partitionSessions(sessions []*SessionState, workerMap map[string]*workerInf
 	return p
 }
 
-// addOrchAgent files agent under its rig's bucket, or as a global agent when
-// wi has no rig.
-func (p *dashboardPartition) addOrchAgent(wi *workerInfo, agent *Agent) {
+// add files agent under its rig's bucket, or as a global agent when wi has no
+// rig.
+func (p *orchPartition) add(wi *workerInfo, agent *Agent) {
 	if wi.Rig != "" {
 		if _, exists := p.rigAgentMap[wi.Rig]; !exists {
 			p.rigOrder = append(p.rigOrder, wi.Rig)
@@ -169,7 +204,7 @@ func (p *dashboardPartition) addOrchAgent(wi *workerInfo, agent *Agent) {
 		p.rigAgentMap[wi.Rig] = append(p.rigAgentMap[wi.Rig], agent)
 		return
 	}
-	p.orchAgents = append(p.orchAgents, agent)
+	p.agents = append(p.agents, agent)
 }
 
 // addRegularAgent files agent under its project's group, creating the group
@@ -188,36 +223,55 @@ func (p *dashboardPartition) addRegularAgent(s *SessionState, agent *Agent) {
 	g.Agents = append(g.Agents, agent)
 }
 
-// buildOrchGroup assembles the top-level "Gas Town" group (global agents
-// plus a nested sub-group per rig) from partition and the rigs' unattached
-// workers, or returns nil when there is no running orchestrator or it
-// contributed neither agents nor unattached workers.
-func buildOrchGroup(orch *orchestrator.State, partition *dashboardPartition, unattached map[string][]*UnattachedWorker) *AgentGroup {
-	if orch == nil || !orch.Running {
-		return nil
-	}
+// buildOrchGroup assembles one orchestrator's top-level group (global agents
+// plus a nested sub-group per rig) from its partition and the rigs'
+// unattached workers, or returns nil when it contributed neither agents nor
+// unattached workers.
+func buildOrchGroup(orch *orchestrator.State, partition *orchPartition, unattached map[string][]*UnattachedWorker) *AgentGroup {
 	rigGroups := buildRigGroups(orch, partition, unattached)
-	if len(partition.orchAgents) == 0 && len(rigGroups) == 0 {
+	if len(partition.agents) == 0 && len(rigGroups) == 0 {
 		return nil
-	}
-
-	orchGroupName := "Gas Town"
-	if orch.Root != "" {
-		orchGroupName = filepath.Base(orch.Root)
 	}
 
 	return &AgentGroup{
-		Name:   orchGroupName,
+		Name:   orchGroupName(orch),
 		Type:   orch.Adapter,
-		Agents: partition.orchAgents,
+		Agents: partition.agents,
 		Groups: rigGroups,
+	}
+}
+
+// uniqueOrchGroupName returns name, with " (<adapter>)" appended when the
+// adapter chose it (State.Name) and another top-level group already has it,
+// and records the result in taken. Both clients key a top-level group by its
+// name, and State.Name is user text — a worker list's status file names its
+// pool — so it must not take a project's or another orchestrator's key.
+// Gas Town sets no State.Name, so its group keeps the name it always had.
+func uniqueOrchGroupName(orch *orchestrator.State, name string, taken map[string]bool) string {
+	if orch.Name != "" && taken[name] {
+		name += " (" + orch.Adapter + ")"
+	}
+	taken[name] = true
+	return name
+}
+
+// orchGroupName is orch.Name when the adapter set one (#2148), else the base
+// of orch.Root, else "Gas Town" — the rule from before State.Name existed.
+func orchGroupName(orch *orchestrator.State) string {
+	switch {
+	case orch.Name != "":
+		return orch.Name
+	case orch.Root != "":
+		return filepath.Base(orch.Root)
+	default:
+		return "Gas Town"
 	}
 }
 
 // buildRigGroups returns one sub-group per rig that has sessions or
 // unattached workers: rigs with sessions first, in partition order, then rigs
 // whose only rows are unattached workers, in orch.Codebases order.
-func buildRigGroups(orch *orchestrator.State, partition *dashboardPartition, unattached map[string][]*UnattachedWorker) []*AgentGroup {
+func buildRigGroups(orch *orchestrator.State, partition *orchPartition, unattached map[string][]*UnattachedWorker) []*AgentGroup {
 	order := append([]string(nil), partition.rigOrder...)
 	for _, cb := range orch.Codebases {
 		if _, hasSessions := partition.rigAgentMap[cb.Name]; !hasSessions && len(unattached[cb.Name]) > 0 {
@@ -252,9 +306,10 @@ func codebaseStatus(orch *orchestrator.State, rigName string) string {
 // the explicit SessionID match and the CWD fallback produce.
 type rigWorkerKey struct{ rig, name string }
 
-// unattachedWorkersByRig returns, per rig, the named codebase workers that no
-// session in sessions is attached to. Only named workers qualify; see
-// orchestrator.Worker.Name for that contract.
+// unattachedWorkersByRig returns, per rig, the named codebase workers of orch
+// (the orchIdx-th running orchestrator) that no session in sessions is
+// attached to. Only named workers qualify; see orchestrator.Worker.Name for
+// that contract.
 //
 // Attachment is read from the sessions actually in this call, through
 // workerMap, and not from a worker's own SessionID: the orchestrator state
@@ -262,8 +317,8 @@ type rigWorkerKey struct{ rig, name string }
 // session newer than the last poll is attached by the CWD fallback while its
 // worker has no SessionID yet, and a session that ended since then leaves a
 // stale SessionID behind. workerMap's keys alone would count that stale id.
-func unattachedWorkersByRig(orch *orchestrator.State, sessions []*SessionState, workerMap map[string]*workerInfo) map[string][]*UnattachedWorker {
-	attached := attachedWorkerKeys(sessions, workerMap)
+func unattachedWorkersByRig(orch *orchestrator.State, orchIdx int, sessions []*SessionState, workerMap map[string]*workerInfo) map[string][]*UnattachedWorker {
+	attached := attachedWorkerKeys(sessions, workerMap, orchIdx)
 	out := make(map[string][]*UnattachedWorker)
 	for _, cb := range orch.Codebases {
 		out[cb.Name] = append(out[cb.Name], rigUnattachedWorkers(cb, attached)...)
@@ -271,13 +326,14 @@ func unattachedWorkersByRig(orch *orchestrator.State, sessions []*SessionState, 
 	return out
 }
 
-// attachedWorkerKeys returns the rig workers some session in sessions is
-// attached to, by either workerMap source. Global agents and unnamed roles
-// produce keys no named codebase worker looks up.
-func attachedWorkerKeys(sessions []*SessionState, workerMap map[string]*workerInfo) map[rigWorkerKey]bool {
+// attachedWorkerKeys returns the rig workers of the orchIdx-th orchestrator
+// that some session in sessions is attached to, by either workerMap source.
+// Global agents and unnamed roles produce keys no named codebase worker looks
+// up.
+func attachedWorkerKeys(sessions []*SessionState, workerMap map[string]*workerInfo, orchIdx int) map[rigWorkerKey]bool {
 	attached := make(map[rigWorkerKey]bool)
 	for _, s := range sessions {
-		if wi := workerMap[s.SessionID]; wi != nil {
+		if wi := workerMap[s.SessionID]; wi != nil && wi.orch == orchIdx {
 			attached[rigWorkerKey{wi.Rig, wi.Name}] = true
 		}
 	}
@@ -303,6 +359,8 @@ func rigUnattachedWorkers(cb orchestrator.Codebase, attached map[rigWorkerKey]bo
 				WorkerName:  w.Name,
 				WorkerID:    w.ID,
 				WorkerState: ownWorkerState(w),
+				Stale:       w.Stale,
+				LastExit:    w.LastExit,
 			})
 		}
 	}
@@ -416,6 +474,22 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 	summary.Ready = byState[StateReady]
 	summary.Error = byState[StateError]
 	return summary
+}
+
+// buildWorkerMaps merges every orchestrator's buildWorkerMap into one
+// sessionID → workerInfo index. A session claimed by more than one goes to the
+// first in orchs, and workerInfo.orch records which one that was.
+func buildWorkerMaps(orchs []*orchestrator.State, sessions []*SessionState) map[string]*workerInfo {
+	merged := make(map[string]*workerInfo)
+	for i, orch := range orchs {
+		for id, wi := range buildWorkerMap(orch, sessions) {
+			if _, claimed := merged[id]; !claimed {
+				wi.orch = i
+				merged[id] = wi
+			}
+		}
+	}
+	return merged
 }
 
 // buildWorkerMap creates a sessionID → workerInfo index from orchestrator state.

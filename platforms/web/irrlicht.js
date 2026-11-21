@@ -1418,7 +1418,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         '<span class="worker-row-icon" style="display:none"></span>' +
         '<span class="row-worker-name" style="display:none"></span>' +
         '<span class="row-worker-id" style="display:none"></span>' +
-        '<span class="worker-row-state" style="display:none"></span>';
+        '<span class="worker-row-state" style="display:none"></span>' +
+        '<span class="worker-row-tag worker-row-stale" style="display:none"></span>' +
+        '<span class="worker-row-tag worker-row-failed" style="display:none"></span>';
       updateWorkerRow(el, worker, depth);
       return el;
     }
@@ -1434,6 +1436,20 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
       setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
       setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
+      setWorkerIndications(el, worker);
+    }
+
+    // setWorkerIndications shows a worker's two row-only indications (#2148):
+    // "stale" when its writer stopped reporting on a busy slot, and
+    // "failed · exit N" when its last completed run exited non-zero. Neither
+    // is a session state: no notification, no count, no state colour.
+    function setWorkerIndications(el, worker) {
+      setWorkerChip(el.querySelector('.worker-row-stale'), worker.stale ? 'stale' : '',
+        'No heartbeat or team update for three heartbeat intervals \u2014 the worker or its scheduler may have stopped');
+      const exit = worker.last_exit;
+      const failed = typeof exit === 'number' && exit !== 0;
+      setWorkerChip(el.querySelector('.worker-row-failed'), failed ? 'failed \u00B7 exit ' + exit : '',
+        failed ? 'Last run ended with exit code ' + exit : '');
     }
 
     function createAlertRow(pressure) {
@@ -1999,10 +2015,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       })(groups);
       return parts.join('|');
     }
-    // One structureSignature part per unattached worker of g (#2140).
+    // One structureSignature part per unattached worker of g (#2140), with
+    // its stale and last-run indications (#2148): either can change with
+    // nothing else about the worker changing.
     function unattachedWorkerSignatures(g) {
       return (g.unattached_workers || []).map(w =>
-        'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || ''));
+        'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || '') +
+        ':' + (w.stale ? 's' : '') + ':' + (w.last_exit ?? ''));
     }
     // Periodic re-hydration. Two jobs, one fetch:
     //   1. STRUCTURE — if the daemon's group tree / role metadata changed
@@ -2094,8 +2113,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // only `costs` go stale, so fall back to 30s. Recursive setTimeout (not
     // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
     function scheduleRehydratePoll() {
+      // Any typed group is an orchestrator's (Gas Town, a worker list, #2148).
       const hasOrchestrator = dashboardGroups.some(g =>
-        g && (g.type === 'gastown' || g.groups?.length));
+        g && (g.type || g.groups?.length));
       setTimeout(() => {
         // .catch last, so a throw from scheduleRehydratePoll is logged too
         // (checked in node: with .catch first it surfaced unhandled) (#2147).

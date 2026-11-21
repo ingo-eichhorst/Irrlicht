@@ -17,6 +17,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -390,9 +391,8 @@ func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store
 // permissions that actually write them.
 //
 // It projects the full consent catalog rather than agents.All(): the kitty
-// patch is one of five daemon-wide declarations appended outside the adapter
-// registry (#2002 added endpoint-route observation as the 4th, #2007 Muse's
-// account-quota permission as the 5th), and projecting only the registry is
+// patch is one of the daemon-wide declarations appended outside the adapter
+// registry (consentCatalog lists them), and projecting only the registry is
 // how it stayed unprotected.
 //
 // An empty result is an error, not an empty list: the rig would read "nothing
@@ -716,7 +716,6 @@ func runDaemon() {
 	// registers) so /api/v1/sessions can always consult it.
 	orchMonitor, orchCtx, orchCancel := setupOrchestratorMonitor(push, logger)
 	defer orchCancel()
-	startGastown, stopGastown := gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 
 	// Muse's account-quota poller (issue #2007) is constructed once inside
 	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
@@ -726,6 +725,12 @@ func runDaemon() {
 	museAPI := museAccountAPIEffects(logger)
 
 	home, _ := os.UserHomeDir()
+	effects := consentEffects{StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop}
+	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
+	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
+	// is resolved once, at startup.
+	effects.StartWorkerlist, effects.StopWorkerlist = workerlistEffects(orchCtx, orchMonitor,
+		workerlist.ResolvePath(dataDir(home)), logger)
 	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
 		DemoMode:         demoMode,
 		PWPort:           pwPort,
@@ -741,17 +746,13 @@ func runDaemon() {
 		AutonomySpans:    autonomySpans,
 		HistoryTracker:   historyTracker,
 	}, setupPermissionServiceDeps{
-		Push:         push,
-		Logger:       logger,
-		Cfg:          cfg,
-		AllAgents:    allAgents,
-		DemoMode:     demoMode,
-		Home:         home,
-		StartGastown: startGastown,
-		StopGastown:  stopGastown,
-
-		StartMuseAccountAPI: museAPI.Start,
-		StopMuseAccountAPI:  museAPI.Stop,
+		Push:      push,
+		Logger:    logger,
+		Cfg:       cfg,
+		AllAgents: allAgents,
+		DemoMode:  demoMode,
+		Home:      home,
+		Effects:   effects,
 	})
 
 	// Register API endpoints that need orchMonitor.

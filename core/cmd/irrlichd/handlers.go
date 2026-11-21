@@ -127,7 +127,9 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		// wrapper's auth.json is read only when observeGranted(adapter) says
 		// that adapter's observe consent is granted (nil = never, #2095).
 		services.InheritRateLimits(sessions, "", observeGranted)
-		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		// Every orchestrator the monitor holds gets its own group (#2148),
+		// in States()' adapter-name order.
+		groups := session.BuildDashboard(sessions, orchMonitor.States()...)
 		resp := sessionsResponse{Groups: groups}
 		if hookHealth != nil {
 			resp.DaemonErrors = services.DaemonErrors(hookHealth())
@@ -161,9 +163,11 @@ func costMaps(tracker outbound.CostTracker, cache *costAttachCache) (byProject, 
 
 // attachGroupCosts populates each top-level group's Costs map with the
 // trailing-window cost for day/week/month/year. A regular project group gets
-// its single project's cost; an orchestrator (gastown) group gets the sum of
-// the distinct project costs across every session beneath it (rigs span
-// projects), counting a shared project once.
+// its single project's cost; an orchestrator group — any group with a Type,
+// Gas Town or a worker list (#2148) — gets the sum of the distinct project
+// costs across every session beneath it (rigs span projects), counting a
+// shared project once. An orchestrator group is never priced by its name: a
+// worker pool named like a project has none of that project's sessions.
 func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]float64) {
 	if byTf == nil {
 		return
@@ -173,8 +177,8 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 			continue
 		}
 		var costs map[string]float64
-		if g.Type == "gastown" {
-			costs = gastownGroupCosts(g, byTf)
+		if g.Type != "" {
+			costs = orchestratorGroupCosts(g, byTf)
 		} else {
 			costs = regularGroupCosts(g, byTf)
 		}
@@ -184,10 +188,11 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 	}
 }
 
-// gastownGroupCosts sums the distinct project costs across every session
+// orchestratorGroupCosts sums the distinct project costs across every session
 // beneath an orchestrator group (rigs span projects), counting a shared
-// project once — the per-timeframe half of attachGroupCosts' gastown branch.
-func gastownGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+// project once — the per-timeframe half of attachGroupCosts' orchestrator
+// branch.
+func orchestratorGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
 	costs := make(map[string]float64, len(costTimeframeSeconds))
 	projects := collectProjectNames(g)
 	for tf := range costTimeframeSeconds {
@@ -223,7 +228,7 @@ func regularGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64
 //
 // Caveat: trailing-window cost is keyed per-project, not per-session, so if a
 // project has sessions both under the orchestrator and in a regular group, its
-// whole windowed cost is attributed to the gastown total AND to that regular
+// whole windowed cost is attributed to the orchestrator total AND to that regular
 // group — there's no per-session split to apportion. Acceptable for an
 // at-a-glance orchestrator rollup.
 func collectProjectNames(g *session.AgentGroup) map[string]struct{} {

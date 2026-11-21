@@ -12,6 +12,10 @@ type State struct {
 	Running bool `json:"running"`
 	// Root is the filesystem root of the orchestrator workspace.
 	Root string `json:"root,omitempty"`
+	// Name is the display name of the orchestrator's dashboard group. Empty
+	// keeps the dashboard's own naming rule (session.BuildDashboard); the
+	// worker-list adapter sets it from its status file (#2148).
+	Name string `json:"name,omitempty"`
 	// GlobalAgents are orchestrator-level agents not scoped to a codebase
 	// (e.g. Gas Town's mayor, deacon).
 	GlobalAgents []GlobalAgent `json:"global_agents,omitempty"`
@@ -66,6 +70,13 @@ type Worker struct {
 	ID        string `json:"id,omitempty"` // bead ID, task ID, etc.
 	SessionID string `json:"session_id,omitempty"`
 	State     string `json:"state"`
+	// Stale marks a busy worker whose writer has stopped reporting on it (a
+	// heartbeat older than the adapter's threshold, #2148). It is an
+	// indication on the worker's row only — never a session state.
+	Stale bool `json:"stale,omitempty"`
+	// LastExit is the exit code of the worker's last completed run, nil when
+	// no run has completed (#2148). A non-zero value shows as failed.
+	LastExit *int `json:"last_exit,omitempty"`
 }
 
 // workUnit represents a trackable unit of work with progress.
