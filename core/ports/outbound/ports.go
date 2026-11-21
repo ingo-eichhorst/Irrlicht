@@ -693,11 +693,12 @@ func (p AutonomySpanProvenance) LiveSince() int64 { return p.EraStarts[""] }
 type FinishedSubagentStore interface {
 	// Retain records one removed child, replacing any earlier record for the
 	// same SessionID.
-	Retain(rec session.FinishedSubagent)
-	// ForgetTree drops every record that descends from rootSessionID —
-	// called when that session is itself removed, after which nothing can
-	// ask for its subagents.
-	ForgetTree(rootSessionID string)
+	Retain(rec session.FinishedSubagent) error
+	// PruneOrphans drops the records of every root session that has been
+	// absent for the store's retention window. rootExists answers whether a
+	// root is still in the session list. A root that is present keeps its
+	// records however long it runs.
+	PruneOrphans(rootExists func(rootSessionID string) bool) error
 	// List returns a copy of every record held.
 	List() []session.FinishedSubagent
 }

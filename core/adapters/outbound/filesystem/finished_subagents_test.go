@@ -1,6 +1,8 @@
 package filesystem
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,15 +24,23 @@ func ids(recs []session.FinishedSubagent) []string {
 	return out
 }
 
+func mustRetain(t *testing.T, s *FinishedSubagentStore, rec session.FinishedSubagent) {
+	t.Helper()
+	if err := s.Retain(rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestFinishedSubagentStore_SurvivesARestart: a record written by one store is
-// served by a fresh store over the same directory — the daemon-restart case.
+// served by a fresh store over the same directory — the daemon-restart case —
+// and a second record for the same session replaces the first.
 func TestFinishedSubagentStore_SurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
 	a := NewFinishedSubagentStoreWithDir(dir)
-	a.Retain(finished("child-1", "root", now, 10))
-	a.Retain(finished("child-2", "root", now.Add(time.Second), 20))
-	a.Retain(finished("child-1", "root", now.Add(2*time.Second), 11)) // replaces
+	mustRetain(t, a, finished("child-1", "root", now, 10))
+	mustRetain(t, a, finished("child-2", "root", now.Add(time.Second), 20))
+	mustRetain(t, a, finished("child-1", "root", now.Add(2*time.Second), 11))
 
 	got := NewFinishedSubagentStoreWithDir(dir).List()
 	if len(got) != 2 || got[0].SessionID != "child-2" || got[1].SessionID != "child-1" {
@@ -41,63 +51,103 @@ func TestFinishedSubagentStore_SurvivesARestart(t *testing.T) {
 	}
 }
 
-// TestFinishedSubagentStore_ForgetTreeDropsEveryDescendant: removing a root
-// drops its children's records and theirs, and nothing else.
-func TestFinishedSubagentStore_ForgetTreeDropsEveryDescendant(t *testing.T) {
+// TestFinishedSubagentStore_OneFilePerRoot: a grandchild whose parent is
+// itself a record lands in its root's file, so a removal rewrites only the
+// file of the root it belongs to.
+func TestFinishedSubagentStore_OneFilePerRoot(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
 	s := NewFinishedSubagentStoreWithDir(dir)
-	s.Retain(finished("grandchild", "child", now, 1))
-	s.Retain(finished("child", "root", now, 1))
-	s.Retain(finished("other-child", "other-root", now, 1))
-	s.ForgetTree("root")
+	mustRetain(t, s, finished("child", "root-a", now, 1))
+	mustRetain(t, s, finished("grandchild", "child", now, 1))
+	mustRetain(t, s, finished("other", "root-b", now, 1))
 
-	if got := ids(s.List()); len(got) != 1 || got[0] != "other-child" {
-		t.Errorf("after ForgetTree(root): %v, want [other-child]", got)
+	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	if len(files) != 2 {
+		t.Fatalf("files = %v, want one per root (2)", files)
 	}
-	if got := ids(NewFinishedSubagentStoreWithDir(dir).List()); len(got) != 1 {
-		t.Errorf("ForgetTree was not persisted: %v", got)
-	}
-}
-
-// TestFinishedSubagentStore_RetentionBoundsGrowth: a record past the window is
-// dropped — at load, and on the next Retain — so records whose root was
-// removed without ForgetTree cannot accumulate.
-func TestFinishedSubagentStore_RetentionBoundsGrowth(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Now()
-	s := NewFinishedSubagentStoreWithDir(dir)
-	s.Retain(finished("old", "gone-root", now.Add(-FinishedSubagentRetention-time.Hour), 1))
-	s.Retain(finished("fresh", "root", now, 1))
-	if got := ids(s.List()); len(got) != 1 || got[0] != "fresh" {
-		t.Errorf("after Retain: %v, want [fresh]", got)
-	}
-
-	s.now = func() time.Time { return now.Add(FinishedSubagentRetention + time.Hour) }
-	s.Retain(finished("later", "root", s.now(), 1))
-	if got := ids(s.List()); len(got) != 1 || got[0] != "later" {
-		t.Errorf("after the window passed: %v, want [later]", got)
+	if got := s.roots["root-a"]; got == nil || len(got.Records) != 2 {
+		t.Errorf("root-a holds %+v, want child and grandchild", got)
 	}
 }
 
-// TestFinishedSubagentStore_UnreadableFileStartsEmpty: a corrupt file is not
-// an error — the store starts empty and the next Retain rewrites it.
-func TestFinishedSubagentStore_UnreadableFileStartsEmpty(t *testing.T) {
+// TestFinishedSubagentStore_PruneOrphansKeepsLiveRootsForever: a root that
+// exists keeps its records however long it runs; a root that is gone loses
+// them only after the retention window; a root that comes back stops its
+// clock.
+func TestFinishedSubagentStore_PruneOrphansKeepsLiveRootsForever(t *testing.T) {
 	dir := t.TempDir()
+	start := time.Now()
 	s := NewFinishedSubagentStoreWithDir(dir)
-	if err := writeFileAtomic(s.path, []byte("{not json"), 0o600); err != nil {
+	mustRetain(t, s, finished("live-child", "live-root", start, 1))
+	mustRetain(t, s, finished("gone-child", "gone-root", start, 1))
+	mustRetain(t, s, finished("back-child", "back-root", start, 1))
+	present := map[string]bool{"live-root": true}
+	exists := func(id string) bool { return present[id] }
+
+	at := func(d time.Duration) {
+		t.Helper()
+		s.now = func() time.Time { return start.Add(d) }
+		if err := s.PruneOrphans(exists); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at(0) // gone-root and back-root start their clocks
+	present["back-root"] = true
+	at(time.Hour) // back-root is back: its clock stops
+	delete(present, "back-root")
+	at(FinishedSubagentRetention) // back-root restarts at the window: not yet expired
+	at(FinishedSubagentRetention + time.Hour)
+
+	got := ids(NewFinishedSubagentStoreWithDir(dir).List())
+	want := map[string]bool{"live-child": true, "back-child": true}
+	if len(got) != len(want) {
+		t.Fatalf("after the window: %v, want live-child (its root exists) and back-child (absent less than the window)", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected record %s kept", id)
+		}
+	}
+}
+
+// TestFinishedSubagentStore_UnreadableFileIsSkipped: a corrupt file or one
+// written in another version is skipped on load, not served and not deleted.
+func TestFinishedSubagentStore_UnreadableFileIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"corrupt.json": "{not json",
+		"future.json":  `{"version":99,"root":"r","records":[{"session_id":"x","parent_session_id":"r","finished_at":1}]}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := NewFinishedSubagentStoreWithDir(dir)
+	if got := s.List(); len(got) != 0 {
+		t.Errorf("loaded %v from unreadable files, want none", ids(got))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "future.json")); err != nil {
+		t.Errorf("a file in another version was removed: %v", err)
+	}
+	mustRetain(t, s, session.FinishedSubagent{}) // no id: ignored, no error
+	if len(s.List()) != 0 {
+		t.Error("a record with no session id was kept")
+	}
+}
+
+// TestFinishedSubagentStore_WriteFailureIsReported: Retain returns the write
+// error instead of dropping it, and the record is still served from memory.
+func TestFinishedSubagentStore_WriteFailureIsReported(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s = NewFinishedSubagentStoreWithDir(dir)
-	if len(s.List()) != 0 {
-		t.Fatalf("corrupt file: %v, want empty", ids(s.List()))
+	s := NewFinishedSubagentStoreWithDir(filepath.Join(blocker, "store"))
+	if err := s.Retain(finished("child", "root", time.Now(), 1)); err == nil {
+		t.Error("Retain into an unwritable directory returned no error")
 	}
-	s.Retain(finished("child", "root", time.Now(), 1))
-	if got := ids(NewFinishedSubagentStoreWithDir(dir).List()); len(got) != 1 {
-		t.Errorf("rewrite after corruption: %v, want [child]", got)
-	}
-	s.Retain(session.FinishedSubagent{}) // no id: ignored
 	if len(s.List()) != 1 {
-		t.Errorf("a record with no session id was kept")
+		t.Error("the record was not kept in memory after the failed write")
 	}
 }

@@ -51,13 +51,16 @@ under `unavailable`, keyed by the field's dotted path. For example:
 - a parent whose adapter has not established that its counts exclude its subagents leaves
   its own counts null.
 
-## What it does not list
+## Subagents that have finished
 
-`subagents[]` lists the subagents that Irrlicht's daemon still tracks. The daemon drops a
-finished subagent's session soon after its parent's turn ends. From then on, that
-subagent's usage is no longer in the document, and the parent's own counts never included
-it. So the sum of `sessions[]` and `subagents[]` covers what the daemon tracks at sampling
-time, which can be less than everything the pane has used.
+The daemon removes a subagent's session once it is done, but it keeps that subagent's final
+usage (tokens, cost and pricing source), and `subagents[]` still lists it.
+
+- **Lifetime of the record:** it lasts as long as its root session is in Irrlicht's session list.
+- **Root that is gone:** the records are kept for 7 more days, so a resumed session
+  (`claude --continue`) still finds them.
+- **Failed write:** the record is still served, but only until the daemon restarts. The daemon
+  logs the failure.
 
 ## When it fails
 

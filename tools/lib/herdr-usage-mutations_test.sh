@@ -191,20 +191,36 @@ assert_go_test_goes_red \
   "a subagent the daemon removed at parent-ready must still be listed"
 
 assert_go_test_goes_red \
-  "a removed root keeping its subagents' records" \
+  "reading a removed child's transcript without observe consent" \
   "core/application/services/session_detector.go" \
-  $'\t\td.finishedSubagents.ForgetTree(state.SessionID)\n' \
-  $'\n' \
-  "./core/application/services/" "TestSessionDetector_RemovedRootForgetsItsRecords" \
-  "want only keep-child"
+  $'\tif d.metrics == nil || state.TranscriptPath == "" || !d.observeAllowed(state.Adapter) {\n' \
+  $'\tif d.metrics == nil || state.TranscriptPath == "" {\n' \
+  "./core/application/services/" "TestSessionDetector_RetainedUsageHonoursObserveConsent" \
+  "with observe consent withheld"
 
 assert_go_test_goes_red \
-  "records never expiring" \
+  "keeping the stored metrics instead of the transcript's tail" \
+  "core/application/services/session_detector.go" \
+  $'\treturn session.MergeMetrics(fresh, state.Metrics)\n' \
+  $'\t_ = fresh\n\treturn state.Metrics\n' \
+  "./core/application/services/" "TestSessionDetector_RetainedUsageReadsTheTranscriptTail" \
+  "not the stored 5/1"
+
+assert_go_test_goes_red \
+  "pruning a root that still exists" \
   "core/adapters/outbound/filesystem/finished_subagents.go" \
-  $'\t\tif r.FinishedAt < cutoff {\n' \
-  $'\t\tif false && r.FinishedAt < cutoff {\n' \
-  "./core/adapters/outbound/filesystem/" "TestFinishedSubagentStore_RetentionBoundsGrowth" \
-  "want [fresh]"
+  $'\t\tcase rootExists(rootID):\n' \
+  $'\t\tcase false && rootExists(rootID):\n' \
+  "./core/adapters/outbound/filesystem/" "TestFinishedSubagentStore_PruneOrphansKeepsLiveRootsForever" \
+  "want live-child (its root exists)"
+
+assert_go_test_goes_red \
+  "never pruning a root that has been gone past the window" \
+  "core/adapters/outbound/filesystem/finished_subagents.go" \
+  $'\t\tcase now-r.MissingSince > int64(FinishedSubagentRetention/time.Second):\n' \
+  $'\t\tcase false:\n' \
+  "./core/adapters/outbound/filesystem/" "TestFinishedSubagentStore_PruneOrphansKeepsLiveRootsForever" \
+  "after the window:"
 
 assert_go_test_goes_red \
   "listing a still-live subagent twice, once from its stale record" \

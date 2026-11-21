@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,15 +101,16 @@ func TestSessionDetector_SweptChildIsRetained(t *testing.T) {
 	}
 }
 
-// TestSessionDetector_RemovedRootForgetsItsRecords: when the root itself is
-// removed (here: the sweep ages out a long-ready root), its subagents'
-// records go with it.
-func TestSessionDetector_RemovedRootForgetsItsRecords(t *testing.T) {
+// TestSessionDetector_RemovedRootKeepsItsRecords: removing a root (here the
+// sweep ages out a long-ready one) does not drop its subagents' records — the
+// same session ID can come back with `claude --continue`, still owning them.
+func TestSessionDetector_RemovedRootKeepsItsRecords(t *testing.T) {
 	repo := newMockRepo()
 	store := filesystem.NewFinishedSubagentStoreWithDir(t.TempDir())
 	now := time.Now()
-	store.Retain(session.FinishedSubagent{SessionID: "old-child", ParentSessionID: "old-root", FinishedAt: now.Unix()})
-	store.Retain(session.FinishedSubagent{SessionID: "keep-child", ParentSessionID: "live-root", FinishedAt: now.Unix()})
+	if err := store.Retain(session.FinishedSubagent{SessionID: "old-child", ParentSessionID: "old-root", FinishedAt: now.Unix()}); err != nil {
+		t.Fatal(err)
+	}
 	det, stop := newFinishedSubagentDetector(t, repo, store)
 	dir := t.TempDir()
 
@@ -122,14 +124,143 @@ func TestSessionDetector_RemovedRootForgetsItsRecords(t *testing.T) {
 
 	det.RunPIDLivenessSweepForTest()
 	waitForSessionDeleted(repo, "old-root", 2*time.Second)
-	waitForCondition(func() bool { return len(store.List()) == 1 }, time.Second)
 	stop()
 
 	if got, _ := repo.Load("old-root"); got != nil {
 		t.Fatalf("the sweep did not remove the aged-out root (state %q); this test needs it removed", got.State)
 	}
+	if got := store.List(); len(got) != 1 || got[0].SessionID != "old-child" {
+		t.Errorf("records after old-root was removed: %+v, want old-child kept for a resumed root", got)
+	}
+}
+
+// probeStore answers the detector's prune with what rootExists said per root.
+type probeStore struct {
+	roots []string
+	asked map[string]bool
+}
+
+func (p *probeStore) Retain(session.FinishedSubagent) error { return nil }
+func (p *probeStore) List() []session.FinishedSubagent      { return nil }
+func (p *probeStore) PruneOrphans(rootExists func(string) bool) error {
+	p.asked = map[string]bool{}
+	for _, r := range p.roots {
+		p.asked[r] = rootExists(r)
+	}
+	return nil
+}
+
+// TestSessionDetector_PruneAsksTheSessionList: the detector's prune answers
+// "does this root still exist" from the session repository.
+func TestSessionDetector_PruneAsksTheSessionList(t *testing.T) {
+	repo := newMockRepo()
+	repo.Save(&session.SessionState{SessionID: "live-root", State: session.StateReady, UpdatedAt: time.Now().Unix()})
+	probe := &probeStore{roots: []string{"live-root", "gone-root"}}
+	det := services.NewSessionDetector([]inbound.Watcher{newMockAgentWatcher()}, services.SessionDetectorDeps{
+		PW: newMockProcessWatcher(), Repo: repo, Log: &mockLogger{}, Git: &mockGit{}, Metrics: &mockMetrics{}, Version: "test",
+	})
+	det.SetFinishedSubagentStore(probe)
+	det.RunFinishedSubagentPruneForTest()
+	if !probe.asked["live-root"] || probe.asked["gone-root"] {
+		t.Errorf("rootExists answered %v, want live-root true and gone-root false", probe.asked)
+	}
+}
+
+// freshMetrics returns scripted metrics for one transcript path and records
+// every ComputeMetrics call.
+type freshMetrics struct {
+	mockMetrics
+	path  string
+	fresh *session.SessionMetrics
+	calls []string
+	mu    sync.Mutex
+}
+
+func (f *freshMetrics) ComputeMetrics(path, _ string) (*session.SessionMetrics, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, path)
+	if path == f.path {
+		return f.fresh, nil
+	}
+	return nil, nil
+}
+
+func (f *freshMetrics) callsFor(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == path {
+			n++
+		}
+	}
+	return n
+}
+
+// sweepRetainOne seeds a waiting parent and a stuck child, lets the sweep
+// remove the child, and returns the one record kept.
+func sweepRetainOne(t *testing.T, metrics *freshMetrics, consent func(string) bool) session.FinishedSubagent {
+	t.Helper()
+	repo := newMockRepo()
+	store := filesystem.NewFinishedSubagentStoreWithDir(t.TempDir())
+	det := services.NewSessionDetector([]inbound.Watcher{newMockAgentWatcher()}, services.SessionDetectorDeps{
+		PW: newMockProcessWatcher(), Repo: repo, Log: &mockLogger{}, Git: &mockGit{}, Metrics: metrics,
+		Broadcaster: &mockBroadcaster{}, Version: "test", ReadyTTL: sweepTestReadyTTL,
+	})
+	det.SetFinishedSubagentStore(store)
+	if consent != nil {
+		det.SetConsentGate(consent)
+	}
+	dir := t.TempDir()
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID: "parent", State: session.StateWaiting, Adapter: "claude-code",
+		TranscriptPath: staleTranscript(t, dir, "parent.jsonl", 0),
+		FirstSeen:      now - parentIdleSeconds, UpdatedAt: now - parentIdleSeconds, EventCount: 10,
+		Metrics: &session.SessionMetrics{LastEventType: "assistant"},
+	})
+	repo.Save(&session.SessionState{
+		SessionID: "child", State: session.StateWorking, ParentSessionID: "parent", Adapter: "claude-code",
+		TranscriptPath: metrics.path, FirstSeen: now, UpdatedAt: now, EventCount: 3,
+		Metrics: &session.SessionMetrics{LastEventType: "tool_use", CumInputTokens: 5, CumOutputTokens: 1},
+	})
+	det.RunPIDLivenessSweepForTest()
+	waitForSessionDeleted(repo, "child", time.Second)
 	recs := store.List()
-	if len(recs) != 1 || recs[0].SessionID != "keep-child" {
-		t.Errorf("records after old-root was removed: %+v, want only keep-child", recs)
+	if len(recs) != 1 || recs[0].Usage == nil {
+		t.Fatalf("records: %+v, want the removed child's", recs)
+	}
+	return recs[0]
+}
+
+// TestSessionDetector_RetainedUsageReadsTheTranscriptTail: the record holds
+// what the child's transcript says at removal — here more than its last
+// activity pass had stored.
+func TestSessionDetector_RetainedUsageReadsTheTranscriptTail(t *testing.T) {
+	metrics := &freshMetrics{
+		path:  staleTranscript(t, t.TempDir(), "child.jsonl", 5*time.Minute),
+		fresh: &session.SessionMetrics{CumInputTokens: 50, CumOutputTokens: 9, PricingSource: "litellm@2026-11-20"},
+	}
+	rec := sweepRetainOne(t, metrics, nil)
+	if rec.Usage.CumInputTokens != 50 || rec.Usage.CumOutputTokens != 9 || rec.Usage.PricingSource != "litellm@2026-11-20" {
+		t.Errorf("usage = %+v, want the transcript's 50/9 tokens and source, not the stored 5/1", rec.Usage)
+	}
+}
+
+// TestSessionDetector_RetainedUsageHonoursObserveConsent: with the adapter's
+// observe consent withheld, removing a child does not read its transcript;
+// the record keeps the metrics already stored.
+func TestSessionDetector_RetainedUsageHonoursObserveConsent(t *testing.T) {
+	metrics := &freshMetrics{
+		path:  staleTranscript(t, t.TempDir(), "child.jsonl", 5*time.Minute),
+		fresh: &session.SessionMetrics{CumInputTokens: 50},
+	}
+	rec := sweepRetainOne(t, metrics, func(string) bool { return false })
+	if n := metrics.callsFor(metrics.path); n != 0 {
+		t.Errorf("the child's transcript was read %d time(s) with observe consent withheld", n)
+	}
+	if rec.Usage.CumInputTokens != 5 {
+		t.Errorf("usage = %+v, want the stored 5 input tokens", rec.Usage)
 	}
 }
