@@ -212,3 +212,37 @@ func TestBuildDashboard_NilAndStoppedOrchestratorsAreSkipped(t *testing.T) {
 		}
 	}
 }
+
+// Review of #2148, red-first on 085088aa8: both clients key a top-level group
+// by its name (web `g:<name>`, macOS AgentGroup.id), and a pool's name is
+// user text from its status file. A pool named like a project — or like
+// another orchestrator's group — got that group's key. A name an adapter set
+// (State.Name) that is already taken gets " (<adapter>)" appended.
+func TestBuildDashboard_PoolNameNeverCollidesWithAnotherGroup(t *testing.T) {
+	sessions := []*SessionState{{SessionID: "a", State: StateWorking, ProjectName: "irrlicht"}}
+	gt := gasTown(rig("irrlicht", nil, polecat("free-1", "GH-1", "", "idle")))
+	pool := workerPool("irrlicht", poolTeam("team-a", "operational", slot("s1", "", "idle")))
+	other := workerPool("gt", poolTeam("team-b", "operational", slot("s2", "", "idle")))
+	other.Adapter = "workerlist2"
+
+	var names []string
+	for _, g := range BuildDashboard(sessions, gt, pool, other) {
+		names = append(names, g.Name)
+	}
+	want := []string{"gt", "irrlicht (workerlist)", "gt (workerlist2)", "irrlicht"}
+	if !slices.Equal(names, want) {
+		t.Errorf("top-level group names = %q, want %q", names, want)
+	}
+}
+
+// LOCK: Gas Town sets no State.Name, so its group keeps the name it always
+// had, even where that name is a project's too (a collision that predates
+// #2148 and needs GT_ROOT's basename to match a project).
+func TestBuildDashboard_GasTownNameUnchangedByCollision(t *testing.T) {
+	sessions := []*SessionState{{SessionID: "a", State: StateWorking, ProjectName: "gt"}}
+	gt := gasTown(rig("irrlicht", nil, polecat("free-1", "GH-1", "", "idle")))
+	groups := BuildDashboard(sessions, gt)
+	if len(groups) != 2 || groups[0].Name != "gt" || groups[1].Name != "gt" {
+		t.Errorf("groups = %v, want Gas Town and the project both named gt", groups)
+	}
+}

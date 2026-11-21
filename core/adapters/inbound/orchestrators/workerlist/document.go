@@ -22,7 +22,7 @@ import (
 //	    "name": "team-a",                   required, unique
 //	    "updated": "<RFC 3339>",            required, stamped by the team's own writer
 //	    "workers": [{                       required
-//	      "name": "team-a-m1-1",            required: <team>-<machine id>-<slot>
+//	      "name": "team-a-m1-1",            required, unique in its team: <team>-<machine id>-<slot>
 //	      "busy": true,                     required
 //	      "work_item": "proj-a1b2",         optional
 //	      "last_heartbeat": "<RFC 3339>",   optional
@@ -130,13 +130,19 @@ func (t team) validate() error {
 	case t.Workers == nil:
 		return errors.New("missing workers")
 	}
+	seen := make(map[string]bool, len(*t.Workers))
 	for i, w := range *t.Workers {
 		switch {
 		case w.Name == "":
 			return fmt.Errorf("workers[%d]: missing name", i)
 		case w.Busy == nil:
 			return fmt.Errorf("workers[%d]: missing busy", i)
+		case seen[w.Name]:
+			// The dashboard lists a name once per team, so a repeated
+			// slot would vanish without a word.
+			return fmt.Errorf("workers[%d]: duplicate worker name %q", i, w.Name)
 		}
+		seen[w.Name] = true
 	}
 	return nil
 }

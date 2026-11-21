@@ -26,9 +26,10 @@ func oneSlot(teamUpdated time.Time, heartbeat string) string {
 // The staleness threshold is 3 heartbeat intervals (180 s at 60 s), checked
 // one second either side against both references: a busy slot's
 // last_heartbeat, and — with no heartbeat — its team's updated (which also
-// makes the team itself stale). Seen red by changing staleMultiplier from 3
-// to 4: every "+1s" row then reads fresh. The exact-boundary row is in the
-// stale-heartbeat replay scenario, where `>=` instead of `>` turns tick 1 red.
+// makes the team itself stale), plus a row exactly at T for each: stale means
+// strictly older than T. Seen red by changing staleMultiplier from 3 to 4
+// (every "+1s" row then reads fresh), and by `>=` instead of `>` in either
+// comparison (its "exactly T" row reads stale).
 func TestBuildState_StalenessBoundary(t *testing.T) {
 	const T = 180 * time.Second
 	cases := []struct {
@@ -39,8 +40,10 @@ func TestBuildState_StalenessBoundary(t *testing.T) {
 		wantTeam      string
 	}{
 		{"heartbeat T-1s", oneSlot(t0.Add(T), rfc(t0)), t0.Add(T - time.Second), false, statusOperational},
+		{"heartbeat exactly T", oneSlot(t0.Add(T), rfc(t0)), t0.Add(T), false, statusOperational},
 		{"heartbeat T+1s", oneSlot(t0.Add(T), rfc(t0)), t0.Add(T + time.Second), true, statusOperational},
 		{"team updated T-1s", oneSlot(t0, ""), t0.Add(T - time.Second), false, statusOperational},
+		{"team updated exactly T", oneSlot(t0, ""), t0.Add(T), false, statusOperational},
 		{"team updated T+1s", oneSlot(t0, ""), t0.Add(T + time.Second), true, statusStale},
 	}
 	for _, tc := range cases {
@@ -91,6 +94,10 @@ func TestDecodeDocument_RefusesInvalid(t *testing.T) {
 		"bad timestamp":        {team(`{"name": "a", "updated": "yesterday", "workers": []}`), "parse"},
 		"worker without name":  {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": [{"busy": true}]}`), "workers[0]: missing name"},
 		"worker without busy":  {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": [{"name": "s"}]}`), "workers[0]: missing busy"},
+		// Review of #2148, red-first on 085088aa8: the dashboard lists a name
+		// once per team, so a repeated slot name hid the second slot silently.
+		"duplicate worker": {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": [
+		                           {"name": "s", "busy": false}, {"name": "s", "busy": true}]}`), "workers[1]: duplicate worker name"},
 		"duplicate team": {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": []},
 		                         {"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": []}`), "duplicate team name"},
 	}

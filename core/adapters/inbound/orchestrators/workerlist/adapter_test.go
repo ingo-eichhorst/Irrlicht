@@ -222,6 +222,22 @@ func TestAdapter_WatchSeesFileCreatedInLiveDataDir(t *testing.T) {
 	})
 }
 
+// Review of #2148, red-first on 085088aa8: a Watch whose context was
+// cancelled before it ran — a grant toggled straight back off — still read
+// and parsed the status file once. No read after a revoke.
+func TestAdapter_WatchAfterCancellationReadsNothing(t *testing.T) {
+	a, _, _ := testAdapter(t)
+	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.Watch(ctx); err == nil {
+		t.Error("Watch on a cancelled context returned nil")
+	}
+	if st := a.State(); st != nil {
+		t.Errorf("Watch on a cancelled context read the file: state %+v", st)
+	}
+}
+
 // An atomic replace of an existing file reaches State() with no tick. LOCK on
 // macOS: kqueue fsnotify re-arms a replaced file by itself (sendCreateIfNew in
 // its backend_kqueue.go), so watching the file instead of the directory was

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -202,5 +203,28 @@ func TestOrchestratorMonitor_EndedSnapshotDoesNotReplaceLiveOne(t *testing.T) {
 	got := m.State("workerlist")
 	if got == nil || got.Root != "/live" {
 		t.Fatalf("State(workerlist) = %+v, want the live registration's snapshot (Root /live)", got)
+	}
+}
+
+// Review of #2148, red-first on 085088aa8: AddWatcher subscribed inside the
+// drain goroutine it spawned, and the daemon starts the watcher's Watch right
+// after AddWatcher returns. A watcher that broadcasts its first snapshot at
+// once (the worker list reads its file immediately) could broadcast before
+// the subscription existed, and then — broadcasting only on change — never
+// again for an unchanging pool. AddWatcher must subscribe before it returns.
+// GOMAXPROCS(1) keeps the spawned goroutine from running before the check,
+// which makes the old order fail every time rather than most of the time.
+func TestOrchestratorMonitor_AddWatcherSubscribesBeforeReturning(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &fakeOrchWatcher{name: "workerlist"}
+	m.AddWatcher(ctx, w)
+	w.mu.Lock()
+	n := len(w.subs)
+	w.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("AddWatcher returned with %d subscriptions, want 1: a snapshot the watcher broadcasts right away is lost", n)
 	}
 }

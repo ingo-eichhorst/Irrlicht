@@ -6,14 +6,17 @@
 #
 #   - the orchestrator monitor's registration scoping (a revoked
 #     orchestrator's snapshot is never served, and a late one never replaces
-#     a live one) — core/application/services/orchestrator_monitor.go;
+#     a live one) and its subscribe-before-return —
+#     core/application/services/orchestrator_monitor.go;
 #   - the worker-list watcher being built only in the permission's Apply —
 #     core/cmd/irrlichd/startup.go;
-#   - the dashboard's first-claim rule and the stale copy onto the worker row
-#     — core/domain/session/grouped.go;
-#   - the worker-list adapter's staleness threshold, schema refusal,
-#     keep-last-good, directory watch and detection probe —
-#     core/adapters/inbound/orchestrators/workerlist/.
+#   - the dashboard's first-claim rule, State.Name, the stale and last_exit
+#     copies onto the worker row and the group-name collision rule —
+#     core/domain/session/grouped.go;
+#   - the worker-list adapter's staleness thresholds (slot and team), schema
+#     refusal, duplicate-slot refusal, keep-last-good, directory watch,
+#     re-evaluation tick, newest-snapshot broadcast, no read after a revoke,
+#     and detection probe — core/adapters/inbound/orchestrators/workerlist/.
 #
 # Each was first run by hand during #2148 and recorded in its PR; this file is
 # the same perturbations, committed so they re-run (AGENTS.md: "Commit that
@@ -220,6 +223,96 @@ assert_go_test_goes_red \
   "./$WL/" \
   "TestFileDetected" \
   "detected although the file the variable names is missing"
+
+# ── monitor: the first snapshot is broadcast before anyone subscribed ──────
+assert_go_test_goes_red \
+  "subscribing inside the drain goroutine again reddens the subscribe-before-return test" \
+  "$MON" \
+  $'\tch := w.Subscribe()\n\tgo m.drainWatcher(ctx, w, ch)' \
+  $'\tgo func() { m.drainWatcher(ctx, w, w.Subscribe()) }()' \
+  "./core/application/services/" \
+  "TestOrchestratorMonitor_AddWatcherSubscribesBeforeReturning" \
+  "AddWatcher returned with 0 subscriptions"
+
+# ── dashboard: the adapter's group name is ignored ──────────────────────────
+assert_go_test_goes_red \
+  "ignoring State.Name names the pool \"Gas Town\"" \
+  "$GROUPED" \
+  $'\tcase orch.Name != "":\n\t\treturn orch.Name\n' \
+  $'\tcase false:\n\t\treturn orch.Name\n' \
+  "./core/domain/session/" \
+  "TestBuildDashboard_PoolListsEverySlotWithItsIndications" \
+  'pool group name = Gas Town, want "Build pool"'
+
+# ── dashboard: the last-run outcome never reaches the row ───────────────────
+assert_go_test_goes_red \
+  "dropping the LastExit copy onto the unattached worker reddens the pool test" \
+  "$GROUPED" \
+  $'\t\t\t\tLastExit:    w.LastExit,\n' \
+  '' \
+  "./core/domain/session/" \
+  "TestBuildDashboard_PoolListsEverySlotWithItsIndications" \
+  "busy slot: last_exit = <nil>, want 2"
+
+# ── dashboard: a pool takes a project's group key ───────────────────────────
+assert_go_test_goes_red \
+  "dropping the name-collision rule gives a pool a project's group name" \
+  "$GROUPED" \
+  $'\tif orch.Name != "" && taken[name] {' \
+  $'\tif false && orch.Name != "" && taken[name] {' \
+  "./core/domain/session/" \
+  "TestBuildDashboard_PoolNameNeverCollidesWithAnotherGroup" \
+  "top-level group names ="
+
+# ── workerlist: a team exactly at the threshold reads as stale ──────────────
+assert_go_test_goes_red \
+  "comparing team staleness with >= reddens the exactly-T team row" \
+  "$WL/document.go" \
+  'teamStale := now.Sub(*t.Updated) > threshold' \
+  'teamStale := now.Sub(*t.Updated) >= threshold' \
+  "./$WL/" \
+  "TestBuildState_StalenessBoundary" \
+  "TestBuildState_StalenessBoundary/team_updated_exactly_T"
+
+# ── workerlist: a repeated slot name is accepted ────────────────────────────
+assert_go_test_goes_red \
+  "accepting a repeated slot name reddens the duplicate-worker row" \
+  "$WL/document.go" \
+  $'\t\tcase seen[w.Name]:' \
+  $'\t\tcase false && seen[w.Name]:' \
+  "./$WL/" \
+  "TestDecodeDocument_RefusesInvalid" \
+  "TestDecodeDocument_RefusesInvalid/duplicate_worker"
+
+# ── workerlist: the tick no longer re-reads ─────────────────────────────────
+assert_go_test_goes_red \
+  "removing the tick's re-read leaves a dead pool fresh forever" \
+  "$WL/adapter.go" \
+  $'\t\t\t\twatching = a.watchDir(w, false)\n\t\t\t}\n\t\t\ta.evaluate()' \
+  $'\t\t\t\twatching = a.watchDir(w, false)\n\t\t\t}' \
+  "./$WL/" \
+  "TestAdapter_TickTurnsSlotStaleWithoutFileChange" \
+  "slot stale after the threshold: not observed"
+
+# ── workerlist: a slow subscriber keeps the oldest snapshot ─────────────────
+assert_go_test_goes_red \
+  "keeping the pending snapshot in broadcast hands a slow subscriber a stale one" \
+  "$WL/adapter.go" \
+  $'\t\tselect {\n\t\tcase <-ch:\n\t\tdefault:\n\t\t}\n' \
+  '' \
+  "./$WL/" \
+  "TestAdapter_SlowSubscriberGetsNewestSnapshot" \
+  "want the newest (p-2)"
+
+# ── workerlist: a Watch started after a revoke reads the file ───────────────
+assert_go_test_goes_red \
+  "dropping Watch's first cancellation check reads the file after a revoke" \
+  "$WL/adapter.go" \
+  $'\t// A revoke can land before this goroutine first runs; read nothing then.\n\tif ctx.Err() != nil {\n\t\treturn ctx.Err()\n\t}\n' \
+  '' \
+  "./$WL/" \
+  "TestAdapter_WatchAfterCancellationReadsNothing" \
+  "Watch on a cancelled context read the file"
 
 if [[ $fails -gt 0 ]]; then
   echo "workerlist-mutations: $fails FAILED"

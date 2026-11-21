@@ -60,8 +60,11 @@ func NewOrchestratorMonitor(
 }
 
 // AddWatcher registers an orchestrator watcher with the running (or
-// not-yet-running) monitor: a drain goroutine forwards its state snapshots
-// into the merged channel until ctx is cancelled. The caller owns the
+// not-yet-running) monitor: it subscribes before returning, then a drain
+// goroutine forwards the snapshots into the merged channel until ctx is
+// cancelled. Subscribing first means a watcher whose Watch the caller starts
+// next can broadcast its first snapshot at once without losing it
+// (TestOrchestratorMonitor_AddWatcherSubscribesBeforeReturning). The caller owns the
 // watcher's Watch lifecycle under the same ctx — this is how the
 // permission service starts/stops orchestrator monitoring on grant/revoke
 // (#570).
@@ -72,14 +75,14 @@ func NewOrchestratorMonitor(
 // (#2148; TestOrchestratorMonitor_RegistrationEndDropsStateAtOnce and
 // TestOrchestratorMonitor_SnapshotInFlightAtRevokeStaysDropped).
 func (m *OrchestratorMonitor) AddWatcher(ctx context.Context, w inbound.OrchestratorWatcher) {
-	go m.drainWatcher(ctx, w)
+	ch := w.Subscribe()
+	go m.drainWatcher(ctx, w, ch)
 }
 
-// drainWatcher subscribes to one watcher and forwards its snapshots into
-// the merged channel until ctx is cancelled or the subscription closes. Each
-// snapshot carries ctx as its registration.
-func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.OrchestratorWatcher) {
-	ch := w.Subscribe()
+// drainWatcher forwards one watcher's snapshots from its subscription ch into
+// the merged channel until ctx is cancelled or ch closes. Each snapshot
+// carries ctx as its registration.
+func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.OrchestratorWatcher, ch <-chan orchestrator.State) {
 	defer w.Unsubscribe(ch)
 	defer m.forget(ctx, w.Name())
 	for {
@@ -154,7 +157,7 @@ func (m *OrchestratorMonitor) States() []*orchestrator.State {
 // registered later via AddWatcher feed the same channel.
 func (m *OrchestratorMonitor) Run(ctx context.Context) error {
 	for _, w := range m.watchers {
-		go m.drainWatcher(ctx, w)
+		m.AddWatcher(ctx, w)
 	}
 
 	m.log.LogInfo("orchestrator-monitor", "", fmt.Sprintf("started — watching %d orchestrator(s)", len(m.watchers)))

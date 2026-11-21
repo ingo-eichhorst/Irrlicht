@@ -134,6 +134,10 @@ func (a *Adapter) broadcast(state orchestrator.State) {
 // exist yet) is logged once and retried on each tick; the tick keeps the file
 // read meanwhile.
 func (a *Adapter) Watch(ctx context.Context) error {
+	// A revoke can land before this goroutine first runs; read nothing then.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		a.logError(fmt.Sprintf("cannot watch %s (re-reading every %v instead): %v", a.path, a.reevaluate, err))

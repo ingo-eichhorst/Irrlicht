@@ -100,9 +100,14 @@ func BuildDashboard(sessions []*SessionState, orchs ...*orchestrator.State) []*A
 
 	// 4. Assemble result: one group per orchestrator, then the projects.
 	var result []*AgentGroup
+	taken := make(map[string]bool, len(partition.regularOrder))
+	for _, key := range partition.regularOrder {
+		taken[key] = true
+	}
 	for i, orch := range running {
 		unattached := unattachedWorkersByRig(orch, i, sessions, workerMap)
 		if orchGroup := buildOrchGroup(orch, partition.orchs[i], unattached); orchGroup != nil {
+			orchGroup.Name = uniqueOrchGroupName(orch, orchGroup.Name, taken)
 			result = append(result, orchGroup)
 		}
 	}
@@ -234,6 +239,20 @@ func buildOrchGroup(orch *orchestrator.State, partition *orchPartition, unattach
 		Agents: partition.agents,
 		Groups: rigGroups,
 	}
+}
+
+// uniqueOrchGroupName returns name, with " (<adapter>)" appended when the
+// adapter chose it (State.Name) and another top-level group already has it,
+// and records the result in taken. Both clients key a top-level group by its
+// name, and State.Name is user text — a worker list's status file names its
+// pool — so it must not take a project's or another orchestrator's key.
+// Gas Town sets no State.Name, so its group keeps the name it always had.
+func uniqueOrchGroupName(orch *orchestrator.State, name string, taken map[string]bool) string {
+	if orch.Name != "" && taken[name] {
+		name += " (" + orch.Adapter + ")"
+	}
+	taken[name] = true
+	return name
 }
 
 // orchGroupName is orch.Name when the adapter set one (#2148), else the base
