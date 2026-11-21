@@ -36,6 +36,8 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" 
 // concurrent processes targeting different project CWDs.
 func Agent() agent.Agent {
 	return agent.Agent{
+		// What this adapter counts (#2061), declared beside the parser.
+		Usage: usageCoverage(),
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  "Aider",

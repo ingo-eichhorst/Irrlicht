@@ -69,7 +69,7 @@ func TestHandleGetSessions_ShowsEveryOrchestrator(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(filesystem.NewWithDir(t.TempDir()), orchMonitor, nil, nil, nil))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(filesystem.NewWithDir(t.TempDir()), orchMonitor, nil, nil, nil, nil))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/v1/sessions")

@@ -299,3 +299,14 @@ func parseTokenCount(s string) int64 {
 	}
 	return int64(v * float64(mult))
 }
+
+// usageCoverage declares what this parser counts (#2061): tokensRE reads only
+// "N sent" (input) and "M received" (output) from a "> Tokens:" line. Aider
+// writes its cache figures to the terminal, not to the chat history this
+// parser reads, so cache_read and cache_write are never counted. Aider has no
+// subagents.
+func usageCoverage() *session.UsageCoverage {
+	return &session.UsageCoverage{
+		TokenTypes: []session.TokenType{session.TokenInput, session.TokenOutput},
+	}
+}

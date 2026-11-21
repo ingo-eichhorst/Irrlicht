@@ -136,6 +136,7 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	t.pendingSnapshot = nil
 	t.cumByModel = make(map[string]*UsageBreakdown)
 	t.cumProviderCostUSD = 0
+	t.providerCostSeen = false
 	// The execution-confidence accumulator is additive over messages like the
 	// token counters above: re-reading from byte 0 would observe every
 	// surviving message again and keep counting prose a rewind deleted

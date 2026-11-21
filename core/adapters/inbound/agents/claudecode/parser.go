@@ -1206,3 +1206,26 @@ func isClaudeCodeMessageEvent(eventType string) bool {
 	}
 	return false
 }
+
+// usageCoverage declares what this parser counts (#2061).
+//
+// Token types: anthropicUsageBreakdown reads all four from the message's own
+// usage block — input_tokens, output_tokens, cache_read_input_tokens, and the
+// cache_creation.ephemeral_5m/1h_input_tokens pair (or its flat
+// cache_creation_input_tokens fallback) as cache_write.
+//
+// Subagents: each subagent writes its own subagents/agent-*.jsonl transcript,
+// a separate session. The parent transcript carries a finished Agent call's
+// toolUseResult.usage summary, and the parent does not count it: that line has
+// no requestId, which applyRequestIDContribution requires, and findUsageMap
+// does not read toolUseResult. TestUsageCoverage_ParentIgnoresSubagentUsageSummary
+// pins this on the 3-1_foreground-subagent recording (2026-09-06-23-53-54),
+// whose line 26 carries such a summary.
+func usageCoverage() *session.UsageCoverage {
+	return &session.UsageCoverage{
+		TokenTypes: []session.TokenType{
+			session.TokenInput, session.TokenOutput, session.TokenCacheRead, session.TokenCacheWrite,
+		},
+		ExcludesSubagents: true,
+	}
+}

@@ -190,6 +190,11 @@ func (f *sessionFold) observe(raw map[string]interface{}) {
 	// delta path skips by design. reconcileTaskSnapshot no-ops when
 	// there is no snapshot or no tasks yet.
 	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &m.Tasks, &f.taskByID)
+	// No cost provenance here (#2061): applyStepFinishTokens builds no
+	// contribution for a "tool-calls" step, so this fold's cost and tokens omit
+	// every mid-turn step, and an empty PricingSource is what keeps the usage
+	// export from vouching for them. The 2.x path (metrics_v2.go) replaces them
+	// with the session_v2 totals and records its own.
 	applyContribution(ev.Contribution, &m.CumInputTokens, &m.CumOutputTokens, &m.CumCacheReadTokens, &m.EstimatedCostUSD)
 	trackTokensAndText(ev, m, &m.LastAssistantText)
 	f.confidence.Observe(ev.Hedge)

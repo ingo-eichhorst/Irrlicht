@@ -43,7 +43,7 @@ func Agent() agent.Agent {
 	// version disclosure below, so the copy cannot come to call the CLI
 	// something the rest of the UI doesn't.
 	const displayName = "Claude Code"
-	return agent.Agent{
+	return withUsage(agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  displayName,
@@ -180,7 +180,14 @@ func Agent() agent.Agent {
 				},
 			},
 		},
-	}
+	})
+}
+
+// withUsage adds what this adapter counts (#2061), declared beside the
+// parser, to its registration.
+func withUsage(a agent.Agent) agent.Agent {
+	a.Usage = usageCoverage()
+	return a
 }
 
 // OpenSubagents satisfies agent.SubagentCounter so the metrics collector

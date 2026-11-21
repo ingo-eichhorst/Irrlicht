@@ -153,44 +153,30 @@ func (cm *CapacityManager) logPricingMiss(modelName string) {
 // EstimateCostUSD calculates the cost in USD from token breakdowns.
 // Returns 0 when pricing data is unavailable (model missing from LiteLLM,
 // or cache not yet fetched). Logs a one-per-model warning on miss so silent
-// zero-pricing is observable in daemon logs.
+// zero-pricing is observable in daemon logs. A caller that must tell an
+// unpriced model from a free one uses PricedCostUSD instead (#2061).
 func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
-	cap := cm.GetModelCapacity(modelName)
-	if cap.Pricing == nil {
-		cm.logPricingMiss(modelName)
-		return 0
-	}
-	p := cap.Pricing
-	cost := float64(inputTokens)*p.InputPerMTok +
-		float64(outputTokens)*p.OutputPerMTok +
-		float64(cacheReadTokens)*p.CacheReadPerMTok +
-		float64(cacheCreationTokens)*p.CacheCreationPerMTok
-	return cost / 1_000_000
+	cost, _ := cm.PricedCostUSD(Tokens{
+		Model:         modelName,
+		Input:         inputTokens,
+		Output:        outputTokens,
+		CacheRead:     cacheReadTokens,
+		CacheCreation: cacheCreationTokens,
+	})
+	return cost
 }
 
 // EstimateCostFromBreakdown calculates USD cost using per-bucket token counts
 // including separate 5m and 1h Anthropic cache-write rates. Falls back to the
 // legacy single-bucket CacheCreationPerMTok when sub-rates are not populated.
 func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, output, cacheRead, cacheCreate5m, cacheCreate1h int64) float64 {
-	cap := cm.GetModelCapacity(modelName)
-	if cap.Pricing == nil {
-		cm.logPricingMiss(modelName)
-		return 0
-	}
-	p := cap.Pricing
-
-	// Choose cache-creation rate: prefer sub-rates when populated.
-	var cacheCreateCost float64
-	if p.CacheCreation5mPerMTok > 0 || p.CacheCreation1hPerMTok > 0 {
-		cacheCreateCost = float64(cacheCreate5m)*p.CacheCreation5mPerMTok +
-			float64(cacheCreate1h)*p.CacheCreation1hPerMTok
-	} else {
-		cacheCreateCost = float64(cacheCreate5m+cacheCreate1h) * p.CacheCreationPerMTok
-	}
-
-	cost := float64(input)*p.InputPerMTok +
-		float64(output)*p.OutputPerMTok +
-		float64(cacheRead)*p.CacheReadPerMTok +
-		cacheCreateCost
-	return cost / 1_000_000
+	cost, _ := cm.PricedCostFromBreakdown(TokenBreakdown{
+		Model:         modelName,
+		Input:         input,
+		Output:        output,
+		CacheRead:     cacheRead,
+		CacheCreate5m: cacheCreate5m,
+		CacheCreate1h: cacheCreate1h,
+	})
+	return cost
 }

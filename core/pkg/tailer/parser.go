@@ -898,6 +898,14 @@ type LedgerState struct {
 	// len(Tasks) understates the counter after a restart and every subsequent
 	// TaskUpdate would miss its target. See issue #615.
 	TaskSeq int `json:"task_seq,omitempty"`
+	// ProviderCostSeen persists TranscriptTailer.providerCostSeen (#2061).
+	// Added WITHOUT a schema bump, the #1104/#1982 trade-off: a bump would
+	// discard every live session's ledger and re-scan it. A ledger written
+	// before this field lacks it, so SetLedgerState also reads a positive
+	// CumProviderCostUSD as "seen". What that leaves uncovered is a session
+	// in flight at upgrade time whose provider-cost turns all reported
+	// exactly $0, until its next provider-cost turn sets the flag again.
+	ProviderCostSeen bool `json:"provider_cost_seen,omitempty"`
 	// PendingTaskCreates persists in-flight TaskCreate calls (tool_use id →
 	// provisional task ID) so a restart between a create's tool_use and its
 	// result can still apply the authoritative ID. See issue #615.

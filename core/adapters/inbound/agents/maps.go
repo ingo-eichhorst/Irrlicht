@@ -211,6 +211,20 @@ func MetricsProviders(agents []agent.Agent) map[string]MetricsProvider {
 	return m
 }
 
+// UsageCoverages produces the adapter-name → usage-coverage map consumed by
+// metrics.Adapter (#2061). Only adapters that declare agent.Agent.Usage
+// appear; every other adapter's sessions carry no coverage, which consumers
+// read as "nothing declared".
+func UsageCoverages(agents []agent.Agent) map[string]*session.UsageCoverage {
+	m := make(map[string]*session.UsageCoverage)
+	for _, a := range agents {
+		if a.Usage != nil {
+			m[a.Identity.Name] = a.Usage
+		}
+	}
+	return m
+}
+
 // jsonLineParserOf returns the JSONLineParser carried inside an Agent's
 // FilesUnderRoot source (if any). Returns the parser and ok=true when
 // the Agent declares a FilesUnderRoot source with a JSONLineParser.

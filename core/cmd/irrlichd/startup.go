@@ -237,6 +237,24 @@ func initAutonomySpanStore(logger outbound.Logger) outbound.AutonomySpanStore {
 	return store
 }
 
+// initFinishedSubagentStore opens the store of removed child sessions' final
+// usage (#2061) — under IRRLICHT_HOME when the daemon is isolated, else the
+// app-support dir — or returns nil, which disables it, when neither resolves.
+func initFinishedSubagentStore(logger outbound.Logger) outbound.FinishedSubagentStore {
+	if dir := stateStoreDir(finishedSubagentsStateDir); dir != "" {
+		return filesystem.NewFinishedSubagentStoreWithDir(dir)
+	}
+	store, err := filesystem.NewFinishedSubagentStore()
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to init finished-subagent store: %v", err))
+		return nil
+	}
+	return store
+}
+
+// finishedSubagentsStateDir is that store's subdirectory under IRRLICHT_HOME.
+const finishedSubagentsStateDir = "finished-subagents"
+
 // autonomyStateDir is the span log's subdirectory under the data dir; it
 // mirrors the cost log's "cost".
 const autonomyStateDir = "autonomy"
@@ -634,6 +652,9 @@ type registerSessionRoutesDeps struct {
 	CachedRepo  outbound.SessionRepository
 	OrchMonitor *services.OrchestratorMonitor
 	CostTracker outbound.CostTracker
+	// FinishedSubagents serves removed child sessions' final usage on
+	// /api/v1/sessions?include=finished_subagents (#2061). nil serves none.
+	FinishedSubagents outbound.FinishedSubagentStore
 	// AutonomySpans backs the History view's Autonomy section (#1905). nil is
 	// valid and yields empty-but-valid payloads.
 	AutonomySpans outbound.AutonomySpanStore
@@ -659,7 +680,7 @@ type registerSessionRoutesDeps struct {
 // separate from registerCoreRoutes because it needs orchMonitor.
 func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(deps.CachedRepo, deps.OrchMonitor, deps.CostTracker,
-		deps.HookHealth, deps.ObserveGranted))
+		deps.HookHealth, deps.ObserveGranted, deps.FinishedSubagents))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files. #373 adds
@@ -692,6 +713,7 @@ type buildDetectorDeps struct {
 	AllAgents         []agent.Agent
 	CostTracker       outbound.CostTracker
 	AutonomySpans     outbound.AutonomySpanStore
+	FinishedSubagents outbound.FinishedSubagentStore
 	HistoryTracker    *services.HistoryTracker
 	DSHObserveGranted func() bool
 }
@@ -762,6 +784,9 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 	if deps.AutonomySpans != nil {
 		detector.SetAutonomySpanStore(deps.AutonomySpans)
 	}
+	// SetFinishedSubagentStore is a bare field assignment, so a nil store
+	// leaves the detector's nil default: nothing is retained.
+	detector.SetFinishedSubagentStore(deps.FinishedSubagents)
 	detector.SetHistoryTracker(deps.HistoryTracker)
 
 	// Cache-creation regression detector (#374): per-project baseline from the

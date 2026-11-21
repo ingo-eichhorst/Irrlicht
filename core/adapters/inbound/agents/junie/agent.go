@@ -36,6 +36,8 @@ func Source() agent.Source {
 // idle-flush heuristic or hook is needed.
 func Agent() agent.Agent {
 	return agent.Agent{
+		// What this adapter counts (#2061), declared beside the parser.
+		Usage: usageCoverage(),
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  "Junie",

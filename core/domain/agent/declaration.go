@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"irrlicht/core/domain/permission"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/cliversion"
 )
 
@@ -21,6 +22,14 @@ type Agent struct {
 	Process     Process
 	Source      Source
 	Permissions []Permission
+
+	// Usage declares what the adapter's usage accounting covers — which
+	// token types its parser reads from the agent's own usage record, and
+	// whether a parent's counts exclude its child sessions (#2061). Optional:
+	// nil is "not declared", which consumers read as every token count
+	// unknown. Declared beside the adapter's parser, never inferred from the
+	// adapter's name.
+	Usage *session.UsageCoverage
 }
 
 // Permission declares one consent-gated capability of an adapter: what

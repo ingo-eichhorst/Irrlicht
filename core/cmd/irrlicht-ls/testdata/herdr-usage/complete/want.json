@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "pane_id": "w1:p1",
+  "sampled_at": "2026-11-21T12:00:00Z",
+  "sessions": [
+    {
+      "session_id": "cc-complete",
+      "adapter": "claude-code",
+      "model": "claude-opus-4-6",
+      "tokens": {
+        "input": 1200,
+        "output": 340,
+        "cache_read": 50000,
+        "cache_write": 4000
+      },
+      "cost": {
+        "usd": 0.42,
+        "pricing_source": "litellm@2026-11-20"
+      },
+      "elapsed_seconds": 180,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": {
+        "provider": "anthropic",
+        "plan_type": "max",
+        "attribution_quality": "confirmed",
+        "windows": [
+          {
+            "window_minutes": 300,
+            "used_percent": 37.5,
+            "resets_at": "2026-11-18T13:53:20Z"
+          },
+          {
+            "window_minutes": 10080,
+            "used_percent": 12,
+            "resets_at": "2026-11-24T06:00:00Z"
+          }
+        ]
+      },
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time"
+      }
+    }
+  ]
+}

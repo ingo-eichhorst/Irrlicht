@@ -42,7 +42,7 @@ func Source() agent.Source {
 
 // Agent returns the Pi adapter registration.
 func Agent() agent.Agent {
-	return agent.Agent{
+	return withUsage(agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  "Pi",
@@ -124,5 +124,12 @@ func Agent() agent.Agent {
 				},
 			},
 		},
-	}
+	})
+}
+
+// withUsage adds what this adapter counts (#2061), declared beside the
+// parser, to its registration.
+func withUsage(a agent.Agent) agent.Agent {
+	a.Usage = usageCoverage()
+	return a
 }
