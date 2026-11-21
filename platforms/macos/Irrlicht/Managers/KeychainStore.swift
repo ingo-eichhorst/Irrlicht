@@ -64,13 +64,40 @@ enum KeychainStore {
     }
 }
 
-/// A store of secrets over one `KeychainBackend`.
+/// A store of secrets over one `KeychainBackend`, read at most once per
+/// account per process.
 ///
 /// An instance type rather than more statics so a test can build a private
 /// store over a counting backend and assert on it without sharing state with
 /// any other test (or with a detached read some other test left running).
+///
+/// # Why it caches
+///
+/// The app reads the relay token on every daemon adopt/spawn publish, every
+/// relay (re)connect and every Settings appearance. A process the item's ACL
+/// does not trust gets one `securityd` dialog per read, and a dismissed
+/// dialog read as "no token" — so the next reconnect asked again. So:
+///
+///   * the first `get` for an account reads the backend and caches the result;
+///     every later `get` is answered from the cache;
+///   * a FAILED read (denied, cancelled, interaction not allowed — not only
+///     not-found) caches "" for the rest of the process, so a declined dialog
+///     is not re-raised in a loop; its `OSStatus` is logged, never a value;
+///   * `set` and `delete` update the cache. A write the backend refuses drops
+///     the account's entry instead, so the next `get` reports what the
+///     keychain actually holds.
+///
+/// The lock is held across the backend read on purpose: concurrent first
+/// reads (a detached publish task and the main actor's relay connect, both at
+/// launch) then produce ONE backend read, and the waiters get its result. A
+/// waiter blocks no longer than it would have blocked on a dialog of its own.
+/// `KeychainSecretsCacheTests` drives each of these rules.
 final class KeychainSecrets: @unchecked Sendable {
     let backend: KeychainBackend
+
+    private var cache: [String: String] = [:]
+    private let lock = NSLock()
+    private let logger = Logger(subsystem: "io.irrlicht.app", category: "KeychainStore")
 
     init(backend: KeychainBackend) {
         self.backend = backend
@@ -78,20 +105,48 @@ final class KeychainSecrets: @unchecked Sendable {
 
     @discardableResult
     func set(_ value: String, account: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
         if value.isEmpty {
-            delete(account: account)
+            deleteLocked(account: account)
             return true
         }
-        return backend.write(value, account: account)
+        let written = backend.write(value, account: account)
+        if written {
+            cache[account] = value
+        } else {
+            cache[account] = nil
+        }
+        return written
     }
 
     func get(account: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[account] { return cached }
         let result = backend.read(account: account)
-        return result.value ?? ""
+        if result.value == nil, result.status != errSecItemNotFound {
+            logger.error("""
+                Keychain read for account \(account, privacy: .public) failed with OSStatus \(result.status, privacy: .public); \
+                treating it as empty for the rest of this process
+                """)
+        }
+        let value = result.value ?? ""
+        cache[account] = value
+        return value
     }
 
     func delete(account: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        deleteLocked(account: account)
+    }
+
+    /// `delete`'s body for a caller that already holds `lock` (`set("")`):
+    /// `NSLock` is not recursive.
+    private func deleteLocked(account: String) {
         backend.delete(account: account)
+        cache[account] = ""
     }
 }
 
