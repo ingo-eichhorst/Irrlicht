@@ -593,6 +593,176 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertFalse(sut.isOffline(row()!), "row is solid again after reconnect")
     }
 
+    // MARK: - Relayed session joins its worker's row (#2149)
+    //
+    // A session that runs in a container and reaches this Mac through the
+    // relay is shown in its orchestrator worker's row. The join key is the
+    // forwarding daemon's label (the container hostname), which equals the
+    // worker's name. Red-first on 8d6279df7: the tests below fail there except
+    // the ones marked LOCK.
+
+    private static func slot(_ name: String, job: String? = nil) -> SessionManager.UnattachedWorker {
+        SessionManager.UnattachedWorker(
+            role: "worker", icon: "\u{1F527}", description: "Pool worker slot",
+            workerName: name, workerID: job, workerState: job == nil ? "idle" : "busy"
+        )
+    }
+
+    /// A worker-list pool whose rig holds free workers `team-a-m1-1` (busy on
+    /// job-1) and `team-a-m1-2`, plus a local project group.
+    private func seedPool(rigAgents: [SessionState]? = nil,
+                          workers: [SessionManager.UnattachedWorker]? = nil,
+                          extra: [AgentGroup] = []) {
+        let rig = AgentGroup(name: "team-a", status: "operational", agents: rigAgents,
+                             unattachedWorkers: workers ?? [Self.slot("team-a-m1-1", job: "job-1"), Self.slot("team-a-m1-2")])
+        sut.seedLocalApiGroups([
+            AgentGroup(name: "irrlicht", agents: [makeSession(id: "local-1", projectName: "irrlicht")]),
+            AgentGroup(name: "Build pool", type: "workerlist", groups: [rig]),
+        ] + extra)
+    }
+
+    private var rig: AgentGroup? {
+        sut.apiGroups.first { $0.name == "Build pool" }?.groups?.first { $0.name == "team-a" }
+    }
+
+    private func group(_ name: String) -> AgentGroup? { sut.apiGroups.first { $0.name == name } }
+
+    func testRelaySessionJoinsTheWorkerItsDaemonIsNamedAfter() {
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+
+        let joined = rig?.agents?.first { $0.rowID == "d1/proc-1" }
+        XCTAssertNotNil(joined, "the relayed session is not in its worker's rig")
+        XCTAssertEqual(joined?.workerName, "team-a-m1-1")
+        XCTAssertEqual(joined?.workerID, "job-1")
+        XCTAssertEqual(joined?.role, "worker")
+        XCTAssertEqual(joined?.roleIcon, "\u{1F527}")
+        XCTAssertEqual(joined?.daemonID, "d1", "the row keeps its relay origin (cloud glyph)")
+        XCTAssertEqual(rig?.unattachedWorkers?.map(\.workerName), ["team-a-m1-2"],
+                       "the joined worker still has a free-worker row")
+        XCTAssertNil(group("container-proj"), "the joined session still has a project group")
+        XCTAssertNil(sut.relaySessionMap["d1/proc-1"]?.workerName,
+                     "the join wrote into the stored session")
+        XCTAssertTrue(sut.sessions.contains { $0.rowID == "d1/proc-1" })
+    }
+
+    func testJoinedSessionLeavesTheWorkerWhenItsDaemonDisconnects() {
+        seedPool()
+        // A second, unrelated daemon stays connected, so the join still runs
+        // after d1 leaves and has to tell a faded daemon from a connected one.
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1"), (id: "d2", label: "elsewhere")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+        XCTAssertNotNil(rig?.agents?.first { $0.rowID == "d1/proc-1" }, "precondition: joined")
+
+        sut.handleRelayMessage(RelayFixtures.daemonStatus(daemonID: "d1", status: "disconnected"))
+
+        XCTAssertNil(rig?.agents?.first { $0.rowID == "d1/proc-1" }, "an offline daemon's session stayed joined")
+        XCTAssertEqual(rig?.unattachedWorkers?.map(\.workerName), ["team-a-m1-1", "team-a-m1-2"])
+        let faded = group("container-proj")?.agents?.first { $0.rowID == "d1/proc-1" }
+        XCTAssertNotNil(faded, "the session did not return to its project group")
+        XCTAssertTrue(faded.map { sut.isOffline($0) } ?? false, "the returned row is not faded")
+        XCTAssertTrue(sut.sessions.contains { $0.rowID == "d1/proc-1" })
+    }
+
+    func testSnapshotAfterThePushJoinsWithNoFurtherPush() {
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+        XCTAssertNotNil(group("container-proj"), "precondition: unlabelled, it sits in its project group")
+
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+
+        XCTAssertNotNil(rig?.agents?.first { $0.rowID == "d1/proc-1" }, "the snapshot did not recompose the groups")
+        XCTAssertNil(group("container-proj"))
+    }
+
+    func testALabelChangeRebuildsTheMenuBarListToo() {
+        // The join decides whether #746 hides a session from the flat
+        // `sessions` the menu bar reads, so a label arriving or leaving has to
+        // rebuild that list as well as the groups — in both directions.
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d2", label: "elsewhere")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "irrlicht"))
+        XCTAssertFalse(sut.sessions.contains { $0.rowID == "d1/proc-1" }, "precondition: #746 hides the unlabelled echo")
+
+        sut.handleRelayMessage(RelayFixtures.daemonStatus(daemonID: "d1", status: "connected", label: "team-a-m1-1"))
+        XCTAssertNotNil(rig?.agents?.first { $0.rowID == "d1/proc-1" })
+        XCTAssertTrue(sut.sessions.contains { $0.rowID == "d1/proc-1" }, "a label arriving left the menu bar list stale")
+
+        sut.handleRelayMessage(RelayFixtures.daemonStatus(daemonID: "d1", status: "disconnected"))
+        XCTAssertFalse(sut.sessions.contains { $0.rowID == "d1/proc-1" }, "a label leaving left the menu bar list stale")
+    }
+
+    func testOfTwoDaemonsLabelledAlikeTheNewestSessionJoins() {
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1"), (id: "d2", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d2", sessionId: "new", project: "container-proj", firstSeen: 200))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "old", project: "container-proj", firstSeen: 100))
+
+        XCTAssertEqual(rig?.agents?.map(\.rowID), ["d2/new"])
+        XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/old"], "the older one keeps today's placement")
+    }
+
+    func testJoinWinsOverTheProjectNameCollapse() {
+        // #746 hides a relay session whose project name a local group already
+        // has — echoes of this Mac's own daemon, which carry this host's label
+        // and never a worker's name. A joined session is exempt, in the list
+        // and in the flat `sessions` the menu bar reads alike.
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "irrlicht"))
+
+        XCTAssertNotNil(rig?.agents?.first { $0.rowID == "d1/proc-1" })
+        XCTAssertTrue(sut.sessions.contains { $0.rowID == "d1/proc-1" }, "the menu bar's list still collapses it")
+        XCTAssertEqual(group("irrlicht")?.agents?.map(\.id), ["local-1"])
+    }
+
+    func testDaemonWithNoLabelIsNotNamedAfterItsId() {
+        // The connect arm stores the id when a daemon sends no daemon_label;
+        // the join must not read that as the daemon's name. Passes on the
+        // parent by construction (nothing joins there); it guards the label
+        // rule against the mutation that drops it.
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.daemonStatus(daemonID: "team-a-m1-1", status: "connected"))
+        sut.handleRelayMessage(RelayFixtures.push(source: "team-a-m1-1", sessionId: "proc-1", project: "container-proj"))
+
+        XCTAssertEqual(rig?.agents?.count ?? 0, 0, "a daemon id was taken for its label")
+        XCTAssertNotNil(group("container-proj"))
+    }
+
+    func testLockNoMatchingWorkerKeepsTodaysPlacement() {
+        seedPool()
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "nobody-here")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+
+        XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/proc-1"])
+        XCTAssertEqual(rig?.unattachedWorkers?.count, 2)
+    }
+
+    func testLockAWorkerWithALocalSessionWins() {
+        var local = makeSession(id: "local-x")
+        local.role = "worker"
+        local.workerName = "team-a-m1-1"
+        seedPool(rigAgents: [local], workers: [Self.slot("team-a-m1-2")])
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+
+        XCTAssertEqual(rig?.agents?.map(\.id), ["local-x"])
+        XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/proc-1"])
+    }
+
+    /// Passes on the parent by construction; guards the one-worker-per-name
+    /// rule against the mutation that drops it.
+    func testTwoWorkersWithTheNameJoinNothing() {
+        let otherRig = AgentGroup(name: "rig", unattachedWorkers: [Self.slot("team-a-m1-1")])
+        seedPool(extra: [AgentGroup(name: "gt", type: "gastown", groups: [otherRig])])
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1")]))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "container-proj"))
+
+        XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/proc-1"])
+        XCTAssertEqual(rig?.unattachedWorkers?.count, 2)
+    }
+
     // MARK: - Helpers
 
     /// Builds a relay `snapshot` control frame announcing a connected daemon

@@ -12,15 +12,17 @@ import Foundation
 enum RelayFixtures {
 
     /// A relay Push frame — envelope `source` plus an inner `session_created`,
-    /// as the hub forwards it.
+    /// as the hub forwards it. `firstSeen` is the wire's unix seconds; the
+    /// relay-worker join (#2149) breaks a tie between candidates on it.
     static func push(
         source: String,
         sessionId: String,
         project: String,
-        state: String = "working"
+        state: String = "working",
+        firstSeen: Int = 0
     ) -> String {
         frame(source: source, inner: "session_created",
-              session: sessionJSON(id: sessionId, project: project, state: state))
+              session: sessionJSON(id: sessionId, project: project, state: state, firstSeen: firstSeen))
     }
 
     /// A relay Push frame carrying `session_deleted` — how a relay session
@@ -121,10 +123,10 @@ enum RelayFixtures {
 
     /// The session object the envelope carries. Split from `frame` so neither
     /// builder takes the whole flattened parameter list.
-    private static func sessionJSON(id: String, project: String, state: String) -> String {
+    private static func sessionJSON(id: String, project: String, state: String, firstSeen: Int = 0) -> String {
         """
         {"session_id":"\(id)","state":"\(state)","model":"m",\
-        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}
+        "cwd":"/tmp","project_name":"\(project)","first_seen":\(firstSeen),"updated_at":0}
         """
     }
 }

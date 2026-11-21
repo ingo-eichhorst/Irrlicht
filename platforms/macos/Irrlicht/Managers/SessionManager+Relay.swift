@@ -351,6 +351,7 @@ extension SessionManager {
                     // the offline mark; its fresh state arrives as pushes.
                     if offlineDaemons[d.daemonID] != nil { restoreDaemon(d.daemonID) }
                 }
+                relayLabelsChanged()
             }
         case "daemon_status":
             if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data), let id = ctrl.daemonID {
@@ -365,6 +366,7 @@ extension SessionManager {
                     relayDaemons[id] = ctrl.daemonLabel ?? id
                     if offlineDaemons[id] != nil { restoreDaemon(id) }
                 }
+                relayLabelsChanged()
             }
         case "hello_ack":
             break
@@ -411,6 +413,16 @@ extension SessionManager {
         default:
             break
         }
+    }
+
+    /// The connected daemons' labels changed. They are the key a relayed
+    /// session joins its worker's row by (#2149), and that join decides both
+    /// the list (`apiGroups`) and the flat `sessions` the menu bar reads, so
+    /// both are rebuilt — a label can arrive after the session's own push.
+    func relayLabelsChanged() {
+        guard !relaySessionMap.isEmpty else { return }
+        rebuildSessionsFromMap()
+        recomposeApiGroups()
     }
 
     /// A relay session is faded when its daemon is currently offline (#540).
