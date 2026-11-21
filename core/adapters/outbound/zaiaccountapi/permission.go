@@ -33,7 +33,9 @@ func PermissionDeclaration(apply, remove func() error) agent.Agent {
 				"that exists only in the process environment is not read. The key is never stored, " +
 				"logged or shown; sessions using the same key share one poll, matched by a salted " +
 				"fingerprint that exists only in memory. Toggling off stops every further key read " +
-				"and every further request to api.z.ai immediately, and discards cached readings.",
+				"and every further request to api.z.ai immediately and discards cached readings; " +
+				"a reading already shown on a session is removed at the next sweep, which runs " +
+				"once a minute.",
 			Apply:  apply,
 			Remove: remove,
 		}},

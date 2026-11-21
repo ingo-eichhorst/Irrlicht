@@ -43,10 +43,9 @@ type MuseAccountSweeperDeps struct {
 // It is level-triggered rather than edge-triggered: each tick writes the
 // current reading while the permission is granted and clears any meta
 // snapshot while it is not. SetProviderRateLimit's own doc comment names the
-// race that makes this necessary — a transcript pass that loaded its copy
-// before a write can save over it — and re-applying every tick is what brings
-// a lost write (or a resurrected snapshot after a revoke) back within one
-// Interval. A tick costs no extra account-API call while the poller's cached
+// writers that can still save an older copy over a write — and re-applying
+// every tick is what brings a lost write (or a resurrected snapshot after a
+// revoke) back within one Interval. A tick costs no extra account-API call while the poller's cached
 // reading is fresh (AccountPoller.pollFreshWindow), and an unchanged reading
 // is not re-saved or re-broadcast.
 //

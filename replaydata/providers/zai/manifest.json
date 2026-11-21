@@ -100,7 +100,7 @@
     "account_identity": {
       "claim": "source-specific-unavailable",
       "evidence": ["zai-live-probe-2026-11-21", "zai-parser-source"],
-      "note": "The response carries no account identifier, so accountRef() returns the empty string. The poll is keyed by a salted, in-memory fingerprint of the key: #1977 §3.2's credential identity, not an account identity. Two sessions on one key share a reading; two keys never do, even on one account."
+      "note": "The response carries no account identifier, so BuildSnapshot leaves ConfirmedAccountRef empty. The poll is keyed by a salted, in-memory fingerprint of the key: #1977 §3.2's credential identity, not an account identity. Two sessions on one key share a reading; two keys never do, even on one account."
     }
   },
   "evidence": [
@@ -122,7 +122,7 @@
       "kind": "source",
       "date": "2026-11-21",
       "ref": "core/adapters/outbound/zaiaccountapi/parser.go",
-      "note": "The allowlist decode and accountRef()."
+      "note": "The allowlist decode, and BuildSnapshot leaving ConfirmedAccountRef empty."
     }
   ]
 }

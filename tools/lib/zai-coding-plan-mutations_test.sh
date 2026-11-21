@@ -13,6 +13,7 @@
 #   P5 the daemon's route reader sending claude-code down the env-only read
 #   P6 a null settings value read as Claude Code's empty-string cancel
 #   P7 a case-variant "Env" block read as the env block
+#   P8 processActivity loading before the lock, so a pass saves a cleared reading back
 # Phase 2 — the Z.ai quota parser and the forecast (#2010 triage 1–6)
 #   Z1 `usage` read as consumption
 #   Z2 `remaining` derived as limit - used
@@ -203,6 +204,16 @@ assert_go_test_goes_red \
   "$SETTINGS_PKG" \
   "TestReadEnv_RejectsNullAndIgnoresCaseVariantEnv" \
   'case-variant env blocks: got map[K:'
+
+# P8: #2161 QA finding 1 — a revoked reading must not survive the clear.
+assert_go_test_goes_red \
+  "P8 loading before the session-state lock reddens the lost-update test" \
+  "core/application/services/session_detector_activity.go" \
+  $'\tfound := false\n\td.pidMgr.WithSessionStateLock(func() {\n\t\tstate, err := d.repo.Load(ev.SessionID)\n\t\tif err != nil || state == nil {\n\t\t\treturn\n\t\t}\n\t\tfound = true\n\t\td.processActivityLocked(id, state, ev)\n\t})' \
+  $'\tfound := false\n\tstate, err := d.repo.Load(ev.SessionID) // mutated: load before the lock (#2010 fixture)\n\td.pidMgr.WithSessionStateLock(func() {\n\t\tif err != nil || state == nil {\n\t\t\treturn\n\t\t}\n\t\tfound = true\n\t\td.processActivityLocked(id, state, ev)\n\t})' \
+  "$SERVICES_PKG" \
+  "TestProcessActivity_NeverResurrectsAClearedProviderSnapshot" \
+  'the zai reading is back after its clear'
 
 # ── Phase 2 ─────────────────────────────────────────────────────────────────
 

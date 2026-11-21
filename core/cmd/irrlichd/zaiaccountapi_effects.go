@@ -53,8 +53,13 @@ func zaiAccountAPIEffects(logger outbound.Logger, poller *services.AccountPoller
 // Z.ai key is read per session from the settings file that routed it, and
 // only by the sweep, after it has checked the grant. Remove revokes every
 // Z.ai poll key — AccountPoller.Revoke deletes by AccountQuotaKey.Provider,
-// which services.ZaiAccountQuotaKey stamps as session.ProviderZai — and the
-// sweep's next tick clears each session's zai snapshot.
+// which services.ZaiAccountQuotaKey stamps as session.ProviderZai. The
+// readings already on sessions are cleared by the sweep's next tick, at most
+// zaiAccountSweepInterval later. Before #2161's QA fix a transcript pass could
+// save a cleared reading back, and the live trials saw it survive to the
+// following tick in 2 of 3 revokes; processActivity now loads under the lock
+// the clear takes. A clear lost to one of the remaining unlocked writers
+// (SetProviderRateLimit's doc names them) is re-applied a tick later.
 func newZaiAccountAPI(poller *services.AccountPoller, transport outbound.AccountQuotaTransport, credentials services.ZaiCredentialReader) zaiAccountAPI {
 	return zaiAccountAPI{
 		Start: func() error { return nil },
