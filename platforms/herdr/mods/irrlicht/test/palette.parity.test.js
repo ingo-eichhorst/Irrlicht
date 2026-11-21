@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { BRAND, connectionHue, pressureHue, track, wash, withAlpha } from '../lib/palette.js';
 import { STATE_HUE, STATE_LABEL, herdrState, irrlichtState } from '../lib/states.js';
-import { DESIGN_CSS, SESSION_GO, brandMatchesCss, canonicalStates, coversCanonicalStates } from './contracts.js';
+import { DESIGN_CSS, SESSION_GO, brandMatchesCss, canonicalStates, coversCanonicalStates, cssTokens } from './contracts.js';
 
 const css = readFileSync(DESIGN_CSS, 'utf8');
 const go = readFileSync(SESSION_GO, 'utf8');
@@ -27,11 +27,23 @@ describe('the palette against the design system', () => {
   test('a key with no token of its name fails rather than being skipped', () => {
     expect(() => brandMatchesCss({ ...BRAND, 'working-ish': '#8B5CF6' }, css)).toThrow(/--working-ish is not a token/);
   });
+
+  test('a CSS file with no tokens fails rather than reading as one that agrees', () => {
+    expect(() => cssTokens('body { color: red; }')).toThrow(/no --token declarations/);
+    expect(() => brandMatchesCss(BRAND, '')).toThrow(/no --token declarations/);
+  });
 });
 
 describe('the state maps against the daemon\'s vocabulary', () => {
   test('canonicalStates is read from session.go, not typed here', () => {
     expect(canonicalStates(go)).toContain('error');
+  });
+
+  test('a session.go the reader cannot follow fails rather than reading as no states', () => {
+    expect(() => canonicalStates('package session\n')).toThrow(/no canonicalStates literal/);
+    expect(() => canonicalStates('var canonicalStates = []string{StateA, StateB, StateC, StateD}\nStateA = "a"\n'))
+      .toThrow(/StateB has no string value/);
+    expect(() => canonicalStates('var canonicalStates = []string{StateA}\nStateA = "a"\n')).toThrow(/fewer than four/);
   });
 
   test('every daemon state, and unknown, has a hue and a label', () => {

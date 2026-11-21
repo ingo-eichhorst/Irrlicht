@@ -159,6 +159,28 @@ describe('the drawn panel, daemon answering', () => {
     expect(world.ran).toEqual([['pane.focus', { terminal: 't4' }], ['pane.focus', { terminal: 't3' }]]);
   });
 
+  test('a poll redraws only when something drawn changed', () => {
+    const view = panel();
+    let notified = 0;
+    const cx = { notify: () => notified++ };
+    view.show(cx, ok());
+    expect(notified).toBe(1);
+    view.show(cx, ok());
+    expect(notified).toBe(1);
+    const fuller = livePayload();
+    fuller.groups[1].agents[0] = { ...CLAUDE_SESSION, metrics: { ...CLAUDE_SESSION.metrics, context_utilization_percentage: 7.5 } };
+    view.show(cx, ok(fuller));
+    expect(notified).toBe(2);
+    // The session outside Herdr moving changes nothing drawn.
+    const outside = livePayload();
+    outside.groups[1].agents[0] = fuller.groups[1].agents[0];
+    outside.groups[2].agents[0] = { ...outside.groups[2].agents[0], metrics: { context_utilization_percentage: 55, pressure_level: 'safe' } };
+    view.show(cx, ok(outside));
+    expect(notified).toBe(2);
+    view.show(cx, { phase: 'stalled', where: 'localhost:7837' });
+    expect(notified).toBe(3);
+  });
+
   test('clicking a group header folds it, and again unfolds it', () => {
     const view = panel(ok());
     let notified = 0;

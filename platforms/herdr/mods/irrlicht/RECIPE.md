@@ -88,9 +88,11 @@ The state icons follow SessionStateIcon, 12px, one per line:
 
   Herdr has no failure status, so an unmatched row never shows `error`.
 - **Pressure hue:** Irrlicht's `pressure_level` picks it, as the macOS app's
-  `contextPressureColor`. `safe` (below 60%) is `--pressure-low`, `caution`
-  (60%) `--pressure-medium`, `warning` (80%) `--pressure-high` and `critical`
-  (90%) `--pressure-critical`. The bar and the percentage share it.
+  `contextPressureColor`. The daemon sets the level from the fill
+  (`core/pkg/tailer/tailer_metrics.go`): `safe` (below 60%) is
+  `--pressure-low`, `caution` (60%) `--pressure-medium`, `warning` (80%)
+  `--pressure-high` and `critical` (90%) `--pressure-critical`. The bar and
+  the percentage share it.
 - **Order:** a group keeps the place where it first appeared while the panel
   is open (SessionManager.orderedGroups), and a group that leaves and comes
   back takes that place again. Rows in a group are in the daemon's payload
@@ -169,10 +171,11 @@ The state icons follow SessionStateIcon, 12px, one per line:
   covers them, and `test/main.render.test.js` checks what the rows ask gpui
   to draw, not how it looks.
 - The hues are fixed, as in the macOS app, while the theme changes around
-  them. They are clear on a dark theme. On a light one the green and orange
-  are faint as text, as they are in the macOS app's light appearance. That is
-  why the notes' words use `foreground` and only their washes and triangles
-  take the hue.
+  them. On a dark theme they stand out, the dark red of a critical fill
+  least. On a light one the green and orange are faint, as in the macOS app's
+  light appearance, and fainter still on a grey ground such as the `win98`
+  theme's. That is why the notes' words use `foreground` and only their
+  washes and triangles take the hue.
 
 ## Done when
 

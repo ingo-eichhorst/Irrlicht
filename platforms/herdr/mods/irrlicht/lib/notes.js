@@ -12,7 +12,7 @@ import { BRAND } from './palette.js';
 export const PRESSURE_ALERT_PERCENT = 80;
 
 // Human label for an error class, used when the agent gave no message of its
-// own: SessionError.classLabel (SessionState.swift:1029-1043). An unknown
+// own: SessionError.classLabel (SessionState.swift:1034-1053). An unknown
 // class is shown as it is.
 const CLASS_LABEL = new Map([
   ['rate_limit', 'Rate limited by the provider'],

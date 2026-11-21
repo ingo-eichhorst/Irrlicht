@@ -51,9 +51,11 @@ export const TRACK_ALPHA = 0.08;
 export const track = (foreground) => withAlpha(foreground, TRACK_ALPHA);
 
 // The context-pressure hue for a daemon pressure_level, as the Swift row's
-// SessionMetrics.contextPressureColor (SessionState.swift:787-795): safe,
-// caution, warning and critical take the four pressure tokens, anything else
-// the grey of `cancelled`.
+// SessionMetrics.contextPressureColor (SessionState.swift:787-795). The daemon
+// sets the level from the fill: safe below 60%, caution from 60, warning from
+// 80, critical from 90 (core/pkg/tailer/tailer_metrics.go:793-800). The four
+// levels take the four pressure tokens; any other level has no hue, and the
+// row then draws no bar (lib/gauge.js).
 const PRESSURE_HUE = new Map([
   ['safe', BRAND['pressure-low']],
   ['caution', BRAND['pressure-medium']],
