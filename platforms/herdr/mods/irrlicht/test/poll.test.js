@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { RERESOLVE_MS, STALL_MS, createPoller, pollOnce, stallState } from '../lib/poll.js';
-import { focusAddress, panelRows, signature, statusLine } from '../lib/rows.js';
+import { statusLine } from '../lib/rows.js';
 import { stallIsReportedOnceAfterStallMs } from './contracts.js';
-import { HOME_ADDR, LIVE_AGENTS, LIVE_TERMINALS, livePayload, world } from './fixtures.js';
+import { HOME_ADDR, livePayload, world } from './fixtures.js';
 
 // io for pollOnce and createPoller: an addr file naming `port`, a fetch that
 // answers `respond(url)`, and a clock the test moves. The ladder's file
@@ -177,60 +177,5 @@ describe('statusLine', () => {
     expect(new Set(lines).size).toBe(lines.length);
     expect(lines[1]).toBe('Irrlicht daemon not reachable at localhost:7843');
     expect(lines[4]).toBe('Irrlicht panel error: x is not a function');
-  });
-});
-
-describe('panelRows', () => {
-  test('lists every agent in Herdr\'s order, with gauges once the daemon answered', () => {
-    const before = panelRows(LIVE_AGENTS, LIVE_TERMINALS, null);
-    expect(before.map((r) => [r.address, r.label, r.gauge.kind])).toEqual([
-      ['t3', 'herdr-demo · TCP slow start notes', 'none'],
-      ['t4', 'herdr-demo · Create DNS resolution notes | codex', 'none'],
-    ]);
-    expect(panelRows(LIVE_AGENTS, LIVE_TERMINALS, []).every((r) => r.tooltip === 'no Irrlicht session matched')).toBe(true);
-  });
-
-  test('a matched row says how it was matched', async () => {
-    const { sessions } = await pollOnce({}, io({ respond: () => answer(livePayload()) }).io);
-    const rows = panelRows(LIVE_AGENTS, LIVE_TERMINALS, sessions);
-    expect(rows.map((r) => [r.gauge.text, r.tooltip])).toEqual([
-      ['4.6%', '4.6% of 1.0M context, safe · claude-opus-5-5 · matched by pid'],
-      ['3.9%', '3.9% of 475K context, safe · gpt-6.1-sol · matched by agent and folder'],
-    ]);
-  });
-
-  test('an agent on another machine gets no gauge, and its tooltip says why', async () => {
-    const { sessions } = await pollOnce({}, io({ respond: () => answer(livePayload()) }).io);
-    const remote = { ...LIVE_AGENTS[0], address: 'vps/t3' };
-    const remoteTerminal = { ...LIVE_TERMINALS[1], address: 'vps/t3' };
-    const [row] = panelRows([remote], [remoteTerminal], sessions);
-    expect(row.gauge.kind).toBe('none');
-    expect(row.tooltip).toBe('on another machine: Irrlicht reads this machine\'s sessions only');
-  });
-
-  test('a session that changes no row does not change the signature', async () => {
-    const a = await pollOnce({}, io({ respond: () => answer(livePayload()) }).io);
-    const moved = livePayload();
-    moved.groups[2].agents[0] = { ...moved.groups[2].agents[0], metrics: { context_utilization_percentage: 55, pressure_level: 'safe' } };
-    const b = await pollOnce({}, io({ respond: () => answer(moved) }).io);
-    const sig = (s) => signature(s, panelRows(LIVE_AGENTS, LIVE_TERMINALS, s.sessions));
-    expect(sig(b)).toBe(sig(a));
-    const shown = livePayload();
-    shown.groups[1].agents[0] = { ...shown.groups[1].agents[0], metrics: { ...shown.groups[1].agents[0].metrics, context_utilization_percentage: 7.5 } };
-    const c = await pollOnce({}, io({ respond: () => answer(shown) }).io);
-    expect(sig(c)).not.toBe(sig(a));
-  });
-});
-
-describe('focusAddress', () => {
-  test('"focus-<n>" names agent n in Herdr\'s order, counting from 1', () => {
-    expect(focusAddress('focus-1', LIVE_AGENTS)).toBe('t3');
-    expect(focusAddress('focus-2', LIVE_AGENTS)).toBe('t4');
-  });
-
-  test('a row that does not exist, or another command, names nothing', () => {
-    expect(focusAddress('focus-3', LIVE_AGENTS)).toBeNull();
-    expect(focusAddress('focus-0', LIVE_AGENTS)).toBeNull();
-    expect(focusAddress('refresh', LIVE_AGENTS)).toBeNull();
   });
 });

@@ -1,0 +1,10 @@
+<!-- SessionStateIcon's ready glyph (SF Symbol checkmark.circle.fill): a disc with the check cut out. Tinted by gpui, which keeps only the alpha. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+      <rect width="16" height="16" fill="#fff"/>
+      <path d="M4.9 8.3 7 10.4l4.1-4.5" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <circle cx="8" cy="8" r="7.5" fill="#fff" mask="url(#cut)"/>
+</svg>
