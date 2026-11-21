@@ -210,34 +210,34 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         console.debug('irrlicht: failed to show notification', e);
       }
     }
-    // waitingWorkerEdges returns the worker-list slots (#2145) that are
-    // waiting in fresh and were listed, not waiting, in prev. A slot absent
+    // waitingWorkerEdges returns the unattached workers (#2145) that are
+    // waiting in fresh and were listed, not waiting, in prev. A worker absent
     // from prev — the first load, a pool or slot that just appeared — is a
-    // first sighting and stays silent, as a session's is. Only type
-    // "workerlist" groups count: Gas Town passes gt's own state strings
-    // through, and those carry no notification contract.
+    // first sighting and stays silent, as a session's is. Waiting is the
+    // daemon's `waiting` flag, which only the worker list sets; a state
+    // string another orchestrator passes through never counts.
     function waitingWorkerEdges(prev, fresh) {
-      const before = workerListStates(prev);
+      const before = unattachedWorkerWaiting(prev);
       const edges = [];
-      for (const [key, w] of workerListStates(fresh)) {
-        const was = before.get(key);
-        if (w.state === 'waiting' && was && was.state !== 'waiting') edges.push(w);
+      for (const [key, w] of unattachedWorkerWaiting(fresh)) {
+        if (w.waiting && before.get(key)?.waiting === false) edges.push(w);
       }
       return edges;
     }
-    // workerListStates maps each worker-list slot, keyed by pool, team and
-    // slot name, to its team, name and worker_state.
-    function workerListStates(groups) {
+    // unattachedWorkerWaiting maps each unattached worker at any depth, keyed
+    // by its group path and name, to its group's name, its name and whether
+    // it is waiting.
+    function unattachedWorkerWaiting(groups) {
       const out = new Map();
-      for (const pool of (groups || [])) {
-        if (pool?.type !== 'workerlist') continue;
-        for (const team of (pool.groups || [])) {
-          for (const w of (team.unattached_workers || [])) {
-            out.set(JSON.stringify([pool.name, team.name, w.worker_name]),
-              { team: team.name, worker: w.worker_name, state: w.worker_state });
+      (function walk(gs, path) {
+        for (const g of (gs || [])) {
+          const key = path ? path + '/' + g.name : g.name;
+          for (const w of (g.unattached_workers || [])) {
+            out.set(key + '/' + w.worker_name, { team: g.name, worker: w.worker_name, waiting: w.waiting === true });
           }
+          walk(g.groups, key);
         }
-      }
+      })(groups, '');
       return out;
     }
     function notifyWaitingWorkers(prev, fresh) {
@@ -1303,12 +1303,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // session (#2140), keyed by group path and worker name, after the group's
     // session rows. Not sessions: no agent number, never in sessionIndex,
     // never counted in a header or the state summary.
-    // poolType is the top-level group's `type` (only a top-level group
-    // carries one): a worker-list slot may be painted waiting (#2145).
-    function emitWorkerRowItems(items, g, groupKey, depth, poolType) {
-      const inWorkerList = poolType === 'workerlist';
+    function emitWorkerRowItems(items, g, groupKey, depth) {
       for (const w of (g.unattached_workers || [])) {
-        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth, inWorkerList});
+        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth});
       }
     }
 
@@ -1356,9 +1353,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // sub-groups (Gas Town rigs) as further collapsible headers. Collapse
         // state is keyed by a path-qualified key (parent/name) so same-named
         // rigs under different orchestrators don't share a collapse toggle.
-        function emitGroup(g, parentKey, depth, poolType) {
+        function emitGroup(g, parentKey, depth) {
           const key = parentKey ? parentKey + '/' + g.name : g.name;
-          const pool = poolType || g.type;
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + key, group: g, groupKey: key, depth: depth});
           }
@@ -1371,8 +1367,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             agentNum++;
             emitAgentRowItems(items, a, agentNum, depth);
           }
-          emitWorkerRowItems(items, g, key, depth, pool);
-          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1, pool);
+          emitWorkerRowItems(items, g, key, depth);
+          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
         for (const g of displayedGroups) emitGroup(g, '', 0);
 
@@ -1381,7 +1377,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           item => item.key,
           item => {
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
-            if (item.type === 'worker') return createWorkerRow(item.worker, item.depth, item.inWorkerList);
+            if (item.type === 'worker') return createWorkerRow(item.worker, item.depth);
             if (item.type === 'error') return createSessionErrorRow(item.agent, item.isChild);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'cachebloat') return createCacheBloatRow(item.agent);
@@ -1394,7 +1390,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           },
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
-            if (item.type === 'worker') { updateWorkerRow(el, item.worker, item.depth, item.inWorkerList); return; }
+            if (item.type === 'worker') { updateWorkerRow(el, item.worker, item.depth); return; }
             if (item.type === 'error') { updateSessionErrorRow(el, item.agent); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'cachebloat') { updateCacheBloatRow(el, item.agent); return; }
@@ -1454,28 +1450,27 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // consumer (theme repaint, history repaint, the Elfdans selection) assumes
     // a session behind the row. The leading hollow circle is a placeholder in
     // the state-icon column, not a session state; the worker's own state is
-    // neutral text at the end — except a worker-list slot waiting for a person
-    // (#2145), whose dot fills and takes the waiting colour (updateWorkerRow).
-    // Only inside a worker list: Gas Town passes gt's own state strings
-    // through, the same scope the notification (workerListStates) keeps.
-    function createWorkerRow(worker, depth, inWorkerList) {
+    // neutral text at the end — except a worker whose agent waits for a
+    // person (`waiting`, #2145), whose dot fills and takes the waiting colour
+    // (updateWorkerRow).
+    function createWorkerRow(worker, depth) {
       const el = document.createElement('div');
       el.className = 'worker-row';
       el.innerHTML =
-        '<span class="worker-row-glyph" title="No session">\u25CB</span>' +
+        '<span class="worker-row-glyph"></span>' +
         '<span class="worker-row-icon" style="display:none"></span>' +
         '<span class="row-worker-name" style="display:none"></span>' +
         '<span class="row-worker-id" style="display:none"></span>' +
         '<span class="worker-row-state" style="display:none"></span>' +
         '<span class="worker-row-tag worker-row-stale" style="display:none"></span>' +
         '<span class="worker-row-tag worker-row-failed" style="display:none"></span>';
-      updateWorkerRow(el, worker, depth, inWorkerList);
+      updateWorkerRow(el, worker, depth);
       return el;
     }
 
     // The name and work item reuse the session row's .row-worker-* chips, so
     // free and busy workers in one rig share their widths.
-    function updateWorkerRow(el, worker, depth, inWorkerList) {
+    function updateWorkerRow(el, worker, depth) {
       el.classList.toggle('nested', !!depth);
       const role = worker.role || '';
       const name = worker.worker_name || '';
@@ -1484,7 +1479,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
       setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
       setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
-      const waiting = !!inWorkerList && worker.worker_state === 'waiting';
+      const waiting = worker.waiting === true;
       el.classList.toggle('waiting', waiting);
       const glyph = el.querySelector('.worker-row-glyph');
       setIfChanged(glyph, 'textContent', waiting ? '\u25CF' : '\u25CB');
@@ -2091,12 +2086,12 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       return parts.join('|');
     }
     // One structureSignature part per unattached worker of g (#2140), with
-    // its stale and last-run indications (#2148): either can change with
-    // nothing else about the worker changing.
+    // its stale and last-run indications (#2148) and its waiting flag
+    // (#2145): each can change with nothing else about the worker changing.
     function unattachedWorkerSignatures(g) {
       return (g.unattached_workers || []).map(w =>
         'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || '') +
-        ':' + (w.stale ? 's' : '') + ':' + (w.last_exit ?? ''));
+        ':' + (w.stale ? 's' : '') + ':' + (w.last_exit ?? '') + ':' + (w.waiting ? 'w' : ''));
     }
     // Periodic re-hydration. Two jobs, one fetch:
     //   1. STRUCTURE — if the daemon's group tree / role metadata changed

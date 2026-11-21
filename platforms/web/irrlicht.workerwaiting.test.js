@@ -1,24 +1,27 @@
-// Issue #2145: a worker-list slot whose agent waits for a person arrives as
-// worker_state "waiting". Its row is painted in the session waiting colour
-// with a filled dot, and a slot that turns waiting raises the same browser
-// notification a waiting session does — once per edge, never on a first
-// sighting, and only for a worker list (Gas Town passes its own states
-// through, so its rows stay as they are).
+// Issue #2145: a worker-list slot whose agent waits for a person arrives with
+// `waiting: true` (and worker_state "waiting" as its text). Its row is painted
+// in the session waiting colour with a filled dot, and a slot that turns
+// waiting raises the same browser notification a waiting session does — once
+// per edge, never on a first sighting, and never for a worker without the flag
+// (Gas Town passes gt's own state strings through in worker_state).
 //
 // Red-first: every test except the LOCK failed before the change (no
 // `waiting` class, no filled dot, no notification); the Gas Town test failed
-// before the paint was scoped to worker lists (#2145 review). Mutations run by
-// hand (tools/mutate.sh refuses irrlicht.js, which holds a NUL byte): dropping
-// workerListStates' `type !== 'workerlist'` skip reddened the Gas Town test;
-// letting waitingWorkerEdges count a slot absent from prev reddened the
-// first-load test.
+// while the paint keyed on the state text (#2145 review). Mutations run by
+// hand (tools/mutate.sh refuses irrlicht.js, which holds a NUL byte): reading
+// the state text as waiting reddened the Gas Town test; letting
+// waitingWorkerEdges count a worker absent from prev reddened the first-load
+// test.
 import { describe, test, expect, beforeAll } from 'vitest'
 
+// A slot as the daemon sends it: `waiting` set exactly when its state is.
 const slot = (name, state, extra = {}) => ({
-  role: 'worker', icon: '🔧', description: 'Pool worker slot', worker_name: name, worker_state: state, ...extra,
+  role: 'worker', icon: '🔧', description: 'Pool worker slot', worker_name: name, worker_state: state,
+  ...(state === 'waiting' ? { waiting: true } : {}), ...extra,
 })
 
-// polecatState is Gas Town's free polecat; its state is passed through from gt.
+// polecatState is Gas Town's free polecat; its state is gt's own text, passed
+// through, and never carries the waiting flag.
 const payload = ({ m1 = 'busy', m2 = 'idle', m3 = 'waiting', polecatState = 'idle' } = {}) => ({
   groups: [
     {
@@ -133,7 +136,7 @@ describe('waiting worker row (#2145)', () => {
     expect(calls[1]).toEqual({ title: 'Worker waiting for input', body: 'lead-T100 · T101' })
   })
 
-  test('a Gas Town worker whose passed-through state reads waiting is neither painted nor notified', async () => {
+  test('a worker whose text reads waiting without the flag is neither painted nor notified', async () => {
     const before = calls.length
     await poll({ m1: 'waiting', polecatState: 'busy' })
     await poll({ m1: 'waiting', polecatState: 'waiting' })

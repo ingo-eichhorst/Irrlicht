@@ -8,7 +8,7 @@
 // module load, and vitest's per-file isolation gives a fresh module instance.
 import { test, expect, beforeAll } from 'vitest'
 
-const slot = (name, state) => ({ role: 'worker', icon: '🔧', description: 'Pool worker slot', worker_name: name, worker_state: state })
+const slot = (name, state) => ({ role: 'worker', icon: '🔧', description: 'Pool worker slot', worker_name: name, worker_state: state, ...(state === 'waiting' ? { waiting: true } : {}) })
 
 const payload = (m1, m2) => ({
   groups: [{

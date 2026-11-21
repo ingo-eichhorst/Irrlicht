@@ -1,9 +1,10 @@
 // Issue #2145 review: the first rehydrate poll is scheduled when the module
 // loads, before the initial /api/v1/sessions fetch lands, so it used to wait
-// the idle 30 s even when that fetch listed a worker list. A worker turning
-// waiting inside that half-minute was first seen already waiting by the poll,
-// which is a first sighting and stays silent. Once the tree is in, a poll
-// still pending is re-armed at the orchestrator cadence (2.5 s).
+// the idle 30 s even when that fetch listed a worker list. Within that
+// half-minute a slot present at the load that turned waiting was seen up to
+// 30 s late, and a slot that appeared after the load and turned waiting was
+// first seen already waiting — a first sighting, which stays silent. Once the
+// tree is in, a poll still pending is re-armed at the orchestrator cadence.
 //
 // Red-first: fails before rearmRehydratePollAfterLoad existed (only the 30 s
 // timer was ever scheduled during load). Own file: the payload is consumed at
