@@ -82,19 +82,38 @@ export function remoteRootSessions(groups) {
 // when nothing joins, and never writes into it or into a session.
 export function joinRelayWorkers(groups, labelOf) {
   const workers = workerCensus(groups);
-  if (!workers.size) return groups;
+  const winners = workers.size ? pickJoinWinners(groups, workers, labelOf) : new Map();
+  return winners.size ? placeJoins(groups, winners, workers) : groups;
+}
+
+// pickJoinWinners maps each free worker's name to the relay session that
+// joins it: of the candidates, the newest first_seen, a tie to the lower id.
+function pickJoinWinners(groups, workers, labelOf) {
   const localIds = localBareIds(groups);
-  const winners = new Map(); // worker name → relay session
+  const winners = new Map();
   for (const a of remoteRootSessions(groups)) {
-    if (a.parent_session_id || isShadowedRemote(a, localIds)) continue;
-    const name = labelOf(sourceIdOf(a.session_id));
-    const w = name ? workers.get(name) : null;
-    if (!w || w.count !== 1 || !w.free) continue;
+    const name = joinableWorkerName(a, workers, localIds, labelOf);
+    if (!name) continue;
     const held = winners.get(name);
     if (!held || isNewer(a, held)) winners.set(name, a);
   }
-  if (!winners.size) return groups;
+  return winners;
+}
 
+// joinableWorkerName is the name of the one free worker relay row `a` may
+// join, or '': `a` is a relay root no local copy shadows, and its daemon's
+// label names exactly one worker in the tree, an unattached one.
+function joinableWorkerName(a, workers, localIds, labelOf) {
+  if (a.parent_session_id || isShadowedRemote(a, localIds)) return '';
+  const name = labelOf(sourceIdOf(a.session_id));
+  const w = name ? workers.get(name) : null;
+  return w && w.count === 1 && w.free ? name : '';
+}
+
+// placeJoins rebuilds the tree with each winner moved, decorated as its
+// worker, to the end of that worker's group's session rows, and the worker
+// out of that group's unattached_workers.
+function placeJoins(groups, winners, workers) {
   const joinedIds = new Set();
   const into = new Map(); // worker's group → decorated sessions
   for (const [name, a] of winners) {
@@ -106,16 +125,16 @@ export function joinRelayWorkers(groups, labelOf) {
       worker_name: worker.worker_name, worker_id: worker.worker_id,
     }]));
   }
+  const stillFree = (w) => !winners.has(w.worker_name);
   return (function rebuild(gs) {
     const out = [];
     for (const g of gs) {
       const all = g.agents || [];
-      const kept = all.filter(a => !joinedIds.has(a.session_id));
       const next = {
         ...g,
-        agents: kept.concat(into.get(g) || []),
+        agents: all.filter(a => !joinedIds.has(a.session_id)).concat(into.get(g) || []),
         groups: g.groups && rebuild(g.groups),
-        unattached_workers: g.unattached_workers && g.unattached_workers.filter(w => !winners.has(w.worker_name)),
+        unattached_workers: g.unattached_workers && g.unattached_workers.filter(stillFree),
       };
       if (!emptiedAway(all, next)) out.push(next);
     }

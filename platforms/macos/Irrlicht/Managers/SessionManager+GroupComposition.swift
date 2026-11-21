@@ -169,40 +169,45 @@ extension SessionManager {
     /// recompose and never written into `localApiGroups` or `relaySessionMap`.
     func relayWorkerJoins() -> [String: SessionState] {
         guard !relaySessionMap.isEmpty, !relayDaemons.isEmpty else { return [:] }
-        // Session rows are counted over the same walk that fills sessionMap.
+        let free = uniquelyNamedFreeWorkers()
+        guard !free.isEmpty else { return [:] }
+        let localIDs = Set(sessionMap.keys)
+        var winners: [String: SessionState] = [:]
+        for s in relaySessionMap.values where s.parentSessionId == nil && !localIDs.contains(s.id) {
+            guard let name = connectedDaemonName(of: s), let w = free[name] else { continue }
+            if let held = winners[name], !s.joinsAhead(of: held) { continue }
+            winners[name] = s.decorated(as: w)
+        }
+        return winners
+    }
+
+    /// The unattached workers whose name no other worker in the local groups
+    /// carries, by name. Session rows are counted over `flattenAgents`, the
+    /// walk that fills `sessionMap`, so a name busy in one rig and free in
+    /// another is not unique.
+    func uniquelyNamedFreeWorkers() -> [String: UnattachedWorker] {
         var count: [String: Int] = [:]
         for s in localApiGroups.flatMap({ flattenAgents(from: $0) }) {
             if let name = s.workerName { count[name, default: 0] += 1 }
         }
         var free: [String: UnattachedWorker] = [:]
-        func collectFree(_ group: AgentGroup) {
+        func collect(_ group: AgentGroup) {
             for w in group.unattachedWorkers ?? [] {
                 count[w.workerName, default: 0] += 1
                 free[w.workerName] = w
             }
-            group.groups?.forEach(collectFree)
+            group.groups?.forEach(collect)
         }
-        localApiGroups.forEach(collectFree)
-        guard !free.isEmpty else { return [:] }
+        localApiGroups.forEach(collect)
+        return free.filter { count[$0.key] == 1 }
+    }
 
-        let localIDs = Set(sessionMap.keys)
-        var winners: [String: SessionState] = [:]
-        for s in relaySessionMap.values where s.parentSessionId == nil && !localIDs.contains(s.id) {
-            guard let daemon = s.daemonID, let name = relayDaemons[daemon], name != daemon,
-                  count[name] == 1, let w = free[name] else { continue }
-            if let held = winners[name],
-               s.firstSeen < held.firstSeen || (s.firstSeen == held.firstSeen && s.rowID > held.rowID) {
-                continue
-            }
-            var copy = s
-            copy.role = w.role
-            copy.roleIcon = w.icon
-            copy.roleDescription = w.description
-            copy.workerName = w.workerName
-            copy.workerID = w.workerID
-            winners[name] = copy
-        }
-        return winners
+    /// The name the session's daemon gave itself, while that daemon is
+    /// connected; nil for a local session, a faded daemon, or a daemon whose
+    /// stored label is its own id (the stand-in for a missing `daemon_label`).
+    func connectedDaemonName(of session: SessionState) -> String? {
+        guard let daemon = session.daemonID, let name = relayDaemons[daemon], name != daemon else { return nil }
+        return name
     }
 
     /// `group` as displayed: each joined session appended to the session rows
@@ -561,5 +566,27 @@ extension SessionManager {
         projectGroupOrder.swapAt(ia, ib)
         saveProjectGroupOrder()
         recomposeApiGroups()
+    }
+}
+
+// The relay-worker join's tie-break and decoration (#2149).
+fileprivate extension SessionState {
+    /// Joins ahead of `other` for the same worker: started later, or in the
+    /// same second with the lower `rowID`.
+    func joinsAhead(of other: SessionState) -> Bool {
+        if firstSeen != other.firstSeen { return firstSeen > other.firstSeen }
+        return rowID < other.rowID
+    }
+
+    /// A copy shown as worker `w`: its role, icon, description, name and work
+    /// item; everything else stays the session's own.
+    func decorated(as w: SessionManager.UnattachedWorker) -> SessionState {
+        var copy = self
+        copy.role = w.role
+        copy.roleIcon = w.icon
+        copy.roleDescription = w.description
+        copy.workerName = w.workerName
+        copy.workerID = w.workerID
+        return copy
     }
 }

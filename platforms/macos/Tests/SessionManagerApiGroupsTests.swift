@@ -699,8 +699,8 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     func testOfTwoDaemonsLabelledAlikeTheNewestSessionJoins() {
         seedPool()
         sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "team-a-m1-1"), (id: "d2", label: "team-a-m1-1")]))
-        sut.handleRelayMessage(RelayFixtures.push(source: "d2", sessionId: "new", project: "container-proj", firstSeen: 200))
-        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "old", project: "container-proj", firstSeen: 100))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d2", sessionId: "new", firstSeen: 200))
+        sut.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "old", firstSeen: 100))
 
         XCTAssertEqual(rig?.agents?.map(\.rowID), ["d2/new"])
         XCTAssertEqual(group("container-proj")?.agents?.map(\.rowID), ["d1/old"], "the older one keeps today's placement")

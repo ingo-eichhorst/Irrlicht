@@ -12,17 +12,23 @@ import Foundation
 enum RelayFixtures {
 
     /// A relay Push frame — envelope `source` plus an inner `session_created`,
-    /// as the hub forwards it. `firstSeen` is the wire's unix seconds; the
-    /// relay-worker join (#2149) breaks a tie between candidates on it.
+    /// as the hub forwards it.
     static func push(
         source: String,
         sessionId: String,
         project: String,
-        state: String = "working",
-        firstSeen: Int = 0
+        state: String = "working"
     ) -> String {
         frame(source: source, inner: "session_created",
-              session: sessionJSON(id: sessionId, project: project, state: state, firstSeen: firstSeen))
+              session: sessionJSON(id: sessionId, project: project, state: state))
+    }
+
+    /// The same frame for a working `container-proj` session that started at
+    /// `firstSeen` (the wire's unix seconds), which the relay-worker join
+    /// (#2149) picks the newest candidate by.
+    static func push(source: String, sessionId: String, firstSeen: Int) -> String {
+        frame(source: source, inner: "session_created",
+              session: sessionJSON(id: sessionId, project: "container-proj", state: "working", firstSeen: firstSeen))
     }
 
     /// A relay Push frame carrying `session_deleted` — how a relay session

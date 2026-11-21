@@ -2385,38 +2385,54 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         case 'hello_ack':
           return;
         case 'snapshot':
-          src.daemons.clear();
-          for (const d of (msg.daemons || [])) {
-            if (d?.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
-          }
-          updateWsStatus();
-          render(); // labels changed: re-join relayed sessions to workers (#2149)
+          applyRelaySnapshot(src, msg);
           return;
         case 'daemon_status':
-          if (msg.daemon_id) {
-            if (msg.status === 'disconnected') {
-              src.daemons.delete(msg.daemon_id);
-              src.seqCursors.delete(msg.daemon_id);
-              src.deliveredDaemons.delete(msg.daemon_id);
-              purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
-            } else {
-              src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
-              render(); // a label arrived: re-join relayed sessions to workers (#2149)
-            }
-          }
+          if (msg.daemon_id) applyDaemonStatus(src, msg);
           updateWsStatus();
           return;
         case 'push':
-          if (msg.msg) {
-            if (msg.source) src.deliveredDaemons.add(msg.source);
-            trackPushSeq(src, msg.source || '', msg.msg.seq);
-            dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
-          }
+          if (msg.msg) applyRelayPush(src, msg);
           return;
         default:
           trackPushSeq(src, '', msg.seq);
           dispatchRawFrame(msg);
       }
+    }
+
+    // A relay `snapshot` names every connected daemon; their labels are the
+    // relay-worker join's key (#2149), so the list re-renders.
+    function applyRelaySnapshot(src, msg) {
+      src.daemons.clear();
+      for (const d of (msg.daemons || [])) {
+        if (d?.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
+      }
+      updateWsStatus();
+      render();
+    }
+
+    // One daemon connecting (its label may join its sessions to a worker,
+    // #2149) or disconnecting (its rows go, #540: the relay no longer deletes
+    // them for us).
+    function applyDaemonStatus(src, msg) {
+      const id = msg.daemon_id;
+      if (msg.status !== 'disconnected') {
+        src.daemons.set(id, { label: msg.daemon_label || id, status: msg.status || 'connected' });
+        render();
+        return;
+      }
+      src.daemons.delete(id);
+      src.seqCursors.delete(id);
+      src.deliveredDaemons.delete(id);
+      purgeDaemonSessions(id);
+    }
+
+    // A relay `push` envelope: remember which daemon this source delivered
+    // (dropSourceRows), then process the inner frame under its daemon's id.
+    function applyRelayPush(src, msg) {
+      if (msg.source) src.deliveredDaemons.add(msg.source);
+      trackPushSeq(src, msg.source || '', msg.msg.seq);
+      dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
     }
 
     // normalizeSourcedFrame folds a relay Push envelope's `source` (daemon id)
