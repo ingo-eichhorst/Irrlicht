@@ -51,6 +51,11 @@ final class SessionManagerWaitingWorkerTests: XCTestCase {
         }
         manager.seedLocalApiGroups(first)
         let before = store.readKeys
+        // readKeys only grows: a key already read would hide a second read.
+        guard !before.contains(NotificationSettings.masterEnabledKey) else {
+            XCTFail("the master key was read before the install under test, so the delta cannot show it")
+            return nil
+        }
         manager.seedLocalApiGroups(second)
         return store.readKeys.subtracting(before)
     }
@@ -131,6 +136,16 @@ final class SessionManagerWaitingWorkerTests: XCTestCase {
         }
     }
 
+    /// The waiting paint follows the notification's scope: a worker list's
+    /// waiting slot is painted, a Gas Town worker reading "waiting" is not.
+    func testOnlyAWorkerListPaintsAWaitingSlot() {
+        let waiting = Self.slot("T101", "waiting")
+        XCTAssertTrue(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: "workerlist"))
+        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: "gastown"))
+        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: nil))
+        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(Self.slot("T101", "busy"), inPoolOfType: "workerlist"))
+    }
+
     /// The hydrate polls every 2.5 s while any orchestrator group (a worker
     /// list or Gas Town) is listed, and every 30 s otherwise.
     func testHydratePollIntervalFollowsOrchestratorPresence() {
@@ -139,6 +154,27 @@ final class SessionManagerWaitingWorkerTests: XCTestCase {
         XCTAssertEqual(manager.hydratePollInterval(for: Self.pool([], type: "gastown")), 2.5)
         XCTAssertEqual(manager.hydratePollInterval(for: [AgentGroup(name: "irrlicht", agents: [])]), 30)
         XCTAssertEqual(manager.hydratePollInterval(for: []), 30)
+    }
+
+    /// A worker whose relayed session is joined into its row (#2149) shows
+    /// that session, which notifies for itself; the worker list's edge for
+    /// it stays silent rather than notifying a second time.
+    func testAWorkerJoinedByARelayedSessionDoesNotFireTwice() {
+        let store = InMemoryDefaults()
+        store.set(true, forKey: NotificationEvent.waiting.enabledKey)
+        let manager = SessionManager(defaults: store)
+        guard !manager.canUseUserNotifications else { return XCTFail(bundleGuardMessage) }
+        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "busy")]))
+        manager.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "T101")]))
+        manager.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "vm-proj"))
+        XCTAssertNotNil(manager.relayWorkerJoins()["T101"], "precondition: the relayed session joined T101")
+        let before = store.readKeys
+        guard !before.contains(NotificationSettings.masterEnabledKey) else {
+            return XCTFail("the master key was read before the install under test, so the delta cannot show it")
+        }
+        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "waiting")]))
+        XCTAssertFalse(store.readKeys.subtracting(before).contains(NotificationSettings.masterEnabledKey),
+                       "a joined worker's waiting edge notified on top of its session's own notification")
     }
 
     /// LOCK: with the waiting toggle off, the funnel is never entered.

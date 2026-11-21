@@ -5,12 +5,19 @@
 # in platforms/macos/Irrlicht/Managers/SessionManager+Notifications.swift,
 # tests in platforms/macos/Tests/SessionManagerWaitingWorkerTests.swift).
 #
-# WHY THIS FILE EXISTS. The three LOCK tests below pin limits #2145 ADDS, so
-# they pass before and after the change by construction; each earns its place
-# by going red when the rule it protects is broken:
+# WHY THIS FILE EXISTS. These tests pin limits #2145 ADDS: the LOCKs pass
+# before and after the change by construction, and the review's tests guard
+# code that had no "before" of its own. Each earns its place by going red when
+# the rule it protects is broken:
 #   1. only worker-list groups notify (Gas Town's states are gt's own);
 #   2. a slot first seen already waiting is a first sighting and stays silent;
-#   3. the notifyOnWaiting toggle gates the worker notification.
+#   3. the notifyOnWaiting toggle gates the worker notification;
+#   4. only worker-list groups paint a waiting slot;
+#   5. a worker joined by a relayed session does not notify a second time;
+#   6. the hydrate re-arms its cadence from the groups it installed;
+#   7. a non-200 hydrate falls back to the idle cadence;
+#   8. an older response is not installed over a newer one;
+#   9. an unchanged timer poll is not installed again.
 # Each was run with these exact anchors through tools/mutate.sh before this
 # file was written, and went red with the messages asserted below.
 #
@@ -108,6 +115,9 @@ assert_swift_test_goes_red() {
 }
 
 NOTIFY="platforms/macos/Irrlicht/Managers/SessionManager+Notifications.swift"
+COMPOSE="platforms/macos/Irrlicht/Managers/SessionManager+GroupComposition.swift"
+HYDRATE="platforms/macos/Irrlicht/Managers/SessionManager+Hydration.swift"
+ROW="platforms/macos/Irrlicht/Views/GroupView.swift"
 
 # ── 1. every orchestrator's slots count, not only a worker list's ───────────
 assert_swift_test_goes_red \
@@ -135,6 +145,60 @@ assert_swift_test_goes_red \
   '        guard !edges.isEmpty else { return }' \
   "SessionManagerWaitingWorkerTests/testWaitingToggleOffDoesNotFire" \
   'notified with notifyOnWaiting off'
+
+# ── 4. every orchestrator paints a waiting slot ────────────────────────────
+assert_swift_test_goes_red \
+  "dropping the workerlist check paints a Gas Town worker waiting" \
+  "$ROW" \
+  '        type == "workerlist" && worker.isWaiting' \
+  '        worker.isWaiting' \
+  "SessionManagerWaitingWorkerTests/testOnlyAWorkerListPaintsAWaitingSlot" \
+  'testOnlyAWorkerListPaintsAWaitingSlot] : XCTAssertFalse failed'
+
+# ── 5. a joined worker's edge is not dropped ────────────────────────────────
+assert_swift_test_goes_red \
+  "notifying joined workers too fires twice for one waiting agent" \
+  "$COMPOSE" \
+  '        notifyWaitingWorkers(edges.filter { joined[$0.worker] == nil })' \
+  '        notifyWaitingWorkers(edges)' \
+  "SessionManagerWaitingWorkerTests/testAWorkerJoinedByARelayedSessionDoesNotFireTwice" \
+  "a joined worker's waiting edge notified on top of its session's own notification"
+
+# ── 6. a successful hydrate no longer re-arms ───────────────────────────────
+assert_swift_test_goes_red \
+  "dropping the re-arm after a successful hydrate leaves the cadence at 30 s" \
+  "$HYDRATE" \
+  '            rearmHydratePolling(for: topGroups)' \
+  '' \
+  "SessionManagerHydrateCadenceTests/testTheCadenceFollowsTheInstalledGroups" \
+  'a listed orchestrator did not speed the hydrate up'
+
+# ── 7. a non-200 hydrate keeps the fast cadence ─────────────────────────────
+assert_swift_test_goes_red \
+  "dropping the non-200 fallback polls a failing daemon every 2.5 s" \
+  "$HYDRATE" \
+  $'                // 2.5 s; the next good hydrate restores the cadence.\n                rearmHydratePolling(for: [])' \
+  '                // 2.5 s; the next good hydrate restores the cadence.' \
+  "SessionManagerHydrateCadenceTests/testAFailedHydrateFallsBackToTheIdleCadence" \
+  'a non-200 hydrate kept the 2.5 s cadence'
+
+# ── 8. responses install in completion order ────────────────────────────────
+assert_swift_test_goes_red \
+  "dropping the request-order guard installs an older response over a newer one" \
+  "$HYDRATE" \
+  '            guard seq > lastInstalledHydrateSeq else { return }' \
+  '            guard seq > 0 else { return }' \
+  "SessionManagerHydrateCadenceTests/testAnOlderResponseIsNotInstalledOverANewerOne" \
+  'the older response was installed over the newer one'
+
+# ── 9. an unchanged timer poll is installed again ───────────────────────────
+assert_swift_test_goes_red \
+  "dropping the unchanged-body skip republishes on every timer poll" \
+  "$HYDRATE" \
+  '            if trigger == .timer && data == lastHydratePayload { return }' \
+  '            if trigger == .timer && data.isEmpty { return }' \
+  "SessionManagerHydrateCadenceTests/testAnUnchangedTimerPollRepublishesNothing" \
+  'an unchanged timer poll republished apiGroups'
 
 if [[ $fails -gt 0 ]]; then
   echo "workerlist-waiting-swift-mutations: $fails FAILED"

@@ -102,10 +102,10 @@ extension SessionManager {
         var id: String { workerName }
 
         var isStale: Bool { stale == true }
-        /// The slot's agent waits for a person (#2145): the row paints its dot
-        /// in the session waiting colour. Only the worker list sends it as a
-        /// contract; the notification edge (`waitingWorkerEdges`) is limited
-        /// to worker-list groups.
+        /// The worker's state reads "waiting" (#2145). Only the worker list
+        /// sends it as a contract, so the row paint
+        /// (`UnattachedWorkerRowView.paintsWaiting`) and the notification edge
+        /// (`waitingWorkerEdges`) both act on it in worker-list groups only.
         var isWaiting: Bool { workerState == "waiting" }
         /// The last run's exit code when it failed (non-zero), else nil — an
         /// exit of 0 and no completed run both show nothing.
@@ -244,13 +244,16 @@ extension SessionManager {
     /// Installs the local daemon's groups and recomposes the published
     /// surfaces. Every hydrate goes through here, so a worker-list slot's
     /// edge into waiting (#2145) is diffed against exactly the groups being
-    /// replaced. Called after the hydrate's `await`, on the main actor, so
-    /// two overlapping hydrates diff in order and cannot both report one edge.
+    /// replaced. `hydrateSessions` installs a response only when it is newer
+    /// than the last one installed, so a late older response cannot replay
+    /// an edge. A worker joined by a relayed session (#2149) shows that
+    /// session, which notifies for itself, so its edge is dropped.
     func installLocalGroups(_ groups: [AgentGroup]) {
         let edges = Self.waitingWorkerEdges(from: localApiGroups, to: groups)
         localApiGroups = groups
         recomposeApiGroups()
-        notifyWaitingWorkers(edges)
+        let joined = relayWorkerJoins()
+        notifyWaitingWorkers(edges.filter { joined[$0.worker] == nil })
     }
 
     /// Groups relay-only sessions (ids not present locally) by project name,

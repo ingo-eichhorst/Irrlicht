@@ -80,12 +80,13 @@ extension SessionManager {
     /// replaces the running timer. No-op under XCTest (issue #832) — a real
     /// daemon round-trip has no business running on a timer during unit tests.
     func startProjectCostsPolling(interval: TimeInterval? = nil) {
-        guard !isRunningUnitTests else { return }
         let every = interval ?? projectCostsRefreshInterval
+        armedHydrateInterval = every
+        guard !isRunningUnitTests else { return }
         projectCostsTimer?.invalidate()
         projectCostsTimer = Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.hydrateSessions()
+                await self?.hydrateSessions(trigger: .timer)
             }
         }
         // Let the system coalesce the 2.5 s orchestrator wakeups.
@@ -101,26 +102,48 @@ extension SessionManager {
     }
 
     /// Re-arms the hydrate timer when the groups just installed want another
-    /// cadence. Leaves a timer that was never started alone (unit tests,
-    /// and the moment before the init Task starts it).
-    private func rearmHydratePolling(for groups: [AgentGroup]) {
-        guard let timer = projectCostsTimer else { return }
+    /// cadence. Leaves polling that was never started alone (the moment
+    /// before the init Task starts it).
+    func rearmHydratePolling(for groups: [AgentGroup]) {
+        guard let armed = armedHydrateInterval else { return }
         let want = hydratePollInterval(for: groups)
-        if timer.timeInterval != want { startProjectCostsPolling(interval: want) }
+        if armed != want { startProjectCostsPolling(interval: want) }
     }
 
-    func hydrateSessions() async {
+    /// Why a hydrate runs: the periodic timer, or anything else (launch, a
+    /// reconnect, a debounced structural change), which always installs.
+    enum HydrateTrigger { case timer, explicit }
+
+    func hydrateSessions(trigger: HydrateTrigger = .explicit) async {
         // The Local source feeds sessionMap/localApiGroups from the local
         // daemon's REST API. When Local is disabled this must not run, or the
         // 30s cost-poll timer (and any pending rehydration) would silently
         // re-add the local sessions that disabling the source just cleared.
-        guard useLocalDaemon else { return }
+        guard useLocalDaemon else {
+            rearmHydratePolling(for: [])
+            return
+        }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
+        if trigger == .timer && hydratesInFlight > 0 { return }
+        hydrateRequestSeq += 1
+        let seq = hydrateRequestSeq
+        hydratesInFlight += 1
+        defer { hydratesInFlight -= 1 }
         do {
             let (data, response) = try await localURLSession.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                // A daemon that answers with an error is not polled every
+                // 2.5 s; the next good hydrate restores the cadence.
+                rearmHydratePolling(for: [])
+                return
+            }
+            // Responses complete in any order; only a newer one installs.
+            guard seq > lastInstalledHydrateSeq else { return }
+            lastInstalledHydrateSeq = seq
+            if trigger == .timer && data == lastHydratePayload { return }
             let decoder = JSONDecoder()
             let payload = try decoder.decode(SessionsResponse.self, from: data)
+            lastHydratePayload = data
             let topGroups = payload.groups
             providerCosts = payload.providerCosts ?? [:]
 
@@ -152,6 +175,7 @@ extension SessionManager {
             }
         } catch {
             print("💧 Hydration failed: \(error.localizedDescription)")
+            rearmHydratePolling(for: [])
         }
     }
 
