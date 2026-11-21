@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # keychain-test-isolation-swift-mutations_test.sh — the committed mutation
-# fixtures for the three guards that keep `swift test` away from the
+# fixtures for the four guards that keep `swift test` away from the
 # developer's real login keychain and live daemon (KeychainStore's backend
 # seam in platforms/macos/Irrlicht/Managers/KeychainStore.swift, DaemonManager's
 # publisher and process-control seams in
 # platforms/macos/Irrlicht/Managers/DaemonManager.swift; guards in
 # platforms/macos/Tests/KeychainStoreBackendGuardTests.swift,
-# platforms/macos/Tests/DaemonManagerPublisherGuardTests.swift and
-# platforms/macos/Tests/DaemonManagerProcessControlGuardTests.swift).
+# platforms/macos/Tests/DaemonManagerPublisherGuardTests.swift,
+# platforms/macos/Tests/DaemonManagerProcessControlGuardTests.swift and
+# platforms/macos/Tests/ActivationClientGuardTests.swift — the last for
+# ActivationClient's task-eta endpoint, which a rendered Settings panel
+# reaches from .onAppear).
 #
 # WHY THIS FILE EXISTS. Both guards are something the change ADDS, so they
 # have no "before the fix" to run red; per AGENTS.md and
 # docs/testing-philosophy.md each earns its place by being seen to fail when
-# what it protects is broken. Seven mutations, each run by hand with these
+# what it protects is broken. Eight mutations, each run by hand with these
 # exact anchors before this file was written, and red with the messages
 # asserted below:
 #   1. the process-wide KeychainStore goes back to the real keychain;
@@ -22,12 +25,14 @@
 #   5. the publisher rule is inverted;
 #   6. DaemonManager's default process control goes back to the live probe /
 #      `pkill -x irrlichd` / spawn;
-#   7. the process-control rule is inverted.
+#   7. the process-control rule is inverted;
+#   8. ActivationClient's endpoint ignores the test-process detector.
 #
 # SAFE TO RUN ON A DEVELOPER MAC, and only because of how it runs. Under
-# mutations 1, 3, 4 and 6 a KeychainStore.get, a DaemonManager publish or a
-# DaemonManager.start() in this process WOULD reach the real keychain (a
-# securityd dialog), the live daemon on :7837, or `pkill -x irrlichd`. Each mutation therefore runs exactly ONE guard test via
+# mutations 1, 3, 4, 6 and 8 a KeychainStore.get, a DaemonManager publish, a
+# DaemonManager.start() or an ActivationClient call in this process WOULD
+# reach the real keychain (a securityd dialog), the live daemon on :7837, or
+# `pkill -x irrlichd`. Each mutation therefore runs exactly ONE guard test via
 # `swift test --filter`, and every guard arm is inert by construction — it
 # inspects which backend/publisher was selected and calls nothing on it (the
 # guard classes' doc comments say so, and have no setUp). Never widen a
@@ -193,6 +198,15 @@ assert_swift_test_goes_red \
   $'        underXCTest ? LiveDaemonProcessControl() : RecordingDaemonProcessControl()' \
   "DaemonManagerProcessControlGuardTests/testTheProcessControlRuleRecordsUnderXCTestAndActsInTheApp" \
   'a test process must get the recording process control'
+
+# ── 8. ActivationClient's endpoint ignores the test-process detector ───────
+assert_swift_test_goes_red \
+  "an ActivationClient endpoint that ignores the detector is caught" \
+  "platforms/macos/Irrlicht/Managers/ActivationClient.swift" \
+  $'    static var endpoint: URL? { endpoint(underXCTest: AppHome.isRunningTests) }' \
+  $'    static var endpoint: URL? { endpoint(underXCTest: false) }' \
+  "ActivationClientGuardTests/testTheEndpointIsNilInThisTestProcess" \
+  'ActivationClient would send task-eta requests to the live daemon from a test process'
 
 if [[ $fails -gt 0 ]]; then
   echo "keychain-test-isolation-swift-mutations: $fails FAILED"
