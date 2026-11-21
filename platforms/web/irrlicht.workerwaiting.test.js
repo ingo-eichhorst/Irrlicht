@@ -5,10 +5,11 @@
 // sighting, and only for a worker list (Gas Town passes its own states
 // through, so its rows stay as they are).
 //
-// Red-first: every test except the LOCKs failed before the change (no
-// `waiting` class, no filled dot, no notification). Mutations run by hand
-// (tools/mutate.sh refuses irrlicht.js, which holds a NUL byte): dropping
-// workerListStates' `type !== 'workerlist'` skip reddened the Gas Town LOCK;
+// Red-first: every test except the LOCK failed before the change (no
+// `waiting` class, no filled dot, no notification); the Gas Town test failed
+// before the paint was scoped to worker lists (#2145 review). Mutations run by
+// hand (tools/mutate.sh refuses irrlicht.js, which holds a NUL byte): dropping
+// workerListStates' `type !== 'workerlist'` skip reddened the Gas Town test;
 // letting waitingWorkerEdges count a slot absent from prev reddened the
 // first-load test.
 import { describe, test, expect, beforeAll } from 'vitest'
@@ -132,10 +133,14 @@ describe('waiting worker row (#2145)', () => {
     expect(calls[1]).toEqual({ title: 'Worker waiting for input', body: 'lead-T100 · T101' })
   })
 
-  test('LOCK: a Gas Town worker whose passed-through state reads waiting does not notify', async () => {
+  test('a Gas Town worker whose passed-through state reads waiting is neither painted nor notified', async () => {
     const before = calls.length
     await poll({ m1: 'waiting', polecatState: 'busy' })
     await poll({ m1: 'waiting', polecatState: 'waiting' })
     expect(calls).toHaveLength(before)
+    const row = workerRow('free-1')
+    expect(row.querySelector('.worker-row-state').textContent).toBe('waiting')
+    expect(row.classList.contains('waiting')).toBe(false)
+    expect(glyph(row)).toBe('○')
   })
 })

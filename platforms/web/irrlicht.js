@@ -1303,9 +1303,12 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // session (#2140), keyed by group path and worker name, after the group's
     // session rows. Not sessions: no agent number, never in sessionIndex,
     // never counted in a header or the state summary.
-    function emitWorkerRowItems(items, g, groupKey, depth) {
+    // poolType is the top-level group's `type` (only a top-level group
+    // carries one): a worker-list slot may be painted waiting (#2145).
+    function emitWorkerRowItems(items, g, groupKey, depth, poolType) {
+      const inWorkerList = poolType === 'workerlist';
       for (const w of (g.unattached_workers || [])) {
-        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth});
+        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth, inWorkerList});
       }
     }
 
@@ -1353,8 +1356,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // sub-groups (Gas Town rigs) as further collapsible headers. Collapse
         // state is keyed by a path-qualified key (parent/name) so same-named
         // rigs under different orchestrators don't share a collapse toggle.
-        function emitGroup(g, parentKey, depth) {
+        function emitGroup(g, parentKey, depth, poolType) {
           const key = parentKey ? parentKey + '/' + g.name : g.name;
+          const pool = poolType || g.type;
           if (showHeaders) {
             items.push({type: 'group', key: 'g:' + key, group: g, groupKey: key, depth: depth});
           }
@@ -1367,8 +1371,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             agentNum++;
             emitAgentRowItems(items, a, agentNum, depth);
           }
-          emitWorkerRowItems(items, g, key, depth);
-          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
+          emitWorkerRowItems(items, g, key, depth, pool);
+          for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1, pool);
         }
         for (const g of displayedGroups) emitGroup(g, '', 0);
 
@@ -1377,7 +1381,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           item => item.key,
           item => {
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
-            if (item.type === 'worker') return createWorkerRow(item.worker, item.depth);
+            if (item.type === 'worker') return createWorkerRow(item.worker, item.depth, item.inWorkerList);
             if (item.type === 'error') return createSessionErrorRow(item.agent, item.isChild);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'cachebloat') return createCacheBloatRow(item.agent);
@@ -1390,7 +1394,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           },
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
-            if (item.type === 'worker') { updateWorkerRow(el, item.worker, item.depth); return; }
+            if (item.type === 'worker') { updateWorkerRow(el, item.worker, item.depth, item.inWorkerList); return; }
             if (item.type === 'error') { updateSessionErrorRow(el, item.agent); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'cachebloat') { updateCacheBloatRow(el, item.agent); return; }
@@ -1452,7 +1456,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // the state-icon column, not a session state; the worker's own state is
     // neutral text at the end — except a worker-list slot waiting for a person
     // (#2145), whose dot fills and takes the waiting colour (updateWorkerRow).
-    function createWorkerRow(worker, depth) {
+    // Only inside a worker list: Gas Town passes gt's own state strings
+    // through, the same scope the notification (workerListStates) keeps.
+    function createWorkerRow(worker, depth, inWorkerList) {
       const el = document.createElement('div');
       el.className = 'worker-row';
       el.innerHTML =
@@ -1463,13 +1469,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         '<span class="worker-row-state" style="display:none"></span>' +
         '<span class="worker-row-tag worker-row-stale" style="display:none"></span>' +
         '<span class="worker-row-tag worker-row-failed" style="display:none"></span>';
-      updateWorkerRow(el, worker, depth);
+      updateWorkerRow(el, worker, depth, inWorkerList);
       return el;
     }
 
     // The name and work item reuse the session row's .row-worker-* chips, so
     // free and busy workers in one rig share their widths.
-    function updateWorkerRow(el, worker, depth) {
+    function updateWorkerRow(el, worker, depth, inWorkerList) {
       el.classList.toggle('nested', !!depth);
       const role = worker.role || '';
       const name = worker.worker_name || '';
@@ -1478,7 +1484,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
       setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
       setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
-      const waiting = worker.worker_state === 'waiting';
+      const waiting = !!inWorkerList && worker.worker_state === 'waiting';
       el.classList.toggle('waiting', waiting);
       const glyph = el.querySelector('.worker-row-glyph');
       setIfChanged(glyph, 'textContent', waiting ? '\u25CF' : '\u25CB');
@@ -1898,6 +1904,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     ]).then(([entries, resp]) => {
       ingestAgentRegistry(entries);
       ingestInitialSessions(resp);
+      rearmRehydratePollAfterLoad();
       render();
       repaintHistory();
     }).catch(err => console.error('irrlicht: initial load failed', err));
@@ -2042,13 +2049,18 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     //
     // Normalized first: the daemon omits an empty `agents` (omitempty), so a
     // same-named orchestrator group would otherwise have nothing to push onto.
+    //
+    // A worker-list slot's edge into waiting (#2145) is diffed against the new
+    // tree as displayed: a worker joined by a relayed session (#2149) shows
+    // that session, which notifies for itself, so it raises no second one.
     function adoptLocalTree(fresh) {
-      notifyWaitingWorkers(dashboardGroups, fresh);
+      const prev = dashboardGroups;
       const carried = remoteRootSessions(dashboardGroups);
       dashboardGroups = fresh;
       normalizeGroupAgents(dashboardGroups);
       for (const a of carried) findOrCreateGroup(a.project_name || 'unknown').agents.push(a);
       rebuildIndex();
+      notifyWaitingWorkers(prev, joinRelayWorkers(dashboardGroups, connectedDaemonLabel));
     }
     // structureSignature captures the daemon-computed shape of the group tree:
     // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
@@ -2176,11 +2188,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // reflect it promptly. With no orchestrator the structure is WS-driven and
     // only `costs` go stale, so fall back to 30s. Recursive setTimeout (not
     // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
+    let rehydrateTimer = null;
     function scheduleRehydratePoll() {
       // Any typed group is an orchestrator's (Gas Town, a worker list, #2148).
       const hasOrchestrator = dashboardGroups.some(g =>
         g && (g.type || g.groups?.length));
-      setTimeout(() => {
+      rehydrateTimer = setTimeout(() => {
+        rehydrateTimer = null;
         // .catch last, so a throw from scheduleRehydratePoll is logged too
         // (checked in node: with .catch first it surfaced unhandled) (#2147).
         rehydratePoll()
@@ -2189,6 +2203,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       }, hasOrchestrator ? 2500 : 30000);
     }
     scheduleRehydratePoll();
+    // The first poll is scheduled above, before the initial fetch lands, so it
+    // waits the idle 30 s even when that fetch lists an orchestrator — long
+    // enough to miss a worker's edge into waiting (#2145). Once the tree is
+    // in, a poll still pending is re-armed at the cadence the tree asks for;
+    // one already running reschedules itself when it finishes.
+    function rearmRehydratePollAfterLoad() {
+      if (rehydrateTimer === null) return;
+      clearTimeout(rehydrateTimer);
+      scheduleRehydratePoll();
+    }
 
     // --- Sources & connections (multi-source) ---
     // The dashboard connects to one or more sources at once: the local source
