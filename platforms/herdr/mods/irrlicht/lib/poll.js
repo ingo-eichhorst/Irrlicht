@@ -1,46 +1,8 @@
-// One poll of the daemon, with every read injected so vitest can drive it.
-//
-// The address is resolved on the first poll and again after any poll that
-// did not get an answer, and kept while the daemon answers. A daemon that
-// restarts on another port therefore fails one poll and is found on the next;
-// a second daemon that publishes a new addr file while the first still
-// answers is not looked for until the first stops answering.
+// Polling the daemon, with every read and the clock injected so vitest can
+// drive it. main.js only starts the timer and draws what a step returns.
 
 import { hostPortOf, resolveDaemonAddress, sessionsURL } from './address.js';
 import { readSessions } from './sessions.js';
-
-// pollOnce resolves the next panel state from the previous one:
-//   { phase: 'ok', where, resolved, sessions }      the daemon answered;
-//   { phase: 'unreachable', where }                 the request itself failed;
-//   { phase: 'unexpected', where }                  something answered, but not
-//                                                   with a sessions payload.
-// (main.js adds 'stalled', from stallState below, and 'error'.)
-// `io.ladder` is resolveDaemonAddress's io; `io.fetch(url)` is Herdr's fetch.
-// Only the request and the body parse are caught here: an exception anywhere
-// else is the panel's own fault and propagates, so main.js can show it as one
-// instead of as a stopped daemon.
-export async function pollOnce(prev, io) {
-  const resolved = prev?.phase === 'ok' && prev.resolved ? prev.resolved : await resolveDaemonAddress(io.ladder);
-  const where = hostPortOf(resolved);
-
-  let response;
-  try {
-    response = await io.fetch(sessionsURL(resolved));
-  } catch {
-    return { phase: 'unreachable', where };
-  }
-  if (!response?.ok) return { phase: 'unexpected', where };
-
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    return { phase: 'unexpected', where };
-  }
-  const sessions = readSessions(payload);
-  if (sessions === null) return { phase: 'unexpected', where };
-  return { phase: 'ok', where, resolved, sessions };
-}
 
 // STALL_MS is how long a request may stay unanswered before the panel stops
 // showing its last numbers. Herdr's `fetch` takes no timeout or abort signal
@@ -50,22 +12,84 @@ export async function pollOnce(prev, io) {
 // current. The Claude Code panel uses the same 10 s.
 export const STALL_MS = 10_000;
 
+// RERESOLVE_MS bounds how often the address is looked up again while the
+// daemon does not answer. Each lookup runs a /bin/sh test of the addr file,
+// and a panel left open with Irrlicht stopped would otherwise spawn one every
+// poll. The last address keeps being asked every poll meanwhile, so a daemon
+// back on the same port is found as fast as before; one back on another port
+// is found within RERESOLVE_MS.
+export const RERESOLVE_MS = 30_000;
+
+// pollOnce resolves the next panel state from the previous one:
+//   { phase: 'ok', where, resolved, resolvedAt, sessions }  the daemon answered;
+//   { phase: 'unreachable', where, resolved, resolvedAt }   the request failed;
+//   { phase: 'unexpected', where, resolved, resolvedAt }    something answered,
+//                                                           but not with a
+//                                                           sessions payload.
+// The address is kept while the daemon answers. Once a poll has failed, the
+// next one looks it up again if the last lookup is RERESOLVE_MS old, and later
+// ones at most every RERESOLVE_MS.
+// `io.ladder` is resolveDaemonAddress's io, `io.fetch(url)` Herdr's fetch,
+// `io.now()` the clock. Only the request and the body parse are caught here:
+// an exception anywhere else is the panel's own fault and propagates, so it is
+// shown as one instead of as a stopped daemon.
+export async function pollOnce(prev, io) {
+  const now = io.now();
+  const fresh = !prev?.resolved || (prev.phase !== 'ok' && now - prev.resolvedAt >= RERESOLVE_MS);
+  const resolved = fresh ? await resolveDaemonAddress(io.ladder) : prev.resolved;
+  const kept = { where: hostPortOf(resolved), resolved, resolvedAt: fresh ? now : prev.resolvedAt };
+
+  let response;
+  try {
+    response = await io.fetch(sessionsURL(resolved));
+  } catch {
+    return { phase: 'unreachable', ...kept };
+  }
+  let payload = null;
+  if (response?.ok) {
+    try { payload = await response.json(); } catch { /* not JSON: unexpected below */ }
+  }
+  const sessions = readSessions(payload);
+  if (sessions === null) return { phase: 'unexpected', ...kept };
+  return { phase: 'ok', ...kept, sessions };
+}
+
 // stallState is the state to show while a request is still in flight:
 // `{ phase: 'stalled', where }` once it has run STALL_MS, else null (keep
-// what is shown). No second request is sent behind a stalled one; when the
-// stalled one settles, its result replaces this state as usual.
+// what is shown).
 export function stallState(state, startedAt, now) {
   if (state?.phase === 'stalled' || !(now - startedAt >= STALL_MS)) return null;
   return { phase: 'stalled', where: state?.where };
 }
 
-// signature is what the panel compares to skip a redraw after a poll: the
-// status line and each row's gauge and tooltip. A session no Herdr agent
-// matched changes nothing on screen, so its numbers moving does not redraw.
-// Herdr's own AGENTS.md says render runs again whenever its live data
-// (agents, terminals, focus, theme) changes, so the rows' other fields need no
-// place here.
-export function signature(state, rows) {
-  const gauges = (rows || []).map((r) => [r.address, r.gauge, r.tooltip]);
-  return JSON.stringify([state?.phase, state?.where, state?.message, gauges]);
+// createPoller owns the one request allowed in flight. Each timer tick calls
+// step(), which answers one of:
+//   { request }  a request went out; the promise resolves to the next state
+//                (a fault inside the panel becomes { phase: 'error', message });
+//   { stalled }  the request in flight just passed STALL_MS;
+//   {}           nothing to do this tick.
+// No second request is sent behind a pending one; when a stalled request
+// settles, its result replaces the stalled state as usual.
+export function createPoller(io) {
+  let state = { phase: 'starting' };
+  let since = null;
+  return {
+    step() {
+      const now = io.now();
+      if (since !== null) {
+        const stalled = stallState(state, since, now);
+        if (stalled) state = stalled;
+        return stalled ? { stalled } : {};
+      }
+      since = now;
+      const request = pollOnce(state, io)
+        .catch((e) => ({ phase: 'error', message: String(e?.message ?? e) }))
+        .then((next) => {
+          since = null;
+          state = next;
+          return next;
+        });
+      return { request };
+    },
+  };
 }

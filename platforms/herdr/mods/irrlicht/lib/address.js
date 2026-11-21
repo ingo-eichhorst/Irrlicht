@@ -20,14 +20,14 @@
 // one folder that people copy on its own, so this copy cannot import that one.
 
 export const DEFAULT_PORT = 7837;
-export const ADDR_FILE_NAME = 'irrlichd.addr';
-export const MAX_ADDR_FILE_BYTES = 64;
+const ADDR_FILE_NAME = 'irrlichd.addr';
+const MAX_ADDR_FILE_BYTES = 64;
 
 // splitHostPort mirrors Go's net.SplitHostPort: the port is what follows the
 // last colon, a bracketed host must close right before it, and a host with a
 // colon of its own (an unbracketed IPv6) is refused. Returns { host, port } or
 // null where Go returns an error.
-export function splitHostPort(hostport) {
+function splitHostPort(hostport) {
   if (typeof hostport !== 'string') return null;
   const i = hostport.lastIndexOf(':');
   if (i < 0) return null; // missing port in address
@@ -63,7 +63,7 @@ function plainHostSpan(hostport, i) {
 // goAtoi mirrors strconv.Atoi for base-10 input: an optional sign, then one
 // or more ASCII digits and nothing else. Returns a number, or null where Go
 // returns an error.
-export function goAtoi(s) {
+function goAtoi(s) {
   if (typeof s !== 'string' || !/^[+-]?[0-9]+$/.test(s)) return null;
   return Number(s);
 }
@@ -88,7 +88,7 @@ function isGoSpace(ch) {
 }
 
 // goTrimSpace mirrors strings.TrimSpace.
-export function goTrimSpace(s) {
+function goTrimSpace(s) {
   const chars = Array.from(s);
   let start = 0;
   let end = chars.length;

@@ -98,7 +98,8 @@ environment once, when it starts.
 
 Two sessions of the same agent in one folder therefore get no gauge, unless
 their pids match. They never trade numbers. Sessions Irrlicht sees outside
-Herdr are not listed.
+Herdr are not listed. An agent on another machine (`vps/t7`) gets no gauge:
+the daemon only sees this machine's sessions.
 
 ## What it runs
 
@@ -109,7 +110,8 @@ Herdr asks you to check this before you add a mod:
 - **Programs:** `/usr/bin/printenv` twice at start, for the two environment
   variables, because a mod has no `process.env`. Also `/bin/sh -c '[ -f "$1" ]
   && [ ! -L "$1" ]'` on the address file, because a mod has no `lstat`. This
-  test runs when the panel starts and after a poll that got no answer.
+  test runs when the panel starts, and at most every 30 seconds while the
+  daemon does not answer.
 - **Files:** it reads only the address file above.
 
 ## Develop
@@ -121,7 +123,10 @@ The decisions live in `lib/`, which imports nothing from Herdr. The tests in
 cd platforms/herdr && npm ci --ignore-scripts && npm test
 ```
 
-`main.js` is the only file that uses Herdr's runtime. Check it with
+`test/address.parity.test.js` also runs the Claude Code panel's copy of the
+address ladder (`platforms/claude-code/lib`) through the same table of Go's
+answers, so it runs only inside this repository. `main.js` is the only file
+that uses Herdr's runtime. Check it with
 `herdr-app check`, which needs Herdr.app installed and is not part of CI.
 Herdr writes `jsconfig.json` and `gpui-kit.d.ts` into a mod folder it loads.
 `.gitignore` keeps them out of the repository. In one test on Herdr 0.1.16, an

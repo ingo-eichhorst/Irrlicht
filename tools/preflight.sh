@@ -732,8 +732,10 @@ if want web; then
                   "web: Claude Code panel"         web_tree platforms/claude-code
   # The Herdr mod's lib/ modules (platforms/herdr/mods/irrlicht). The mod's
   # main.js imports Herdr's runtime and is checked by `herdr-app check`, which
-  # needs Herdr.app and is not in CI.
-  run_gate_scoped '^platforms/herdr/' \
+  # needs Herdr.app and is not in CI. The claude-code half is the mod's
+  # test/address.parity.test.js, which runs the Claude Code panel's ports of
+  # the address ladder and formatTokens through the same table as the mod's.
+  run_gate_scoped '^platforms/herdr/|^platforms/claude-code/lib/(address|format)\.js$' \
                   "web: Herdr mod"                 web_tree platforms/herdr
 fi
 

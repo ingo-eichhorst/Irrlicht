@@ -73,7 +73,8 @@ daemon. A Claude Code row reads `4.8%` with a thin bar, and a Codex row reads
      file and not a symlink.
   3. Port 7837.
 
-  The address is resolved again after a poll that got no answer.
+  The address is kept while the daemon answers. Once a poll has failed, it
+  is looked up again at most every 30 s.
 - **Matching an agent to a session:**
   1. A session whose `pid` equals the terminal's `foreground.pid`, else the
      terminal's `pid`. Two sessions on one pid get no gauge.
@@ -82,7 +83,8 @@ daemon. A Claude Code row reads `4.8%` with a thin bar, and a Codex row reads
      exactly one session share that pair, and no row already holds that
      session.
 
-  Child sessions (subagents) are never matched.
+  Child sessions (subagents) and agents on other machines (`vps/t7`) are
+  never matched.
 - **Code layout:** the decisions are in `lib/` (address, sessions, match,
   gauge, poll, rows), with no Herdr imports, and are tested with vitest.
   `main.js` reads Herdr and draws.

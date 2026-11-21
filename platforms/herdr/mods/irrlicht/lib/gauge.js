@@ -23,12 +23,12 @@ export function formatTokens(n) {
 
 // formatPercent prints one decimal, as the macOS app does
 // (SessionState.swift: String(format: "%.1f%%")).
-export function formatPercent(p) {
+function formatPercent(p) {
   return p.toFixed(1) + '%';
 }
 
 // gaugeOf answers what a matched session's row shows:
-//   { kind: 'percent', text, fraction, color, detail }  the context fill;
+//   { kind: 'percent', text, fraction, color, textColor, detail }  the fill;
 //   { kind: 'tokens', text, detail }                    the window is unknown;
 //   { kind: 'none' }                                    no figure yet.
 // A known window with no pressure level yet ("unknown" or absent, as a
@@ -48,6 +48,9 @@ export function gaugeOf(facts) {
     text,
     fraction: Math.min(1, facts.percent / 100),
     color,
+    // A safe fill is not news: its figure is drawn in `muted`, the others in
+    // their pressure colour.
+    textColor: facts.pressure === 'safe' ? 'muted' : color,
     detail: text + of + ' context, ' + facts.pressure,
   };
 }

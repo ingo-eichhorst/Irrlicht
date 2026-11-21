@@ -3,21 +3,17 @@ import { matchAgents } from '../lib/match.js';
 import { readSessions } from '../lib/sessions.js';
 import {
   ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, foregroundPidWinsOverTerminalPid,
-  herdrAgent, pidMatchedAgentsCountInTheirFolder, session, summary,
+  herdrAgent, matchHerdr, pidMatchedAgentsCountInTheirFolder, remoteAgentsAreNeverMatched, session, summary,
 } from './contracts.js';
 import {
   CLAUDE_SESSION, CODEX_SESSION, LIVE_AGENTS, LIVE_TERMINALS, OTHER_SESSION, livePayload,
 } from './fixtures.js';
 
-const facts = (payload) => readSessions(payload);
-
-function run(herdr, sessions) {
-  return summary(matchAgents(herdr.map((h) => h.agent), herdr.map((h) => h.terminal), facts({ groups: [{ agents: sessions }] })));
-}
+const run = (herdr, sessions) => summary(matchHerdr(matchAgents, herdr, sessions));
 
 describe('the live run (Herdr 0.1.16, Claude Code 2.1.330, Codex 0.163.0)', () => {
   test('Claude Code is matched by its foreground pid, Codex by its folder', () => {
-    expect(summary(matchAgents(LIVE_AGENTS, LIVE_TERMINALS, facts(livePayload())))).toEqual({
+    expect(summary(matchAgents(LIVE_AGENTS, LIVE_TERMINALS, readSessions(livePayload())))).toEqual({
       t3: [CLAUDE_SESSION.session_id, 'pid'],
       t4: [CODEX_SESSION.session_id, 'folder'],
     });
@@ -29,7 +25,7 @@ describe('the live run (Herdr 0.1.16, Claude Code 2.1.330, Codex 0.163.0)', () =
   });
 
   test('a session outside Herdr and a subagent child match no row', () => {
-    const matched = [...matchAgents(LIVE_AGENTS, LIVE_TERMINALS, facts(livePayload())).values()].map((m) => m.session.id);
+    const matched = [...matchAgents(LIVE_AGENTS, LIVE_TERMINALS, readSessions(livePayload())).values()].map((m) => m.session.id);
     expect(matched).not.toContain(OTHER_SESSION.session_id);
     expect(matched).not.toContain(OTHER_SESSION.children[0].session_id);
   });
@@ -100,5 +96,9 @@ describe('never trade numbers', () => {
 
   test('the foreground pid is asked before the terminal pid', () => {
     foregroundPidWinsOverTerminalPid(matchAgents);
+  });
+
+  test('an agent on another machine is never matched', () => {
+    remoteAgentsAreNeverMatched(matchAgents);
   });
 });

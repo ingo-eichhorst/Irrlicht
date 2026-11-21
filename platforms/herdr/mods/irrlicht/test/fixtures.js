@@ -118,3 +118,30 @@ export function livePayload(...extraGroups) {
     provider_costs: {},
   };
 }
+
+// The address ladder's io (resolveDaemonAddress), faked: environment values
+// and files by path. Every file check and read is recorded, so "the file was
+// never read" is an observation rather than an absence.
+export const HOME_ADDR = '/home/dev/.local/share/irrlicht/irrlichd.addr';
+
+export function world({ env = {}, files = {} } = {}) {
+  const asked = [];
+  return {
+    asked,
+    io: {
+      bindAddr: async () => env.IRRLICHT_BIND_ADDR,
+      irrlichtHome: async () => env.IRRLICHT_HOME,
+      home: async () => env.HOME,
+      isRegularFile: async (path) => {
+        asked.push(['isRegularFile', path]);
+        const f = files[path];
+        return !!f && !f.isLink && (f.kind || 'file') === 'file';
+      },
+      read: async (path) => {
+        asked.push(['read', path]);
+        const f = files[path];
+        return f ? f.text : null;
+      },
+    },
+  };
+}

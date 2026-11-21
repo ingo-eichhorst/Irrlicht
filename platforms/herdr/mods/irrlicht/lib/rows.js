@@ -6,7 +6,7 @@ import { matchAgents } from './match.js';
 
 // cleanTitle drops what an agent puts before its title (a status glyph or
 // spinner and the separator after it), as Herdr's own agents mod does.
-export function cleanTitle(s) {
+function cleanTitle(s) {
   return (s ?? '').replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, '').replace(/^\[ [!.] \] /, '').trim();
 }
 
@@ -14,6 +14,13 @@ export function cleanTitle(s) {
 function rowLabel(a) {
   const detail = cleanTitle(a.title) || a.tab_name || '';
   return [a.space_name, detail].filter(Boolean).join(' · ');
+}
+
+// unmatchedTooltip says why a row has no gauge.
+function unmatchedTooltip(a) {
+  return String(a.address).includes('/')
+    ? 'on another machine: Irrlicht reads this machine\'s sessions only'
+    : 'no Irrlicht session matched';
 }
 
 // MATCHED_BY says, in the row's tooltip, how its numbers were found.
@@ -26,10 +33,10 @@ export function panelRows(agents, terminals, sessions) {
   const matches = sessions ? matchAgents(agents, terminals, sessions) : new Map();
   return agents.map((a) => {
     const m = matches.get(a.address);
-    const gauge = m ? gaugeOf(m.session) : { kind: 'none' };
+    const gauge = gaugeOf(m?.session);
     const tooltip = m
       ? [gauge.detail, m.session.model, MATCHED_BY[m.via]].filter(Boolean).join(' · ')
-      : 'no Irrlicht session matched';
+      : unmatchedTooltip(a);
     return {
       address: a.address,
       label: rowLabel(a),
@@ -62,4 +69,23 @@ export function statusLine(state) {
     default:
       return { text: 'Looking for the Irrlicht daemon…', tone: 'dim' };
   }
+}
+
+// signature is what the panel compares to skip a redraw after a poll: the
+// status line as drawn and each row's gauge and tooltip. A session no Herdr
+// agent matched changes nothing on screen, so its numbers moving does not
+// redraw. Herdr's own AGENTS.md says render runs again whenever its live data
+// (agents, terminals, focus, theme) changes, so the rows' other fields need no
+// place here.
+export function signature(state, rows) {
+  const gauges = (rows || []).map((r) => [r.address, r.gauge, r.tooltip]);
+  return JSON.stringify([statusLine(state), gauges]);
+}
+
+// focusAddress is the agent the mod command "focus-<n>" names: row n of the
+// panel, counting from 1, which is agent n in Herdr's order. Null when the
+// command is another one or the row does not exist.
+export function focusAddress(command, agents) {
+  const n = /^focus-(\d+)$/.exec(String(command));
+  return (n && agents[Number(n[1]) - 1]?.address) || null;
 }

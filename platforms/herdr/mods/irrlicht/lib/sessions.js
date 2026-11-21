@@ -7,7 +7,7 @@
 
 // An empty adapter means Claude Code (SessionState.Adapter's doc comment,
 // core/domain/session/session.go).
-export const DEFAULT_ADAPTER = 'claude-code';
+const DEFAULT_ADAPTER = 'claude-code';
 
 function arrayOf(value) {
   return Array.isArray(value) ? value : [];
@@ -23,7 +23,7 @@ function isSession(value) {
 // so it never is the program a Herdr terminal runs. On the live payload read
 // for this mod (2026-11-21), the one Claude Code subagent carried no `pid` at
 // all.
-export function topLevelSessions(payload) {
+function topLevelSessions(payload) {
   const out = [];
   const visit = (groups) => {
     for (const g of arrayOf(groups)) {
@@ -69,8 +69,10 @@ export function sessionFacts(session) {
 }
 
 // readSessions is the payload as the panel keeps it, or null when it is not
-// the shape the daemon serves (no `groups` array).
+// the shape the daemon serves. `groups` is null when the daemon has no
+// session at all: handlers.go tags it without omitempty, and BuildDashboard
+// (core/domain/session/grouped.go) starts from `var result []*AgentGroup`.
 export function readSessions(payload) {
-  if (!payload || !Array.isArray(payload.groups)) return null;
+  if (!payload || (payload.groups !== null && !Array.isArray(payload.groups))) return null;
   return topLevelSessions(payload).map(sessionFacts);
 }

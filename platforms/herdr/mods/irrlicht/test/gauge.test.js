@@ -10,7 +10,7 @@ function factsWith(metrics) {
 describe('gaugeOf', () => {
   test('the live Claude Code and Codex sessions show their fill to one decimal, as the macOS app does', () => {
     expect(gaugeOf(sessionFacts(CLAUDE_SESSION))).toEqual({
-      kind: 'percent', text: '4.6%', fraction: 0.0464, color: 'idle',
+      kind: 'percent', text: '4.6%', fraction: 0.0464, color: 'idle', textColor: 'muted',
       detail: '4.6% of 1.0M context, safe',
     });
     expect(gaugeOf(sessionFacts(CODEX_SESSION)).text).toBe('3.9%');
@@ -22,6 +22,13 @@ describe('gaugeOf', () => {
     expect(color(65, 'caution')).toBe('working');
     expect(color(85, 'warning')).toBe('blocked');
     expect(color(95, 'critical')).toBe('blocked');
+  });
+
+  test('a safe figure is drawn muted, the others in their pressure colour', () => {
+    const textColor = (pct, level) => gaugeOf(factsWith({ context_utilization_percentage: pct, pressure_level: level })).textColor;
+    expect(textColor(10, 'safe')).toBe('muted');
+    expect(textColor(65, 'caution')).toBe('working');
+    expect(textColor(95, 'critical')).toBe('blocked');
   });
 
   test('the bar never draws past full', () => {
@@ -70,6 +77,13 @@ describe('readSessions', () => {
       ['a', 'claude-code', 1, ''],
       ['nested', 'pi', 2, '/w'],
     ]);
+  });
+
+  test('an idle daemon\'s payload ({"groups": null}) is no sessions, not a foreign answer', () => {
+    // The daemon encodes an empty dashboard as a nil slice: handlers.go tags
+    // `groups` without omitempty, and BuildDashboard (core/domain/session/
+    // grouped.go) starts from `var result []*AgentGroup`.
+    expect(readSessions({ groups: null, provider_costs: {} })).toEqual([]);
   });
 
   test('anything but a sessions payload is null', () => {

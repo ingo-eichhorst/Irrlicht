@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
 import {
   ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, foregroundPidWinsOverTerminalPid,
-  pidMatchedAgentsCountInTheirFolder,
+  pidMatchedAgentsCountInTheirFolder, remoteAgentsAreNeverMatched,
 } from './contracts.js';
 
 const LIB = new URL('../lib/', import.meta.url);
@@ -70,5 +70,14 @@ describe('committed mutants of the matching rules', () => {
       'const pids = [terminal?.pid, terminal?.foreground?.pid];',
     );
     expect(() => foregroundPidWinsOverTerminalPid(matchAgents)).toThrow();
+  });
+
+  test('matching agents on other machines lets a remote pid show a local session', async () => {
+    const { matchAgents } = await loadMutant(
+      'remote-agents-matched',
+      'const agents = allAgents.filter(isLocal);',
+      'const agents = allAgents;',
+    );
+    expect(() => remoteAgentsAreNeverMatched(matchAgents)).toThrow();
   });
 });

@@ -3,14 +3,16 @@
 // sends the daemon nothing but that GET. The only programs it runs are
 // /usr/bin/printenv (twice, at start, for IRRLICHT_BIND_ADDR and
 // IRRLICHT_HOME: a mod has no process.env) and /bin/sh's `[ -f ] && [ ! -L ]`
-// test of the addr file (a mod has no lstat). The decisions live in ./lib,
-// which imports nothing from Herdr; this file only reads Herdr and draws.
+// test of the addr file (a mod has no lstat), at start and at most every 30 s
+// while the daemon does not answer (lib/poll.js RERESOLVE_MS). The decisions
+// live in ./lib, which imports nothing from Herdr; this file only reads Herdr,
+// starts the timer and draws.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, theme, run, exec, home, readTextFile, checking, nextCommand } from "herdr";
-import { pollOnce, signature, stallState } from "./lib/poll.js";
-import { panelRows, statusLine } from "./lib/rows.js";
+import { createPoller } from "./lib/poll.js";
+import { focusAddress, panelRows, signature, statusLine } from "./lib/rows.js";
 
 const POLL_MS = 3000;
 
@@ -45,7 +47,7 @@ export default class Irrlicht extends View {
     this.sig = signature(this.state, []);
     if (checking()) return;
     const env = Promise.all([envValue("IRRLICHT_BIND_ADDR"), envValue("IRRLICHT_HOME")]);
-    this.io = {
+    this.poller = createPoller({
       ladder: {
         bindAddr: async () => (await env)[0],
         irrlichtHome: async () => (await env)[1],
@@ -54,47 +56,32 @@ export default class Irrlicht extends View {
         read: (path) => readTextFile(path),
       },
       fetch: (url) => fetch(url),
-    };
+      now: () => Date.now(),
+    });
     cx.timer.every(POLL_MS, (cx) => this.tick(cx));
     this.tick(cx);
     // Keyboard and script access to the row action: "irrlicht.focus-<n>"
     // focuses the agent in row n (from 1), exactly as clicking that row does.
-    cx.spawn(async (cx) => {
+    cx.spawn(async () => {
       for (;;) {
-        const command = await nextCommand();
-        const n = /^focus-(\d+)$/.exec(command);
-        const row = n ? this.rows?.[Number(n[1]) - 1] : null;
-        if (row) focusAgent(row.address);
-        cx.notify();
+        const address = focusAddress(await nextCommand(), agents());
+        if (address) focusAgent(address);
       }
     });
   }
 
   tick(cx) {
-    if (this.busy) {
-      const stalled = stallState(this.state, this.busySince, Date.now());
-      if (stalled) this.show(cx, stalled);
-      return;
-    }
-    this.busy = true;
-    this.busySince = Date.now();
-    cx.spawn(async (cx) => {
-      let next;
-      try {
-        next = await pollOnce(this.state, this.io);
-      } catch (e) {
-        next = { phase: "error", message: String(e?.message ?? e) };
-      } finally {
-        this.busy = false;
-      }
-      this.show(cx, next);
-    });
+    const step = this.poller.step();
+    if (step.stalled) this.show(cx, step.stalled);
+    if (step.request) cx.spawn(async (cx) => this.show(cx, await step.request));
   }
 
-  // show adopts a state and redraws only when what is drawn changed.
+  // show adopts a state and redraws only when what is drawn changed. Without
+  // sessions no row is matched, so the terminals need not be read.
   show(cx, next) {
     this.state = next;
-    const sig = signature(next, panelRows(agents(), terminals(), next.sessions ?? null));
+    const sessions = next.sessions ?? null;
+    const sig = signature(next, panelRows(agents(), sessions ? terminals() : [], sessions));
     if (sig !== this.sig) {
       this.sig = sig;
       cx.notify();
@@ -107,7 +94,7 @@ export default class Irrlicht extends View {
       return h_flex().flex_none().gap(6).items_center()
         .child(div().w(36).h(4).rounded(2).bg(t.border)
           .child(div().h(4).rounded(2).w(Math.max(2, Math.round(36 * g.fraction))).bg(fill)))
-        .child(div().w(40).text_right().text_size(11.5).text_color(g.color === "idle" ? t.muted : fill).child(g.text));
+        .child(div().w(40).text_right().text_size(11.5).text_color(t[g.textColor] ?? fill).child(g.text));
     }
     if (g.kind === "tokens") {
       return div().flex_none().text_size(11.5).text_color(t.muted).child(g.text + " tok");
@@ -139,7 +126,6 @@ export default class Irrlicht extends View {
   render() {
     const t = theme();
     const rows = panelRows(agents(), terminals(), this.state.sessions ?? null);
-    this.rows = rows;
     const line = statusLine(this.state);
     return v_flex()
       .size_full()
