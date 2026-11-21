@@ -149,26 +149,36 @@ function placeJoins(groups, winners, workers) {
 // carry it and, for an unattached one, where it is: { count, free: { group,
 // worker } | null }. Relay rows are not the local tree and are not counted.
 function workerCensus(groups) {
-  const byName = new Map();
-  const entry = (name) => {
-    const e = byName.get(name) || { count: 0, free: null };
-    byName.set(name, e);
-    e.count++;
-    return e;
-  };
-  const countRows = (arr) => {
-    for (const a of (arr || [])) {
-      if (a.worker_name && sessionOrigin(a) === 'local') entry(a.worker_name);
-      countRows(a.children);
-    }
-  };
+  const census = new Map();
   forEachGroup(groups, (g) => {
-    countRows(g.agents);
-    for (const w of (g.unattached_workers || [])) {
-      if (w.worker_name) entry(w.worker_name).free = { group: g, worker: w };
-    }
+    countSessionRows(census, g.agents);
+    countFreeWorkers(census, g);
   });
-  return byName;
+  return census;
+}
+
+// censusEntry counts one more worker named `name` and returns its entry.
+function censusEntry(census, name) {
+  const e = census.get(name) || { count: 0, free: null };
+  census.set(name, e);
+  e.count++;
+  return e;
+}
+
+// countSessionRows counts the worker names local session rows carry,
+// subagent rows included.
+function countSessionRows(census, rows) {
+  for (const a of (rows || [])) {
+    if (a.worker_name && sessionOrigin(a) === 'local') censusEntry(census, a.worker_name);
+    countSessionRows(census, a.children);
+  }
+}
+
+// countFreeWorkers counts group g's unattached workers and records where each is.
+function countFreeWorkers(census, g) {
+  for (const w of (g.unattached_workers || [])) {
+    if (w.worker_name) censusEntry(census, w.worker_name).free = { group: g, worker: w };
+  }
 }
 
 // isNewer: a started after b, or at the same second with the lower id.
