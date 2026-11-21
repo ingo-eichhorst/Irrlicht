@@ -113,6 +113,11 @@ class SessionManager: ObservableObject {
     /// WebSocket deltas only carry individual session updates.
     var projectCostsTimer: Timer?
     let projectCostsRefreshInterval: TimeInterval = 30.0
+    /// The hydrate cadence while an orchestrator group is listed (#2145):
+    /// orchestrator state is never pushed over the WebSocket, so a worker
+    /// turning waiting reaches the app only by polling. Matches the web
+    /// dashboard's 2.5 s in `scheduleRehydratePoll`.
+    let orchestratorPollInterval: TimeInterval = 2.5
 
     /// Daemon-owned directory. `irrlichd` creates it and writes session JSON
     /// files; the app only mutates individual files for explicit user actions

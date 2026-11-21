@@ -81,7 +81,9 @@ extension SessionManager {
 
     /// One `unattached_workers` entry: an orchestrator worker with no
     /// session. `workerState` is the orchestrator's own state string, shown
-    /// as text — never mapped onto `SessionState.State`.
+    /// as text — never mapped onto `SessionState.State`. The one value read
+    /// as more than text is a worker-list slot's "waiting" (#2145): see
+    /// `isWaiting`.
     struct UnattachedWorker: Decodable, Equatable, Identifiable {
         let role: String?
         let icon: String?
@@ -100,6 +102,11 @@ extension SessionManager {
         var id: String { workerName }
 
         var isStale: Bool { stale == true }
+        /// The slot's agent waits for a person (#2145): the row paints its dot
+        /// in the session waiting colour. Only the worker list sends it as a
+        /// contract; the notification edge (`waitingWorkerEdges`) is limited
+        /// to worker-list groups.
+        var isWaiting: Bool { workerState == "waiting" }
         /// The last run's exit code when it failed (non-zero), else nil — an
         /// exit of 0 and no completed run both show nothing.
         var failedExitCode: Int? {
@@ -226,13 +233,24 @@ extension SessionManager {
         return placed
     }
 
-    /// Test seam: install local (non-relay) groups and recompose the published
-    /// surfaces, mirroring how the hydration path installs groups. Setting the
-    /// published `apiGroups` directly is not enough — `patchApiGroups` /
-    /// `removeFromApiGroups` operate on `localApiGroups` and recompose over it.
+    /// Test seam: install local (non-relay) groups through the same path the
+    /// hydration uses. Setting the published `apiGroups` directly is not
+    /// enough — `patchApiGroups` / `removeFromApiGroups` operate on
+    /// `localApiGroups` and recompose over it.
     func seedLocalApiGroups(_ groups: [AgentGroup]) {
+        installLocalGroups(groups)
+    }
+
+    /// Installs the local daemon's groups and recomposes the published
+    /// surfaces. Every hydrate goes through here, so a worker-list slot's
+    /// edge into waiting (#2145) is diffed against exactly the groups being
+    /// replaced. Called after the hydrate's `await`, on the main actor, so
+    /// two overlapping hydrates diff in order and cannot both report one edge.
+    func installLocalGroups(_ groups: [AgentGroup]) {
+        let edges = Self.waitingWorkerEdges(from: localApiGroups, to: groups)
         localApiGroups = groups
         recomposeApiGroups()
+        notifyWaitingWorkers(edges)
     }
 
     /// Groups relay-only sessions (ids not present locally) by project name,

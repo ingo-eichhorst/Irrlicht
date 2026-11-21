@@ -74,18 +74,39 @@ extension SessionManager {
         }
     }
 
-    /// Starts periodic re-hydration so group-level cost values (which arrive
-    /// as part of /api/v1/sessions and are not pushed via WebSocket deltas)
-    /// stay fresh. Idempotent. No-op under XCTest (issue #832) — a real
+    /// Starts periodic re-hydration so group-level cost values and
+    /// orchestrator state (which arrive as part of /api/v1/sessions and are
+    /// not pushed via WebSocket deltas) stay fresh. Idempotent: re-arming
+    /// replaces the running timer. No-op under XCTest (issue #832) — a real
     /// daemon round-trip has no business running on a timer during unit tests.
-    func startProjectCostsPolling() {
+    func startProjectCostsPolling(interval: TimeInterval? = nil) {
         guard !isRunningUnitTests else { return }
+        let every = interval ?? projectCostsRefreshInterval
         projectCostsTimer?.invalidate()
-        projectCostsTimer = Timer.scheduledTimer(withTimeInterval: projectCostsRefreshInterval, repeats: true) { [weak self] _ in
+        projectCostsTimer = Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.hydrateSessions()
             }
         }
+        // Let the system coalesce the 2.5 s orchestrator wakeups.
+        projectCostsTimer?.tolerance = every / 10
+    }
+
+    /// The hydrate cadence for the groups just installed (#2145):
+    /// `orchestratorPollInterval` while any orchestrator group is listed, so
+    /// a worker-list slot turning waiting notifies within seconds, else
+    /// `projectCostsRefreshInterval`.
+    func hydratePollInterval(for groups: [AgentGroup]) -> TimeInterval {
+        groups.contains(where: \.isOrchestrator) ? orchestratorPollInterval : projectCostsRefreshInterval
+    }
+
+    /// Re-arms the hydrate timer when the groups just installed want another
+    /// cadence. Leaves a timer that was never started alone (unit tests,
+    /// and the moment before the init Task starts it).
+    private func rearmHydratePolling(for groups: [AgentGroup]) {
+        guard let timer = projectCostsTimer else { return }
+        let want = hydratePollInterval(for: groups)
+        if timer.timeInterval != want { startProjectCostsPolling(interval: want) }
     }
 
     func hydrateSessions() async {
@@ -103,8 +124,8 @@ extension SessionManager {
             let topGroups = payload.groups
             providerCosts = payload.providerCosts ?? [:]
 
-            localApiGroups = topGroups
-            recomposeApiGroups()
+            installLocalGroups(topGroups)
+            rearmHydratePolling(for: topGroups)
             if isDebugMode {
                 print("💧 hydrate: groupedSessionIds=\(groupedSessionIds.count) ids, sample=\(groupedSessionIds.prefix(3))")
             }
@@ -116,6 +137,7 @@ extension SessionManager {
                 if group.type == "gastown" { hasGasTown = true }
                 states += flattenAgents(from: group)
             }
+            let hadSessions = sessionMap.count
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
             rebuildSessionsFromMap()
 
@@ -123,7 +145,11 @@ extension SessionManager {
             hasGasTownGroups = hasGasTown
             gasTownProvider?.updateAvailability(hasGasTown)
 
-            print("💧 Hydrated \(states.count) sessions from REST API")
+            // Logged on a change only: with an orchestrator listed this runs
+            // every 2.5 s.
+            if states.count != hadSessions || isDebugMode {
+                print("💧 Hydrated \(states.count) sessions from REST API")
+            }
         } catch {
             print("💧 Hydration failed: \(error.localizedDescription)")
         }
