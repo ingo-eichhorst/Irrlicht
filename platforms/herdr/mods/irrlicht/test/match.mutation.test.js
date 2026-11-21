@@ -1,39 +1,16 @@
-// Committed mutants of lib/match.js (AGENTS.md: commit the mutation rather than
-// describing it). Each mutant breaks one matching rule; the contract that
-// rule exists for must then fail. A mutant that still passes means the
-// contract no longer reaches the rule it claims to protect.
-//
-// Each anchor must occur exactly once in lib/match.js: an anchor that stopped
-// matching fails here as stale instead of silently testing the unmutated file.
+// Committed mutants of lib/match.js (test/mutant.js says how they are
+// loaded). Each mutant breaks one matching rule; the contract that rule exists
+// for must then fail.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { afterAll, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import {
   ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, foregroundPidWinsOverTerminalPid,
   pidMatchedAgentsCountInTheirFolder, remoteAgentsAreNeverMatched,
 } from './contracts.js';
+import { mutantLoader } from './mutant.js';
 
-const LIB = new URL('../lib/', import.meta.url);
-const source = (name) => readFileSync(new URL(name, LIB), 'utf8');
-const dir = mkdtempSync(join(tmpdir(), 'irrlicht-herdr-mutant-'));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
-
-// loadMutant writes lib/match.js with `anchor` replaced, next to a copy of
-// the one module it imports, and loads it.
-async function loadMutant(name, anchor, replacement) {
-  const original = source('match.js');
-  expect(original.split(anchor).length - 1, `anchor for ${name} must occur exactly once in lib/match.js`).toBe(1);
-  const mutant = original.replace(anchor, replacement);
-  expect(mutant).not.toBe(original);
-  const sub = join(dir, name);
-  mkdirSync(sub, { recursive: true });
-  writeFileSync(join(sub, 'sessions.js'), source('sessions.js'));
-  writeFileSync(join(sub, 'match.js'), mutant);
-  return import(pathToFileURL(join(sub, 'match.js')).href);
-}
+const load = mutantLoader('irrlicht-herdr-mutant-');
+const loadMutant = (name, anchor, replacement) => load(name, 'match.js', anchor, replacement);
 
 describe('committed mutants of the matching rules', () => {
   test('dropping the uniqueness check lets an ambiguous pair trade numbers', async () => {

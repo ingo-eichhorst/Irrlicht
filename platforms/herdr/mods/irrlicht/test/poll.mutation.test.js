@@ -1,33 +1,14 @@
-// Committed mutants of lib/poll.js (AGENTS.md: commit the mutation rather than
-// describing it): the stall guard and the re-lookup backoff. Each mutant
-// breaks one rule; the test that rule exists for must then fail. Each anchor
-// must occur exactly once in lib/poll.js, so a stale anchor fails here
-// instead of silently testing the unmutated file.
+// Committed mutants of lib/poll.js (test/mutant.js says how they are
+// loaded): the stall guard and the re-lookup backoff. Each mutant breaks one
+// rule; the test that rule exists for must then fail.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { afterAll, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { stallIsReportedOnceAfterStallMs } from './contracts.js';
 import { HOME_ADDR, livePayload, world } from './fixtures.js';
+import { mutantLoader } from './mutant.js';
 
-const LIB = new URL('../lib/', import.meta.url);
-const source = (name) => readFileSync(new URL(name, LIB), 'utf8');
-const dir = mkdtempSync(join(tmpdir(), 'irrlicht-herdr-poll-mutant-'));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
-
-// loadMutant writes lib/poll.js with `anchor` replaced, next to copies of the
-// modules it imports, and loads it.
-async function loadMutant(name, anchor, replacement) {
-  const original = source('poll.js');
-  expect(original.split(anchor).length - 1, `anchor for ${name} must occur exactly once in lib/poll.js`).toBe(1);
-  const sub = join(dir, name);
-  mkdirSync(sub, { recursive: true });
-  for (const dep of ['address.js', 'sessions.js']) writeFileSync(join(sub, dep), source(dep));
-  writeFileSync(join(sub, 'poll.js'), original.replace(anchor, replacement));
-  return import(pathToFileURL(join(sub, 'poll.js')).href);
-}
+const load = mutantLoader('irrlicht-herdr-poll-mutant-');
+const loadMutant = (name, anchor, replacement) => load(name, 'poll.js', anchor, replacement);
 
 // A daemon that answered once and then stopped, polled every 3 s for 27 s:
 // the address may be looked up again once (the poll after the first
