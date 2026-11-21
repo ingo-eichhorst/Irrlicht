@@ -15,14 +15,15 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// museAccountAPIEffects builds the daemon-wide AccountPoller and Muse's
-// CredentialResolver/AccountQuotaTransport once, plus the Apply/Remove
-// closures museaccountapi.PermissionDeclaration needs and the per-session
-// sweep that polls through them (issue #2057) — the gastownEffects
-// shape (this file's sibling, startup.go's gastownEffects), for the same
-// reason: the museaccountapi/services packages cannot construct a
-// *services.AccountPoller for themselves (deliberately ONE per daemon — see
-// accountpoller.go's own package doc), so the daemon's own wiring has to.
+// museAccountAPIEffects builds Muse's CredentialResolver/AccountQuotaTransport
+// once over the daemon's shared AccountPoller (runDaemon builds the one
+// poller and passes it to every account-quota provider, issue #2010), plus
+// the Apply/Remove closures museaccountapi.PermissionDeclaration needs and
+// the per-session sweep that polls through them (issue #2057) — the
+// gastownEffects shape (this file's sibling, startup.go's gastownEffects),
+// for the same reason: the museaccountapi/services packages cannot construct
+// a *services.AccountPoller for themselves (deliberately ONE per daemon —
+// see accountpoller.go's own package doc), so the daemon's own wiring has to.
 //
 // agent.AccountAPIPermissionKey's doc comment (written by #2003, before any
 // real provider existed) describes Apply as registering the provider "with"
