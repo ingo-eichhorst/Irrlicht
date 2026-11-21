@@ -31,7 +31,7 @@ function splitHostPort(hostport) {
   if (typeof hostport !== 'string') return null;
   const i = hostport.lastIndexOf(':');
   if (i < 0) return null; // missing port in address
-  const span = hostport[0] === '[' ? bracketedHostSpan(hostport, i) : plainHostSpan(hostport, i);
+  const span = hostport.startsWith('[') ? bracketedHostSpan(hostport, i) : plainHostSpan(hostport, i);
   if (!span || hasStrayBracket(hostport, span)) return null;
   return { host: span.host, port: hostport.slice(i + 1) };
 }
@@ -64,7 +64,7 @@ function plainHostSpan(hostport, i) {
 // or more ASCII digits and nothing else. Returns a number, or null where Go
 // returns an error.
 function goAtoi(s) {
-  if (typeof s !== 'string' || !/^[+-]?[0-9]+$/.test(s)) return null;
+  if (typeof s !== 'string' || !/^[+-]?\d+$/.test(s)) return null;
   return Number(s);
 }
 

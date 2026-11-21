@@ -33,7 +33,7 @@ import { trimSlashes } from './sessions.js';
 // "codex"); a pair that spells it differently matches nothing, never the
 // wrong session.
 function agentKey({ agent, terminal }) {
-  const cwd = trimSlashes((terminal.foreground || {}).cwd || terminal.cwd || '');
+  const cwd = trimSlashes(terminal.foreground?.cwd || terminal.cwd || '');
   if (!agent.app || !cwd) return null;
   return agent.app + '\u0000' + cwd;
 }
@@ -67,7 +67,7 @@ const isLocal = (agent) => !String(agent.address).includes('/');
 // candidatePids are the pids a terminal's agent can be known by: the
 // foreground process group's leader first, then the terminal's own process.
 function candidatePids(terminal) {
-  const pids = [(terminal.foreground || {}).pid, terminal.pid];
+  const pids = [terminal.foreground?.pid, terminal.pid];
   return pids;
 }
 

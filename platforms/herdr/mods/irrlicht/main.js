@@ -63,17 +63,22 @@ export default class Irrlicht extends View {
     // Keyboard and script access to the row action: "irrlicht.focus-<n>"
     // focuses the agent in row n (from 1), exactly as clicking that row does.
     cx.spawn(async () => {
-      for (;;) {
-        const address = focusAddress(await nextCommand(), agents());
+      while (!this.closed) {
+        const address = focusAddress(await nextCommand(), agents()); // NOSONAR (javascript:S9382): commands arrive one at a time; waiting for the next is the loop
         if (address) focusAgent(address);
       }
     });
   }
 
+  // close is Herdr's last call to a copy; it ends the command loop above.
+  async close() {
+    this.closed = true;
+  }
+
   tick(cx) {
     const step = this.poller.step();
-    if (step.stalled) this.show(cx, step.stalled);
-    if (step.request) cx.spawn(async (cx) => this.show(cx, await step.request));
+    if (step.kind === "stalled") this.show(cx, step.state);
+    if (step.kind === "request") cx.spawn(async (cx) => this.show(cx, await step.request));
   }
 
   // show adopts a state and redraws only when what is drawn changed. Without

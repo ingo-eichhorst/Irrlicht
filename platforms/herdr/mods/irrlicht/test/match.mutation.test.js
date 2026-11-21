@@ -66,8 +66,8 @@ describe('committed mutants of the matching rules', () => {
   test('asking the terminal pid first picks the wrapper\'s session', async () => {
     const { matchAgents } = await loadMutant(
       'terminal-pid-first',
-      'const pids = [(terminal.foreground || {}).pid, terminal.pid];',
-      'const pids = [terminal.pid, (terminal.foreground || {}).pid];',
+      'const pids = [terminal.foreground?.pid, terminal.pid];',
+      'const pids = [terminal.pid, terminal.foreground?.pid];',
     );
     expect(() => foregroundPidWinsOverTerminalPid(matchAgents)).toThrow();
   });

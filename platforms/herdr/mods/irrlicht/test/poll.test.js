@@ -136,11 +136,11 @@ describe('createPoller', () => {
     expect(first.request).toBeInstanceOf(Promise);
     await Promise.resolve();
     w.clock.now += 3000;
-    expect(poller.step()).toEqual({});
+    expect(poller.step()).toEqual({ kind: 'idle' });
     w.clock.now += STALL_MS;
-    expect(poller.step().stalled).toMatchObject({ phase: 'stalled' });
+    expect(poller.step()).toMatchObject({ kind: 'stalled', state: { phase: 'stalled' } });
     w.clock.now += 3000;
-    expect(poller.step()).toEqual({});
+    expect(poller.step()).toEqual({ kind: 'idle' });
     await new Promise((r) => setTimeout(r, 0));
     expect(w.fetches.length).toBe(1);
 

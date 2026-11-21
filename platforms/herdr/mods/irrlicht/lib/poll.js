@@ -56,14 +56,14 @@ async function addressFor(prev, io) {
 }
 
 function lookUpAgain(prev, now) {
-  if (!prev || !prev.resolved) return true;
+  if (!prev?.resolved) return true;
   return prev.phase !== 'ok' && now - prev.resolvedAt >= RERESOLVE_MS;
 }
 
 // bodyOf is a successful response's JSON, or null for an error status or a
 // body that is not JSON (readSessions then answers null: "unexpected").
 async function bodyOf(response) {
-  if (!response || !response.ok) return null;
+  if (!response?.ok) return null;
   try {
     return await response.json();
   } catch {
@@ -75,16 +75,17 @@ async function bodyOf(response) {
 // `{ phase: 'stalled', where }` once it has run STALL_MS, else null (keep
 // what is shown).
 export function stallState(state, startedAt, now) {
-  if (state.phase === 'stalled' || !(now - startedAt >= STALL_MS)) return null;
+  if (state.phase === 'stalled' || now - startedAt < STALL_MS) return null;
   return { phase: 'stalled', where: state.where };
 }
 
 // createPoller owns the one request allowed in flight. Each timer tick calls
 // step(), which answers one of:
-//   { request }  a request went out; the promise resolves to the next state
-//                (a fault inside the panel becomes { phase: 'error', message });
-//   { stalled }  the request in flight just passed STALL_MS;
-//   {}           nothing to do this tick.
+//   { kind: 'request', request }  a request went out; the promise resolves to
+//                                 the next state (a fault inside the panel
+//                                 becomes { phase: 'error', message });
+//   { kind: 'stalled', state }    the request in flight just passed STALL_MS;
+//   { kind: 'idle' }              nothing to do this tick.
 // No second request is sent behind a pending one; when a stalled request
 // settles, its result replaces the stalled state as usual.
 export function createPoller(io) {
@@ -95,8 +96,9 @@ export function createPoller(io) {
       const now = io.now();
       if (since !== null) {
         const stalled = stallState(state, since, now);
-        if (stalled) state = stalled;
-        return stalled ? { stalled } : {};
+        if (!stalled) return { kind: 'idle' };
+        state = stalled;
+        return { kind: 'stalled', state };
       }
       since = now;
       const request = pollOnce(state, io)
@@ -106,7 +108,7 @@ export function createPoller(io) {
           state = next;
           return next;
         });
-      return { request };
+      return { kind: 'request', request };
     },
   };
 }

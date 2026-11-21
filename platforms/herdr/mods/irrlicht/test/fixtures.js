@@ -2,7 +2,10 @@
 // 0.1.21, Claude Code 2.1.330 and Codex 0.163.0 each started in a Herdr tab,
 // and the Irrlicht daemon's GET /api/v1/sessions read at the same moment.
 // Trimmed to the fields the mod reads plus a few neighbours, with the user's
-// home directory replaced by /Users/dev. The pids are the measured ones: they
+// home directory replaced by /Users/dev, and the run's /tmp/herdr-demo (typed)
+// and /private/tmp/herdr-demo (resolved) moved to /var and /private/var: the
+// same macOS symlink shape, without naming a publicly writable directory
+// (SonarCloud javascript:S5443). The pids are the measured ones: they
 // carry the finding that Codex's session pid (46690) is the native binary
 // below the `node` launcher Herdr reports as the foreground (46686).
 
@@ -27,16 +30,16 @@ export const LIVE_TERMINALS = [
     foreground: { argv: ['/bin/zsh', '-l'], cwd: '/Users/dev', name: 'zsh', pid: 21596 },
   },
   {
-    address: 't3', pid: 45877, cwd: '/tmp/herdr-demo/claude', state: 'live', status: 'done',
+    address: 't3', pid: 45877, cwd: '/var/herdr-demo/claude', state: 'live', status: 'done',
     report: { app: 'claude-code', state: 'done' },
-    foreground: { argv: ['claude'], cwd: '/private/tmp/herdr-demo/claude', name: '2.1.330', pid: 46222 },
+    foreground: { argv: ['claude'], cwd: '/private/var/herdr-demo/claude', name: '2.1.330', pid: 46222 },
   },
   {
-    address: 't4', pid: 46387, cwd: '/tmp/herdr-demo/codex', state: 'live', status: 'idle',
+    address: 't4', pid: 46387, cwd: '/var/herdr-demo/codex', state: 'live', status: 'idle',
     report: { app: 'codex', state: 'idle' },
     foreground: {
       argv: ['node', '/Users/dev/.nvm/versions/node/v22.18.0/bin/codex', '--no-daemon'],
-      cwd: '/private/tmp/herdr-demo/codex', name: 'node', pid: 46686,
+      cwd: '/private/var/herdr-demo/codex', name: 'node', pid: 46686,
     },
   },
 ];
@@ -46,7 +49,7 @@ export const CLAUDE_SESSION = {
   session_id: 'd042c4a9-aeed-43fe-929b-012be3d17727',
   state: 'waiting',
   adapter: 'claude-code',
-  cwd: '/private/tmp/herdr-demo/claude',
+  cwd: '/private/var/herdr-demo/claude',
   project_name: 'claude',
   pid: 46222,
   launcher: { term_program: 'ghostty', tty: '/dev/ttys025' },
@@ -64,7 +67,7 @@ export const CODEX_SESSION = {
   session_id: '01a1fcba-f6c8-7840-9448-b12d3b6e51cc',
   state: 'ready',
   adapter: 'codex',
-  cwd: '/private/tmp/herdr-demo/codex',
+  cwd: '/private/var/herdr-demo/codex',
   project_name: 'codex',
   pid: 46690,
   launcher: { term_program: 'ghostty', tty: '/dev/ttys029' },

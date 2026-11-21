@@ -39,8 +39,9 @@ function topLevelSessions(payload) {
 // root stays "/".
 export function trimSlashes(path) {
   if (typeof path !== 'string' || path === '') return '';
-  const trimmed = path.replace(/\/+$/, '');
-  return trimmed === '' ? '/' : trimmed;
+  let end = path.length;
+  while (end > 1 && path[end - 1] === '/') end--;
+  return path.slice(0, end);
 }
 
 function positiveInt(n) {
