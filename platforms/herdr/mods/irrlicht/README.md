@@ -1,9 +1,10 @@
 # Irrlicht for Herdr.app
 
-A [Herdr.app](https://herdr.dev) mod that shows how full each agent's context
-window is. It lists Herdr's agents in Herdr's own order, and next to each one
-shows the fill Irrlicht measured, for example `4.8%`, with a small bar coloured
-by pressure. Clicking a row focuses that agent's pane.
+A [Herdr.app](https://herdr.dev) mod that lists Herdr's agents the way the
+Irrlicht menu bar app lists sessions. Agents are grouped by project. Each row
+shows the agent's Irrlicht state, its model, and how full its context window
+is, for example `4.6%` beside a bar coloured by pressure. Clicking a row
+focuses that agent's pane.
 
 ![Irrlicht in Herdr](preview.png)
 
@@ -47,29 +48,83 @@ a copied one, and not after a restart. Both commands above were tested on
 0.1.16.
 
 To focus an agent from the keyboard, `irrlicht.focus-<n>` runs the click of
-row `n`, counting from 1. Bind it in `keys.json`, or run it from a shell:
+row `n` as the panel draws it. Rows are counted from 1 across all groups, and
+each row shows its number. Bind it in `keys.json`, or run it from a shell:
 
 ```sh
 herdr-app do irrlicht.focus-2
 ```
 
-## What a row shows
+## What the panel shows
 
-| The row shows | When |
+It follows the macOS app's session list (`SessionListView`, `GroupView`,
+`SessionRowView` and `SessionStateIcon` in `platforms/macos/Irrlicht/Views`).
+The hues are Irrlicht's, from
+`tools/irrlicht-design-system/colors_and_type.css`. Backgrounds, text, borders
+and hover come from Herdr's theme, so the panel follows a light or a dark Herdr
+theme.
+
+- **Header:** `Irrlicht`, then the state icons of up to three rows (or a count
+  such as `5 agents`), and a connection dot on the right. The dot is green when
+  the daemon answers, orange while the panel first looks for it, and red
+  otherwise. Hover over it to see which daemon the panel reads.
+- **A line under the header** appears only while the daemon is not answering.
+  It says *not reachable* when nothing answers, *not answering* when a request
+  has hung for 10 seconds, *sent an unexpected answer* when something else
+  answers on that port, and *panel error* when the mod itself failed. The
+  last two sit on a red wash. A broken panel never looks like a stopped
+  daemon.
+- **Groups:** one per project, named as the daemon groups it (the session's
+  `project_name`, else `unknown`; a session an orchestrator such as Gas Town
+  claimed is in that orchestrator's group, marked ⛽). Each has a fold chevron
+  and a count such as `2 sessions`. A group keeps the place where it first
+  appeared for as long as the panel is open. The macOS app remembers that
+  order across restarts and lets you move groups; this panel does neither.
+  Rows within a group are in the order the daemon lists them. Agents
+  that no Irrlicht session matched come last, in a group named `Other agents`,
+  in Herdr's order. Before the daemon answers, every agent is in that group.
+- **Rows:** see the next table. A row that no session matched shows its state
+  icon, number, title and program icon only.
+
+| The row shows | Where it comes from |
 |---|---|
-| `4.8%` and a bar | Irrlicht knows the model's context window. The bar takes the theme's `idle` colour below 60%, `working` from 60%, and `blocked` from 80%. These are Irrlicht's pressure levels. |
-| `31K tok` | Irrlicht could not resolve the context window (`context_window_unknown`). It shows the token count, never a misleading `0%`. |
-| `–` | No Irrlicht session matched this agent, or the session has no figure yet. |
+| State icon | The session's state, drawn as the macOS app draws it (see below). |
+| Number | The row's place in the panel, which `focus-<n>` uses. |
+| Purple badge with a count | Subagents working or waiting, from the daemon's subagent summary. |
+| Title | The agent's terminal title, else its tab's name. |
+| Model, e.g. `opus-5.5` | The session's model, shortened as the macOS app shortens it. |
+| Program icon | Herdr's icon for the agent. |
+| Bar, e.g. `46.4K`, and `4.6%` | The context fill. The bar holds the token count, and the bar and the percentage take the pressure hue: green below 60%, orange from 60%, red from 80%, dark red from 90%. |
+| `31.0K / ?` and `—` | Irrlicht could not resolve the context window. The panel shows the token count, never a misleading `0%`. |
+| Red line | The session failed: the agent's message, else the kind of failure. |
+| Orange pill | The session is waiting, and this is its question. |
+| `Switch to a fresh session soon` | The context is 80% full or more and the session is still going. |
 
-Hover over a row to see the exact figure, the model, and how the session was
-matched.
+The state icons and their hues:
 
-The status line under the header says which daemon the panel reads, for example
-`Irrlicht at localhost:7837`. It says *not reachable* when nothing answers
-there, and *not answering* when a request has hung for 10 seconds (a daemon
-that accepts the connection but never replies). In both cases the gauges turn
-to dashes. It says *panel error* when the mod itself failed, so a broken panel
-never looks like a stopped daemon.
+| State | Icon | Hue |
+|---|---|---|
+| `working` | a solid dot that slowly pulses | `#8B5CF6` purple |
+| `waiting` | two pause bars | `#FF9500` orange |
+| `ready` | a disc with a check | `#34C759` green |
+| `error` | a disc with an exclamation mark | `#FF3B30` red |
+| unknown | a ring with a question mark | `#8E8E93` grey |
+
+An agent that no Irrlicht session matched gets a state from its Herdr status:
+
+| Herdr status | Shown as |
+|---|---|
+| `working` | `working` |
+| `blocked` (needs you) | `waiting` |
+| `done` | `ready` |
+| `idle` | `ready` |
+| anything else | unknown |
+
+Herdr has no failure status, so these rows are never shown as `error`.
+
+Hover over a row to see its space and title, its state, the exact figure,
+the model, its branch, and how the session was matched. The cost display is
+off by default in the macOS app, so it is not shown here either.
 
 ## Which daemon it reads
 
@@ -112,7 +167,8 @@ Herdr asks you to check this before you add a mod:
   && [ ! -L "$1" ]'` on the address file, because a mod has no `lstat`. This
   test runs when the panel starts, and at most every 30 seconds while the
   daemon does not answer.
-- **Files:** it reads only the address file above.
+- **Files:** it reads only the address file above, and draws the icons in
+  its own `icons/` folder.
 
 ## Develop
 
@@ -123,12 +179,23 @@ The decisions live in `lib/`, which imports nothing from Herdr. The tests in
 cd platforms/herdr && npm ci --ignore-scripts && npm test
 ```
 
-`test/address.parity.test.js` also runs the Claude Code panel's copy of the
-address ladder (`platforms/claude-code/lib`) through the same table of Go's
-answers, so it runs only inside this repository. `main.js` is the only file
-that uses Herdr's runtime. Check it with
-`herdr-app check`, which needs Herdr.app installed and is not part of CI.
-Herdr writes `jsconfig.json` and `gpui-kit.d.ts` into a mod folder it loads.
+- `test/main.render.test.js` draws `main.js` against recording stand-ins for
+  Herdr's modules (`test/stubs/`, aliased in `vitest.config.js`). It checks
+  what is asked for (texts, hues, icons, click handlers), not the layout.
+- `test/palette.parity.test.js` reads
+  `tools/irrlicht-design-system/colors_and_type.css` and checks every hue in
+  `lib/palette.js` against it. It also reads `core/domain/session/session.go`
+  and checks that the state maps name every state the daemon declares.
+- `test/address.parity.test.js` runs the Claude Code panel's copy of the
+  address ladder (`platforms/claude-code/lib`) through the same table of Go's
+  answers.
+- The `*.mutation.test.js` files run those contracts against committed broken
+  copies of `lib/` and expect them to fail.
+
+The parity tests read files elsewhere in this repository, so they run only
+here. `main.js` is the only file that uses Herdr's runtime. Check it with
+`herdr-app check`, which needs Herdr.app and is not part of CI. Herdr writes
+`jsconfig.json` and `gpui-kit.d.ts` into a mod folder it loads, and
 `.gitignore` keeps them out of the repository. In one test on Herdr 0.1.16, an
 open panel window kept running the old code after a save in the linked folder.
 Closing and reopening it (`mod.open` twice) loaded the new code.
