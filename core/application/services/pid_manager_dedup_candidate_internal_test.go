@@ -40,7 +40,7 @@ func TestIsDedupDeleteCandidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isDedupDeleteCandidate(tt.victim, tt.pid, tt.winner); got != tt.want {
-				t.Fatalf("isDedupDeleteCandidate(victim=%s pid=%d, pid=%d, winner=%s) = %v, want %v",
+				t.Fatalf("isDedupDeleteCandidate(victim %s on PID %d, pid %d, winner %s) = %v, want %v",
 					tt.victim.SessionID, tt.victim.PID, tt.pid, tt.winner.SessionID, got, tt.want)
 			}
 		})
