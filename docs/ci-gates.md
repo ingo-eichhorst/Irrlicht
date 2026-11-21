@@ -785,7 +785,7 @@ CI parity section (chunking, the budget, and what it makes visible).
   immediately by an explicit emptiness guard that does the work pipefail would.
 
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
-  four independent suites, each with its own `node_modules`:
+  five independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
   - `tools/onboarding-factory/internal/viewer/web/` — the onboarding viewer.
   - `platforms/claude-code/` — the Claude Code panel's `lib/` modules. Its
@@ -804,6 +804,8 @@ CI parity section (chunking, the budget, and what it makes visible).
     runtime: `herdr-app check`, which needs Herdr.app and is not in CI, loads
     it, and `test/main.render.test.js` draws it under vitest against
     recording stand-ins for Herdr's modules (`test/stubs/`).
+  - `platforms/vscode/` — the VS Code extension. `npm test` is unit-only
+    (pure modules); `npm run test:e2e` downloads VS Code and is not in CI.
 
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
 

@@ -156,13 +156,16 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - Web (only when touching a `web/` tree): `npm test` in that tree —
   `platforms/web/` (the dashboard),
   `tools/onboarding-factory/internal/viewer/web/` (the onboarding viewer),
-  `platforms/claude-code/` (the Claude Code panel's `lib/`) and
-  `platforms/herdr/` (the Herdr.app mod's `lib/`) are four independent
+  `platforms/claude-code/` (the Claude Code panel's `lib/`),
+  `platforms/herdr/` (the Herdr.app mod's `lib/`) and
+  `platforms/vscode/` (the VS Code extension) are five independent
   suites, each with its own `node_modules`. Runs `vitest run`.
   **Never `npm install`** (rewrites `package-lock.json`) — use `npm ci`. The
   panel's mod itself is tested by `claude plugin test platforms/claude-code`,
   and the Herdr mod's `main.js` by `herdr-app check`; both need their app's
-  CLI and are not in CI.
+  CLI and are not in CI. The VS Code extension's `npm test` is unit-only;
+  `npm run test:e2e` downloads VS Code into `platforms/vscode/.vscode-test`
+  and runs a local smoke test, not in CI.
 - State vocabulary: `tools/state-vocabulary-lint.sh` (#1804) flags any single
   line naming three-or-more-but-not-all of `session.CanonicalStates()` — the
   hand-typed enumeration that is complete when written and silently stale one

@@ -97,7 +97,7 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | macOS (menu bar app)  | beta    | [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest) |
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after the curl or PKG install; Homebrew and DMG drag-installs: Settings → Advanced Settings → Command-Line Tool → Install Command-Line Tool |
-| VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
+| VS Code extension     | alpha   | sideload the `.vsix` — see [platforms/vscode/README.md](platforms/vscode/README.md) |
 | Linux (**daemon**-only — background service, no menu-bar UI) | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
 | iOS / iPadOS          | planned | —                         |

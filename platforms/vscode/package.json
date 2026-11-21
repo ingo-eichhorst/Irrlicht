@@ -1,0 +1,129 @@
+{
+  "name": "irrlicht-vscode",
+  "displayName": "Irrlicht",
+  "description": "Irrlicht dashboard, session-state status bar and agent terminals for VS Code.",
+  "publisher": "irrlicht",
+  "version": "0.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ingo-eichhorst/Irrlicht.git",
+    "directory": "platforms/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "irrlicht.openPanel",
+        "title": "Open Panel",
+        "category": "Irrlicht"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "irrlicht",
+          "title": "Irrlicht",
+          "icon": "media/irrlicht.svg"
+        }
+      ]
+    },
+    "views": {
+      "irrlicht": [
+        {
+          "type": "webview",
+          "id": "irrlicht.dashboard",
+          "name": "Dashboard"
+        },
+        {
+          "id": "irrlicht.agentTerminals",
+          "name": "Agent Terminals"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Irrlicht",
+      "properties": {
+        "irrlicht.daemonUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7837",
+          "scope": "machine",
+          "description": "URL of the Irrlicht daemon. Only loopback http(s) addresses (127.0.0.0/8, ::1, localhost) are accepted; anything else falls back to the default."
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "irrlicht.state.working",
+        "description": "Irrlicht: working session",
+        "defaults": {
+          "dark": "#8B5CF6",
+          "light": "#6526F3",
+          "highContrast": "#8B5CF6",
+          "highContrastLight": "#6526F3"
+        }
+      },
+      {
+        "id": "irrlicht.state.waiting",
+        "description": "Irrlicht: waiting session",
+        "defaults": {
+          "dark": "#FF9500",
+          "light": "#884F00",
+          "highContrast": "#FF9500",
+          "highContrastLight": "#884F00"
+        }
+      },
+      {
+        "id": "irrlicht.state.ready",
+        "description": "Irrlicht: ready session",
+        "defaults": {
+          "dark": "#34C759",
+          "light": "#207936",
+          "highContrast": "#34C759",
+          "highContrastLight": "#207936"
+        }
+      },
+      {
+        "id": "irrlicht.state.error",
+        "description": "Irrlicht: error session",
+        "defaults": {
+          "dark": "#FF3B30",
+          "light": "#CC0C00",
+          "highContrast": "#FF3B30",
+          "highContrastLight": "#CC0C00"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build && node test/e2e/runTest.mjs",
+    "test:e2e:mutation": "bash test/e2e/frame-src-mutation.sh",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.90.0",
+    "@types/ws": "8.18.2",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0",
+    "ws": "8.22.1"
+  }
+}

@@ -742,6 +742,10 @@ if want web; then
   # canonicalStates its state maps must cover.
   run_gate_scoped '^platforms/herdr/|^platforms/claude-code/lib/(address|format)\.js$|^tools/irrlicht-design-system/colors_and_type\.css$|^core/domain/session/session\.go$' \
                   "web: Herdr mod"                 web_tree platforms/herdr
+  # The VS Code extension: unit tests only (vitest, pure modules). Its e2e
+  # suite downloads VS Code and is run by hand, not here or in CI.
+  run_gate_scoped '^platforms/vscode/' \
+                  "web: platforms/vscode"          web_tree platforms/vscode
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same

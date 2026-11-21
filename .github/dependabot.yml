@@ -34,6 +34,7 @@ updates:
       - /tools/onboarding-factory/internal/viewer/web
       - /platforms/claude-code
       - /platforms/herdr
+      - /platforms/vscode
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -1,0 +1,13 @@
+src/**
+test/**
+node_modules/**
+.vscode-test/**
+out/**
+tsconfig.json
+vitest.config.ts
+esbuild.mjs
+.gitignore
+media/*.webm
+media/*.mp4
+media/*.gif
+**/*.map

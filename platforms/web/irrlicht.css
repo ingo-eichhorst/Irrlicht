@@ -2185,3 +2185,6 @@
       .history-panel { flex-basis: auto; }
       .history-chart-wrap { height: 280px; }
     }
+
+/* VS Code embed (#350): rows are click-to-focus. */
+.embed-vscode .session-row { cursor: pointer; }

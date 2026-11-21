@@ -20,6 +20,59 @@ BUNDLE_ID="io.irrlicht.app"
 PKG_NAME="Irrlicht-${VERSION}-mac-installer.pkg"
 DMG_NAME="Irrlicht-${VERSION}.dmg"
 
+VSIX_NAME="irrlicht-vscode-${VERSION}.vsix"
+
+# ── VS Code extension (.vsix, sideload) ───────────────────────────────
+# Builds from a COPY of platforms/vscode under $BUILD_DIR so that neither
+# `npm ci` (which wipes node_modules) nor the version stamp touches the
+# working tree. The source package.json keeps version 0.0.0; the staged copy
+# gets version.json's version, written with node rather than sed.
+# `npm ci --ignore-scripts` is used (as web-test.yml does): the lockfile's
+# esbuild and @vscode/vsce both work without install-time lifecycle scripts
+# (esbuild ships its binary in a platform package, not a postinstall download),
+# so no dependency script needs to run on the release machine.
+build_vscode_extension() {
+    local src="$ROOT_DIR/platforms/vscode"
+    local staging="$ROOT_DIR/$BUILD_DIR/vscode-staging"
+    local out="$ROOT_DIR/$BUILD_DIR/$VSIX_NAME"
+    local tool
+    for tool in node npm rsync; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: '$tool' not found on PATH; it is required to build the VS Code extension" >&2
+            return 1
+        fi
+    done
+    mkdir -p "$ROOT_DIR/$BUILD_DIR"
+    rm -rf "$staging" "$out"
+    mkdir -p "$staging"
+    rsync -a \
+        --exclude 'node_modules/' --exclude 'dist/' --exclude 'out/' \
+        --exclude '.vscode-test/' --exclude '*.vsix' \
+        --exclude 'media/*.webm' --exclude 'media/*.mp4' --exclude 'media/*.gif' \
+        "$src/" "$staging/" || return 1
+    ( cd "$staging" \
+        && node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version=process.argv[1];fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")' "$VERSION" \
+        && npm ci --ignore-scripts \
+        && npm run package -- --out "$out" ) || {
+        echo "ERROR: VS Code extension build failed" >&2
+        return 1
+    }
+    if [ ! -s "$out" ]; then
+        echo "ERROR: $out was not produced (or is empty)" >&2
+        return 1
+    fi
+    echo "  Created $BUILD_DIR/$VSIX_NAME"
+}
+
+# --vsix-only: build just the extension and exit. Parsed before any other
+# work; with no arguments the script behaves exactly as it always has.
+if [ "${1:-}" = "--vsix-only" ]; then
+    echo "Building VS Code extension v$VERSION"
+    build_vscode_extension || exit 1
+    echo "$ROOT_DIR/$BUILD_DIR/$VSIX_NAME"
+    exit 0
+fi
+
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
 
@@ -662,6 +715,11 @@ productbuild \
 
 echo "  Created $BUILD_DIR/$PKG_NAME"
 
+# ── 6b. VS Code extension (.vsix) ────────────────────────────────────
+echo ""
+echo "Building VS Code extension..."
+build_vscode_extension
+
 # ── 7. Checksums ───────────────────────────────────────────────────────
 echo ""
 echo "Calculating checksums..."
@@ -674,7 +732,8 @@ shasum -a 256 "$DMG_NAME" "$PKG_NAME" \
     ${DAEMON_NAME}-linux-amd64.tar.gz \
     ${DAEMON_NAME}-linux-arm64.tar.gz \
     ${RELAY_NAME}-linux-amd64.tar.gz \
-    ${RELAY_NAME}-linux-arm64.tar.gz > checksums.sha256
+    ${RELAY_NAME}-linux-arm64.tar.gz \
+    "$VSIX_NAME" > checksums.sha256
 cd ..
 
 # ── 8. Summary ─────────────────────────────────────────────────────────
@@ -696,6 +755,9 @@ echo ""
 echo "Linux relay hub (extract anywhere; bin/ + Resources/web/ travel together):"
 echo "  amd64:      $BUILD_DIR/${RELAY_NAME}-linux-amd64.tar.gz"
 echo "  arm64:      $BUILD_DIR/${RELAY_NAME}-linux-arm64.tar.gz"
+echo ""
+echo "VS Code extension (sideload): $BUILD_DIR/$VSIX_NAME"
+echo "  (code --install-extension $VSIX_NAME)"
 echo ""
 echo "Optional:"
 echo "  LaunchAgent: $BUILD_DIR/${BUNDLE_ID}.daemon.plist"
