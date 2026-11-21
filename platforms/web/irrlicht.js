@@ -210,6 +210,41 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         console.debug('irrlicht: failed to show notification', e);
       }
     }
+    // waitingWorkerEdges returns the worker-list slots (#2145) that are
+    // waiting in fresh and were listed, not waiting, in prev. A slot absent
+    // from prev — the first load, a pool or slot that just appeared — is a
+    // first sighting and stays silent, as a session's is. Only type
+    // "workerlist" groups count: Gas Town passes gt's own state strings
+    // through, and those carry no notification contract.
+    function waitingWorkerEdges(prev, fresh) {
+      const before = workerListStates(prev);
+      const edges = [];
+      for (const [key, w] of workerListStates(fresh)) {
+        const was = before.get(key);
+        if (w.state === 'waiting' && was && was.state !== 'waiting') edges.push(w);
+      }
+      return edges;
+    }
+    // workerListStates maps each worker-list slot, keyed by pool, team and
+    // slot name, to its team, name and worker_state.
+    function workerListStates(groups) {
+      const out = new Map();
+      for (const pool of (groups || [])) {
+        if (pool?.type !== 'workerlist') continue;
+        for (const team of (pool.groups || [])) {
+          for (const w of (team.unattached_workers || [])) {
+            out.set(JSON.stringify([pool.name, team.name, w.worker_name]),
+              { team: team.name, worker: w.worker_name, state: w.worker_state });
+          }
+        }
+      }
+      return out;
+    }
+    function notifyWaitingWorkers(prev, fresh) {
+      for (const e of waitingWorkerEdges(prev, fresh)) {
+        tryNotify('notifyOnWaiting', 'Worker waiting for input', e.team + ' \u00B7 ' + e.worker);
+      }
+    }
     function rowLabel(s) {
       // Best-effort "project · branch" label that matches what the row shows.
       const proj = s?.project_name || '';
@@ -1415,7 +1450,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // consumer (theme repaint, history repaint, the Elfdans selection) assumes
     // a session behind the row. The leading hollow circle is a placeholder in
     // the state-icon column, not a session state; the worker's own state is
-    // neutral text at the end.
+    // neutral text at the end — except a worker-list slot waiting for a person
+    // (#2145), whose dot fills and takes the waiting colour (updateWorkerRow).
     function createWorkerRow(worker, depth) {
       const el = document.createElement('div');
       el.className = 'worker-row';
@@ -1442,6 +1478,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
       setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
       setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
+      const waiting = worker.worker_state === 'waiting';
+      el.classList.toggle('waiting', waiting);
+      const glyph = el.querySelector('.worker-row-glyph');
+      setIfChanged(glyph, 'textContent', waiting ? '\u25CF' : '\u25CB');
+      setIfChanged(glyph, 'title', waiting ? 'Waiting for input' : 'No session');
       setWorkerIndications(el, worker);
     }
 
@@ -2002,6 +2043,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // Normalized first: the daemon omits an empty `agents` (omitempty), so a
     // same-named orchestrator group would otherwise have nothing to push onto.
     function adoptLocalTree(fresh) {
+      notifyWaitingWorkers(dashboardGroups, fresh);
       const carried = remoteRootSessions(dashboardGroups);
       dashboardGroups = fresh;
       normalizeGroupAgents(dashboardGroups);

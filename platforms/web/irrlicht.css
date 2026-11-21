@@ -1300,6 +1300,11 @@
     .worker-row-glyph { width: 12px; flex-shrink: 0; text-align: center; }
     .worker-row-icon { flex-shrink: 0; }
     .worker-row-state { font-size: 9px; flex-shrink: 0; white-space: nowrap; }
+    /* A worker-list slot waiting for a person (#2145): the one worker state
+       painted like a session's — filled dot and state text in the waiting
+       colour. */
+    .worker-row.waiting .worker-row-glyph,
+    .worker-row.waiting .worker-row-state { color: var(--waiting); }
     /* A worker's row-only indications (#2148): "stale" on the amber wash and
        "failed · exit N" on the red one — the token pairs .row-confidence and
        .row-error already use, whose contrast irrlicht.confidence.test.js and
