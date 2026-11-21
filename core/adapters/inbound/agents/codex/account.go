@@ -71,6 +71,10 @@ func authPathFor(transcriptPath string) string {
 	return filepath.Join(filepath.Dir(dir), "auth.json")
 }
 
+// Provider implements outbound.SessionAccountReader: Codex's auth.json
+// login is an OpenAI account.
+func (r *AccountReader) Provider() string { return session.ProviderOpenAI }
+
 // ReadHomeAccount implements outbound.SessionAccountReader. A chatgpt-mode
 // auth.json yields tokens.account_id; any other mode is ok with Ref "" (an
 // API-key home has no account).

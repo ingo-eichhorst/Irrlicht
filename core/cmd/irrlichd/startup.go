@@ -985,9 +985,15 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// point as launcher capture, gated on its OWN permission (#2002) — never
 	// the launcher grant above, and never read at all while denied.
 	// ObserveRoute itself distinguishes denied from every other outcome, so
-	// the closure only has to forward the current grant state.
-	detector.SetRouteReader(func(pid int) *session.RouteObservation {
+	// the closure only has to forward the current grant state. A Claude Code
+	// session resolves the URL from its settings files before its env
+	// (#2010); every other adapter keeps the env-only read — those files are
+	// Claude Code's and say nothing about another agent's route.
+	detector.SetRouteReader(func(pid int, adapter, cwd string) *session.RouteObservation {
 		granted := permService.Granted(processlifecycle.EndpointName, processlifecycle.PermissionKeyEndpointEnv)
+		if adapter == claudecode.AdapterName {
+			return processlifecycle.ObserveClaudeCodeRoute(pid, cwd, granted)
+		}
 		return processlifecycle.ObserveRoute(pid, granted)
 	})
 	// Let a pi session tell us which herdr pane it is in, for the reader
