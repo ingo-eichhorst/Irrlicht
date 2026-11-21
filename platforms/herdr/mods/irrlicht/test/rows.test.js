@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { OTHER_GROUP_KEY, countText, headerSummary, panelLayout, rememberGroups } from '../lib/layout.js';
 import * as layoutModule from '../lib/layout.js';
-import { PRESSURE_ALERT_PERCENT, rowNotes } from '../lib/notes.js';
+import { rowNotes } from '../lib/notes.js';
 import { BRAND } from '../lib/palette.js';
 import * as rowsModule from '../lib/rows.js';
 import { readSessions } from '../lib/sessions.js';
-import { signatureFollowsEveryDrawnField } from './contracts.js';
+import {
+  focusFollowsTheDrawnOrder, gastownGroupsAreMarked, pressureAlertFiresAtEighty, signatureFollowsEveryDrawnField, tooltipNamesTheBranch,
+} from './contracts.js';
 import { CLAUDE_SESSION, LIVE_AGENTS, LIVE_TERMINALS, livePayload } from './fixtures.js';
 
 const { focusAddress, panelRows, shortModelName, signature } = rowsModule;
@@ -37,6 +39,10 @@ describe('panelRows', () => {
     const [row] = panelRows([remote], [remoteTerminal], readSessions(livePayload()));
     expect(row.matched).toBe(false);
     expect(row.tooltip).toMatch(/on another machine: Irrlicht reads this machine's sessions only$/);
+  });
+
+  test('the tooltip names the session\'s branch', () => {
+    tooltipNamesTheBranch(rowsModule);
   });
 
   test('a session state this panel cannot read is unknown, never a guess', () => {
@@ -111,6 +117,10 @@ describe('panelLayout', () => {
     expect(laid(rowsSwapped, gone.remembered).groups.map((g) => g.name)).toEqual(['codex', 'claude']);
   });
 
+  test('a Gas Town group is marked as one, a project\'s group is not', () => {
+    gastownGroupsAreMarked(rowsModule, layoutModule);
+  });
+
   test('the header summary is up to three state icons, else a count', () => {
     expect(headerSummary(laid(live(), []))).toEqual({ states: ['ready', 'waiting'], text: '' });
     const many = [...LIVE_AGENTS, ...LIVE_AGENTS].map((a, i) => ({ ...a, address: `t${i + 10}` }));
@@ -162,9 +172,13 @@ describe('rowNotes', () => {
     expect(rowNotes(facts({ state: 'ready', questionHeadline: 'Ship it?' }))).toEqual([]);
   });
 
+  test('the alert fires at 80%, the Swift app\'s default threshold', () => {
+    pressureAlertFiresAtEighty(rowNotes);
+  });
+
   test('a session still going at 80% or more is told to switch; a finished one is not', () => {
     const alert = (state, percent) => rowNotes(facts({ state, percent })).map((n) => n.kind);
-    expect(alert('working', PRESSURE_ALERT_PERCENT)).toEqual(['pressure']);
+    expect(alert('working', 80)).toEqual(['pressure']);
     expect(alert('waiting', 95)).toEqual(['pressure']);
     expect(alert('working', 79.9)).toEqual([]);
     expect(alert('ready', 95)).toEqual([]);
@@ -189,10 +203,7 @@ describe('signature', () => {
 
 describe('focusAddress', () => {
   test('"focus-<n>" names row n as drawn, counting from 1, not agent n in Herdr\'s order', () => {
-    const rows = laid(live(), []).rows;
-    // Herdr lists t3 first; the panel draws the codex group (t4) first.
-    expect(focusAddress('focus-1', rows)).toBe('t4');
-    expect(focusAddress('focus-2', rows)).toBe('t3');
+    focusFollowsTheDrawnOrder(rowsModule, layoutModule);
   });
 
   test('a row that does not exist, or another command, names nothing', () => {

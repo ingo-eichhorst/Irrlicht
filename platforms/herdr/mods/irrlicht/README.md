@@ -190,7 +190,7 @@ cd platforms/herdr && npm ci --ignore-scripts && npm test
   address ladder (`platforms/claude-code/lib`) through the same table of Go's
   answers.
 - The `*.mutation.test.js` files run those contracts against committed broken
-  copies of `lib/` and expect them to fail.
+  copies of `lib/` and `main.js` and expect them to fail.
 
 The parity tests read files elsewhere in this repository, so they run only
 here. `main.js` is the only file that uses Herdr's runtime. Check it with

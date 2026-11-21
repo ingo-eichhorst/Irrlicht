@@ -104,47 +104,112 @@ export function stallIsReportedOnceAfterStallMs(stallStateFn, stallMs) {
   expect(stallStateFn({ phase: 'stalled', where: 'localhost:7843' }, 0, 10 * stallMs)).toBeNull();
 }
 
-// Every daemon field a row or a group header draws moves the signature, so a
-// poll that changes one redraws the panel; a session no row shows does not.
-// `rows` is lib/rows.js (signature, panelRows) and `layout` lib/layout.js
-// (panelLayout), or committed mutants of them.
-export function signatureFollowsEveryDrawnField(rows, layout) {
-  const sig = (payload) => {
-    const sessions = readSessions(payload);
-    const state = { phase: 'ok', where: 'localhost:7837', sessions };
-    return rows.signature(state, layout.panelLayout(rows.panelRows(LIVE_AGENTS, LIVE_TERMINALS, sessions), []));
-  };
-  // The Claude Code session (group 1 of the live payload), changed by `edit`.
-  const claude = (edit) => {
-    const p = livePayload();
-    p.groups[1].agents[0] = edit(p.groups[1].agents[0]);
-    return sig(p);
-  };
+// The layout and rows of the live run's agents for `payload`, built by the
+// modules under test: `rows` is lib/rows.js and `layout` lib/layout.js, or
+// committed mutants of them.
+function laidOut(rows, layout, payload) {
+  const sessions = readSessions(payload);
+  return layout.panelLayout(rows.panelRows(LIVE_AGENTS, LIVE_TERMINALS, sessions), []);
+}
+
+// The live payload with the Claude Code session (group 1) changed by `edit`.
+function claudeEdited(edit) {
+  const p = livePayload();
+  p.groups[1].agents[0] = edit(p.groups[1].agents[0]);
+  return p;
+}
+
+// signatureMisses lists every daemon field whose change leaves the signature
+// as it was, so a poll that changes it would not redraw. Each case changes
+// one field of the Claude Code session or its group; the error cases compare
+// two failed sessions. The pressure alert is not a field of its own: it is
+// derived from the state and the fill, which are both cases here.
+export function signatureMisses(rows, layout) {
+  const sig = (payload) => rows.signature({ phase: 'ok', where: 'localhost:7837' }, laidOut(rows, layout, payload));
+  const claude = (edit) => sig(claudeEdited(edit));
   const metrics = (fields) => claude((s) => ({ ...s, metrics: { ...s.metrics, ...fields } }));
   const failed = (fields) => claude((s) => ({ ...s, state: 'error', metrics: { ...s.metrics, ...fields } }));
-  const renamed = livePayload();
-  renamed.groups[1].name = 'claude-renamed';
+  const group = (fields) => {
+    const p = livePayload();
+    p.groups[1] = { ...p.groups[1], ...fields };
+    return sig(p);
+  };
   const swapped = livePayload();
   swapped.groups.reverse();
   const base = sig(livePayload());
-  const moved = {
-    state: claude((s) => ({ ...s, state: 'working' })),
-    model: metrics({ model_name: 'claude-sonnet-5-1' }),
-    percent: metrics({ context_utilization_percentage: 7.5 }),
-    pressure: metrics({ pressure_level: 'caution' }),
-    tokens: metrics({ total_tokens: 99000 }),
-    subagents: claude((s) => ({ ...s, subagents: { total: 1, working: 1, waiting: 0, ready: 0, error: 0 } })),
-    question: metrics({ question_headline: 'Run the migration?' }),
-    'group name': sig(renamed),
-    'group order': sig(swapped),
-  };
-  for (const [field, got] of Object.entries(moved)) expect(got, `a change of ${field} must move the signature`).not.toBe(base);
-  expect(failed({ session_error: { message: 'quota' } }), 'the error line\'s text must move the signature')
-    .not.toBe(failed({}));
+  const failedBase = failed({});
+  const cases = [
+    ['state', claude((s) => ({ ...s, state: 'working' })), base],
+    ['model', metrics({ model_name: 'claude-sonnet-5-1' }), base],
+    ['percent', metrics({ context_utilization_percentage: 7.5 }), base],
+    ['pressure', metrics({ pressure_level: 'caution' }), base],
+    ['tokens', metrics({ total_tokens: 99000 }), base],
+    ['subagents', claude((s) => ({ ...s, subagents: { total: 1, working: 1, waiting: 0, ready: 0, error: 0 } })), base],
+    ['branch', claude((s) => ({ ...s, git_branch: 'main' })), base],
+    ['question', metrics({ question_headline: 'Run the migration?' }), base],
+    ['last assistant text', metrics({ last_assistant_text: 'Shall I run the migration now?' }), base],
+    ['error message', failed({ session_error: { message: 'Invalid API key' } }), failedBase],
+    ['error class', failed({ session_error: { class: 'quota' } }), failedBase],
+    ['group name', group({ name: 'claude-renamed' }), base],
+    ['gastown', group({ type: 'gastown' }), base],
+    ['group order', sig(swapped), base],
+  ];
+  return cases.filter(([, changed, reference]) => changed === reference).map(([field]) => field);
+}
+
+// Every daemon field a row or a group header draws moves the signature, and a
+// session no row shows does not.
+export function signatureFollowsEveryDrawnField(rows, layout) {
+  expect(signatureMisses(rows, layout), 'fields whose change does not move the signature').toEqual([]);
+  const sig = (payload) => rows.signature({ phase: 'ok', where: 'localhost:7837' }, laidOut(rows, layout, payload));
   // The session outside Herdr (group 2) is in no row.
   const outside = livePayload();
   outside.groups[2].agents[0] = { ...outside.groups[2].agents[0], metrics: { context_utilization_percentage: 55, pressure_level: 'safe' } };
-  expect(sig(outside)).toBe(base);
+  expect(sig(outside), 'a session no row shows must not move the signature').toBe(sig(livePayload()));
+}
+
+// `focus-<n>` names row n as drawn: on the live run the codex group comes
+// first, so focus-1 is Codex's terminal (t4), although Herdr lists t3 first.
+export function focusFollowsTheDrawnOrder(rows, layout) {
+  const drawn = laidOut(rows, layout, livePayload()).rows;
+  expect(['focus-1', 'focus-2', 'focus-3'].map((c) => rows.focusAddress(c, drawn)), 'the agents focus-1..3 name').toEqual(['t4', 't3', null]);
+}
+
+// A Gas Town group is marked as one in the layout (GroupView.swift:80-83
+// draws its ⛽), and a project's group is not.
+export function gastownGroupsAreMarked(rows, layout) {
+  const payload = livePayload();
+  payload.groups[1] = { ...payload.groups[1], name: 'gastown', type: 'gastown' };
+  const marks = laidOut(rows, layout, payload).groups.map((g) => [g.name, g.gastown]);
+  expect(marks, 'which groups are marked Gas Town').toEqual([['codex', false], ['gastown', true]]);
+}
+
+// The row's tooltip names the session's git branch, which the Swift row draws
+// as a column (SessionRowView.swift:394-400) and this one has no room for.
+export function tooltipNamesTheBranch(rows) {
+  const payload = claudeEdited((s) => ({ ...s, git_branch: 'feat/x' }));
+  const [claude] = rows.panelRows(LIVE_AGENTS, LIVE_TERMINALS, readSessions(payload));
+  expect(claude.tooltip, 'the tooltip of a session on a branch').toContain(' · branch feat/x · ');
+}
+
+// The pressure alert fires at the Swift app's default threshold, 80%
+// (ContextPressureThreshold.swift:16), written here as the number rather than
+// read from the module under test, so a changed constant cannot pass.
+export function pressureAlertFiresAtEighty(rowNotes) {
+  const alerts = (percent) => rowNotes({ state: 'working', percent }).filter((n) => n.kind === 'pressure').length;
+  expect([alerts(79.9), alerts(80)], 'pressure alerts at 79.9% and at 80%').toEqual([0, 1]);
+}
+
+// Each state's hue is its own design-system token: the four states' tokens,
+// and the grey of --cancelled for a state this panel cannot read.
+export function stateHuesAreTheirTokens(stateHue, brand) {
+  expect(stateHue, 'the state hues').toEqual({
+    working: brand.working,
+    waiting: brand.waiting,
+    ready: brand.ready,
+    error: brand.error,
+    unknown: brand.cancelled,
+  });
 }
 
 // The repository around this mod, for the checks that read its other files.
@@ -214,5 +279,5 @@ export function canonicalStates(goSource) {
 // `unknown`, the fallback for a state this panel cannot read.
 export function coversCanonicalStates(map, goSource) {
   const sorted = (names) => names.sort((a, b) => a.localeCompare(b));
-  expect(sorted(Object.keys(map))).toEqual(sorted([...canonicalStates(goSource), 'unknown']));
+  expect(sorted(Object.keys(map)), 'the map is keyed by the daemon\'s states plus unknown').toEqual(sorted([...canonicalStates(goSource), 'unknown']));
 }

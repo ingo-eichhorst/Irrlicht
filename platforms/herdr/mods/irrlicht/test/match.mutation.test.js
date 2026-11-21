@@ -10,7 +10,7 @@ import {
 import { mutantLoader } from './mutant.js';
 
 const load = mutantLoader('irrlicht-herdr-mutant-');
-const loadMutant = (name, anchor, replacement) => load(name, 'match.js', anchor, replacement);
+const loadMutant = (name, anchor, replacement) => load(name, 'lib/match.js', anchor, replacement);
 
 describe('committed mutants of the matching rules', () => {
   test('dropping the uniqueness check lets an ambiguous pair trade numbers', async () => {

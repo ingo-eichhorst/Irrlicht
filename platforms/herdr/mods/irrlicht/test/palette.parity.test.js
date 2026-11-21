@@ -14,7 +14,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { BRAND, connectionHue, pressureHue, track, wash, withAlpha } from '../lib/palette.js';
 import { STATE_HUE, STATE_LABEL, herdrState, irrlichtState } from '../lib/states.js';
-import { DESIGN_CSS, SESSION_GO, brandMatchesCss, canonicalStates, coversCanonicalStates, cssTokens } from './contracts.js';
+import {
+  DESIGN_CSS, SESSION_GO, brandMatchesCss, canonicalStates, coversCanonicalStates, cssTokens, stateHuesAreTheirTokens,
+} from './contracts.js';
 
 const css = readFileSync(DESIGN_CSS, 'utf8');
 const go = readFileSync(SESSION_GO, 'utf8');
@@ -49,6 +51,10 @@ describe('the state maps against the daemon\'s vocabulary', () => {
   test('every daemon state, and unknown, has a hue and a label', () => {
     coversCanonicalStates(STATE_HUE, go);
     coversCanonicalStates(STATE_LABEL, go);
+  });
+
+  test('each state\'s hue is its own token, an unreadable state\'s the grey of --cancelled', () => {
+    stateHuesAreTheirTokens(STATE_HUE, BRAND);
   });
 
   test('the unknown state takes the grey of --cancelled, never a state\'s hue', () => {

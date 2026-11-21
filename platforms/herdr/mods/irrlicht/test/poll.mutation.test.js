@@ -8,7 +8,7 @@ import { HOME_ADDR, livePayload, world } from './fixtures.js';
 import { mutantLoader } from './mutant.js';
 
 const load = mutantLoader('irrlicht-herdr-poll-mutant-');
-const loadMutant = (name, anchor, replacement) => load(name, 'poll.js', anchor, replacement);
+const loadMutant = (name, anchor, replacement) => load(name, 'lib/poll.js', anchor, replacement);
 
 // A daemon that answered once and then stopped, polled every 3 s for 27 s:
 // the address may be looked up again once (the poll after the first

@@ -8,70 +8,29 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import Irrlicht from '../main.js';
 import { BRAND, track, wash } from '../lib/palette.js';
-import { readSessions } from '../lib/sessions.js';
 import { world } from './stubs/herdr.js';
-import { CLAUDE_SESSION, LIVE_AGENTS, LIVE_TERMINALS, livePayload } from './fixtures.js';
+import { CLAUDE_SESSION, livePayload } from './fixtures.js';
+import {
+  THEME, arg, byId, call, draw, errorRowIsRed, gastownGroupIsMarked, kids, ok, resetWorld, svgs, texts,
+  unknownRowIsGrey, walk,
+} from './render.js';
 
-// A dark theme as Herdr reports one: the six-digit colours main.js reads.
-const THEME = {
-  chrome: '#1b1d23', foreground: '#abb2bf', muted: '#8a909c', dim: '#5c6370',
-  border: '#2c313a', hover: '#2c313a', selected: '#323844',
-};
+const panel = (state) => draw(Irrlicht, state);
 
-const kids = (node) => (node && typeof node === 'object' ? node.kids : []);
+beforeEach(resetWorld);
 
-function walk(node, visit) {
-  if (!node || typeof node !== 'object') return;
-  visit(node);
-  for (const c of kids(node)) walk(c, visit);
-}
-
-// texts is every string child under `node`, in drawing order.
-function texts(node) {
-  const out = [];
-  const go = (n) => {
-    if (typeof n === 'string') out.push(n);
-    for (const c of kids(n)) go(c);
-  };
-  go(node);
-  return out;
-}
-
-const call = (node, name) => node.calls.find((c) => c[0] === name);
-const arg = (node, name) => call(node, name)?.[1];
-
-function byId(root, id) {
-  let found = null;
-  walk(root, (n) => {
-    if (arg(n, 'id') === id) found = found || n;
+describe('the drawn panel, rows in every state', () => {
+  test('a failed session\'s row is red: the disc-mark glyph and the error line', () => {
+    errorRowIsRed(Irrlicht);
   });
-  expect(found, `no element with id ${id}`).not.toBeNull();
-  return found;
-}
 
-// svgs is every icon file drawn under `node`, with its tint.
-function svgs(node) {
-  const out = [];
-  walk(node, (n) => {
-    if (n.kind === 'svg') out.push([n.arg, arg(n, 'text_color')]);
+  test('a state the panel cannot read is the grey question ring, never green', () => {
+    unknownRowIsGrey(Irrlicht);
   });
-  return out;
-}
 
-function panel(state) {
-  const view = new Irrlicht();
-  view.init({}, { timer: { every() {} }, spawn() {} });
-  if (state) view.state = state;
-  return view;
-}
-
-const ok = (payload = livePayload()) => ({ phase: 'ok', where: 'localhost:7837', sessions: readSessions(payload) });
-
-beforeEach(() => {
-  world.agents = LIVE_AGENTS;
-  world.terminals = LIVE_TERMINALS;
-  world.theme = THEME;
-  world.ran = [];
+  test('a Gas Town group\'s header carries its mark', () => {
+    gastownGroupIsMarked(Irrlicht);
+  });
 });
 
 describe('the drawn panel, daemon answering', () => {
