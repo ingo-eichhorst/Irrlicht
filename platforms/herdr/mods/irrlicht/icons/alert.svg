@@ -1,0 +1,6 @@
+<!-- The warning triangle the Swift row puts before its error line and pressure alert (SF Symbol exclamationmark.triangle). Tinted by gpui. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 2.3 14.6 13.6H1.4Z"/>
+  <path d="M8 6.5v3.2"/>
+  <circle cx="8" cy="11.7" r="0.9" fill="#000" stroke="none"/>
+</svg>

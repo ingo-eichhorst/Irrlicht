@@ -115,7 +115,7 @@ fi
 # enumerates them the way go.work enumerates modules — so this list stays
 # hand-maintained. tools/lib/module-list_test.sh holds both it and GO_MODULES
 # against .github/dependabot.yml.
-WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web platforms/claude-code)
+WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web platforms/claude-code platforms/herdr)
 
 FAILED=0
 fail() { local msg="$1"; echo "FAIL: $msg" >&2; FAILED=1; return 0; }

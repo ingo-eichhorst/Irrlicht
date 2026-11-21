@@ -349,7 +349,8 @@ This checks, across every module in `go.work` and every web tree:
 - `gosec` — High-severity + High-confidence findings are blocking; lower
   severity/confidence findings are logged for visibility
 - `npm audit --audit-level=high` in `platforms/web`,
-  `tools/onboarding-factory/internal/viewer/web` and `platforms/claude-code`
+  `tools/onboarding-factory/internal/viewer/web`, `platforms/claude-code` and
+  `platforms/herdr`
 
 **Abort the release on any non-zero exit.** The script names the failing
 tool, the specific finding (alert URL, OSV/CVE id, or gosec rule), and a
