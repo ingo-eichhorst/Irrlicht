@@ -2868,7 +2868,20 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 //     that direction is, again, the presession-sweep family's — confirmed via
 //     TestHandlePIDAssigned_PresessionNeverEvictsRealSession, which stays
 //     green under this extraction.
+//   - A pid <= 0 selects no victim (issue #2157): PID 0 means "no PID found
+//     yet", not a PID two sessions share. Of the three paths, only the
+//     periodic sweep reaches here with one — HandlePIDAssigned returns early
+//     for pid <= 0 and seedAlivePIDs tracks only state.PID > 0, while
+//     snapshotPeriodicPIDVictims tracks every row — and before this guard it
+//     deleted every PID-0 root but the newest. PID-0 rows keep their own
+//     cleanup: the liveness sweep's TTL branch, isOrphanAtSeed and
+//     reapStaleChild. TestIsDedupDeleteCandidate and
+//     TestCheckPIDLiveness_PeriodicDedup_PIDZeroRootsAreNotDuplicates were
+//     seen red without it.
 func isDedupDeleteCandidate(victim *session.SessionState, pid int, winner *session.SessionState) bool {
+	if pid <= 0 {
+		return false
+	}
 	if victim.PID != pid || victim.SessionID == winner.SessionID {
 		return false
 	}
