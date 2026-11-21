@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "pane_id": "w2:p1",
+  "sampled_at": "2026-11-21T12:00:00Z",
+  "sessions": [
+    {
+      "session_id": "oc-parent",
+      "adapter": "opencode",
+      "model": "qwen",
+      "tokens": {
+        "input": null,
+        "output": null,
+        "cache_read": null,
+        "cache_write": null
+      },
+      "cost": {
+        "usd": null,
+        "pricing_source": null
+      },
+      "elapsed_seconds": 30,
+      "active_seconds": null,
+      "subagents": [
+        {
+          "session_id": "oc-child",
+          "tokens": {
+            "input": 500,
+            "output": 40,
+            "cache_read": 0,
+            "cache_write": 0
+          },
+          "cost": {
+            "usd": 0.01,
+            "pricing_source": "provider-reported"
+          }
+        }
+      ],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "cost.usd": "the opencode adapter has not established that a parent's counts exclude its listed subagents",
+        "rate_limit": "no rate-limit snapshot observed for this session",
+        "tokens.cache_read": "the opencode adapter has not established that a parent's counts exclude its listed subagents",
+        "tokens.cache_write": "the opencode adapter has not established that a parent's counts exclude its listed subagents",
+        "tokens.input": "the opencode adapter has not established that a parent's counts exclude its listed subagents",
+        "tokens.output": "the opencode adapter has not established that a parent's counts exclude its listed subagents"
+      }
+    }
+  ]
+}

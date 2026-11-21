@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "pane_id": "w1:p1",
+  "sampled_at": "2026-11-21T12:00:00Z",
+  "sessions": [
+    {
+      "session_id": "cc-parent",
+      "adapter": "claude-code",
+      "model": "claude-opus-4-6",
+      "tokens": {
+        "input": 1200,
+        "output": 340,
+        "cache_read": 50000,
+        "cache_write": 4000
+      },
+      "cost": {
+        "usd": 0.42,
+        "pricing_source": "litellm@2026-11-20"
+      },
+      "elapsed_seconds": 180,
+      "active_seconds": null,
+      "subagents": [
+        {
+          "session_id": "cc-child-a",
+          "tokens": {
+            "input": 1,
+            "output": 2,
+            "cache_read": 30,
+            "cache_write": 4
+          },
+          "cost": {
+            "usd": 0.001,
+            "pricing_source": "litellm@2026-11-20"
+          }
+        },
+        {
+          "session_id": "cc-child-b",
+          "tokens": {
+            "input": 10,
+            "output": 20,
+            "cache_read": 300,
+            "cache_write": 40
+          },
+          "cost": {
+            "usd": 0.01,
+            "pricing_source": "litellm@2026-11-20"
+          }
+        }
+      ],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "rate_limit": "no rate-limit snapshot observed for this session"
+      }
+    }
+  ]
+}

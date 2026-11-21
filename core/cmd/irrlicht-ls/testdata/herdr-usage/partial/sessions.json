@@ -1,0 +1,176 @@
+{
+  "groups": [
+    {
+      "name": "demo",
+      "agents": [
+        {
+          "version": 1,
+          "session_id": "cc-unpriced",
+          "state": "working",
+          "adapter": "claude-code",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000040,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 180,
+            "total_tokens": 60000,
+            "model_name": "local-gemma",
+            "context_utilization_percentage": 12.5,
+            "pressure_level": "safe",
+            "estimated_cost_usd": 0.0,
+            "cum_input_tokens": 1200,
+            "cum_output_tokens": 340,
+            "cum_cache_read_tokens": 50000,
+            "cum_cache_creation_tokens": 4000,
+            "pricing_source": "",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ],
+              "excludes_subagents": true
+            },
+            "last_assistant_text": "prompt text that must never reach the usage document",
+            "unpriced_models": [
+              "local-gemma"
+            ]
+          }
+        },
+        {
+          "version": 1,
+          "session_id": "pi-provider-cost",
+          "state": "working",
+          "adapter": "pi",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000030,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 90,
+            "model_name": "gpt-5",
+            "estimated_cost_usd": 0.031,
+            "cum_input_tokens": 40,
+            "cum_output_tokens": 5,
+            "pricing_source": "provider-reported",
+            "tokens_unobserved": true,
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ]
+            }
+          }
+        },
+        {
+          "version": 1,
+          "session_id": "aider-no-cache",
+          "state": "working",
+          "adapter": "aider",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000020,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 60,
+            "model_name": "gpt-4.1-mini",
+            "estimated_cost_usd": 0.002,
+            "cum_input_tokens": 771,
+            "cum_output_tokens": 12,
+            "pricing_source": "litellm@2026-11-20",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output"
+              ]
+            }
+          }
+        },
+        {
+          "version": 1,
+          "session_id": "codex-undeclared",
+          "state": "working",
+          "adapter": "codex",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000010,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 0,
+            "model_name": "unknown",
+            "estimated_cost_usd": 0.45,
+            "cum_input_tokens": 90822,
+            "cum_output_tokens": 800,
+            "pricing_source": "litellm@2026-11-20"
+          }
+        },
+        {
+          "version": 1,
+          "session_id": "junie-just-started",
+          "state": "working",
+          "adapter": "junie",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000000,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 0,
+            "model_name": "unknown",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

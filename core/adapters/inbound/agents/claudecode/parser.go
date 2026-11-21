@@ -1214,13 +1214,13 @@ func isClaudeCodeMessageEvent(eventType string) bool {
 // cache_creation.ephemeral_5m/1h_input_tokens pair (or its flat
 // cache_creation_input_tokens fallback) as cache_write.
 //
-// Subagents: findUsageMap reads only raw.usage, message.usage and
-// response.usage, never the toolUseResult.usage summary the parent transcript
-// carries for a finished Agent call, and each subagent writes its own
-// subagents/agent-*.jsonl transcript that is a separate session. Checked on
-// the 3-1_foreground-subagent recording (2026-09-06-23-53-54): its parent
-// golden's cumulative counts omit the toolUseResult.usage on line 26, and
-// TestUsageCoverage_ParentIgnoresSubagentUsageSummary pins it.
+// Subagents: each subagent writes its own subagents/agent-*.jsonl transcript,
+// a separate session. The parent transcript carries a finished Agent call's
+// toolUseResult.usage summary, and the parent does not count it: that line has
+// no requestId, which applyRequestIDContribution requires, and findUsageMap
+// does not read toolUseResult. TestUsageCoverage_ParentIgnoresSubagentUsageSummary
+// pins this on the 3-1_foreground-subagent recording (2026-09-06-23-53-54),
+// whose line 26 carries such a summary.
 func usageCoverage() *session.UsageCoverage {
 	return &session.UsageCoverage{
 		TokenTypes: []session.TokenType{

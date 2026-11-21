@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "pane_id": "w1:p1",
+  "sampled_at": "2026-11-21T12:00:00Z",
+  "sessions": [
+    {
+      "session_id": "cc-unpriced",
+      "adapter": "claude-code",
+      "model": "local-gemma",
+      "tokens": {
+        "input": 1200,
+        "output": 340,
+        "cache_read": 50000,
+        "cache_write": 4000
+      },
+      "cost": {
+        "usd": null,
+        "pricing_source": null
+      },
+      "elapsed_seconds": 180,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "cost.usd": "no price known for local-gemma",
+        "rate_limit": "no rate-limit snapshot observed for this session"
+      }
+    },
+    {
+      "session_id": "pi-provider-cost",
+      "adapter": "pi",
+      "model": "gpt-5",
+      "tokens": {
+        "input": null,
+        "output": null,
+        "cache_read": null,
+        "cache_write": null
+      },
+      "cost": {
+        "usd": 0.031,
+        "pricing_source": "provider-reported"
+      },
+      "elapsed_seconds": 90,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "rate_limit": "no rate-limit snapshot observed for this session",
+        "tokens.cache_read": "some turns reported only a provider cost, and their tokens were not counted",
+        "tokens.cache_write": "some turns reported only a provider cost, and their tokens were not counted",
+        "tokens.input": "some turns reported only a provider cost, and their tokens were not counted",
+        "tokens.output": "some turns reported only a provider cost, and their tokens were not counted"
+      }
+    },
+    {
+      "session_id": "aider-no-cache",
+      "adapter": "aider",
+      "model": "gpt-4.1-mini",
+      "tokens": {
+        "input": 771,
+        "output": 12,
+        "cache_read": null,
+        "cache_write": null
+      },
+      "cost": {
+        "usd": null,
+        "pricing_source": null
+      },
+      "elapsed_seconds": 60,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "cost.usd": "priced from only the token types the aider adapter reads",
+        "rate_limit": "no rate-limit snapshot observed for this session",
+        "tokens.cache_read": "the aider adapter does not read cache_read tokens from the agent's usage record",
+        "tokens.cache_write": "the aider adapter does not read cache_write tokens from the agent's usage record"
+      }
+    },
+    {
+      "session_id": "codex-undeclared",
+      "adapter": "codex",
+      "model": null,
+      "tokens": {
+        "input": null,
+        "output": null,
+        "cache_read": null,
+        "cache_write": null
+      },
+      "cost": {
+        "usd": null,
+        "pricing_source": null
+      },
+      "elapsed_seconds": null,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "cost.usd": "priced from token counts the codex adapter does not declare",
+        "elapsed_seconds": "the observed events span less than a second so far",
+        "model": "no model name observed",
+        "rate_limit": "no rate-limit snapshot observed for this session",
+        "tokens.cache_read": "the codex adapter does not declare which token types it counts",
+        "tokens.cache_write": "the codex adapter does not declare which token types it counts",
+        "tokens.input": "the codex adapter does not declare which token types it counts",
+        "tokens.output": "the codex adapter does not declare which token types it counts"
+      }
+    },
+    {
+      "session_id": "junie-just-started",
+      "adapter": "junie",
+      "model": null,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "usd": 0,
+        "pricing_source": null
+      },
+      "elapsed_seconds": null,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "elapsed_seconds": "the observed events span less than a second so far",
+        "model": "no model name observed",
+        "rate_limit": "no rate-limit snapshot observed for this session"
+      }
+    }
+  ]
+}
