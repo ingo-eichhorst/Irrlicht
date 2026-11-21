@@ -6,10 +6,6 @@ import SwiftUI
 struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
-    /// The orchestrator type of the top-level group this one sits in (only a
-    /// top-level group carries `type`), passed down to sub-groups so a worker
-    /// row knows whether it belongs to a worker list (#2145).
-    var poolType: String? = nil
     @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
@@ -156,13 +152,12 @@ struct GroupView: View {
 
                 // Free orchestrator workers (#2140), after the session rows.
                 ForEach(group.unattachedWorkers ?? []) { worker in
-                    UnattachedWorkerRowView(worker: worker,
-                                            paintsWaiting: UnattachedWorkerRowView.paintsWaiting(worker, inPoolOfType: poolType ?? group.type))
+                    UnattachedWorkerRowView(worker: worker)
                         .padding(.leading, isTopLevel ? 8 : 16)
                 }
 
                 ForEach(group.groups ?? [], id: \.name) { subGroup in
-                    GroupView(group: subGroup, depth: depth + 1, poolType: poolType ?? group.type)
+                    GroupView(group: subGroup, depth: depth + 1)
                 }
             }
         }
@@ -191,33 +186,24 @@ struct GroupView: View {
 /// Deliberately not a `SessionRowView` — there is no session behind it, so it
 /// has no session state icon, no click-to-focus, and it never reaches
 /// `sessionMap` or the menu bar. The one exception to "no session state" is a
-/// worker-list slot waiting for a person (#2145): `paintsWaiting` fills its dot
-/// in the waiting colour, and `installLocalGroups` notifies on its edge —
-/// both for worker-list groups only. The leading columns are meant
+/// worker whose agent waits for a person (`isWaiting`, #2145): its dot fills in
+/// the waiting colour, and `installLocalGroups` notifies on its edge. The
+/// leading columns are meant
 /// to line up with `SessionRowView`'s (state slot, role icon, worker name
 /// capped at 60pt, work item shortened to 8 characters); the two are kept in
 /// step by hand, so a change to that block there belongs here too.
 struct UnattachedWorkerRowView: View {
     let worker: SessionManager.UnattachedWorker
-    /// Paint the row as waiting; see `paintsWaiting(_:inPoolOfType:)`.
-    var paintsWaiting = false
-
-    /// A worker is painted waiting only in a worker list (#2145): Gas Town
-    /// passes gt's own state strings through, which carry no waiting
-    /// contract — and no notification, which is scoped the same way.
-    static func paintsWaiting(_ worker: SessionManager.UnattachedWorker, inPoolOfType type: String?) -> Bool {
-        type == "workerlist" && worker.isWaiting
-    }
 
     var body: some View {
         HStack(spacing: 6) {
             // A placeholder in the state-icon column, not a session state —
             // filled in the waiting colour while the slot waits (#2145).
-            Image(systemName: paintsWaiting ? "circle.fill" : "circle")
+            Image(systemName: worker.isWaiting ? "circle.fill" : "circle")
                 .font(.system(size: 9))
-                .foregroundColor(paintsWaiting ? IrrColors.waiting : .secondary.opacity(0.6))
+                .foregroundColor(worker.isWaiting ? IrrColors.waiting : .secondary.opacity(0.6))
                 .frame(width: 12, height: 12)
-                .tooltip(paintsWaiting ? "Waiting for input" : "No session")
+                .tooltip(worker.isWaiting ? "Waiting for input" : "No session")
 
             if let icon = worker.icon, !icon.isEmpty {
                 Text(icon)
@@ -246,7 +232,7 @@ struct UnattachedWorkerRowView: View {
             if let state = worker.workerState, !state.isEmpty {
                 Text(state)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(paintsWaiting ? IrrColors.waiting : .secondary)
+                    .foregroundColor(worker.isWaiting ? IrrColors.waiting : .secondary)
                     .lineLimit(1)
             }
 

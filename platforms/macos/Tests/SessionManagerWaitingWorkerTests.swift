@@ -1,29 +1,35 @@
 import XCTest
 @testable import Irrlicht
 
-/// #2145: a worker-list slot whose agent waits for a person arrives as
-/// `worker_state` "waiting". Installing the local daemon's groups raises the
-/// same notification funnel a waiting session uses — once per edge into
-/// waiting, never on a first sighting, never for Gas Town (whose worker
-/// states are gt's own strings) and never with the waiting toggle off.
+/// #2145: a worker-list slot whose agent waits for a person arrives with
+/// `waiting: true` (and `worker_state` "waiting" as its text). Installing the
+/// local daemon's groups raises the same notification funnel a waiting session
+/// uses — once per edge into waiting, never on a first sighting, never for a
+/// worker without the flag (Gas Town passes gt's own state strings through in
+/// `worker_state`), never for a worker a relayed session joined, and never with
+/// the waiting toggle off.
 ///
 /// Evidence the funnel was entered is the read of the master-switch key:
 /// `sendNotification` is its only reader inside `SessionManager`, and
 /// `canUseUserNotifications` is false under `swift test`, so nothing is
 /// posted (the same witness as `SessionManagerNotificationStoreTests`).
 ///
-/// Red-first: the three "reaches the firing path" tests failed before the
-/// change; the LOCKs pass there by construction, and three of them are held
-/// by mutations instead (tools/lib/workerlist-waiting-swift-mutations_test.sh:
-/// the Gas Town, first-sighting and toggle-off LOCKs each went red).
+/// Red-first: the three "reaches the firing path" tests and the joined-worker
+/// test failed before their changes; the LOCKs pass there by construction and
+/// are held by mutations instead (tools/lib/workerlist-waiting-swift-mutations_test.sh).
 @MainActor
 final class SessionManagerWaitingWorkerTests: XCTestCase {
     typealias AgentGroup = SessionManager.AgentGroup
     typealias Worker = SessionManager.UnattachedWorker
 
-    private static func slot(_ name: String, _ state: String) -> Worker {
-        Worker(role: "worker", icon: "\u{1F527}", description: "Pool worker slot",
-               workerName: name, workerID: name, workerState: state)
+    /// A slot as the daemon sends it: `waiting` set exactly when the worker
+    /// list said so. `flag: false` is a worker whose text merely reads
+    /// "waiting", as a Gas Town state passed through would.
+    private static func slot(_ name: String, _ state: String, flag: Bool? = nil) -> Worker {
+        var w = Worker(role: "worker", icon: "\u{1F527}", description: "Pool worker slot",
+                       workerName: name, workerID: name, workerState: state)
+        w.waiting = (flag ?? (state == "waiting")) ? true : nil
+        return w
     }
 
     private static func pool(_ workers: [Worker], type: String = "workerlist") -> [AgentGroup] {
@@ -32,89 +38,94 @@ final class SessionManagerWaitingWorkerTests: XCTestCase {
         ])]
     }
 
-    private let bundleGuardMessage = """
-        canUseUserNotifications is true in this test process — the runner gained \
-        an app bundle, so these tests would post real notifications.
-        """
-
-    /// Installs `first`, then `second`, into a manager whose store enables
-    /// `events`, and returns the keys the store was asked for during the
-    /// second install only.
-    private func keysAskedInstalling(_ first: [AgentGroup], then second: [AgentGroup],
-                                     enabling events: [NotificationEvent] = [.waiting]) -> Set<String>? {
+    /// Installs each of `prior` in turn, runs `before`, then installs `last`,
+    /// in a manager whose store enables `events`; returns the keys the store
+    /// was asked for during the last install only, or nil having failed.
+    private func keysAskedInstalling(_ prior: [[AgentGroup]], then last: [AgentGroup],
+                                     enabling events: [NotificationEvent] = [.waiting],
+                                     before: (SessionManager) -> Void = { _ in }) -> Set<String>? {
         let store = InMemoryDefaults()
         for event in events { store.set(true, forKey: event.enabledKey) }
         let manager = SessionManager(defaults: store)
         guard !manager.canUseUserNotifications else {
-            XCTFail(bundleGuardMessage)
+            XCTFail("canUseUserNotifications is true in this test process — the runner gained an app bundle, so these tests would post real notifications.")
             return nil
         }
-        manager.seedLocalApiGroups(first)
-        let before = store.readKeys
+        prior.forEach { manager.seedLocalApiGroups($0) }
+        before(manager)
+        let seen = store.readKeys
         // readKeys only grows: a key already read would hide a second read.
-        guard !before.contains(NotificationSettings.masterEnabledKey) else {
+        guard !seen.contains(NotificationSettings.masterEnabledKey) else {
             XCTFail("the master key was read before the install under test, so the delta cannot show it")
             return nil
         }
-        manager.seedLocalApiGroups(second)
-        return store.readKeys.subtracting(before)
+        manager.seedLocalApiGroups(last)
+        return store.readKeys.subtracting(seen)
     }
 
+    private func fired(_ asked: Set<String>) -> Bool { asked.contains(NotificationSettings.masterEnabledKey) }
+
     func testABusySlotTurningWaitingReachesTheFiringPath() {
-        guard let asked = keysAskedInstalling(Self.pool([Self.slot("T101", "busy")]),
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("T101", "busy")])],
                                               then: Self.pool([Self.slot("T101", "waiting")]))
         else { return }
-        XCTAssertTrue(asked.contains(NotificationSettings.masterEnabledKey),
-                      "busy → waiting never reached sendNotification; asked: \(asked.sorted())")
+        XCTAssertTrue(fired(asked), "busy → waiting never reached sendNotification; asked: \(asked.sorted())")
     }
 
     func testAFreeSlotTurningWaitingReachesTheFiringPath() {
-        guard let asked = keysAskedInstalling(Self.pool([Self.slot("T101", "idle")]),
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("T101", "idle")])],
                                               then: Self.pool([Self.slot("T101", "waiting")]))
         else { return }
-        XCTAssertTrue(asked.contains(NotificationSettings.masterEnabledKey),
-                      "idle → waiting never reached sendNotification; asked: \(asked.sorted())")
+        XCTAssertTrue(fired(asked), "idle → waiting never reached sendNotification; asked: \(asked.sorted())")
     }
 
     func testWaitingAfterBusyAgainReachesTheFiringPath() {
-        let store = InMemoryDefaults()
-        store.set(true, forKey: NotificationEvent.waiting.enabledKey)
-        let manager = SessionManager(defaults: store)
-        guard !manager.canUseUserNotifications else { return XCTFail(bundleGuardMessage) }
-        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "waiting")]))
-        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "busy")]))
-        let before = store.readKeys
-        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "waiting")]))
-        XCTAssertTrue(store.readKeys.subtracting(before).contains(NotificationSettings.masterEnabledKey),
-                      "a second waiting episode did not notify")
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("T101", "waiting")]),
+                                               Self.pool([Self.slot("T101", "busy")])],
+                                              then: Self.pool([Self.slot("T101", "waiting")]))
+        else { return }
+        XCTAssertTrue(fired(asked), "a second waiting episode did not notify")
     }
 
     /// LOCK: the same waiting payload twice is one episode, not two.
     func testTheSameWaitingPayloadAgainDoesNotFire() {
         let waiting = Self.pool([Self.slot("T101", "waiting")])
-        guard let asked = keysAskedInstalling(waiting, then: waiting) else { return }
-        XCTAssertFalse(asked.contains(NotificationSettings.masterEnabledKey),
-                       "an unchanged waiting slot notified again")
+        guard let asked = keysAskedInstalling([waiting], then: waiting) else { return }
+        XCTAssertFalse(fired(asked), "an unchanged waiting slot notified again")
     }
 
     /// LOCK: a slot first seen already waiting — the first hydrate after
     /// launch — is a first sighting and stays silent, as a session's is.
     func testAFirstSightingAlreadyWaitingDoesNotFire() {
-        guard let asked = keysAskedInstalling([], then: Self.pool([Self.slot("T101", "waiting")]))
+        guard let asked = keysAskedInstalling([[]], then: Self.pool([Self.slot("T101", "waiting")]))
         else { return }
-        XCTAssertFalse(asked.contains(NotificationSettings.masterEnabledKey),
-                       "a slot first seen waiting notified")
+        XCTAssertFalse(fired(asked), "a slot first seen waiting notified")
     }
 
-    /// LOCK: Gas Town passes gt's own state strings through; they carry no
-    /// notification contract.
-    func testAGasTownWorkerReadingWaitingDoesNotFire() {
-        guard let asked = keysAskedInstalling(Self.pool([Self.slot("free-1", "busy")], type: "gastown"),
-                                              then: Self.pool([Self.slot("free-1", "waiting")], type: "gastown"),
+    /// LOCK: a Gas Town worker whose passed-through state text reads
+    /// "waiting" carries no flag, so it neither notifies nor paints.
+    func testAWorkerWhoseTextReadsWaitingWithoutTheFlagDoesNotFire() {
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("free-1", "busy")], type: "gastown")],
+                                              then: Self.pool([Self.slot("free-1", "waiting", flag: false)], type: "gastown"),
                                               enabling: NotificationEvent.allCases)
         else { return }
-        XCTAssertFalse(asked.contains(NotificationSettings.masterEnabledKey),
-                       "a Gas Town worker notified")
+        XCTAssertFalse(fired(asked), "a worker without the waiting flag notified")
+        XCTAssertFalse(Self.slot("free-1", "waiting", flag: false).isWaiting, "a worker without the flag reads as waiting")
+    }
+
+    /// A worker whose relayed session is joined into its row (#2149) shows
+    /// that session, which notifies for itself; the worker's edge stays
+    /// silent rather than notifying a second time.
+    func testAWorkerJoinedByARelayedSessionDoesNotFireTwice() {
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("T101", "busy")])],
+                                              then: Self.pool([Self.slot("T101", "waiting")]),
+                                              before: { manager in
+            manager.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "T101")]))
+            manager.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "vm-proj"))
+            XCTAssertNotNil(manager.relayWorkerJoins()["T101"], "precondition: the relayed session joined T101")
+        })
+        else { return }
+        XCTAssertFalse(fired(asked), "a joined worker's waiting edge notified on top of its session's own notification")
     }
 
     /// One edge per slot that turned waiting, identified by pool, team and
@@ -128,62 +139,19 @@ final class SessionManagerWaitingWorkerTests: XCTestCase {
         XCTAssertEqual(edges.first?.body, "lead-T100 \u{00B7} T101")
     }
 
-    /// The row paints a slot as waiting only for the exact "waiting" string.
-    func testOnlyAWaitingStateReadsAsWaiting() {
+    /// The row paints a worker as waiting from the flag, never the text.
+    func testOnlyTheWaitingFlagReadsAsWaiting() {
         XCTAssertTrue(Self.slot("T101", "waiting").isWaiting)
-        for state in ["busy", "idle", "Waiting", ""] {
-            XCTAssertFalse(Self.slot("T101", state).isWaiting, state)
-        }
-    }
-
-    /// The waiting paint follows the notification's scope: a worker list's
-    /// waiting slot is painted, a Gas Town worker reading "waiting" is not.
-    func testOnlyAWorkerListPaintsAWaitingSlot() {
-        let waiting = Self.slot("T101", "waiting")
-        XCTAssertTrue(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: "workerlist"))
-        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: "gastown"))
-        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(waiting, inPoolOfType: nil))
-        XCTAssertFalse(UnattachedWorkerRowView.paintsWaiting(Self.slot("T101", "busy"), inPoolOfType: "workerlist"))
-    }
-
-    /// The hydrate polls every 2.5 s while any orchestrator group (a worker
-    /// list or Gas Town) is listed, and every 30 s otherwise.
-    func testHydratePollIntervalFollowsOrchestratorPresence() {
-        let manager = SessionManager(defaults: InMemoryDefaults())
-        XCTAssertEqual(manager.hydratePollInterval(for: Self.pool([Self.slot("T101", "busy")])), 2.5)
-        XCTAssertEqual(manager.hydratePollInterval(for: Self.pool([], type: "gastown")), 2.5)
-        XCTAssertEqual(manager.hydratePollInterval(for: [AgentGroup(name: "irrlicht", agents: [])]), 30)
-        XCTAssertEqual(manager.hydratePollInterval(for: []), 30)
-    }
-
-    /// A worker whose relayed session is joined into its row (#2149) shows
-    /// that session, which notifies for itself; the worker list's edge for
-    /// it stays silent rather than notifying a second time.
-    func testAWorkerJoinedByARelayedSessionDoesNotFireTwice() {
-        let store = InMemoryDefaults()
-        store.set(true, forKey: NotificationEvent.waiting.enabledKey)
-        let manager = SessionManager(defaults: store)
-        guard !manager.canUseUserNotifications else { return XCTFail(bundleGuardMessage) }
-        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "busy")]))
-        manager.handleRelayMessage(RelayFixtures.snapshot(daemons: [(id: "d1", label: "T101")]))
-        manager.handleRelayMessage(RelayFixtures.push(source: "d1", sessionId: "proc-1", project: "vm-proj"))
-        XCTAssertNotNil(manager.relayWorkerJoins()["T101"], "precondition: the relayed session joined T101")
-        let before = store.readKeys
-        guard !before.contains(NotificationSettings.masterEnabledKey) else {
-            return XCTFail("the master key was read before the install under test, so the delta cannot show it")
-        }
-        manager.seedLocalApiGroups(Self.pool([Self.slot("T101", "waiting")]))
-        XCTAssertFalse(store.readKeys.subtracting(before).contains(NotificationSettings.masterEnabledKey),
-                       "a joined worker's waiting edge notified on top of its session's own notification")
+        XCTAssertFalse(Self.slot("T101", "waiting", flag: false).isWaiting)
+        XCTAssertFalse(Self.slot("T101", "busy").isWaiting)
     }
 
     /// LOCK: with the waiting toggle off, the funnel is never entered.
     func testWaitingToggleOffDoesNotFire() {
-        guard let asked = keysAskedInstalling(Self.pool([Self.slot("T101", "busy")]),
+        guard let asked = keysAskedInstalling([Self.pool([Self.slot("T101", "busy")])],
                                               then: Self.pool([Self.slot("T101", "waiting")]),
                                               enabling: [.ready])
         else { return }
-        XCTAssertFalse(asked.contains(NotificationSettings.masterEnabledKey),
-                       "notified with notifyOnWaiting off")
+        XCTAssertFalse(fired(asked), "notified with notifyOnWaiting off")
     }
 }

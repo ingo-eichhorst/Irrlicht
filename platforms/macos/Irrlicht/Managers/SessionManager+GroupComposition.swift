@@ -81,9 +81,8 @@ extension SessionManager {
 
     /// One `unattached_workers` entry: an orchestrator worker with no
     /// session. `workerState` is the orchestrator's own state string, shown
-    /// as text — never mapped onto `SessionState.State`. The one value read
-    /// as more than text is a worker-list slot's "waiting" (#2145): see
-    /// `isWaiting`.
+    /// as text — never mapped onto `SessionState.State`. A worker whose agent
+    /// waits for a person carries `waiting` instead (#2145): see `isWaiting`.
     struct UnattachedWorker: Decodable, Equatable, Identifiable {
         let role: String?
         let icon: String?
@@ -97,16 +96,18 @@ extension SessionManager {
         /// without them still builds.
         var stale: Bool? = nil
         var lastExit: Int? = nil
+        /// The orchestrator says this worker's agent waits for a person
+        /// (#2145). Only the worker list sets it; a state string another
+        /// orchestrator passes through in `workerState` never does.
+        var waiting: Bool? = nil
 
         /// The daemon lists a name at most once per group.
         var id: String { workerName }
 
         var isStale: Bool { stale == true }
-        /// The worker's state reads "waiting" (#2145). Only the worker list
-        /// sends it as a contract, so the row paint
-        /// (`UnattachedWorkerRowView.paintsWaiting`) and the notification edge
-        /// (`waitingWorkerEdges`) both act on it in worker-list groups only.
-        var isWaiting: Bool { workerState == "waiting" }
+        /// The row is painted in the waiting colour and notifies on its edge
+        /// (`waitingWorkerEdges`).
+        var isWaiting: Bool { waiting == true }
         /// The last run's exit code when it failed (non-zero), else nil — an
         /// exit of 0 and no completed run both show nothing.
         var failedExitCode: Int? {
@@ -115,7 +116,7 @@ extension SessionManager {
         }
 
         enum CodingKeys: String, CodingKey {
-            case role, icon, description, stale
+            case role, icon, description, stale, waiting
             case workerName = "worker_name"
             case workerID = "worker_id"
             case workerState = "worker_state"
@@ -146,7 +147,9 @@ extension SessionManager {
     ///
     /// `groupedSessionIds` stays local-only: it feeds `patchApiGroups`' guard,
     /// which is about the LOCAL patch path, not about display.
-    func recomposeApiGroups() {
+    /// Returns the relay joins it placed, for `installLocalGroups`.
+    @discardableResult
+    func recomposeApiGroups() -> [String: SessionState] {
         let joins = relayWorkerJoins()
         let joinedRowIDs = Set(joins.values.map(\.rowID))
         let localNames = Set(localApiGroups.map(\.name))
@@ -154,6 +157,7 @@ extension SessionManager {
             + relayGroups(excluding: joinedRowIDs).filter { !localNames.contains($0.name) }
         apiGroups = orderedGroups(displayed)
         groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
+        return joins
     }
 
     /// Relayed sessions shown in an orchestrator worker's row (#2149), keyed by
@@ -251,8 +255,7 @@ extension SessionManager {
     func installLocalGroups(_ groups: [AgentGroup]) {
         let edges = Self.waitingWorkerEdges(from: localApiGroups, to: groups)
         localApiGroups = groups
-        recomposeApiGroups()
-        let joined = relayWorkerJoins()
+        let joined = recomposeApiGroups()
         notifyWaitingWorkers(edges.filter { joined[$0.worker] == nil })
     }
 

@@ -282,6 +282,12 @@ extension SessionManager {
                 // dashboard answered the wizard). Dataless by design —
                 // re-fetch; pendingWizardAgents drives the overlay (#570).
                 Task { await refreshPermissions() }
+            case "orchestrator_updated":
+                // An orchestrator's shown state changed, e.g. a worker turned
+                // waiting (#2145). Dataless like permissions_updated:
+                // orchestrator state rides only /api/v1/sessions, so re-fetch
+                // it through the debounced rehydrate.
+                scheduleRehydration()
             default:
                 break
             }

@@ -146,10 +146,11 @@ extension SessionManager {
         )
     }
 
-    // MARK: - Waiting worker-list slots (#2145)
+    // MARK: - Waiting orchestrator workers (#2145)
 
-    /// A worker-list slot that turned waiting between two installs of the
-    /// local groups.
+    /// An orchestrator worker that turned waiting between two installs of the
+    /// local groups: `pool` is its top-level group, `team` the group listing
+    /// it.
     struct WaitingWorkerEdge: Hashable {
         let pool: String
         let team: String
@@ -159,33 +160,31 @@ extension SessionManager {
         var body: String { "\(team) \u{00B7} \(worker)" }
     }
 
-    /// The worker-list slots waiting in `new` that were listed, not waiting,
-    /// in `old`. A slot absent from `old` — the first hydrate after launch, a
-    /// pool or slot that just appeared — is a first sighting and stays silent,
-    /// as a session's is. Only `type == "workerlist"` groups count: Gas Town
-    /// passes gt's own state strings through, and those carry no
-    /// notification contract.
+    /// The unattached workers waiting in `new` that were listed, not
+    /// waiting, in `old`. A worker absent from `old` — the first hydrate
+    /// after launch, a pool or slot that just appeared — is a first sighting
+    /// and stays silent, as a session's is.
     static func waitingWorkerEdges(from old: [AgentGroup], to new: [AgentGroup]) -> [WaitingWorkerEdge] {
         var before: [WaitingWorkerEdge: Bool] = [:]
-        forEachWorkerListSlot(in: old) { edge, worker in before[edge] = worker.isWaiting }
+        forEachUnattachedWorker(in: old) { edge, worker in before[edge] = worker.isWaiting }
         var edges: [WaitingWorkerEdge] = []
-        forEachWorkerListSlot(in: new) { edge, worker in
+        forEachUnattachedWorker(in: new) { edge, worker in
             if worker.isWaiting, before[edge] == false { edges.append(edge) }
         }
         return edges
     }
 
-    /// Visits every slot of every worker-list pool: pool → team → slot, the
-    /// only depth the daemon puts unattached workers at.
-    private static func forEachWorkerListSlot(in groups: [AgentGroup],
-                                              _ visit: (WaitingWorkerEdge, UnattachedWorker) -> Void) {
-        for pool in groups where pool.type == "workerlist" {
-            for team in pool.groups ?? [] {
-                for worker in team.unattachedWorkers ?? [] {
-                    visit(WaitingWorkerEdge(pool: pool.name, team: team.name, worker: worker.workerName), worker)
-                }
+    /// Visits every unattached worker at any depth, with its top-level group
+    /// as `pool` and the group listing it as `team`.
+    private static func forEachUnattachedWorker(in groups: [AgentGroup],
+                                                _ visit: (WaitingWorkerEdge, UnattachedWorker) -> Void) {
+        func walk(_ group: AgentGroup, pool: String) {
+            for worker in group.unattachedWorkers ?? [] {
+                visit(WaitingWorkerEdge(pool: pool, team: group.name, worker: worker.workerName), worker)
             }
+            group.groups?.forEach { walk($0, pool: pool) }
         }
+        groups.forEach { walk($0, pool: $0.name) }
     }
 
     /// Posts "Worker waiting for input" for each edge, gated like a waiting

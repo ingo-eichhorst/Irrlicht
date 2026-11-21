@@ -74,81 +74,44 @@ extension SessionManager {
         }
     }
 
-    /// Starts periodic re-hydration so group-level cost values and
-    /// orchestrator state (which arrive as part of /api/v1/sessions and are
-    /// not pushed via WebSocket deltas) stay fresh. Idempotent: re-arming
-    /// replaces the running timer. No-op under XCTest (issue #832) — a real
+    /// Starts periodic re-hydration so group-level cost values (which arrive
+    /// as part of /api/v1/sessions and are not pushed via WebSocket deltas)
+    /// stay fresh. Idempotent. No-op under XCTest (issue #832) — a real
     /// daemon round-trip has no business running on a timer during unit tests.
-    func startProjectCostsPolling(interval: TimeInterval? = nil) {
-        let every = interval ?? projectCostsRefreshInterval
-        armedHydrateInterval = every
+    func startProjectCostsPolling() {
         guard !isRunningUnitTests else { return }
         projectCostsTimer?.invalidate()
-        projectCostsTimer = Timer.scheduledTimer(withTimeInterval: every, repeats: true) { [weak self] _ in
+        projectCostsTimer = Timer.scheduledTimer(withTimeInterval: projectCostsRefreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                await self?.hydrateSessions(trigger: .timer)
+                await self?.hydrateSessions()
             }
         }
-        // Let the system coalesce the 2.5 s orchestrator wakeups.
-        projectCostsTimer?.tolerance = every / 10
     }
 
-    /// The hydrate cadence for the groups just installed (#2145):
-    /// `orchestratorPollInterval` while any orchestrator group is listed, so
-    /// a worker-list slot turning waiting notifies within seconds, else
-    /// `projectCostsRefreshInterval`.
-    func hydratePollInterval(for groups: [AgentGroup]) -> TimeInterval {
-        groups.contains(where: \.isOrchestrator) ? orchestratorPollInterval : projectCostsRefreshInterval
-    }
-
-    /// Re-arms the hydrate timer when the groups just installed want another
-    /// cadence. Leaves polling that was never started alone (the moment
-    /// before the init Task starts it).
-    func rearmHydratePolling(for groups: [AgentGroup]) {
-        guard let armed = armedHydrateInterval else { return }
-        let want = hydratePollInterval(for: groups)
-        if armed != want { startProjectCostsPolling(interval: want) }
-    }
-
-    /// Why a hydrate runs: the periodic timer, or anything else (launch, a
-    /// reconnect, a debounced structural change), which always installs.
-    enum HydrateTrigger { case timer, explicit }
-
-    func hydrateSessions(trigger: HydrateTrigger = .explicit) async {
+    func hydrateSessions() async {
         // The Local source feeds sessionMap/localApiGroups from the local
         // daemon's REST API. When Local is disabled this must not run, or the
         // 30s cost-poll timer (and any pending rehydration) would silently
         // re-add the local sessions that disabling the source just cleared.
-        guard useLocalDaemon else {
-            rearmHydratePolling(for: [])
-            return
-        }
+        guard useLocalDaemon else { return }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
-        if trigger == .timer && hydratesInFlight > 0 { return }
+        // The timer, a debounced rehydrate and a reconnect can overlap, and
+        // their responses complete in any order: only a response newer than
+        // the last one installed is installed (#2145 review), so a late older
+        // one cannot undo a newer one or replay a worker's waiting edge.
         hydrateRequestSeq += 1
         let seq = hydrateRequestSeq
-        hydratesInFlight += 1
-        defer { hydratesInFlight -= 1 }
         do {
             let (data, response) = try await localURLSession.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                // A daemon that answers with an error is not polled every
-                // 2.5 s; the next good hydrate restores the cadence.
-                rearmHydratePolling(for: [])
-                return
-            }
-            // Responses complete in any order; only a newer one installs.
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             guard seq > lastInstalledHydrateSeq else { return }
             lastInstalledHydrateSeq = seq
-            if trigger == .timer && data == lastHydratePayload { return }
             let decoder = JSONDecoder()
             let payload = try decoder.decode(SessionsResponse.self, from: data)
-            lastHydratePayload = data
             let topGroups = payload.groups
             providerCosts = payload.providerCosts ?? [:]
 
             installLocalGroups(topGroups)
-            rearmHydratePolling(for: topGroups)
             if isDebugMode {
                 print("💧 hydrate: groupedSessionIds=\(groupedSessionIds.count) ids, sample=\(groupedSessionIds.prefix(3))")
             }
@@ -160,7 +123,6 @@ extension SessionManager {
                 if group.type == "gastown" { hasGasTown = true }
                 states += flattenAgents(from: group)
             }
-            let hadSessions = sessionMap.count
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
             rebuildSessionsFromMap()
 
@@ -168,14 +130,9 @@ extension SessionManager {
             hasGasTownGroups = hasGasTown
             gasTownProvider?.updateAvailability(hasGasTown)
 
-            // Logged on a change only: with an orchestrator listed this runs
-            // every 2.5 s.
-            if states.count != hadSessions || isDebugMode {
-                print("💧 Hydrated \(states.count) sessions from REST API")
-            }
+            print("💧 Hydrated \(states.count) sessions from REST API")
         } catch {
             print("💧 Hydration failed: \(error.localizedDescription)")
-            rearmHydratePolling(for: [])
         }
     }
 
