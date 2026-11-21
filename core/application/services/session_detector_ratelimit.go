@@ -80,6 +80,15 @@ func (d *SessionDetector) SetProviderRateLimit(sessionID, provider string, snap 
 	return true
 }
 
+// listedProviderSnapshot returns st's rate-limit snapshot when it is
+// provider's — what a provider sweep compares a new reading against.
+func listedProviderSnapshot(st *session.SessionState, provider string) *session.RateLimitSnapshot {
+	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != provider {
+		return nil
+	}
+	return st.Metrics.RateLimit
+}
+
 // sameRateLimitReading reports whether a and b carry the same reading,
 // ignoring the observation timestamps a re-poll always changes.
 func sameRateLimitReading(a, b *session.RateLimitSnapshot) bool {

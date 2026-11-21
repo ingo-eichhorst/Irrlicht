@@ -104,10 +104,13 @@ readings of third-party or upstream material already committed here —
 `cfd84237738c`, and
 `replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json`.
 
-#2002's endpoint observation reads exactly one key —
-`endpointEnvKeys = {"ANTHROPIC_BASE_URL"}` in
-`core/adapters/inbound/agents/processlifecycle/endpoint_route.go` — so a
-Bedrock- or Vertex-routed Claude Code session that sets no base URL yields
+#2002's endpoint observation reads one route key, `ANTHROPIC_BASE_URL`
+(`endpointSourceKey` in
+`core/adapters/inbound/agents/processlifecycle/endpoint_route.go`). Since
+#2010 it reads that key from a Claude Code session's settings files before
+its environment, and also reads `CLAUDE_CONFIG_DIR` to find the user
+settings file — but still no provider-selection flag. So a Bedrock- or
+Vertex-routed Claude Code session that sets no base URL yields
 `RouteAbsent`: *looked and found no override*, which is already the right
 answer for that key set and is not a claim about the session's route.
 

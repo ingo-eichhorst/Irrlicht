@@ -803,7 +803,7 @@ func TestHandlePIDAssigned_RouteCaptureIsIdempotent(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	var calls int
-	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+	pm.SetRouteReader(func(pid int, _, _ string) *session.RouteObservation {
 		calls++
 		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.example.com"}
 	})
@@ -873,7 +873,7 @@ func TestBackfillRoute_DeniedIsRetriedAfterGrant(t *testing.T) {
 	pm := newPIDManagerForTest(repo)
 	// Simulates the permission having since been granted: the reader now
 	// performs a real read and finds an override.
-	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+	pm.SetRouteReader(func(pid int, _, _ string) *session.RouteObservation {
 		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.example.com"}
 	})
 
@@ -904,7 +904,7 @@ func TestBackfillRoute_ObservedIsNotRetried(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	var calls int
-	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+	pm.SetRouteReader(func(pid int, _, _ string) *session.RouteObservation {
 		calls++
 		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://should-not-appear.example.com"}
 	})

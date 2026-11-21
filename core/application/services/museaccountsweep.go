@@ -110,7 +110,7 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 		// The listed copy is at most the repo cache's TTL old, well inside
 		// one Interval, so it is enough to skip a write that would change
 		// nothing; SetProviderRateLimit re-checks against the stored row.
-		listed := listedMetaSnapshot(st)
+		listed := listedProviderSnapshot(st, session.ProviderMeta)
 		if !granted {
 			if listed != nil {
 				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderMeta, nil)
@@ -139,14 +139,6 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 			delete(s.failing, id)
 		}
 	}
-}
-
-// listedMetaSnapshot returns st's rate-limit snapshot when it is a meta one.
-func listedMetaSnapshot(st *session.SessionState) *session.RateLimitSnapshot {
-	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != session.ProviderMeta {
-		return nil
-	}
-	return st.Metrics.RateLimit
 }
 
 func (s *MuseAccountSweeper) logFailure(sessionID string, err error) {

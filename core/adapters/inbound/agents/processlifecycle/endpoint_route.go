@@ -25,12 +25,27 @@ import (
 // provider's override key here is new-provider integration, which #2002 §2
 // excludes; endpointSourceKey below is named once so that stays a one-line
 // change when it happens.
+//
+// CLAUDE_CONFIG_DIR is read only to locate a Claude Code session's user
+// settings file (ObserveClaudeCodeRoute, issue #2010): Claude Code's
+// documentation says it relocates "all settings", and its value is a
+// directory path, not a credential. It never becomes a route itself.
 var endpointEnvKeys = map[string]struct{}{
-	"ANTHROPIC_BASE_URL": {},
+	endpointSourceKey:  {},
+	claudeConfigDirKey: {},
 }
 
-// endpointSourceKey is the sole key in endpointEnvKeys.
+// routeEnvKeys is the part of endpointEnvKeys the env-only ObserveRoute
+// reads: a non-Claude process's CLAUDE_CONFIG_DIR locates nothing, so it is
+// not read there at all.
+var routeEnvKeys = map[string]struct{}{endpointSourceKey: {}}
+
+// endpointSourceKey is the endpoint override key in endpointEnvKeys.
 const endpointSourceKey = "ANTHROPIC_BASE_URL"
+
+// claudeConfigDirKey is the key in endpointEnvKeys that locates a Claude
+// Code session's user settings file.
+const claudeConfigDirKey = "CLAUDE_CONFIG_DIR"
 
 // ObserveRoute observes the provider endpoint pid's process is routed
 // through, redacted before it is ever retained or logged. granted must be
@@ -46,7 +61,14 @@ func ObserveRoute(pid int, granted bool) *session.RouteObservation {
 	if !granted {
 		return &session.RouteObservation{Status: session.RouteDenied}
 	}
-	env, err := osProc.EnvOf(pid, endpointEnvKeys)
+	env, err := osProc.EnvOf(pid, routeEnvKeys)
+	return routeFromEnv(env, err)
+}
+
+// routeFromEnv turns one EnvOf read of endpointEnvKeys into an observation.
+// Shared by ObserveRoute and ObserveClaudeCodeRoute's env fallback, so the
+// environment is judged by one piece of code on both paths.
+func routeFromEnv(env map[string]string, err error) *session.RouteObservation {
 	if err != nil {
 		// Cannot look, not "looked and found nothing" — the same line
 		// #1537 draws for WriterOf. Anchored here (rather than duplicated

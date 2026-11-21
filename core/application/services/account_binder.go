@@ -118,7 +118,7 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 		if state.AccountBinding != nil && state.AccountBinding.Ref != "" {
 			state.AccountBinding = &session.AccountBinding{Decided: true}
 		}
-		stampSnapshot(state, session.AccountBinding{}, obs)
+		stampSnapshot(state, session.AccountBinding{}, obs, r.Provider())
 		return
 	}
 	home := b.homeFor(obs)
@@ -133,20 +133,32 @@ func (b *AccountBinder) Stamp(state *session.SessionState) {
 		if start == 0 {
 			// Transcript start unreadable: stay undecided and retry, rather
 			// than guessing from FirstSeen alone.
-			stampSnapshot(state, session.AccountBinding{}, obs)
+			stampSnapshot(state, session.AccountBinding{}, obs, r.Provider())
 			return
 		}
 	}
 	// Advance ignores start once the binding is decided.
 	binding = binding.Advance(home, start, b.now().Unix())
 	state.AccountBinding = &binding
-	stampSnapshot(state, binding, obs)
+	stampSnapshot(state, binding, obs, r.Provider())
 }
 
 // stampSnapshot replaces the session's rate-limit snapshot with a copy carrying
 // the account binding confirms for the reading's sample time.
-func stampSnapshot(state *session.SessionState, binding session.AccountBinding, obs outbound.HomeAccountObservation) {
+//
+// A snapshot stamped with another provider than the home's login (provider)
+// is left untouched, scrub included: the login confirms nothing about it,
+// and its ref and product are that provider's own. A Claude Code session
+// routed to Z.ai carries a Z.ai account-API snapshot (issue #2010), and
+// before this guard the binder wrote the Anthropic account id onto it and
+// replaced its product — TestAccountBinder_LeavesAnotherProvidersSnapshotAlone
+// was run red against that code. An unstamped snapshot (Provider "", a row
+// written before #1994) is still stamped, as before.
+func stampSnapshot(state *session.SessionState, binding session.AccountBinding, obs outbound.HomeAccountObservation, provider string) {
 	if state.Metrics == nil || state.Metrics.RateLimit == nil {
+		return
+	}
+	if p := state.Metrics.RateLimit.Provider; p != "" && p != provider {
 		return
 	}
 	cp := *state.Metrics.RateLimit

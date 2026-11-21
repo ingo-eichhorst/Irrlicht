@@ -50,17 +50,27 @@ type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
 // a revoked consent — returns false rather than true.
 type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 
-// RouteReader observes a session's provider-endpoint route from pid's
-// process env (issue #2002). Unlike LauncherEnvReader it carries no
-// hostKnown-style completeness flag: an env-based read has no later signal
-// that would change its answer (no herdr-style external indirection), so it
-// is captured once at first PID assignment (captureRoute) and never
-// re-evaluated. Always returns a non-nil observation — the reader itself
+// RouteReader observes a session's provider-endpoint route (issue #2002):
+// from pid's process env, and for a Claude Code session from its settings
+// files first (issue #2010) — which is why it is handed the session's
+// adapter and working directory, the directory those files are found from.
+// Unlike LauncherEnvReader it carries no hostKnown-style completeness flag,
+// and it is captured once at first PID assignment (captureRoute) and not
+// re-evaluated. That is exact for the process env, which is fixed at exec
+// time. It is not exact for settings: Claude Code applies a saved change to
+// a settings file's env block in the running session (its env-var
+// documentation), and nothing re-reads the files: captureRoute and
+// backfillRoute leave any informative route in place, so a mid-session edit
+// is never reflected for that session (a new session reads afresh).
+// zaiaccountapi.CredentialReader re-checks the route file's base URL before
+// each key read, which covers an edit away from api.z.ai, not one towards
+// it. Always returns a non-nil observation — the reader itself
 // distinguishes denied/unreadable/absent/malformed/observed
-// (processlifecycle.ObserveRoute) rather than collapsing any of them to nil.
-// The real implementation lives in the processlifecycle adapter and is
-// injected to preserve the hexagonal layering.
-type RouteReader func(pid int) *session.RouteObservation
+// (processlifecycle.ObserveRoute / ObserveClaudeCodeRoute) rather than
+// collapsing any of them to nil. The real implementation lives in the
+// processlifecycle adapter and is injected to preserve the hexagonal
+// layering.
+type RouteReader func(pid int, adapter, cwd string) *session.RouteObservation
 
 // BackgroundReader reports adapter-specific background-agent metadata for a PID
 // (e.g. Claude Code's kind:"bg" registry entry for an Agent-View background
@@ -545,9 +555,11 @@ func (pm *PIDManager) boundToSessionHost(state *session.SessionState) bool {
 // it means "the permission was pending or denied at read time", a fact about
 // consent state, not about the process's environment — and consent can
 // change after this capture runs. Every other status
-// (observed/absent/unreadable/malformed) reflects the process's env at exec
-// time, which is fixed for the process's life, so those ARE locked in on
-// first read, matching captureLauncher's own set-once shape for Launcher.
+// (observed/absent/unreadable/malformed) is locked in on first read,
+// matching captureLauncher's own set-once shape for Launcher. For an
+// env-sourced route that is exact (the env is fixed at exec time); for a
+// settings-sourced one it is the value at first assignment — see
+// RouteReader for the mid-session-edit limitation.
 //
 // Before this guard existed, ObserveRoute's non-nil-on-every-call contract
 // (unlike LauncherEnvReader, which returns nil on denial) meant the very
@@ -564,7 +576,7 @@ func (pm *PIDManager) captureRoute(state *session.SessionState, pid int) {
 	if state.Route != nil && state.Route.Status != session.RouteDenied {
 		return
 	}
-	state.Route = pm.routeEnv(pid)
+	state.Route = pm.routeEnv(pid, state.Adapter, state.CWD)
 }
 
 // captureBackground flags state as a background agent when the reader recognizes

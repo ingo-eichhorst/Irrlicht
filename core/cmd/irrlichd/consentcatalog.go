@@ -7,11 +7,12 @@ import (
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	"irrlicht/core/adapters/outbound/museaccountapi"
+	"irrlicht/core/adapters/outbound/zaiaccountapi"
 	"irrlicht/core/domain/agent"
 )
 
 // consentCatalog returns every declaration the permission wizard offers: the
-// agent adapters in agents.All() plus seven daemon-wide entries with no
+// agent adapters in agents.All() plus the daemon-wide entries with no
 // Source/Process axes — the Gas Town orchestrator (reads ~/gt), launcher-identity
 // capture (reads whitelisted env vars from agent processes for click-to-focus),
 // the kitty remote-control config patch (writes kitty.conf for tab-precise
@@ -21,7 +22,9 @@ import (
 // covered together per agent.AccountAPIPermissionKey's own doc comment), and
 // Claude Code's account-identity read (issue #2095 — a pseudo-adapter, not a
 // second permission on claude-code, whose revoke would stop transcript watching),
-// and the worker-list orchestrator (issue #2148 — reads one status file).
+// and the worker-list orchestrator (issue #2148 — reads one status file),
+// and Z.ai's coding-plan quota (issue #2010 — the key from the settings file
+// that routed a session to api.z.ai, plus the api.z.ai egress).
 //
 // It exists so the composition lives in ONE place (#1383). This list is what
 // IRRLICHT_PERMISSION_MODE=grant-all grants, so it is also the set whose Apply
@@ -46,7 +49,8 @@ func consentCatalog(all []agent.Agent, fx consentEffects) []agent.Agent {
 		processlifecycle.EndpointPermissionDeclaration(),
 		museaccountapi.PermissionDeclaration(fx.StartMuseAccountAPI, fx.StopMuseAccountAPI),
 		claudecode.AccountPermissionDeclaration(),
-		workerlist.PermissionDeclaration(fx.StartWorkerlist, fx.StopWorkerlist))
+		workerlist.PermissionDeclaration(fx.StartWorkerlist, fx.StopWorkerlist),
+		zaiaccountapi.PermissionDeclaration(fx.StartZaiAccountAPI, fx.StopZaiAccountAPI))
 }
 
 // consentEffects are the grant/revoke effects of the daemon-wide permissions
@@ -54,11 +58,12 @@ func consentCatalog(all []agent.Agent, fx consentEffects) []agent.Agent {
 // (startup.go's gastownEffects/workerlistEffects — the session repository and
 // the orchestrator monitor) and Muse's account-quota permission
 // (museaccountapi_effects.go's museAccountAPIEffects — the daemon-wide
-// AccountPoller).
+// AccountPoller), and Z.ai's (zaiaccountapi_effects.go — its poller).
 type consentEffects struct {
 	StartGastown, StopGastown               func() error
 	StartMuseAccountAPI, StopMuseAccountAPI func() error
 	StartWorkerlist, StopWorkerlist         func() error
+	StartZaiAccountAPI, StopZaiAccountAPI   func() error
 }
 
 // declaredConsentCatalog is consentCatalog for the flag paths, which read the
@@ -73,5 +78,6 @@ func declaredConsentCatalog() []agent.Agent {
 		StartGastown: noop, StopGastown: noop,
 		StartMuseAccountAPI: noop, StopMuseAccountAPI: noop,
 		StartWorkerlist: noop, StopWorkerlist: noop,
+		StartZaiAccountAPI: noop, StopZaiAccountAPI: noop,
 	})
 }
