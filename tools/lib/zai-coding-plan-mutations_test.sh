@@ -130,8 +130,8 @@ SWEEP_GO="core/application/services/zaiaccountsweep.go"
 assert_go_test_goes_red \
   "P1 letting the process env outrank settings reddens probe row B" \
   "$ROUTE_GO" \
-  $'\tif obs := routeFromSettings(settingsenv.Lookup(settingsenv.Sources(in), endpointSourceKey)); obs != nil {' \
-  $'\tif obs := routeFromEnv(env, envErr); obs.Status == session.RouteObserved { // mutated: env first (#2010 fixture)\n\t\treturn obs\n\t}\n\tif obs := routeFromSettings(settingsenv.Lookup(settingsenv.Sources(in), endpointSourceKey)); obs != nil {' \
+  $'\tif obs := routeFromSettings(claudesettings.Lookup(claudesettings.Sources(in), endpointSourceKey)); obs != nil {' \
+  $'\tif obs := routeFromEnv(env, envErr); obs.Status == session.RouteObserved { // mutated: env first (#2010 fixture)\n\t\treturn obs\n\t}\n\tif obs := routeFromSettings(claudesettings.Lookup(claudesettings.Sources(in), endpointSourceKey)); obs != nil {' \
   "$ROUTE_PKG" \
   "TestObserveClaudeCodeRoute_SettingsBeatProcessEnv" \
   'settings.local.json must outrank the process env'
@@ -151,8 +151,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "P3 ignoring a --settings flag reddens the settings-flag test" \
   "$ROUTE_GO" \
-  $'\t\tCLIOpaque: argvErr != nil || len(argv) == 0 || settingsenv.FlagsTouchSettings(argv),' \
-  $'\t\tCLIOpaque: false && (argvErr != nil || len(argv) == 0 || settingsenv.FlagsTouchSettings(argv)), // mutated: command line never consulted (#2010 fixture)' \
+  $'\t\tCLIOpaque: argvErr != nil || len(argv) == 0 || claudesettings.FlagsTouchSettings(argv),' \
+  $'\t\tCLIOpaque: false && (argvErr != nil || len(argv) == 0 || claudesettings.FlagsTouchSettings(argv)), // mutated: command line never consulted (#2010 fixture)' \
   "$ROUTE_PKG" \
   "TestObserveClaudeCodeRoute_SettingsFlagIsNamedNotSkipped" \
   'source:"settings:cli"}'

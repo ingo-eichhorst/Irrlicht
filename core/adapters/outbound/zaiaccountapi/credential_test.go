@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"irrlicht/core/adapters/inbound/agents/claudecode/settingsenv"
+	"irrlicht/core/adapters/inbound/agents/claudesettings"
 	"irrlicht/core/domain/session"
 )
 
@@ -17,7 +17,7 @@ func newTestReader(t *testing.T) *CredentialReader {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewCredentialReader(settingsenv.ReadEnv, fp)
+	return NewCredentialReader(claudesettings.ReadEnv, fp)
 }
 
 func settingsFile(t *testing.T, body string) string {

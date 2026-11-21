@@ -3,7 +3,7 @@ package processlifecycle
 import (
 	"os"
 
-	"irrlicht/core/adapters/inbound/agents/claudecode/settingsenv"
+	"irrlicht/core/adapters/inbound/agents/claudesettings"
 	"irrlicht/core/domain/session"
 )
 
@@ -19,14 +19,14 @@ type settingsHost struct {
 // machine's real ~/.claude or managed-settings directory.
 var claudeSettingsHost = func() settingsHost {
 	home, _ := os.UserHomeDir()
-	return settingsHost{Home: home, ManagedDir: settingsenv.ManagedDir(), MDMProfiles: settingsenv.MDMProfiles()}
+	return settingsHost{Home: home, ManagedDir: claudesettings.ManagedDir(), MDMProfiles: claudesettings.MDMProfiles()}
 }
 
 // ObserveClaudeCodeRoute is ObserveRoute for a Claude Code session (issue
 // #2010). Claude Code applies a settings file's `env` block over the
 // environment it inherited, so ANTHROPIC_BASE_URL is resolved from its
 // settings layers first, in its documented precedence (package
-// settingsenv), and from the process environment only when no layer sets
+// claudesettings), and from the process environment only when no layer sets
 // it. cwd is the session's working directory, which locates the project and
 // project-local files.
 //
@@ -34,7 +34,7 @@ var claudeSettingsHost = func() settingsHost {
 // happens while it is not granted: the process's ANTHROPIC_BASE_URL and
 // CLAUDE_CONFIG_DIR (endpointEnvKeys), whether its command line carries a
 // settings flag (the flag token only), and env.ANTHROPIC_BASE_URL from each
-// settings file. No other settings key leaves settingsenv.ReadEnv.
+// settings file. No other settings key leaves claudesettings.ReadEnv.
 //
 // Results beyond ObserveRoute's:
 //   - a settings layer that sets the URL: observed or malformed, Source
@@ -58,7 +58,7 @@ func ObserveClaudeCodeRoute(pid int, cwd string, granted bool) *session.RouteObs
 	env, envErr := osProc.EnvOf(pid, endpointEnvKeys)
 	argv, argvErr := osProc.ArgvOf(pid)
 	host := claudeSettingsHost()
-	in := settingsenv.Inputs{
+	in := claudesettings.Inputs{
 		CWD:              cwd,
 		ConfigDir:        env[claudeConfigDirKey],
 		ConfigDirUnknown: envErr != nil,
@@ -67,9 +67,9 @@ func ObserveClaudeCodeRoute(pid int, cwd string, granted bool) *session.RouteObs
 		MDMProfiles:      host.MDMProfiles,
 		// ArgvOf answers nil for a command line it could not read (the port
 		// contract), and a command line nobody read may carry --settings.
-		CLIOpaque: argvErr != nil || len(argv) == 0 || settingsenv.FlagsTouchSettings(argv),
+		CLIOpaque: argvErr != nil || len(argv) == 0 || claudesettings.FlagsTouchSettings(argv),
 	}
-	if obs := routeFromSettings(settingsenv.Lookup(settingsenv.Sources(in), endpointSourceKey)); obs != nil {
+	if obs := routeFromSettings(claudesettings.Lookup(claudesettings.Sources(in), endpointSourceKey)); obs != nil {
 		return obs
 	}
 	return routeFromEnv(env, envErr)
@@ -77,13 +77,13 @@ func ObserveClaudeCodeRoute(pid int, cwd string, granted bool) *session.RouteObs
 
 // routeFromSettings turns a settings lookup into an observation, or nil when
 // no settings layer sets the URL and the process env decides.
-func routeFromSettings(r settingsenv.Result) *session.RouteObservation {
-	if r.Status == settingsenv.StatusNotSet {
+func routeFromSettings(r claudesettings.Result) *session.RouteObservation {
+	if r.Status == claudesettings.StatusNotSet {
 		return nil
 	}
 	obs := &session.RouteObservation{Source: "settings:" + r.Source.Layer, SettingsFile: r.Source.Path}
 	switch {
-	case r.Status != settingsenv.StatusFound:
+	case r.Status != claudesettings.StatusFound:
 		obs.Status = session.RouteUnreadable
 	case r.Value == "":
 		obs.Status = session.RouteAbsent

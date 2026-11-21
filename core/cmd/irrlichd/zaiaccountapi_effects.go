@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents/claudecode/settingsenv"
+	"irrlicht/core/adapters/inbound/agents/claudesettings"
 	"irrlicht/core/adapters/outbound/accountquota"
 	"irrlicht/core/adapters/outbound/zaiaccountapi"
 	"irrlicht/core/application/services"
@@ -26,7 +26,7 @@ type zaiAccountAPI struct {
 
 // zaiAccountAPIEffects builds the production parts: the reviewed transport
 // to zaiaccountapi.Destination() only, and a credential reader over
-// settingsenv.ReadEnv with a fresh per-daemon fingerprint salt. A
+// claudesettings.ReadEnv with a fresh per-daemon fingerprint salt. A
 // construction failure is a coding mistake (a fixed destination) or a
 // failed random read; it is logged once and leaves transport nil, so no
 // sweep starts.
@@ -42,7 +42,7 @@ func zaiAccountAPIEffects(logger outbound.Logger) zaiAccountAPI {
 		logger.LogError("permissions", "", fmt.Sprintf("zaiaccountapi: %v", ferr))
 	default:
 		transport = t
-		credentials = zaiaccountapi.NewCredentialReader(settingsenv.ReadEnv, fp)
+		credentials = zaiaccountapi.NewCredentialReader(claudesettings.ReadEnv, fp)
 	}
 	return newZaiAccountAPI(transport, credentials)
 }

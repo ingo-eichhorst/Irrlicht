@@ -1,4 +1,4 @@
-// Package settingsenv reconstructs which of Claude Code's settings files
+// Package claudesettings reconstructs which of Claude Code's settings files
 // supplies one `env` variable for a session, in Claude Code's documented
 // precedence (issue #2010 phase 1).
 //
@@ -33,7 +33,7 @@
 // and local env values in an interactive session, and a launch environment
 // built by the Claude Desktop app, which the documentation says takes
 // precedence over settings env values.
-package settingsenv
+package claudesettings
 
 import (
 	"encoding/json"
@@ -279,7 +279,7 @@ func readBounded(path string) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > maxSettingsBytes {
-		return nil, fmt.Errorf("settingsenv: %s exceeds %d bytes", path, maxSettingsBytes)
+		return nil, fmt.Errorf("claudesettings: %s exceeds %d bytes", path, maxSettingsBytes)
 	}
 	return data, nil
 }
@@ -308,7 +308,7 @@ func ReadEnv(path string, keys map[string]struct{}) (map[string]string, error) {
 		Env map[string]json.RawMessage `json:"env"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("settingsenv: %s is not a JSON settings object: %w", path, err)
+		return nil, fmt.Errorf("claudesettings: %s is not a JSON settings object: %w", path, err)
 	}
 	out := make(map[string]string, len(keys))
 	for k := range keys {
@@ -318,7 +318,7 @@ func ReadEnv(path string, keys map[string]struct{}) (map[string]string, error) {
 		}
 		var v string
 		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, fmt.Errorf("settingsenv: %s: env.%s is not a string", path, k)
+			return nil, fmt.Errorf("claudesettings: %s: env.%s is not a string", path, k)
 		}
 		out[k] = v
 	}

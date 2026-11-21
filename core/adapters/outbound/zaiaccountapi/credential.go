@@ -23,7 +23,7 @@ const (
 var credentialKeys = map[string]struct{}{keyBaseURL: {}, keyAuthToken: {}, keyAPIKey: {}}
 
 // EnvFileReader returns the named env keys from a Claude Code settings file
-// — settingsenv.ReadEnv, injected by the daemon's wiring so this outbound
+// — claudesettings.ReadEnv, injected by the daemon's wiring so this outbound
 // package does not import an inbound one.
 type EnvFileReader func(path string, keys map[string]struct{}) (map[string]string, error)
 

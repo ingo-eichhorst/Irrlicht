@@ -1,4 +1,4 @@
-package settingsenv
+package claudesettings
 
 import (
 	"os/user"
