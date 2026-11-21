@@ -1,0 +1,12 @@
+{
+  "name": "irrlicht-herdr",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pretest": "[ -e node_modules/.bin/vitest ] || npm ci --ignore-scripts",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0"
+  }
+}

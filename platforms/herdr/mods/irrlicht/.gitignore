@@ -1,0 +1,4 @@
+# Herdr writes these into every mod folder it loads (and `herdr-app check`
+# writes them too); they are its own type files, not part of the mod.
+jsconfig.json
+gpui-kit.d.ts

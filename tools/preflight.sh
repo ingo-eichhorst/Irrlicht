@@ -730,6 +730,16 @@ if want web; then
   # it under --changed, not only quotaChips.js.
   run_gate_scoped '^platforms/claude-code/|^platforms/web/[^/]+\.js$' \
                   "web: Claude Code panel"         web_tree platforms/claude-code
+  # The Herdr mod's lib/ modules (platforms/herdr/mods/irrlicht). The mod's
+  # main.js imports Herdr's runtime and is checked by `herdr-app check`, which
+  # needs Herdr.app and is not in CI. The claude-code half is the mod's
+  # test/address.parity.test.js, which runs the Claude Code panel's ports of
+  # the address ladder and formatTokens through the same table as the mod's.
+  # The last two paths are read by its test/palette.parity.test.js: the
+  # design system's colour tokens the mod's palette copies, and the daemon's
+  # canonicalStates its state maps must cover.
+  run_gate_scoped '^platforms/herdr/|^platforms/claude-code/lib/(address|format)\.js$|^tools/irrlicht-design-system/colors_and_type\.css$|^core/domain/session/session\.go$' \
+                  "web: Herdr mod"                 web_tree platforms/herdr
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same
