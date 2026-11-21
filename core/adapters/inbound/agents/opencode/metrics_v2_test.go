@@ -15,18 +15,6 @@ import (
 // tool state, and its turn end and failure from the idle row. On main it
 // returned nil for every 2.x store.
 func TestComputeMetrics_V2Store(t *testing.T) {
-	metricsFor := func(t *testing.T, w *Watcher, id string) *session.SessionMetrics {
-		t.Helper()
-		m, err := ComputeMetrics(w.transcriptPathFor(id), "")
-		if err != nil {
-			t.Fatalf("ComputeMetrics(%s): %v", id, err)
-		}
-		if m == nil {
-			t.Fatalf("ComputeMetrics(%s) = nil, want the session's metrics", id)
-		}
-		return m
-	}
-
 	t.Run("completed_turn_totals_come_from_session_v2", func(t *testing.T) {
 		w, db := newV2Store(t)
 		loadV2Fixture(t, db, v2StoreRows)
@@ -34,7 +22,7 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		// the column is what ComputeMetrics reports.
 		execAll(t, db, `UPDATE session_v2 SET cost = 0.0421 WHERE id = '`+sesToolTurn+`'`)
 
-		m := metricsFor(t, w, sesToolTurn)
+		m := v2MetricsFor(t, w, sesToolTurn)
 		// session_v2 row: tokens_input 2254, tokens_output 370,
 		// tokens_cache_read 23040 — the session's own totals, which include
 		// the title call the assistant rows do not carry (the three rows sum
@@ -52,7 +40,7 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 	t.Run("tokens_with_no_reported_cost_are_unpriced_not_free", func(t *testing.T) {
 		w, db := newV2Store(t)
 		loadV2Fixture(t, db, v2StoreRows) // the fixture's local model: session_v2.cost 0
-		m := metricsFor(t, w, sesToolTurn)
+		m := v2MetricsFor(t, w, sesToolTurn)
 		checkV2ZeroCostIsUnpriced(t, m)
 		if want := tailer.NormalizeModelName("qwen3.8-27b-splash"); m.ModelName != want {
 			t.Errorf("ModelName = %q, want %q (the assistant row's data.model.id)", m.ModelName, want)
@@ -80,7 +68,7 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		holdBackAfter(t, db, sesPermission, 4)
 		setToRunningTool(t, db, sesPermission)
 
-		m := metricsFor(t, w, sesPermission)
+		m := v2MetricsFor(t, w, sesPermission)
 		if !m.HasOpenToolCall || m.OpenToolCallCount != 1 || len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "shell" {
 			t.Errorf("open tools = %t / %d / %v, want true / 1 / [shell]",
 				m.HasOpenToolCall, m.OpenToolCallCount, m.LastOpenToolNames)
@@ -94,7 +82,7 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		w, db := newV2Store(t)
 		loadV2Fixture(t, db, v2StoreRows)
 
-		m := metricsFor(t, w, sesFailed)
+		m := v2MetricsFor(t, w, sesFailed)
 		if m.LastEventType != "turn_done" {
 			t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
 		}
@@ -114,7 +102,7 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		w, db := newV2Store(t)
 		loadV2Fixture(t, db, v2StoreRows)
 
-		m := metricsFor(t, w, sesInterrupted)
+		m := v2MetricsFor(t, w, sesInterrupted)
 		if m.LastEventType != "turn_done" || m.SessionError != nil {
 			t.Errorf("LastEventType %q, SessionError %+v; want turn_done and no error (an interrupt is not a failure)",
 				m.LastEventType, m.SessionError)
@@ -128,6 +116,20 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 			t.Errorf("ComputeMetrics(unknown) = %+v, %v; want nil, nil", m, err)
 		}
 	})
+}
+
+// v2MetricsFor reads one session's metrics from the 2.x store, failing the
+// test when there are none.
+func v2MetricsFor(t *testing.T, w *Watcher, id string) *session.SessionMetrics {
+	t.Helper()
+	m, err := ComputeMetrics(w.transcriptPathFor(id), "")
+	if err != nil {
+		t.Fatalf("ComputeMetrics(%s): %v", id, err)
+	}
+	if m == nil {
+		t.Fatalf("ComputeMetrics(%s) = nil, want the session's metrics", id)
+	}
+	return m
 }
 
 // checkV2ReportedCostProvenance (#2061): the cost is opencode's own, and this
