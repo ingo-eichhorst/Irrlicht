@@ -69,8 +69,10 @@ enum QuotaMenuBarRenderer {
     /// Unlike the popover bucketing this does **not** drop stale snapshots:
     /// the icon has no room to dim, so with nothing fresh it keeps the
     /// last-known reading (an active `.usage`-style icon must not look idle;
-    /// see MenuBarImageBuilder's fallback). A snapshot with no windows at all
-    /// (the credits/usage-only path) can never render and is skipped.
+    /// see MenuBarImageBuilder's fallback). A snapshot with no window the icon
+    /// can draw is skipped (`hasDrawableWindow`): one with no windows at all
+    /// (the credits/usage-only path), or one whose only window is monthly
+    /// (Mistral Vibe, #2012), can never render.
     static func selectedSnapshot(
         sessions: [SessionState],
         providerKey: String?,
@@ -83,7 +85,7 @@ enum QuotaMenuBarRenderer {
             let stale: Bool
         }
         let candidates = sessions.compactMap { s -> Candidate? in
-            guard let snap = s.metrics?.rateLimit, !snap.windows.isEmpty else { return nil }
+            guard let snap = s.metrics?.rateLimit, hasDrawableWindow(snap) else { return nil }
             return Candidate(
                 provider: snap.bucketProviderKey(adapter: s.adapter),
                 key: snap.accountBucketKey(adapter: s.adapter),
@@ -128,12 +130,26 @@ enum QuotaMenuBarRenderer {
         return image
     }
 
+    /// The windows `buildSVG` and `buildCircleSVG` draw: the 5h (300-minute)
+    /// and the 7d (10080-minute) one. Everything that asks "can the icon draw
+    /// this?" goes through here, so the drawers and the pickers cannot drift.
+    static func drawableWindows(_ info: RateLimitInfo) -> (fiveHour: RateLimitWindowInfo?, sevenDay: RateLimitWindowInfo?) {
+        (info.windows.first { $0.canonicalWindowMinutes == 300 },
+         info.windows.first { $0.canonicalWindowMinutes == 10080 })
+    }
+
+    /// Whether the icon can draw `info` at all (#2012: a monthly-only
+    /// snapshot cannot).
+    static func hasDrawableWindow(_ info: RateLimitInfo) -> Bool {
+        let windows = drawableWindows(info)
+        return windows.fiveHour != nil || windows.sevenDay != nil
+    }
+
     /// `compact` drops the "5h"/"7d" text label and narrows the bars —
     /// used in Combined style, where the icon's width is shared with the
     /// session-state dots. Defaults to `false` (today's Usage-style layout).
     static func buildSVG(for info: RateLimitInfo, compact: Bool = false, now: Date) -> (svg: String, width: CGFloat)? {
-        let fiveHour = info.windows.first { $0.canonicalWindowMinutes == 300 }
-        let sevenDay = info.windows.first { $0.canonicalWindowMinutes == 10080 }
+        let (fiveHour, sevenDay) = drawableWindows(info)
         guard fiveHour != nil || sevenDay != nil else { return nil }
 
         let effectiveBarWidth = compact ? barWidth * compactBarWidthFactor : barWidth
@@ -158,8 +174,7 @@ enum QuotaMenuBarRenderer {
     /// number it's showing. Falls back to 7d only when 5h is absent (e.g.
     /// a fresh snapshot that hasn't carried both windows yet).
     static func buildCircleSVG(for info: RateLimitInfo, now: Date) -> (svg: String, width: CGFloat)? {
-        let fiveHour = info.windows.first { $0.canonicalWindowMinutes == 300 }
-        let sevenDay = info.windows.first { $0.canonicalWindowMinutes == 10080 }
+        let (fiveHour, sevenDay) = drawableWindows(info)
         guard let window = fiveHour ?? sevenDay else { return nil }
         let pct = min(max(window.usedPercent, 0), 100) / 100
         let size = height // square, same 18pt row height as the bars/dots

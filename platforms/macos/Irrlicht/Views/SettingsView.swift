@@ -821,9 +821,18 @@ struct SettingsView: View {
         let eligibleSessions = gasTownProvider?.isDaemonRunning == true
             ? sessionManager.sessions.filter { !(gasTownProvider?.ownsSession($0) ?? false) }
             : sessionManager.sessions
+        return Self.quotaProviderKeys(in: eligibleSessions)
+    }
+
+    /// The provider keys the menu-bar icon can draw for `sessions`: a provider
+    /// is offered only when one of its snapshots has a window the icon draws
+    /// (`QuotaMenuBarRenderer.hasDrawableWindow`, the same predicate its
+    /// `selectedSnapshot` applies). A monthly-only snapshot (Mistral Vibe,
+    /// #2012) would otherwise be offered as live while its slot stays empty.
+    static func quotaProviderKeys(in sessions: [SessionState]) -> [String] {
         var keys = Set<String>()
-        for session in eligibleSessions {
-            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
+        for session in sessions {
+            guard let snap = session.metrics?.rateLimit, QuotaMenuBarRenderer.hasDrawableWindow(snap) else { continue }
             keys.insert(snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")")
         }
         return keys.sorted()

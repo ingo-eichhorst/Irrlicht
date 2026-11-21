@@ -1,0 +1,32 @@
+{
+  "_comment": "Issue #2012's live probe, 2026-11-21, recorded by the maintainer's session (issue comment 7063552453). Each request was a fetch() with redirect 'manual' from a console.mistral.ai page in the maintainer's own Chrome (Mistral Vibe free plan), so the browser attached its own cookies; no cookie value was read, copied or logged (so no X-CSRFToken header could have been set either). The response bodies sit beside this file, one per capture, byte for byte, so this record is the only place their provenance is written down.",
+  "date": "2026-11-21",
+  "request": "GET https://console.mistral.ai/api-ui/trpc/billing.vibeUsage?batch=1&input=... (the URL in mistralvibe.UsageURL, from CodexBar b6e65a8 MistralUsageFetcher.swift:67)",
+  "captures": [
+    {
+      "time_utc": "2026-11-21T13:37:45Z",
+      "session": "signed in, nothing used",
+      "status": 200,
+      "measured_bytes": 108,
+      "file": "live_probe_2026-11-21T133745Z_usage.json",
+      "fidelity": "byte-exact reconstruction: every field shown, length matches the measured 108 bytes"
+    },
+    {
+      "time_utc": "2026-11-21T13:38:33Z",
+      "session": "signed in, after one `vibe -p` turn (vibe 2.19.1, 13:38:13-13:38:19 UTC, on the CLI's own API key)",
+      "status": 200,
+      "measured_bytes": 115,
+      "file": "live_probe_2026-11-21T133833Z_usage_after_one_turn.json",
+      "fidelity": "byte-exact reconstruction: every field shown, length matches the measured 115 bytes"
+    },
+    {
+      "time_utc": "2026-11-21T13:44:12Z",
+      "session": "no cookies (credentials: \"omit\")",
+      "status": 401,
+      "measured_bytes": 16,
+      "location_header": false,
+      "file": "live_probe_2026-11-21T134412Z_no_session_401.shape.json",
+      "fidelity": "SHAPE ONLY: {\"detail\":null} is 15 bytes against the measured 16; the exact whitespace was not captured"
+    }
+  ]
+}

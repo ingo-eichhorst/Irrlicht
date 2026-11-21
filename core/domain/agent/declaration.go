@@ -55,6 +55,19 @@ type Permission struct {
 	Apply  func() error
 	Remove func() error
 
+	// RequiresExplicitGrant keeps this permission out of
+	// IRRLICHT_PERMISSION_MODE=grant-all's auto-grant: PermissionService.Start
+	// leaves it in whatever state the store holds (pending on a fresh home),
+	// so only a person answering it grants it. For a permission whose grant
+	// is itself an assertion only the user can make (issue #2012: "the
+	// Mistral account in this Chrome profile is the one your vibe CLI uses"),
+	// or whose effect reads data a recording or dev daemon on the real $HOME
+	// must never touch unasked (a browser's cookies and its Keychain key).
+	// TestGrantAll_LeavesAnExplicitGrantPermissionUnanswered pins the
+	// service's half, and TestConsentCatalog_ExplicitGrantPermissionsSurviveGrantAll
+	// (core/cmd/irrlichd) every declaration that sets it.
+	RequiresExplicitGrant bool
+
 	// Writes is non-nil for every permission whose Apply closure writes a
 	// shared, user-owned file — a file that follows $HOME rather than
 	// IRRLICHT_HOME, and that therefore outlives the daemon that wrote it. It

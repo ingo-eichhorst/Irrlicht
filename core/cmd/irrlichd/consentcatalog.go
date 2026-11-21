@@ -6,12 +6,13 @@ import (
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
+	"irrlicht/core/adapters/outbound/mistralvibe"
 	"irrlicht/core/adapters/outbound/museaccountapi"
 	"irrlicht/core/domain/agent"
 )
 
 // consentCatalog returns every declaration the permission wizard offers: the
-// agent adapters in agents.All() plus seven daemon-wide entries with no
+// agent adapters in agents.All() plus eight daemon-wide entries with no
 // Source/Process axes — the Gas Town orchestrator (reads ~/gt), launcher-identity
 // capture (reads whitelisted env vars from agent processes for click-to-focus),
 // the kitty remote-control config patch (writes kitty.conf for tab-precise
@@ -21,7 +22,9 @@ import (
 // covered together per agent.AccountAPIPermissionKey's own doc comment), and
 // Claude Code's account-identity read (issue #2095 — a pseudo-adapter, not a
 // second permission on claude-code, whose revoke would stop transcript watching),
-// and the worker-list orchestrator (issue #2148 — reads one status file).
+// and the worker-list orchestrator (issue #2148 — reads one status file),
+// and Mistral Vibe's browser-session permission (issue #2012 — the Chrome
+// cookie and Keychain read plus the console.mistral.ai egress).
 //
 // It exists so the composition lives in ONE place (#1383). This list is what
 // IRRLICHT_PERMISSION_MODE=grant-all grants, so it is also the set whose Apply
@@ -46,7 +49,8 @@ func consentCatalog(all []agent.Agent, fx consentEffects) []agent.Agent {
 		processlifecycle.EndpointPermissionDeclaration(),
 		museaccountapi.PermissionDeclaration(fx.StartMuseAccountAPI, fx.StopMuseAccountAPI),
 		claudecode.AccountPermissionDeclaration(),
-		workerlist.PermissionDeclaration(fx.StartWorkerlist, fx.StopWorkerlist))
+		workerlist.PermissionDeclaration(fx.StartWorkerlist, fx.StopWorkerlist),
+		mistralvibe.PermissionDeclaration(fx.StartMistralVibe, fx.StopMistralVibe))
 }
 
 // consentEffects are the grant/revoke effects of the daemon-wide permissions
@@ -59,6 +63,8 @@ type consentEffects struct {
 	StartGastown, StopGastown               func() error
 	StartMuseAccountAPI, StopMuseAccountAPI func() error
 	StartWorkerlist, StopWorkerlist         func() error
+	// Mistral Vibe's browser-session permission (mistralvibe_effects.go).
+	StartMistralVibe, StopMistralVibe func() error
 }
 
 // declaredConsentCatalog is consentCatalog for the flag paths, which read the
@@ -73,5 +79,6 @@ func declaredConsentCatalog() []agent.Agent {
 		StartGastown: noop, StopGastown: noop,
 		StartMuseAccountAPI: noop, StopMuseAccountAPI: noop,
 		StartWorkerlist: noop, StopWorkerlist: noop,
+		StartMistralVibe: noop, StopMistralVibe: noop,
 	})
 }
