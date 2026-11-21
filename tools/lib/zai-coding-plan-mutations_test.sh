@@ -152,7 +152,7 @@ assert_go_test_goes_red \
   "P3 ignoring a --settings flag reddens the settings-flag test" \
   "$ROUTE_GO" \
   $'\t\tCLIOpaque: argvErr != nil || len(argv) == 0 || settingsenv.FlagsTouchSettings(argv),' \
-  $'\t\tCLIOpaque: false, // mutated: command line never consulted (#2010 fixture)' \
+  $'\t\tCLIOpaque: false && (argvErr != nil || len(argv) == 0 || settingsenv.FlagsTouchSettings(argv)), // mutated: command line never consulted (#2010 fixture)' \
   "$ROUTE_PKG" \
   "TestObserveClaudeCodeRoute_SettingsFlagIsNamedNotSkipped" \
   'source:"settings:cli"}'
@@ -294,7 +294,7 @@ assert_go_test_goes_red \
   "S4 matching the route by substring reddens the exact-host test" \
   "$DEST_GO" \
   $'\treturn strings.EqualFold(u.Hostname(), Host)' \
-  $'\treturn strings.Contains(endpoint, Host) // mutated: substring match (#2010 fixture)' \
+  $'\treturn strings.Contains(u.String(), Host) // mutated: substring match (#2010 fixture)' \
   "$ZAI_PKG" \
   "TestIsZaiRoute" \
   'IsZaiRoute("https://api.z.ai.example.com/anthropic") = true, want false'
