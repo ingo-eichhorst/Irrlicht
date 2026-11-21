@@ -23,6 +23,14 @@ enum RelayFixtures {
               session: sessionJSON(id: sessionId, project: project, state: state))
     }
 
+    /// The same frame for a working `container-proj` session that started at
+    /// `firstSeen` (the wire's unix seconds), which the relay-worker join
+    /// (#2149) picks the newest candidate by.
+    static func push(source: String, sessionId: String, firstSeen: Int) -> String {
+        frame(source: source, inner: "session_created",
+              session: sessionJSON(id: sessionId, project: "container-proj", state: "working", firstSeen: firstSeen))
+    }
+
     /// A relay Push frame carrying `session_deleted` — how a relay session
     /// really leaves `relaySessionMap`, and therefore how a relay project
     /// group really leaves the rendered payload (#1954).
@@ -121,10 +129,10 @@ enum RelayFixtures {
 
     /// The session object the envelope carries. Split from `frame` so neither
     /// builder takes the whole flattened parameter list.
-    private static func sessionJSON(id: String, project: String, state: String) -> String {
+    private static func sessionJSON(id: String, project: String, state: String, firstSeen: Int = 0) -> String {
         """
         {"session_id":"\(id)","state":"\(state)","model":"m",\
-        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}
+        "cwd":"/tmp","project_name":"\(project)","first_seen":\(firstSeen),"updated_at":0}
         """
     }
 }

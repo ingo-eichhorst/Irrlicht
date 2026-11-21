@@ -48,8 +48,10 @@ extension SessionManager {
         let costs: [String: Double]?
         /// Orchestrator workers in this group that no session is attached to
         /// (#2140): a free polecat, an idle pool slot. Not sessions — they
-        /// never enter `sessionMap`, the menu bar or notifications.
-        let unattachedWorkers: [UnattachedWorker]?
+        /// never enter `sessionMap`, the menu bar or notifications. `var` so
+        /// the displayed copy can drop a worker a relayed session joined
+        /// (#2149, `placingRelayJoins`).
+        var unattachedWorkers: [UnattachedWorker]?
 
         var id: String { name }
         /// Gas Town's own group — for its branding only (the ⛽ glyph, the
@@ -131,14 +133,97 @@ extension SessionManager {
     /// inert — it was rendered but absent from `projectGroupOrder`, the list
     /// `moveProjectGroupUp/Down` act on.
     ///
+    /// A relayed session joined into an orchestrator worker's row (#2149,
+    /// `relayWorkerJoins`) is shown in that worker's group instead of a relay
+    /// project group, so the #746 collapse never reaches it.
+    ///
     /// `groupedSessionIds` stays local-only: it feeds `patchApiGroups`' guard,
     /// which is about the LOCAL patch path, not about display.
     func recomposeApiGroups() {
+        let joins = relayWorkerJoins()
+        let joinedRowIDs = Set(joins.values.map(\.rowID))
         let localNames = Set(localApiGroups.map(\.name))
-        let displayed = localApiGroups
-            + relayGroups().filter { !localNames.contains($0.name) }
+        let displayed = localApiGroups.map { placingRelayJoins(joins, in: $0) }
+            + relayGroups(excluding: joinedRowIDs).filter { !localNames.contains($0.name) }
         apiGroups = orderedGroups(displayed)
         groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
+    }
+
+    /// Relayed sessions shown in an orchestrator worker's row (#2149), keyed by
+    /// worker name, each a copy carrying that worker's role, icon,
+    /// description, name and work item. A session that runs in a container
+    /// and reaches this Mac through the relay joins worker X only when
+    /// - its daemon is connected and named X: read from `relayDaemons`, which
+    ///   holds connected daemons only — never `daemonLabels` or
+    ///   `daemonLabel(for:)`, which include faded daemons and fall back to the
+    ///   id. A label equal to the daemon id is the snapshot / `daemon_status`
+    ///   arms' stand-in for a missing `daemon_label` and never joins;
+    /// - it is a relay root (no parent) with no local copy by id — the same
+    ///   id-only filter as `relayGroups(excluding:)`;
+    /// - exactly one worker in the local groups is named X, counting session
+    ///   rows with that `workerName` and `unattachedWorkers` entries alike,
+    ///   and that one is unattached. A worker with a local session therefore
+    ///   wins.
+    /// Of several candidates the newest `firstSeen` joins, a tie goes to the
+    /// lower `rowID`, and the rest keep today's placement. Derived on every
+    /// recompose and never written into `localApiGroups` or `relaySessionMap`.
+    func relayWorkerJoins() -> [String: SessionState] {
+        guard !relaySessionMap.isEmpty, !relayDaemons.isEmpty else { return [:] }
+        let free = uniquelyNamedFreeWorkers()
+        guard !free.isEmpty else { return [:] }
+        let localIDs = Set(sessionMap.keys)
+        var winners: [String: SessionState] = [:]
+        for s in relaySessionMap.values where s.parentSessionId == nil && !localIDs.contains(s.id) {
+            guard let name = connectedDaemonName(of: s), let w = free[name] else { continue }
+            if let held = winners[name], !s.joinsAhead(of: held) { continue }
+            winners[name] = s.decorated(as: w)
+        }
+        return winners
+    }
+
+    /// The unattached workers whose name no other worker in the local groups
+    /// carries, by name. Session rows are counted over `flattenAgents`, the
+    /// walk that fills `sessionMap`, so a name busy in one rig and free in
+    /// another is not unique.
+    func uniquelyNamedFreeWorkers() -> [String: UnattachedWorker] {
+        var count: [String: Int] = [:]
+        for s in localApiGroups.flatMap({ flattenAgents(from: $0) }) {
+            if let name = s.workerName { count[name, default: 0] += 1 }
+        }
+        var free: [String: UnattachedWorker] = [:]
+        func collect(_ group: AgentGroup) {
+            for w in group.unattachedWorkers ?? [] {
+                count[w.workerName, default: 0] += 1
+                free[w.workerName] = w
+            }
+            group.groups?.forEach(collect)
+        }
+        localApiGroups.forEach(collect)
+        return free.filter { count[$0.key] == 1 }
+    }
+
+    /// The name the session's daemon gave itself, while that daemon is
+    /// connected; nil for a local session, a faded daemon, or a daemon whose
+    /// stored label is its own id (the stand-in for a missing `daemon_label`).
+    func connectedDaemonName(of session: SessionState) -> String? {
+        guard let daemon = session.daemonID, let name = relayDaemons[daemon], name != daemon else { return nil }
+        return name
+    }
+
+    /// `group` as displayed: each joined session appended to the session rows
+    /// of the group that lists its worker, and that worker dropped from the
+    /// group's `unattachedWorkers` (#2149). A worker's name is unique in the
+    /// tree whenever it joined, so matching by name finds the one group.
+    func placingRelayJoins(_ joins: [String: SessionState], in group: AgentGroup) -> AgentGroup {
+        guard !joins.isEmpty else { return group }
+        var placed = group
+        let joinedHere = (group.unattachedWorkers ?? []).compactMap { joins[$0.workerName] }
+        if !joinedHere.isEmpty {
+            placed.agents = (group.agents ?? []) + joinedHere
+            placed.unattachedWorkers = group.unattachedWorkers?.filter { joins[$0.workerName] == nil }
+        }
+        placed.groups = group.groups?.map { placingRelayJoins(joins, in: $0) }
+        return placed
     }
 
     /// Test seam: install local (non-relay) groups and recompose the published
@@ -150,14 +235,15 @@ extension SessionManager {
         recomposeApiGroups()
     }
 
-    /// Groups relay-only sessions (ids not present locally) by project name.
-    /// No orchestrator handling or child nesting in v0; the common same-daemon
-    /// case yields no relay-only rows, so this only renders a genuine second
-    /// daemon's sessions.
-    func relayGroups() -> [AgentGroup] {
+    /// Groups relay-only sessions (ids not present locally) by project name,
+    /// leaving out the `excluding` rowIDs — sessions joined into a worker's
+    /// row (#2149). No child nesting in v0; the common same-daemon case yields
+    /// no relay-only rows, so this only renders a genuine second daemon's
+    /// sessions.
+    func relayGroups(excluding joined: Set<String>) -> [AgentGroup] {
         guard !relaySessionMap.isEmpty else { return [] }
         let localIDs = Set(sessionMap.keys)
-        let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
+        let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) && !joined.contains($0.rowID) }
         // A relay session is top-level only if its parent is unknown within its
         // own daemon (rowIDs are "daemon/id") and is not a local session —
         // matching rebuildSessionsFromMap. Keeps a relay child from surfacing as
@@ -480,5 +566,27 @@ extension SessionManager {
         projectGroupOrder.swapAt(ia, ib)
         saveProjectGroupOrder()
         recomposeApiGroups()
+    }
+}
+
+// The relay-worker join's tie-break and decoration (#2149).
+fileprivate extension SessionState {
+    /// Joins ahead of `other` for the same worker: started later, or in the
+    /// same second with the lower `rowID`.
+    func joinsAhead(of other: SessionState) -> Bool {
+        if firstSeen != other.firstSeen { return firstSeen > other.firstSeen }
+        return rowID < other.rowID
+    }
+
+    /// A copy shown as worker `w`: its role, icon, description, name and work
+    /// item; everything else stays the session's own.
+    func decorated(as w: SessionManager.UnattachedWorker) -> SessionState {
+        var copy = self
+        copy.role = w.role
+        copy.roleIcon = w.icon
+        copy.roleDescription = w.description
+        copy.workerName = w.workerName
+        copy.workerID = w.workerID
+        return copy
     }
 }

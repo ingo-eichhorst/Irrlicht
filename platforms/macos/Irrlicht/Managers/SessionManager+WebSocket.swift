@@ -401,11 +401,16 @@ extension SessionManager {
         // array (menu bar, cycling) agrees with `apiGroups` (list view) instead
         // of double-counting the echo.
         let localProjectNames = Set(localApiGroups.map(\.name))
+        // A session joined into a worker's row (#2149) is exempt from that
+        // collapse, as it is in `recomposeApiGroups()`: an echo of this Mac's
+        // own daemon carries this host's label, never a worker's name.
+        let joined = Set(relayWorkerJoins().values.map(\.rowID))
         // Two different relay daemons sharing a session_id stay distinct (keyed
         // by compound rowID), so build a flat array rather than a bare-id dict
         // — a dict would collide them back into one row (#537).
         let relayOnly = relaySessionMap.values.filter {
-            !localIDs.contains($0.id) && !localProjectNames.contains($0.projectName ?? "")
+            !localIDs.contains($0.id)
+                && (joined.contains($0.rowID) || !localProjectNames.contains($0.projectName ?? ""))
         }
         let all = Array(sessionMap.values) + relayOnly
 

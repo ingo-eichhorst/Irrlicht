@@ -153,3 +153,18 @@ describe('a disconnected dashboard publishes nothing (arc42 §8.5)', () => {
     expect(mocks.publishLedgerSnapshot).not.toHaveBeenCalled()
   })
 })
+
+describe('a socket that closes inside the publish debounce (#2149)', () => {
+  test('publishes nothing, though the publish was already scheduled', async () => {
+    // A closing relay socket drops the rows it delivered, and the debounce
+    // timer scheduled while it was connected would otherwise fire after the
+    // drop and publish the emptied list as the truth.
+    ws = await waitForNewSocket(ws)
+    mocks.publishLedgerSnapshot.mockClear()
+    ws.simulateOpen() // the connect edge schedules a publish
+    ws.simulateMessage(sessionFrame({ session_id: 'proc-10', state: 'waiting', project_name: 'irrlicht' }))
+    ws.close()
+    await afterDebounce()
+    expect(mocks.publishLedgerSnapshot).not.toHaveBeenCalled()
+  })
+})
