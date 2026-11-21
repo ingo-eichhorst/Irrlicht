@@ -54,13 +54,16 @@ type ZaiAccountSweeper struct {
 	// failure streak, logged once. Touched only from the sweep goroutine.
 	keys    map[AccountQuotaKey]bool
 	failing map[string]bool
+	// written is the key fingerprint each session's current zai reading was
+	// fetched under, so a reading is never left standing as another key's.
+	written map[string]string
 	// listFailing marks a session-listing failure streak, logged once.
 	listFailing bool
 }
 
 // NewZaiAccountSweeper builds a sweeper; Run starts it.
 func NewZaiAccountSweeper(deps ZaiAccountSweeperDeps) *ZaiAccountSweeper {
-	return &ZaiAccountSweeper{deps: deps, keys: map[AccountQuotaKey]bool{}, failing: map[string]bool{}}
+	return &ZaiAccountSweeper{deps: deps, keys: map[AccountQuotaKey]bool{}, failing: map[string]bool{}, written: map[string]string{}}
 }
 
 // Run sweeps once immediately, then every Interval, until ctx is done.
@@ -94,7 +97,6 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 		return
 	}
 	s.listFailing = false
-	granted := s.deps.Granted()
 	prev := s.keys
 	s.keys = map[AccountQuotaKey]bool{}
 	seen := map[string]bool{}
@@ -107,18 +109,19 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 		}
 		seen[st.SessionID] = true
 		listed := listedProviderSnapshot(st, session.ProviderZai)
-		if !granted {
-			if listed != nil {
-				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderZai, nil)
-			}
+		// Read live for every session, immediately before its key read: a
+		// fetch can block for the transport timeout, and a revoke that lands
+		// meanwhile must stop the next key read, not the next sweep's
+		// (#2161 review; TestZaiAccountSweep_RevokeMidSweepStopsTheNextKeyRead
+		// was seen red against a once-per-sweep read).
+		if !s.deps.Granted() {
+			s.clear(st.SessionID, listed)
 			continue
 		}
 		cred, err := s.deps.Credentials.Read(st.Route)
 		if err != nil {
 			s.logFailure(st.SessionID, err)
-			if listed != nil {
-				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderZai, nil)
-			}
+			s.clear(st.SessionID, listed)
 			continue
 		}
 		s.keys[ZaiAccountQuotaKey(cred.Fingerprint)] = true
@@ -128,8 +131,20 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 		} else {
 			delete(s.failing, st.SessionID)
 		}
-		if snap != nil && (listed == nil || !sameRateLimitReading(listed, snap)) {
-			s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderZai, snap)
+		switch {
+		case snap != nil:
+			if listed == nil || !sameRateLimitReading(listed, snap) {
+				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderZai, snap)
+			}
+			s.written[st.SessionID] = cred.Fingerprint
+		case listed != nil && s.written[st.SessionID] != cred.Fingerprint:
+			// The reading on the session was not fetched with this key — the
+			// key changed, or the reading predates this daemon's salt — and
+			// this key has none yet. Clear it rather than show another key's
+			// figures as this one's (#2161 review;
+			// TestZaiAccountSweep_KeyChangeNeverKeepsTheOldKeysReading was
+			// seen red before this branch existed).
+			s.clear(st.SessionID, listed)
 		}
 	}
 	for key := range prev {
@@ -141,6 +156,19 @@ func (s *ZaiAccountSweeper) sweep(ctx context.Context) {
 		if !seen[id] {
 			delete(s.failing, id)
 		}
+	}
+	for id := range s.written {
+		if !seen[id] {
+			delete(s.written, id)
+		}
+	}
+}
+
+// clear removes the session's zai reading, if the listed copy holds one.
+func (s *ZaiAccountSweeper) clear(sessionID string, listed *session.RateLimitSnapshot) {
+	delete(s.written, sessionID)
+	if listed != nil {
+		s.deps.Writer.SetProviderRateLimit(sessionID, session.ProviderZai, nil)
 	}
 }
 

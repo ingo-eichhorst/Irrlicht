@@ -250,3 +250,47 @@ func TestObserveClaudeCodeRoute_LocalFileAtRepoRoot(t *testing.T) {
 		t.Errorf("SettingsFile = %q, want the repository root's %s", got.SettingsFile, rootFile)
 	}
 }
+
+// Review finding 1 (#2161): the daemon's route reader — the dispatch that
+// makes the settings-layer fix live — sends a claude-code session through
+// the settings layers and every other adapter through the env-only read.
+func TestSessionRouteReader_DispatchesClaudeCodeToSettings(t *testing.T) {
+	withClaudeSettingsHost(t)
+	cwd := t.TempDir()
+	writeSettings(t, cwd, "settings.local.json", zaiLocal)
+	withRouteObserver(t, claudeRouteSpy(map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:9"}))
+	granted := true
+	read := SessionRouteReader("claude-code", func() bool { return granted })
+
+	requireRoute(t, read(123, "claude-code", cwd), session.RouteObserved, zaiAnthropicEndpoint, "settings:local")
+	requireRoute(t, read(123, "codex", cwd), session.RouteObserved, "http://127.0.0.1:9", "env:ANTHROPIC_BASE_URL")
+
+	granted = false
+	requireRoute(t, read(123, "claude-code", cwd), session.RouteDenied, "", "")
+}
+
+// Review finding 4 (#2161): a null value and a case-variant "Env" block are
+// not Claude Code's env, so neither may decide the route.
+func TestObserveClaudeCodeRoute_NullAndCaseVariantEnvAreNotTheRoute(t *testing.T) {
+	t.Run("null value is unreadable, not an empty cancel", func(t *testing.T) {
+		withClaudeSettingsHost(t)
+		cwd := t.TempDir()
+		writeSettings(t, cwd, "settings.local.json", `{"env":{"ANTHROPIC_BASE_URL":null}}`)
+		withRouteObserver(t, claudeRouteSpy(map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:9"}))
+		requireRoute(t, ObserveClaudeCodeRoute(123, cwd, true), session.RouteUnreadable, "", "settings:local")
+	})
+	t.Run("null env block is unreadable", func(t *testing.T) {
+		withClaudeSettingsHost(t)
+		cwd := t.TempDir()
+		writeSettings(t, cwd, "settings.local.json", `{"env":null}`)
+		withRouteObserver(t, claudeRouteSpy(map[string]string{}))
+		requireRoute(t, ObserveClaudeCodeRoute(123, cwd, true), session.RouteUnreadable, "", "settings:local")
+	})
+	t.Run("an Env block is not env", func(t *testing.T) {
+		withClaudeSettingsHost(t)
+		cwd := t.TempDir()
+		writeSettings(t, cwd, "settings.local.json", `{"Env":{"ANTHROPIC_BASE_URL":"`+zaiAnthropicEndpoint+`"}}`)
+		withRouteObserver(t, claudeRouteSpy(map[string]string{}))
+		requireRoute(t, ObserveClaudeCodeRoute(123, cwd, true), session.RouteAbsent, "", "")
+	})
+}

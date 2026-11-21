@@ -32,7 +32,11 @@
 // the local-file ownership exceptions, the workspace-trust gate on project
 // and local env values in an interactive session, and a launch environment
 // built by the Claude Desktop app, which the documentation says takes
-// precedence over settings env values.
+// precedence over settings env values. A linked worktree of a BARE
+// repository (commondir not ending in .git) is reported opaque, so its
+// sessions' routes read unreadable: the documentation names the main
+// checkout's root, and a bare repository has none, so where Claude Code
+// keeps the local file there is unknown — no probe has looked.
 package claudesettings
 
 import (
@@ -250,9 +254,10 @@ func worktreeMainRoot(d string) (string, bool) {
 
 // FlagsTouchSettings reports whether argv carries a flag that changes which
 // settings apply: --settings (a JSON value or file inserted above the
-// project files) or --setting-sources (which drops whole layers). Only the
-// flag token is matched; its value, which can be inline JSON holding a
-// credential, is never read or kept.
+// project files) or --setting-sources (which drops whole layers). argv is
+// already in memory (the caller read the whole command line); only flag
+// tokens are compared, and nothing from it — least of all a flag's value,
+// which can be inline JSON holding a credential — is kept or returned.
 func FlagsTouchSettings(argv []string) bool {
 	for _, a := range argv {
 		for _, flag := range []string{"--settings", "--setting-sources"} {
@@ -288,39 +293,54 @@ func readBounded(path string) ([]byte, error) {
 // file at path, and only those keys: a key present with an empty string is
 // returned as "", an absent key is left out.
 //
-// The whole file is read into memory first, as EnvOf reads a process's whole
-// environment buffer before filtering it (core/ports/outbound EnvOf). The
-// `env` block's other values are decoded as raw bytes, never as strings,
-// and nothing outside keys leaves this function, so a token sitting beside
+// This is selective retention, not selective reading: the whole file is
+// read into memory first, as EnvOf reads a process's whole environment
+// buffer before filtering it (core/ports/outbound EnvOf). The `env` block's
+// other values are decoded as raw bytes, never as strings, and nothing
+// outside keys leaves this function, so a token sitting beside
 // ANTHROPIC_BASE_URL is never returned to a caller that did not name it.
 //
 // A missing file returns an error satisfying errors.Is(err, fs.ErrNotExist).
 // Any other failure — unreadable, oversized, not strict JSON (Claude Code's
-// documentation: "a // comment or a trailing comma is a syntax error"), or a
-// named key holding a non-string — is a different error: the file exists
-// and its answer is unknown.
+// documentation: "a // comment or a trailing comma is a syntax error"), an
+// `env` that is not an object, or a named key holding a non-string
+// (including null) — is a different error: the file exists and its answer
+// is unknown.
 func ReadEnv(path string, keys map[string]struct{}) (map[string]string, error) {
 	data, err := readBounded(path)
 	if err != nil {
 		return nil, err
 	}
-	var doc struct {
-		Env map[string]json.RawMessage `json:"env"`
-	}
+	// Decoded into maps, not a tagged struct: encoding/json matches a struct
+	// tag case-insensitively, so `"Env"` or `"ENV"` — keys Claude Code does
+	// not read — would otherwise be taken for the env block.
+	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("claudesettings: %s is not a JSON settings object: %w", path, err)
 	}
 	out := make(map[string]string, len(keys))
+	rawEnv, ok := doc["env"]
+	if !ok {
+		return out, nil
+	}
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(rawEnv, &env); err != nil || env == nil {
+		return nil, fmt.Errorf("claudesettings: %s: env is not an object", path)
+	}
 	for k := range keys {
-		raw, ok := doc.Env[k]
+		raw, ok := env[k]
 		if !ok {
 			continue
 		}
-		var v string
-		if err := json.Unmarshal(raw, &v); err != nil {
+		// A JSON null decodes into a string as "" without error, which would
+		// read as Claude Code's documented "empty value cancels a shell
+		// export". It is a schema error instead, so it is refused like any
+		// other non-string.
+		var v *string
+		if err := json.Unmarshal(raw, &v); err != nil || v == nil {
 			return nil, fmt.Errorf("claudesettings: %s: env.%s is not a string", path, k)
 		}
-		out[k] = v
+		out[k] = *v
 	}
 	return out, nil
 }

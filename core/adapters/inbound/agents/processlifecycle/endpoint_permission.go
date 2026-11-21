@@ -42,15 +42,16 @@ func EndpointPermissionDeclaration() agent.Agent {
 			Detail: "When a session is linked to its process, irrlicht reads only " +
 				"ANTHROPIC_BASE_URL and CLAUDE_CONFIG_DIR from that process's environment — " +
 				"never the full environment, and never a credential or API-key variable. " +
-				"For a Claude Code session it also reads env.ANTHROPIC_BASE_URL, and no " +
-				"other key, from each of Claude Code's settings files, because a value " +
-				"there overrides the process environment: managed-settings.json and " +
+				"For a Claude Code session it also reads Claude Code's settings files and " +
+				"keeps only env.ANTHROPIC_BASE_URL from them, because a value there " +
+				"overrides the process environment: managed-settings.json and " +
 				"managed-settings.d/*.json in the system directory, .claude/settings.local.json " +
 				"and .claude/settings.json under the session's project, and settings.json " +
 				"in ~/.claude (or in CLAUDE_CONFIG_DIR, which is read only to find that " +
-				"file). It checks whether the process was started with --settings or " +
-				"--setting-sources, without reading or keeping the flag's value; a " +
-				"session started that way, or under a macOS configuration profile for " +
+				"file). It reads the process's command line to check whether it was " +
+				"started with --settings or --setting-sources, and keeps nothing from " +
+				"it — the flag's value is never stored or logged; a session started " +
+				"that way, or under a macOS configuration profile for " +
 				"Claude Code, is shown as unreadable rather than guessed. Before the " +
 				"value is stored or shown, irrlicht removes any username, password, " +
 				"query string, and fragment from it, keeping only the scheme, host, " +

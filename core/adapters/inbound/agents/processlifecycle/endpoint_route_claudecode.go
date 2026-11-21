@@ -75,6 +75,22 @@ func ObserveClaudeCodeRoute(pid int, cwd string, granted bool) *session.RouteObs
 	return routeFromEnv(env, envErr)
 }
 
+// SessionRouteReader returns the daemon's route reader: a session of
+// claudeAdapter (claudecode.AdapterName, passed in because claudecode
+// imports this package) resolves its route through ObserveClaudeCodeRoute,
+// every other adapter through the env-only ObserveRoute — Claude Code's
+// settings files say nothing about another agent's route. granted reports
+// the endpoint permission's CURRENT state and is read on every call.
+func SessionRouteReader(claudeAdapter string, granted func() bool) func(pid int, adapter, cwd string) *session.RouteObservation {
+	return func(pid int, adapter, cwd string) *session.RouteObservation {
+		ok := granted != nil && granted()
+		if adapter == claudeAdapter {
+			return ObserveClaudeCodeRoute(pid, cwd, ok)
+		}
+		return ObserveRoute(pid, ok)
+	}
+}
+
 // routeFromSettings turns a settings lookup into an observation, or nil when
 // no settings layer sets the URL and the process env decides.
 func routeFromSettings(r claudesettings.Result) *session.RouteObservation {

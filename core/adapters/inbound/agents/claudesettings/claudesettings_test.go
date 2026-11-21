@@ -180,3 +180,33 @@ func TestLookup_OpaqueSourceStopsTheWalk(t *testing.T) {
 		t.Fatalf("Lookup = %+v, want opaque managed", r)
 	}
 }
+
+// Review finding 7 (#2161): a linked worktree of a BARE repository has no
+// main checkout root, so where Claude Code keeps its local file is unknown
+// and the layer is opaque — a recorded decision, named in the package doc.
+func TestSources_BareRepositoryWorktreeIsOpaque(t *testing.T) {
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	gitdir := filepath.Join(bare, "worktrees", "wt1")
+	write(t, filepath.Join(gitdir, "commondir"), "../..\n")
+	wt := filepath.Join(t.TempDir(), "wt1")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+gitdir+"\n")
+
+	got := localSources(Inputs{CWD: wt, Home: t.TempDir()})
+
+	if len(got) != 1 || !got[0].Opaque {
+		t.Fatalf("localSources = %+v, want one opaque local source for a bare-repository worktree", got)
+	}
+}
+
+func TestReadEnv_RejectsNullAndIgnoresCaseVariantEnv(t *testing.T) {
+	keys := map[string]struct{}{"K": {}}
+	p := filepath.Join(t.TempDir(), "s.json")
+	write(t, p, `{"env":{"K":null}}`)
+	if got, err := ReadEnv(p, keys); err == nil {
+		t.Errorf("null value: got %v, want an error (null is not Claude Code's empty-string cancel)", got)
+	}
+	write(t, p, `{"Env":{"K":"v"},"ENV":{"K":"w"}}`)
+	if got, err := ReadEnv(p, keys); err != nil || len(got) != 0 {
+		t.Errorf("case-variant env blocks: got %v, %v; want no value (Claude Code reads only \"env\")", got, err)
+	}
+}

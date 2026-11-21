@@ -272,3 +272,56 @@ func TestZaiAccountRefresh_RefusesAnUnresolvedCredential(t *testing.T) {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 }
+
+// Review finding 3 (#2161): the grant is re-read before EVERY key read, so
+// a revoke landing mid-sweep — a fetch can block for the transport timeout
+// — stops the next session's key read at once, not at the next sweep.
+func TestZaiAccountSweep_RevokeMidSweepStopsTheNextKeyRead(t *testing.T) {
+	creds := &fakeZaiCredentials{keys: map[string]string{"/a/s.json": "key-a", "/b/s.json": "key-b"}}
+	granted := true
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		granted = false // the revoke lands while the first session's fetch is in flight
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: zaiBody("1")}, nil
+	}}
+	sw, _, _ := newZaiTestSweeper(staticSessions{zaiSession("a", "/a/s.json"), zaiSession("b", "/b/s.json")}, creds, transport, func() bool { return granted })
+
+	sw.sweep(context.Background())
+
+	if got := creds.count(); got != 1 {
+		t.Fatalf("credential reads = %d, want 1: the second session's key was read after the permission was revoked", got)
+	}
+}
+
+// Review finding 2 (#2161): a reading fetched with one key never stays on
+// the session as the reading of another. When the session's key changes and
+// the first poll under the new key fails, the old key's reading is cleared.
+func TestZaiAccountSweep_KeyChangeNeverKeepsTheOldKeysReading(t *testing.T) {
+	creds := &fakeZaiCredentials{keys: map[string]string{"/a/s.json": "key-a"}}
+	fail := false
+	transport := &fakeTransport{fn: func(int, outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		if fail {
+			return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureNetwork, Detail: "x"}
+		}
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: zaiBody("7")}, nil
+	}}
+	st := zaiSession("a", "/a/s.json")
+	sw, w, _ := newZaiTestSweeper(staticSessions{st}, creds, transport, alwaysGranted)
+
+	sw.sweep(context.Background())
+	writes := w.snapshot()
+	if len(writes) != 1 || writes[0].snap == nil {
+		t.Fatalf("setup: writes = %+v, want key A's reading", writes)
+	}
+	st.Metrics = &session.SessionMetrics{RateLimit: writes[0].snap} // the listed copy now holds key A's reading
+
+	creds.mu.Lock()
+	creds.keys["/a/s.json"] = "key-b" // the user put another key in the settings file
+	creds.mu.Unlock()
+	fail = true
+	sw.sweep(context.Background())
+
+	writes = w.snapshot()
+	if len(writes) != 2 || writes[1].snap != nil {
+		t.Fatalf("writes = %+v, want key A's reading cleared once key B's first poll failed", writes)
+	}
+}

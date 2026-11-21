@@ -10,6 +10,9 @@
 #   P2 an unreadable/opaque layer read as absent
 #   P3 a --settings flag ignored
 #   P4 the AccountBinder restamping another provider's snapshot
+#   P5 the daemon's route reader sending claude-code down the env-only read
+#   P6 a null settings value read as Claude Code's empty-string cancel
+#   P7 a case-variant "Env" block read as the env block
 # Phase 2 — the Z.ai quota parser and the forecast (#2010 triage 1–6)
 #   Z1 `usage` read as consumption
 #   Z2 `remaining` derived as limit - used
@@ -112,6 +115,8 @@ assert_go_test_goes_red() {
 
 ROUTE_GO="core/adapters/inbound/agents/processlifecycle/endpoint_route_claudecode.go"
 ROUTE_PKG="./core/adapters/inbound/agents/processlifecycle/"
+SETTINGS_GO="core/adapters/inbound/agents/claudesettings/claudesettings.go"
+SETTINGS_PKG="./core/adapters/inbound/agents/claudesettings/"
 BINDER_GO="core/application/services/account_binder.go"
 SERVICES_PKG="./core/application/services/"
 PARSER_GO="core/adapters/outbound/zaiaccountapi/parser.go"
@@ -166,6 +171,36 @@ assert_go_test_goes_red \
   "$SERVICES_PKG" \
   "TestAccountBinder_LeavesAnotherProvidersSnapshotAlone" \
   'on a zai snapshot; the Anthropic login is not its account'
+
+# P5: #2161 review finding 1 — the dispatch is what makes the fix live.
+assert_go_test_goes_red \
+  "P5 routing claude-code through the env-only read reddens the dispatch test" \
+  "$ROUTE_GO" \
+  $'\t\tif adapter == claudeAdapter {' \
+  $'\t\tif false { // mutated: claude-code never reaches the settings layers (#2010 fixture)' \
+  "$ROUTE_PKG" \
+  "TestSessionRouteReader_DispatchesClaudeCodeToSettings" \
+  'want {status:observed endpoint:"https://api.z.ai/api/anthropic" source:"settings:local"}'
+
+# P6: #2161 review finding 4 — null decodes into a string as "" silently.
+assert_go_test_goes_red \
+  "P6 reading a null value as an empty cancel reddens the null-value test" \
+  "$SETTINGS_GO" \
+  $'\t\tif err := json.Unmarshal(raw, &v); err != nil || v == nil {\n\t\t\treturn nil, fmt.Errorf("claudesettings: %s: env.%s is not a string", path, k)\n\t\t}' \
+  $'\t\tif err := json.Unmarshal(raw, &v); err != nil {\n\t\t\treturn nil, fmt.Errorf("claudesettings: %s: env.%s is not a string", path, k)\n\t\t}\n\t\tif v == nil { // mutated: null read as "" (#2010 fixture)\n\t\t\tempty := ""\n\t\t\tv = &empty\n\t\t}' \
+  "$SETTINGS_PKG" \
+  "TestReadEnv_RejectsNullAndIgnoresCaseVariantEnv" \
+  'null value: got map[K:], want an error'
+
+# P7: #2161 review finding 4 — Claude Code reads only the lowercase "env".
+assert_go_test_goes_red \
+  "P7 matching the env block case-insensitively reddens the case-variant test" \
+  "$SETTINGS_GO" \
+  $'\trawEnv, ok := doc["env"]' \
+  $'\trawEnv, ok := doc["env"]\n\tfor dk, dv := range doc { // mutated: case-insensitive env block (#2010 fixture)\n\t\tif strings.EqualFold(dk, "env") {\n\t\t\trawEnv, ok = dv, true\n\t\t}\n\t}' \
+  "$SETTINGS_PKG" \
+  "TestReadEnv_RejectsNullAndIgnoresCaseVariantEnv" \
+  'case-variant env blocks: got map[K:'
 
 # ── Phase 2 ─────────────────────────────────────────────────────────────────
 
@@ -273,8 +308,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "S2 reading the key before checking the grant reddens the not-granted test" \
   "$SWEEP_GO" \
-  $'\t\tif !granted {' \
-  $'\t\t_, _ = s.deps.Credentials.Read(st.Route) // mutated: key read before the grant check (#2010 fixture)\n\t\tif !granted {' \
+  $'\t\tif !s.deps.Granted() {' \
+  $'\t\t_, _ = s.deps.Credentials.Read(st.Route) // mutated: key read before the grant check (#2010 fixture)\n\t\tif !s.deps.Granted() {' \
   "$SERVICES_PKG" \
   "TestZaiAccountSweep_NotGrantedReadsNoKeyAndClears" \
   'without the grant, want 0'
