@@ -13,7 +13,7 @@ import SwiftUI
 @MainActor
 final class SettingsRelayTokenWriteTests: XCTestCase {
 
-    private let account = "relayToken"
+    private let account: KeychainAccount = "relayToken"
 
     /// The commit rule on its own: an edit that trims to the stored token
     /// writes nothing and reports no change, so the caller skips the nudges.

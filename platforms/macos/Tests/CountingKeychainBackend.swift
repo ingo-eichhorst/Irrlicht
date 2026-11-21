@@ -4,7 +4,7 @@ import Security
 
 /// A `KeychainBackend` double that counts every call and can be told to fail.
 final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
-    private var items: [String: String]
+    private var items: [KeychainAccount: String]
     private let readStatus: OSStatus
     private let writeSucceeds: Bool
     private let readDelay: TimeInterval
@@ -13,7 +13,7 @@ final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
     private var writeCount = 0
     private var deleteCount = 0
 
-    init(items: [String: String], readStatus: OSStatus = errSecSuccess,
+    init(items: [KeychainAccount: String], readStatus: OSStatus = errSecSuccess,
          writeSucceeds: Bool = true, readDelay: TimeInterval = 0) {
         self.items = items
         self.readStatus = readStatus
@@ -25,7 +25,7 @@ final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
     var writes: Int { lock.lock(); defer { lock.unlock() }; return writeCount }
     var deletes: Int { lock.lock(); defer { lock.unlock() }; return deleteCount }
 
-    func read(account: String) -> (value: String?, status: OSStatus) {
+    func read(account: KeychainAccount) -> (value: String?, status: OSStatus) {
         lock.lock()
         readCount += 1
         lock.unlock()
@@ -37,7 +37,7 @@ final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
         return (value, errSecSuccess)
     }
 
-    func write(_ value: String, account: String) -> Bool {
+    func write(_ value: String, account: KeychainAccount) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         writeCount += 1
@@ -46,7 +46,7 @@ final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
         return true
     }
 
-    func delete(account: String) {
+    func delete(account: KeychainAccount) {
         lock.lock()
         defer { lock.unlock() }
         deleteCount += 1

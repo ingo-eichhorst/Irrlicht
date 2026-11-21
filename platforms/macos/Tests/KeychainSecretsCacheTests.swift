@@ -15,7 +15,7 @@ import Security
 /// counts belong to the arm alone and no arm touches `KeychainStore.shared`.
 final class KeychainSecretsCacheTests: XCTestCase {
 
-    private let account = "relayToken"
+    private let account: KeychainAccount = "relayToken"
 
     func testTwoGetsReadTheBackendOnce() {
         let backend = CountingKeychainBackend(items: [account: "tok"])

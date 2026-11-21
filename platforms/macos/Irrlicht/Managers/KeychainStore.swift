@@ -32,6 +32,22 @@ import os
 /// (#832). `KeychainStoreBackendGuardTests` asserts both that the detector
 /// answers true in the test bundle and that the shared store took the
 /// in-memory backend.
+/// The account a secret is stored under, e.g. `"relayToken"`. A type rather
+/// than a bare `String` so a secret's VALUE and the account it lives under
+/// cannot be swapped at a call site; string literals still convert, so call
+/// sites read `get(account: "relayToken")`.
+struct KeychainAccount: Hashable, Sendable, ExpressibleByStringLiteral {
+    let name: String
+
+    init(_ name: String) {
+        self.name = name
+    }
+
+    init(stringLiteral name: String) {
+        self.name = name
+    }
+}
+
 enum KeychainStore {
 
     /// Picks the backend for the process-wide store. A pure function so the
@@ -49,17 +65,17 @@ enum KeychainStore {
     /// Stores `value` for `account`, replacing any existing item. An empty
     /// `value` deletes the item (so clearing the token field forgets it).
     @discardableResult
-    static func set(_ value: String, account: String) -> Bool {
+    static func set(_ value: String, account: KeychainAccount) -> Bool {
         shared.set(value, account: account)
     }
 
     /// Returns the stored secret for `account`, or "" when absent.
-    static func get(account: String) -> String {
+    static func get(account: KeychainAccount) -> String {
         shared.get(account: account)
     }
 
     /// Removes the stored secret for `account` (no-op if absent).
-    static func delete(account: String) {
+    static func delete(account: KeychainAccount) {
         shared.delete(account: account)
     }
 }
@@ -96,7 +112,7 @@ enum KeychainStore {
 final class KeychainSecrets: @unchecked Sendable {
     let backend: KeychainBackend
 
-    private var cache: [String: String] = [:]
+    private var cache: [KeychainAccount: String] = [:]
     private let lock = NSLock()
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "KeychainStore")
 
@@ -105,7 +121,7 @@ final class KeychainSecrets: @unchecked Sendable {
     }
 
     @discardableResult
-    func set(_ value: String, account: String) -> Bool {
+    func set(_ value: String, account: KeychainAccount) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         // The store already holds exactly this value: nothing to write. This
@@ -127,14 +143,14 @@ final class KeychainSecrets: @unchecked Sendable {
         return written
     }
 
-    func get(account: String) -> String {
+    func get(account: KeychainAccount) -> String {
         lock.lock()
         defer { lock.unlock() }
         if let cached = cache[account] { return cached }
         let result = backend.read(account: account)
         if result.value == nil, result.status != errSecItemNotFound {
             logger.error("""
-                Keychain read for account \(account, privacy: .public) failed with OSStatus \(result.status, privacy: .public); \
+                Keychain read for account \(account.name, privacy: .public) failed with OSStatus \(result.status, privacy: .public); \
                 treating it as empty for the rest of this process
                 """)
         }
@@ -143,7 +159,7 @@ final class KeychainSecrets: @unchecked Sendable {
         return value
     }
 
-    func delete(account: String) {
+    func delete(account: KeychainAccount) {
         lock.lock()
         defer { lock.unlock() }
         deleteLocked(account: account)
@@ -151,7 +167,7 @@ final class KeychainSecrets: @unchecked Sendable {
 
     /// `delete`'s body for a caller that already holds `lock` (`set("")`):
     /// `NSLock` is not recursive.
-    private func deleteLocked(account: String) {
+    private func deleteLocked(account: KeychainAccount) {
         backend.delete(account: account)
         cache[account] = ""
     }
@@ -161,11 +177,11 @@ final class KeychainSecrets: @unchecked Sendable {
 protocol KeychainBackend: AnyObject {
     /// The secret for `account` and the Security status of the read. `value`
     /// is non-nil exactly when the read succeeded.
-    func read(account: String) -> (value: String?, status: OSStatus)
+    func read(account: KeychainAccount) -> (value: String?, status: OSStatus)
     /// Replaces the secret for `account`. True on success.
-    func write(_ value: String, account: String) -> Bool
+    func write(_ value: String, account: KeychainAccount) -> Bool
     /// Removes the secret for `account` (no-op if absent).
-    func delete(account: String)
+    func delete(account: KeychainAccount)
 }
 
 /// The real login keychain: service `ai.irrlicht.relay`, generic passwords,
@@ -196,11 +212,11 @@ final class SystemKeychainBackend: KeychainBackend {
 
     /// Identifies the item: class, service, account. The query for update,
     /// read and delete.
-    static func itemQuery(account: String) -> [String: Any] {
+    static func itemQuery(account: KeychainAccount) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: account.name,
         ]
     }
 
@@ -212,7 +228,7 @@ final class SystemKeychainBackend: KeychainBackend {
 
     /// A new item: the identifying attributes, the data and the accessibility
     /// class it has always had.
-    static func addAttributes(account: String, data: Data) -> [String: Any] {
+    static func addAttributes(account: KeychainAccount, data: Data) -> [String: Any] {
         var attrs = itemQuery(account: account)
         attrs[kSecValueData as String] = data
         // Deliberately no SecAccessControl / biometric gate (SonarQube
@@ -227,23 +243,23 @@ final class SystemKeychainBackend: KeychainBackend {
         return attrs
     }
 
-    func write(_ value: String, account: String) -> Bool {
+    func write(_ value: String, account: KeychainAccount) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
         let updated = SecItemUpdate(Self.itemQuery(account: account) as CFDictionary,
                                     Self.updateAttributes(data: data) as CFDictionary)
         if updated == errSecSuccess { return true }
         guard updated == errSecItemNotFound else {
-            logger.error("Keychain update for account \(account, privacy: .public) failed with OSStatus \(updated, privacy: .public)")
+            logger.error("Keychain update for account \(account.name, privacy: .public) failed with OSStatus \(updated, privacy: .public)")
             return false
         }
         let added = SecItemAdd(Self.addAttributes(account: account, data: data) as CFDictionary, nil)
         if added != errSecSuccess {
-            logger.error("Keychain add for account \(account, privacy: .public) failed with OSStatus \(added, privacy: .public)")
+            logger.error("Keychain add for account \(account.name, privacy: .public) failed with OSStatus \(added, privacy: .public)")
         }
         return added == errSecSuccess
     }
 
-    func read(account: String) -> (value: String?, status: OSStatus) {
+    func read(account: KeychainAccount) -> (value: String?, status: OSStatus) {
         var query = Self.itemQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -257,7 +273,7 @@ final class SystemKeychainBackend: KeychainBackend {
         return (value, status)
     }
 
-    func delete(account: String) {
+    func delete(account: KeychainAccount) {
         SecItemDelete(Self.itemQuery(account: account) as CFDictionary)
     }
 }
@@ -267,24 +283,24 @@ final class SystemKeychainBackend: KeychainBackend {
 /// keychain dialog, and never reads, rewrites or deletes the user's real
 /// item). Each process starts empty.
 final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable {
-    private var items: [String: String] = [:]
+    private var items: [KeychainAccount: String] = [:]
     private let lock = NSLock()
 
-    func read(account: String) -> (value: String?, status: OSStatus) {
+    func read(account: KeychainAccount) -> (value: String?, status: OSStatus) {
         lock.lock()
         defer { lock.unlock() }
         guard let value = items[account] else { return (nil, errSecItemNotFound) }
         return (value, errSecSuccess)
     }
 
-    func write(_ value: String, account: String) -> Bool {
+    func write(_ value: String, account: KeychainAccount) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         items[account] = value
         return true
     }
 
-    func delete(account: String) {
+    func delete(account: KeychainAccount) {
         lock.lock()
         defer { lock.unlock() }
         items[account] = nil

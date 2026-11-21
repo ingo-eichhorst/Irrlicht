@@ -887,7 +887,7 @@ struct SettingsView: View {
     /// runs first so a refused Keychain write changes nothing; the drafts are
     /// then updated so the manual fields show what was stored.
     private func applyRelayEnrollment(origin: URL, token: String) throws {
-        try RelayEnrollmentClient.apply(token: token, origin: origin) { keychain.set($0, account: $1) }
+        try RelayEnrollmentClient.apply(token: token, origin: origin) { keychain.set($0, account: KeychainAccount($1)) }
         relayURLDraft = origin.absoluteString
         relayTokenDraft = token
         sessionManager.relayTokenDidChange()
