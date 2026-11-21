@@ -61,9 +61,9 @@ func unattachedEntry(t *testing.T, rigGroup map[string]any, name string) map[str
 
 // LOCK + mutation: passing a worker list beside Gas Town leaves Gas Town's
 // group byte-for-byte as it was alone, and puts the pool after it, ahead of
-// the project groups. Seen red by building the pool's group into the first
-// orchestrator's slot (partition.orchs[0] for every i) — the pool's slots then
-// joined Gas Town's group.
+// the project groups. Seen red by filing every claimed session under the last
+// orchestrator's partition (p.orchs[len(p.orchs)-1] in partitionSessions):
+// Gas Town's busy polecat then left its group.
 func TestBuildDashboard_PoolBesideGasTownLeavesGasTownUnchanged(t *testing.T) {
 	sessions := []*SessionState{
 		{SessionID: "pole-1", State: StateWorking, ProjectName: "irrlicht", CWD: "/gt/irrlicht/polecats/busy-1"},

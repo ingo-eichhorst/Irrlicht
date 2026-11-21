@@ -2,12 +2,12 @@ package workerlist
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -61,9 +61,6 @@ func NewAdapter(path string, logger outbound.Logger) *Adapter {
 
 // Name returns the orchestrator identifier.
 func (a *Adapter) Name() string { return Name }
-
-// Path returns the status file this adapter reads.
-func (a *Adapter) Path() string { return a.path }
 
 // Detected reports whether the status file exists (a stat, no read).
 func (a *Adapter) Detected() bool { return fileExists(a.path) }
@@ -152,21 +149,15 @@ func (a *Adapter) Watch(ctx context.Context) error {
 	events, errs := watcherChans(w)
 	base := filepath.Base(a.path)
 	for {
+		reread, tick := false, false
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
 				events = nil
-				continue
 			}
-			if filepath.Base(ev.Name) != base {
-				continue
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			a.evaluate()
+			reread = ok && filepath.Base(ev.Name) == base
 		case _, ok := <-errs:
 			// An fsnotify error (e.g. a kqueue overflow) can lose an event;
 			// the next tick re-reads the file regardless.
@@ -174,14 +165,17 @@ func (a *Adapter) Watch(ctx context.Context) error {
 				errs = nil
 			}
 		case <-ticker.C:
-			// select picks at random among ready cases, so after a revoke a
-			// pending tick could still win once; no read after cancellation.
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if !watching {
-				watching = a.watchDir(w, false)
-			}
+			reread, tick = true, true
+		}
+		// select picks at random among ready cases, so after a revoke a
+		// pending event or tick could still win once; no read after that.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if tick && !watching {
+			watching = a.watchDir(w, false)
+		}
+		if reread {
 			a.evaluate()
 		}
 	}
@@ -291,12 +285,7 @@ func stateChanged(prev, curr *orchestrator.State) bool {
 	}
 	p, c := *prev, *curr
 	p.UpdatedAt, c.UpdatedAt = time.Time{}, time.Time{}
-	pb, perr := json.Marshal(p)
-	cb, cerr := json.Marshal(c)
-	if perr != nil || cerr != nil {
-		return true // never suppress a broadcast on a marshal failure
-	}
-	return string(pb) != string(cb)
+	return !reflect.DeepEqual(p, c)
 }
 
 func (a *Adapter) logError(msg string) {

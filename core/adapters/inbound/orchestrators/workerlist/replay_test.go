@@ -87,41 +87,41 @@ func TestWorkerlistReplay(t *testing.T) {
 func runScenario(t *testing.T, dir string) {
 	t.Helper()
 	cfg := readScenario(t, filepath.Join(dir, "scenario.json"))
-	goldenDir := filepath.Join(dir, "golden")
-	if *updateGoldens {
-		if err := os.MkdirAll(goldenDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
 	states := make([]*orchestrator.State, 0, len(cfg.Ticks))
 	for i, tick := range cfg.Ticks {
-		n := i + 1
-		data, err := os.ReadFile(filepath.Join(dir, "input", "ticks", fmt.Sprintf("tick-%03d", n), "status.json"))
-		if err != nil {
-			t.Fatalf("tick %d: %v", n, err)
-		}
-		doc, err := decodeDocument(data)
-		if err != nil {
-			t.Fatalf("tick %d: fixture does not decode: %v", n, err)
-		}
-		st := buildState(doc, tick.Now)
+		st := replayTick(t, dir, i+1, tick.Now)
 		states = append(states, st)
-		compareGolden(t, st, filepath.Join(goldenDir, fmt.Sprintf("state-%03d.json", n)), n)
+		compareGolden(t, st, dir, i+1)
 	}
 	checkVerify(t, cfg.Verify, states)
 }
 
-func compareGolden(t *testing.T, st *orchestrator.State, path string, tick int) {
+// replayTick decodes tick n's status file and maps it as of now.
+func replayTick(t *testing.T, dir string, n int, now time.Time) *orchestrator.State {
 	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "input", "ticks", fmt.Sprintf("tick-%03d", n), "status.json"))
+	if err != nil {
+		t.Fatalf("tick %d: %v", n, err)
+	}
+	doc, err := decodeDocument(data)
+	if err != nil {
+		t.Fatalf("tick %d: fixture does not decode: %v", n, err)
+	}
+	return buildState(doc, now)
+}
+
+// compareGolden compares st with the scenario's golden for tick n, or writes
+// that golden under -update-goldens.
+func compareGolden(t *testing.T, st *orchestrator.State, dir string, tick int) {
+	t.Helper()
+	path := filepath.Join(dir, "golden", fmt.Sprintf("state-%03d.json", tick))
 	got, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	got = append(got, '\n')
 	if *updateGoldens {
-		if err := os.WriteFile(path, got, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeGolden(t, path, got)
 		return
 	}
 	want, err := os.ReadFile(path)
@@ -141,14 +141,11 @@ func checkVerify(t *testing.T, v scenarioVerify, states []*orchestrator.State) {
 		t.Errorf("verify name: got %q, want %q", last.Name, *v.Name)
 	}
 	expect(t, "teams", v.Teams, teamField(last, func(cb orchestrator.Codebase) string { return cb.Name }))
-	expect(t, "team_status", v.TeamStatus, teamField(last, func(cb orchestrator.Codebase) string { return cb.Status }))
+	expect(t, "team_status", v.TeamStatus, teamStatuses(last))
 	expect(t, "worker_states", v.WorkerStates, workerField(last, func(w orchestrator.Worker) string { return w.State }))
 	expect(t, "worker_ids", v.WorkerIDs, workerField(last, func(w orchestrator.Worker) string { return w.ID }))
 	expect(t, "stale_workers", v.StaleWorkers, staleNames(last))
-	expectPerTick(t, "team_status_per_tick", v.TeamStatusPerTick, states,
-		func(st *orchestrator.State) []string {
-			return teamField(st, func(cb orchestrator.Codebase) string { return cb.Status })
-		})
+	expectPerTick(t, "team_status_per_tick", v.TeamStatusPerTick, states, teamStatuses)
 	expectPerTick(t, "stale_workers_per_tick", v.StaleWorkersPerTick, states, staleNames)
 	if v.LastExit != nil {
 		got := map[string]int{}
@@ -167,7 +164,7 @@ func checkVerify(t *testing.T, v scenarioVerify, states []*orchestrator.State) {
 // an empty list is a real expectation of none).
 func expect(t *testing.T, key string, want, got []string) {
 	t.Helper()
-	if want != nil && !reflect.DeepEqual(nonNil(got), want) {
+	if want != nil && !reflect.DeepEqual(got, want) {
 		t.Errorf("verify %s: got %q, want %q", key, got, want)
 	}
 }
@@ -185,19 +182,16 @@ func expectPerTick(t *testing.T, key string, want [][]string, states []*orchestr
 	}
 }
 
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
-}
-
 func teamField(st *orchestrator.State, f func(orchestrator.Codebase) string) []string {
 	out := []string{}
 	for _, cb := range st.Codebases {
 		out = append(out, f(cb))
 	}
 	return out
+}
+
+func teamStatuses(st *orchestrator.State) []string {
+	return teamField(st, func(cb orchestrator.Codebase) string { return cb.Status })
 }
 
 func allWorkers(st *orchestrator.State) []orchestrator.Worker {
@@ -251,4 +245,14 @@ func readScenario(t *testing.T, path string) scenarioConfig {
 		t.Fatalf("%s has an empty verify block", path)
 	}
 	return cfg
+}
+
+func writeGolden(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -164,6 +164,16 @@ assert_go_test_goes_red \
   "TestBuildDashboard_FirstOrchestratorKeepsASharedSession" \
   "Gas Town rig agents"
 
+# ── dashboard: a pool beside Gas Town changes Gas Town's group ─────────────
+assert_go_test_goes_red \
+  "filing every claimed session under the last orchestrator changes Gas Town's group" \
+  "$GROUPED" \
+  'p.orchs[wi.orch].add(wi, agent)' \
+  'p.orchs[len(p.orchs)-1].add(wi, agent)' \
+  "./core/domain/session/" \
+  "TestBuildDashboard_PoolBesideGasTownLeavesGasTownUnchanged" \
+  "Gas Town group changed when a pool was passed beside it"
+
 # ── dashboard: the stale indication never reaches the row ───────────────────
 assert_go_test_goes_red \
   "dropping the Stale copy onto the unattached worker reddens the pool test" \
@@ -183,6 +193,16 @@ assert_go_test_goes_red \
   "./$WL/" \
   "TestWorkerlistReplay" \
   "TestWorkerlistReplay/stale-heartbeat"
+
+# ── workerlist: the same mutation against the boundary table ────────────────
+assert_go_test_goes_red \
+  "comparing slot staleness with >= reddens the boundary table's exactly-T heartbeat row" \
+  "$WL/document.go" \
+  'out.Stale = teamStale || now.Sub(ref) > threshold' \
+  'out.Stale = teamStale || now.Sub(ref) >= threshold' \
+  "./$WL/" \
+  "TestBuildState_StalenessBoundary" \
+  "TestBuildState_StalenessBoundary/heartbeat_exactly_T"
 
 # ── workerlist: an unknown schema is accepted ───────────────────────────────
 assert_go_test_goes_red \
@@ -288,8 +308,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "removing the tick's re-read leaves a dead pool fresh forever" \
   "$WL/adapter.go" \
-  $'\t\t\t\twatching = a.watchDir(w, false)\n\t\t\t}\n\t\t\ta.evaluate()' \
-  $'\t\t\t\twatching = a.watchDir(w, false)\n\t\t\t}' \
+  'reread, tick = true, true' \
+  'tick = true' \
   "./$WL/" \
   "TestAdapter_TickTurnsSlotStaleWithoutFileChange" \
   "slot stale after the threshold: not observed"
@@ -313,6 +333,22 @@ assert_go_test_goes_red \
   "./$WL/" \
   "TestAdapter_WatchAfterCancellationReadsNothing" \
   "Watch on a cancelled context read the file"
+
+# ── workerlist: a replay with nothing to replay passes ──────────────────────
+# Not a source mutation: the fixture directory is pointed at an empty one
+# through WORKERLIST_FIXTURES_DIR, and the replay must fail rather than pass
+# having checked nothing.
+empty_dir="$(mktemp -d)"
+out="$(cd "$REPO_ROOT" && WORKERLIST_FIXTURES_DIR="$empty_dir" \
+  go test "./$WL/" -run TestWorkerlistReplay -count=1 2>&1; echo "GO_TEST_RC=$?")"
+rmdir "$empty_dir"
+if grep -q 'GO_TEST_RC=0' <<<"$out" || ! grep -qF "no scenarios under" <<<"$out"; then
+  echo "FAIL: an empty scenarios directory must fail the replay with \"no scenarios under\""
+  echo "$out" | quote_output
+  fails=$((fails + 1))
+else
+  echo "ok  an empty scenarios directory fails the replay"
+fi
 
 if [[ $fails -gt 0 ]]; then
   echo "workerlist-mutations: $fails FAILED"

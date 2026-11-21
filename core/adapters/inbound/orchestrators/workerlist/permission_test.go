@@ -1,6 +1,7 @@
 package workerlist
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,27 +59,19 @@ func TestFileDetected(t *testing.T) {
 	})
 }
 
-// LOCK: one observe permission, keyed "state", with the daemon's effects.
+// LOCK: one observe permission, keyed "state", whose Apply is the daemon's
+// start effect and whose Remove is its stop effect.
 func TestPermissionDeclarationShape(t *testing.T) {
-	calls := 0
-	effect := func() error { calls++; return nil }
-	decl := PermissionDeclaration(effect, effect)
-	if decl.Identity.Name != Name || decl.Identity.DisplayName == "" {
-		t.Errorf("identity = %+v", decl.Identity)
-	}
-	if len(decl.Permissions) != 1 {
-		t.Fatalf("%d permissions, want 1", len(decl.Permissions))
+	errStart, errStop := errors.New("start"), errors.New("stop")
+	decl := PermissionDeclaration(func() error { return errStart }, func() error { return errStop })
+	if decl.Identity.Name != Name || len(decl.Permissions) != 1 {
+		t.Fatalf("declaration = %+v, want %q with one permission", decl, Name)
 	}
 	p := decl.Permissions[0]
 	if p.Key != PermissionKeyState || p.Kind != permission.KindObserve {
 		t.Errorf("permission = %s/%s, want %s/%s", p.Key, p.Kind, PermissionKeyState, permission.KindObserve)
 	}
-	if p.Apply == nil || p.Remove == nil {
-		t.Fatal("Apply/Remove not wired")
-	}
-	_ = p.Apply()
-	_ = p.Remove()
-	if calls != 2 {
-		t.Errorf("effects ran %d times, want the two passed in", calls)
+	if p.Apply() != errStart || p.Remove() != errStop {
+		t.Error("Apply/Remove are not the start/stop effects passed in")
 	}
 }

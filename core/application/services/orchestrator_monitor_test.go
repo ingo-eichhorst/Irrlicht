@@ -10,14 +10,6 @@ import (
 	"irrlicht/core/domain/orchestrator"
 )
 
-// orchTestLog is a no-op outbound.Logger for the monitor tests.
-type orchTestLog struct{}
-
-func (orchTestLog) LogInfo(_, _, _ string)                                  {}
-func (orchTestLog) LogError(_, _, _ string)                                 {}
-func (orchTestLog) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (orchTestLog) Close() error                                            { return nil }
-
 // fakeOrchWatcher is an inbound.OrchestratorWatcher whose snapshots the test
 // emits by hand.
 type fakeOrchWatcher struct {
@@ -59,7 +51,10 @@ func (f *fakeOrchWatcher) emit(t *testing.T, s orchestrator.State) {
 	}
 }
 
-// waitSubscribed waits until the monitor's drain goroutine has subscribed.
+// waitSubscribed waits until the monitor has subscribed to f. Since the #2148
+// review AddWatcher subscribes before it returns, so this returns at once on
+// this tree; it stays so these tests also replay on 796a07307, where the
+// drain goroutine subscribed later.
 func (f *fakeOrchWatcher) waitSubscribed(t *testing.T) {
 	t.Helper()
 	waitOrch(t, f.name+" subscribed", func() bool {
@@ -114,7 +109,7 @@ func queueSnapshot(t *testing.T, m *OrchestratorMonitor, ctx context.Context, w 
 // assertion, because the permission service's revoke returns as soon as the
 // stop effect has cancelled the context.
 func TestOrchestratorMonitor_RegistrationEndDropsStateAtOnce(t *testing.T) {
-	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	m := NewOrchestratorMonitor(nil, nil, &gateLogger{})
 	startOrchRun(t, m)
 
 	w := &fakeOrchWatcher{name: "workerlist"}
@@ -134,7 +129,7 @@ func TestOrchestratorMonitor_RegistrationEndDropsStateAtOnce(t *testing.T) {
 // A snapshot the drain had already forwarded when the registration ended is
 // stored by Run afterwards; it must not bring the revoked orchestrator back.
 func TestOrchestratorMonitor_SnapshotInFlightAtRevokeStaysDropped(t *testing.T) {
-	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	m := NewOrchestratorMonitor(nil, nil, &gateLogger{})
 	revoked := &fakeOrchWatcher{name: "workerlist"}
 	watchCtx, endRegistration := context.WithCancel(context.Background())
 	defer endRegistration()
@@ -160,7 +155,7 @@ func TestOrchestratorMonitor_SnapshotInFlightAtRevokeStaysDropped(t *testing.T) 
 // replace them. Guards a drop keyed on the adapter name instead of on the
 // registration.
 func TestOrchestratorMonitor_RegrantServesNewRegistrationOnly(t *testing.T) {
-	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	m := NewOrchestratorMonitor(nil, nil, &gateLogger{})
 	oldCtx, endOld := context.WithCancel(context.Background())
 	defer endOld()
 	queueSnapshot(t, m, oldCtx, &fakeOrchWatcher{name: "workerlist"},
@@ -183,7 +178,7 @@ func TestOrchestratorMonitor_RegrantServesNewRegistrationOnly(t *testing.T) {
 // registration's must not replace it: the orchestrator would vanish until its
 // next snapshot. Red-first on 796a07307, which stored whatever came last.
 func TestOrchestratorMonitor_EndedSnapshotDoesNotReplaceLiveOne(t *testing.T) {
-	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	m := NewOrchestratorMonitor(nil, nil, &gateLogger{})
 	liveCtx, endLive := context.WithCancel(context.Background())
 	defer endLive()
 	queueSnapshot(t, m, liveCtx, &fakeOrchWatcher{name: "workerlist"},
@@ -216,7 +211,7 @@ func TestOrchestratorMonitor_EndedSnapshotDoesNotReplaceLiveOne(t *testing.T) {
 // which makes the old order fail every time rather than most of the time.
 func TestOrchestratorMonitor_AddWatcherSubscribesBeforeReturning(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	m := NewOrchestratorMonitor(nil, nil, orchTestLog{})
+	m := NewOrchestratorMonitor(nil, nil, &gateLogger{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := &fakeOrchWatcher{name: "workerlist"}

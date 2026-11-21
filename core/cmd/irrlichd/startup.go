@@ -918,7 +918,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		hasLive = processlifecycle.HasLiveProcess
 	}
 	// consentCatalog (consentcatalog.go) composes the agent adapters with the
-	// seven daemon-wide entries. It is shared with the --print-managed-files
+	// daemon-wide entries. It is shared with the --print-managed-files
 	// and --uninstall-hooks flag paths on purpose: what the wizard offers is
 	// what grant-all grants, so it has to be the same list the recorder's
 	// protected file set is projected from (#1383).
@@ -945,8 +945,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
 	// The worker list is detected by its status file's presence (stat-only):
 	// $IRRLICHT_WORKERLIST_FILE, else workerlist.json in the data directory.
-	workerlistDataDir := dataDir(deps.Home)
-	permService.SetDetectionProbe(workerlist.Name, func() bool { return workerlist.FileDetected(workerlistDataDir) })
+	permService.SetDetectionProbe(workerlist.Name, func() bool { return workerlist.FileDetected(dataDir(deps.Home)) })
 	// Launcher and endpoint-route capture are both relevant whenever ANY
 	// agent runs, so each wizard row appears alongside the first detected
 	// agent's. Short-circuits on the first live match, and the detection

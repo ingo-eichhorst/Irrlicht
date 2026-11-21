@@ -84,7 +84,6 @@ func (m *OrchestratorMonitor) AddWatcher(ctx context.Context, w inbound.Orchestr
 // carries ctx as its registration.
 func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.OrchestratorWatcher, ch <-chan orchestrator.State) {
 	defer w.Unsubscribe(ch)
-	defer m.forget(ctx, w.Name())
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,17 +98,6 @@ func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.Orches
 				return
 			}
 		}
-	}
-}
-
-// forget deletes name's stored snapshot when it came from the registration
-// reg, keeping the map to live registrations. It only tidies: State and
-// States already skip a snapshot whose registration has ended.
-func (m *OrchestratorMonitor) forget(reg context.Context, name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if rs, ok := m.states[name]; ok && rs.reg == reg {
-		delete(m.states, name)
 	}
 }
 

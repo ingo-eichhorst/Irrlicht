@@ -33,7 +33,7 @@ import (
 //
 // Package agents cannot compose this itself: processlifecycle imports agents,
 // so agents importing processlifecycle back would be an import cycle. This is
-// the lowest package that already sees all seven.
+// the lowest package that already sees all of them.
 //
 // fx carries the grant/revoke effects only the daemon's runtime wiring can
 // build. Callers that read declarations rather than exercise them pass no-ops

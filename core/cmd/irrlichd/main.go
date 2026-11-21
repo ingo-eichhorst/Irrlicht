@@ -391,7 +391,7 @@ func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store
 // permissions that actually write them.
 //
 // It projects the full consent catalog rather than agents.All(): the kitty
-// patch is one of seven daemon-wide declarations appended outside the adapter
+// patch is one of the daemon-wide declarations appended outside the adapter
 // registry (consentCatalog lists them), and projecting only the registry is
 // how it stayed unprotected.
 //
@@ -716,7 +716,6 @@ func runDaemon() {
 	// registers) so /api/v1/sessions can always consult it.
 	orchMonitor, orchCtx, orchCancel := setupOrchestratorMonitor(push, logger)
 	defer orchCancel()
-	startGastown, stopGastown := gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 
 	// Muse's account-quota poller (issue #2007) is constructed once inside
 	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
@@ -726,10 +725,11 @@ func runDaemon() {
 	museAPI := museAccountAPIEffects(logger)
 
 	home, _ := os.UserHomeDir()
-	// The worker-list watcher (#2148), consent-gated like Gas Town. Its path
-	// is resolved once, at startup: $IRRLICHT_WORKERLIST_FILE, else
-	// workerlist.json in the data directory.
-	startWorkerlist, stopWorkerlist := workerlistEffects(orchCtx, orchMonitor,
+	effects := consentEffects{StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop}
+	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
+	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
+	// is resolved once, at startup.
+	effects.StartWorkerlist, effects.StopWorkerlist = workerlistEffects(orchCtx, orchMonitor,
 		workerlist.ResolvePath(dataDir(home)), logger)
 	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
 		DemoMode:         demoMode,
@@ -752,14 +752,7 @@ func runDaemon() {
 		AllAgents: allAgents,
 		DemoMode:  demoMode,
 		Home:      home,
-		Effects: consentEffects{
-			StartGastown:        startGastown,
-			StopGastown:         stopGastown,
-			StartMuseAccountAPI: museAPI.Start,
-			StopMuseAccountAPI:  museAPI.Stop,
-			StartWorkerlist:     startWorkerlist,
-			StopWorkerlist:      stopWorkerlist,
-		},
+		Effects:   effects,
 	})
 
 	// Register API endpoints that need orchMonitor.

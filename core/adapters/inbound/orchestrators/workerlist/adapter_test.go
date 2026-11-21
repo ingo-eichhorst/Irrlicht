@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/orchestrator"
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // captureLog records log lines so a test can count them.
@@ -57,17 +58,17 @@ func testAdapter(t *testing.T) (*Adapter, *captureLog, *atomic.Int64) {
 // file in the same directory, then rename it over path.
 func writeAtomic(t *testing.T, path, content string) {
 	t.Helper()
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicfile.WriteFile(path, []byte(content)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func teamStatuses(st *orchestrator.State) []string {
-	return teamField(st, func(cb orchestrator.Codebase) string { return cb.Status })
+// wantTeamStatus requires st to hold exactly one team, with status want.
+func wantTeamStatus(t *testing.T, when string, st *orchestrator.State, want string) {
+	t.Helper()
+	if got := teamStatuses(st); len(got) != 1 || got[0] != want {
+		t.Errorf("%s: team statuses %v, want [%s]", when, got, want)
+	}
 }
 
 // waitState polls a.State() until cond holds, failing with the elapsed time.
@@ -112,31 +113,25 @@ func TestAdapter_UnreadableKeepsLastGoodSnapshot(t *testing.T) {
 	for name, content := range bad {
 		t.Run(name, func(t *testing.T) {
 			a, log, _ := testAdapter(t)
-			writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+			writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 			a.evaluate()
-			if got := teamStatuses(a.State()); len(got) != 1 || got[0] != statusOperational {
-				t.Fatalf("good document: team statuses %v", got)
-			}
+			wantTeamStatus(t, "good document", a.State(), statusOperational)
 
-			writeAtomic(t, a.Path(), content)
+			writeAtomic(t, a.path, content)
 			a.evaluate()
 			a.evaluate()
 			st := a.State()
 			if !st.Running || slotID(st) != "p-1" {
 				t.Fatalf("unreadable document: state %+v, want the last good snapshot", st)
 			}
-			if got := teamStatuses(st); len(got) != 1 || got[0] != statusUnreadable {
-				t.Errorf("unreadable document: team statuses %v, want [unreadable]", got)
-			}
+			wantTeamStatus(t, "unreadable document", st, statusUnreadable)
 			if e, _ := log.counts(); e != 1 {
 				t.Errorf("logged %d errors over two reads of one unreadable file, want 1: %v", e, log.errs)
 			}
 
-			writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+			writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 			a.evaluate()
-			if got := teamStatuses(a.State()); len(got) != 1 || got[0] != statusOperational {
-				t.Errorf("good again: team statuses %v, want [operational]", got)
-			}
+			wantTeamStatus(t, "good again", a.State(), statusOperational)
 		})
 	}
 }
@@ -144,7 +139,7 @@ func TestAdapter_UnreadableKeepsLastGoodSnapshot(t *testing.T) {
 // An unreadable document with no good one before it shows no pool, loudly.
 func TestAdapter_UnreadableWithoutGoodSnapshotIsNotRunning(t *testing.T) {
 	a, log, _ := testAdapter(t)
-	writeAtomic(t, a.Path(), `{"schema": 1, "teams": [`)
+	writeAtomic(t, a.path, `{"schema": 1, "teams": [`)
 	a.evaluate()
 	if st := a.State(); st == nil || st.Running {
 		t.Fatalf("state = %+v, want Running=false", st)
@@ -167,7 +162,7 @@ func TestAdapter_WatchSeesFileCreatedAfterStart(t *testing.T) {
 	go func() { _ = a.Watch(ctx) }()
 	waitState(t, a, "initial read of the missing file", func(st *orchestrator.State) bool { return !st.Running })
 
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	waitState(t, a, "created file", func(st *orchestrator.State) bool { return st.Running && slotID(st) == "p-1" })
 }
 
@@ -216,7 +211,7 @@ func TestAdapter_WatchSeesFileCreatedInLiveDataDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(`{"x":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	waitState(t, a, "status file created in the data directory", func(st *orchestrator.State) bool {
 		return st.Running && slotID(st) == "p-1"
 	})
@@ -227,7 +222,7 @@ func TestAdapter_WatchSeesFileCreatedInLiveDataDir(t *testing.T) {
 // and parsed the status file once. No read after a revoke.
 func TestAdapter_WatchAfterCancellationReadsNothing(t *testing.T) {
 	a, _, _ := testAdapter(t)
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := a.Watch(ctx); err == nil {
@@ -247,23 +242,23 @@ func TestAdapter_WatchAfterCancellationReadsNothing(t *testing.T) {
 func TestAdapter_WatchSeesAtomicReplace(t *testing.T) {
 	a, _, _ := testAdapter(t)
 	a.reevaluate = time.Hour
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = a.Watch(ctx) }()
 	waitState(t, a, "initial read", func(st *orchestrator.State) bool { return st.Running && slotID(st) == "p-1" })
 
-	writeAtomic(t, a.Path(), strings.Replace(oneSlot(t0, rfc(t0)), `"p-1"`, `"p-2"`, 1))
+	writeAtomic(t, a.path, strings.Replace(oneSlot(t0, rfc(t0)), `"p-1"`, `"p-2"`, 1))
 	waitState(t, a, "replace", func(st *orchestrator.State) bool { return st.Running && slotID(st) == "p-2" })
 }
 
 // With the file unchanged, the re-evaluation tick alone turns a busy slot
-// stale once the clock passes the threshold. Seen red by removing the
-// evaluate call from Watch's ticker case.
+// stale once the clock passes the threshold. Seen red by making Watch's
+// ticker case stop asking for a re-read (tools/lib/workerlist-mutations_test.sh).
 func TestAdapter_TickTurnsSlotStaleWithoutFileChange(t *testing.T) {
 	a, _, clock := testAdapter(t)
 	a.reevaluate = 10 * time.Millisecond
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = a.Watch(ctx) }()
@@ -281,9 +276,9 @@ func TestAdapter_TickTurnsSlotStaleWithoutFileChange(t *testing.T) {
 func TestAdapter_SlowSubscriberGetsNewestSnapshot(t *testing.T) {
 	a, _, _ := testAdapter(t)
 	ch := a.Subscribe()
-	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	writeAtomic(t, a.path, oneSlot(t0, rfc(t0)))
 	a.evaluate()
-	writeAtomic(t, a.Path(), strings.Replace(oneSlot(t0, rfc(t0)), `"p-1"`, `"p-2"`, 1))
+	writeAtomic(t, a.path, strings.Replace(oneSlot(t0, rfc(t0)), `"p-1"`, `"p-2"`, 1))
 	a.evaluate()
 	select {
 	case st := <-ch:
