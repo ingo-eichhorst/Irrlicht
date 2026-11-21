@@ -73,6 +73,10 @@ export function sessionFacts(session) {
 // session at all: handlers.go tags it without omitempty, and BuildDashboard
 // (core/domain/session/grouped.go) starts from `var result []*AgentGroup`.
 export function readSessions(payload) {
-  if (!payload || (payload.groups !== null && !Array.isArray(payload.groups))) return null;
+  if (!isSessionsPayload(payload)) return null;
   return topLevelSessions(payload).map(sessionFacts);
+}
+
+function isSessionsPayload(payload) {
+  return Boolean(payload) && (payload.groups === null || Array.isArray(payload.groups));
 }

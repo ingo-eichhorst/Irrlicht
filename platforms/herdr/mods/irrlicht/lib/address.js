@@ -102,15 +102,26 @@ export function cleanPath(p) {
   if (p === '') return '.';
   const rooted = p.startsWith('/');
   const out = [];
-  for (const seg of p.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg !== '..') out.push(seg);
-    else if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
-    else if (!rooted) out.push('..');
-  }
+  for (const seg of p.split('/')) pushSegment(out, seg, rooted);
   const joined = out.join('/');
   if (rooted) return '/' + joined;
   return joined === '' ? '.' : joined;
+}
+
+// pushSegment is one turn of Clean's loop: an empty element (a doubled slash)
+// and `.` add nothing, `..` is foldDotDot's, anything else is kept.
+function pushSegment(out, seg, rooted) {
+  if (seg === '' || seg === '.') return;
+  if (seg === '..') foldDotDot(out, rooted);
+  else out.push(seg);
+}
+
+// foldDotDot is Clean's `..` rule: it removes the element before it unless
+// that is a `..` too; with nothing to remove it is kept, except at the root,
+// where `/..` is `/`.
+function foldDotDot(out, rooted) {
+  if (out.length > 0 && out[out.length - 1] !== '..') out.pop();
+  else if (!rooted) out.push('..');
 }
 
 // addrFilePath mirrors daemonaddr.AddrFilePath. `irrlichtHome` and `home` are

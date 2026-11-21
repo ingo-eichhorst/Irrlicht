@@ -49,26 +49,24 @@ export function panelRows(agents, terminals, sessions) {
   });
 }
 
+const STARTING = { text: 'Looking for the Irrlicht daemon\u2026', tone: 'dim' };
+
+const STATUS_LINES = new Map([
+  ['ok', (s) => ({ text: 'Irrlicht at ' + s.where, tone: 'dim' })],
+  ['unreachable', (s) => ({ text: 'Irrlicht daemon not reachable at ' + s.where, tone: 'dim' })],
+  ['stalled', (s) => ({ text: 'Irrlicht daemon ' + (s.where ? 'at ' + s.where + ' ' : '') + 'is not answering', tone: 'dim' })],
+  ['unexpected', (s) => ({ text: 'Irrlicht at ' + s.where + ' sent an unexpected answer', tone: 'warn' })],
+  ['error', (s) => ({ text: 'Irrlicht panel error: ' + (s.message || 'unknown'), tone: 'warn' })],
+]);
+
 // statusLine is the line under the header: which daemon the panel reads, or
 // why it reads none. An unreachable daemon and a failure inside the panel are
 // told apart, so a broken panel never passes for a stopped daemon.
 //   state: { phase: 'starting' | 'ok' | 'unreachable' | 'stalled' | 'unexpected' | 'error',
 //            where?: 'localhost:7837', message?: string }
 export function statusLine(state) {
-  switch (state?.phase) {
-    case 'ok':
-      return { text: 'Irrlicht at ' + state.where, tone: 'dim' };
-    case 'unreachable':
-      return { text: 'Irrlicht daemon not reachable at ' + state.where, tone: 'dim' };
-    case 'stalled':
-      return { text: 'Irrlicht daemon ' + (state.where ? 'at ' + state.where + ' ' : '') + 'is not answering', tone: 'dim' };
-    case 'unexpected':
-      return { text: 'Irrlicht at ' + state.where + ' sent an unexpected answer', tone: 'warn' };
-    case 'error':
-      return { text: 'Irrlicht panel error: ' + (state.message || 'unknown'), tone: 'warn' };
-    default:
-      return { text: 'Looking for the Irrlicht daemon…', tone: 'dim' };
-  }
+  const line = STATUS_LINES.get(state ? state.phase : undefined);
+  return line ? line(state) : STARTING;
 }
 
 // signature is what the panel compares to skip a redraw after a poll: the

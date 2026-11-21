@@ -32,9 +32,9 @@ import { trimSlashes } from './sessions.js';
 // `adapter` were the same string for both agents measured ("claude-code",
 // "codex"); a pair that spells it differently matches nothing, never the
 // wrong session.
-function agentKey(agent, terminal) {
-  const cwd = trimSlashes(terminal?.foreground?.cwd || terminal?.cwd || '');
-  if (!agent?.app || !cwd) return null;
+function agentKey({ agent, terminal }) {
+  const cwd = trimSlashes((terminal.foreground || {}).cwd || terminal.cwd || '');
+  if (!agent.app || !cwd) return null;
   return agent.app + '\u0000' + cwd;
 }
 
@@ -48,9 +48,7 @@ function groupBy(items, keyOf) {
   const groups = new Map();
   for (const item of items) {
     const k = keyOf(item);
-    if (k === null) continue;
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(item);
+    if (k !== null) groups.set(k, (groups.get(k) || []).concat([item]));
   }
   return groups;
 }
@@ -69,7 +67,7 @@ const isLocal = (agent) => !String(agent.address).includes('/');
 // candidatePids are the pids a terminal's agent can be known by: the
 // foreground process group's leader first, then the terminal's own process.
 function candidatePids(terminal) {
-  const pids = [terminal?.foreground?.pid, terminal?.pid];
+  const pids = [(terminal.foreground || {}).pid, terminal.pid];
   return pids;
 }
 
@@ -84,40 +82,46 @@ function pidMatches(terminal, sessionsByPid) {
   return [];
 }
 
-export function matchAgents(allAgents, terminals, sessions) {
-  const agents = allAgents.filter(isLocal);
-  const terminalOf = new Map(terminals.map((t) => [t.address, t]));
+// matchByPid runs the pid step over every agent. It answers the rows it
+// matched, the session ids they claimed, and the agents no pid decided.
+function matchByPid(herdr, sessions) {
   const sessionsByPid = groupBy(sessions, (s) => s.pid);
+  const result = { matched: new Map(), claimed: new Set(), undecided: [] };
+  for (const h of herdr) recordPidStep(result, h, pidMatches(h.terminal, sessionsByPid));
+  return result;
+}
 
-  const matched = new Map();
-  const claimed = new Set();
-  const undecided = [];
-  for (const a of agents) {
-    const found = pidMatches(terminalOf.get(a.address), sessionsByPid);
-    if (found.length === 1) {
-      matched.set(a.address, { session: found[0], via: 'pid' });
-      claimed.add(found[0].id);
-    } else if (found.length === 0) {
-      undecided.push(a);
-    }
-  }
+// recordPidStep files one agent's pid step: no session leaves it to the
+// folder rule, one is its match, more are ambiguous and decide "no gauge".
+function recordPidStep(result, h, found) {
+  if (found.length === 0) result.undecided.push(h);
+  if (found.length !== 1) return;
+  result.matched.set(h.agent.address, { session: found[0], via: 'pid' });
+  result.claimed.add(found[0].id);
+}
 
-  // The folder rule, for agents no pid decided. It decides only when exactly
-  // one Herdr agent and exactly one session share the pair, both counted over
-  // everything, pid-matched ones included: an agent a pid already matched
-  // that also runs in the folder still makes the folder ambiguous. Apart from
-  // the counts, a session a pid already gave to a row (`claimed`) is never
-  // handed to a second row.
-  const agentKeyOf = (a) => agentKey(a, terminalOf.get(a.address));
-  const agentsPerKey = countBy(agents, agentKeyOf);
+// matchByFolder is the folder rule, for agents no pid decided. It decides
+// only when exactly one Herdr agent and exactly one session share the pair,
+// both counted over everything, pid-matched ones included: an agent a pid
+// already matched that also runs in the folder still makes the folder
+// ambiguous. Apart from the counts, a session a pid already gave to a row
+// (`claimed`) is never handed to a second row.
+function matchByFolder(herdr, sessions, { matched, claimed, undecided }) {
+  const agentsPerKey = countBy(herdr, agentKey);
   const sessionsPerKey = groupBy(sessions, sessionKey);
-  for (const a of undecided) {
-    const k = agentKeyOf(a);
+  for (const h of undecided) {
+    const k = agentKey(h);
     const pair = sessionsPerKey.get(k) || [];
     const unique = agentsPerKey.get(k) === 1 && pair.length === 1;
     if (unique && !claimed.has(pair[0].id)) {
-      matched.set(a.address, { session: pair[0], via: 'folder' });
+      matched.set(h.agent.address, { session: pair[0], via: 'folder' });
     }
   }
   return matched;
+}
+
+export function matchAgents(allAgents, terminals, sessions) {
+  const terminalOf = new Map(terminals.map((t) => [t.address, t]));
+  const herdr = allAgents.filter(isLocal).map((agent) => ({ agent, terminal: terminalOf.get(agent.address) || {} }));
+  return matchByFolder(herdr, sessions, matchByPid(herdr, sessions));
 }

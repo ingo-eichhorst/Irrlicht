@@ -25,10 +25,10 @@ export function matchHerdr(matchFn, herdr, sessions) {
   return matchFn(herdr.map((h) => h.agent), herdr.map((h) => h.terminal), sessionsOf(sessions));
 }
 
-export function session(id, adapter, pid, cwd, percent = 10) {
+export function session(id, adapter, pid, cwd) {
   return {
     session_id: id, adapter, pid, cwd, state: 'working',
-    metrics: { context_utilization_percentage: percent, pressure_level: 'safe', context_window: 1000000 },
+    metrics: { context_utilization_percentage: 10, pressure_level: 'safe', context_window: 1000000 },
   };
 }
 
@@ -41,7 +41,7 @@ export function ambiguousPairsGetNoGauge(matchFn) {
 
   // Two Herdr agents, two sessions, one folder, no pid in common.
   const both = matchHerdr(matchFn, [one, two],
-    [session('a', 'codex', 12, '/repo', 10), session('b', 'codex', 22, '/repo', 80)]);
+    [session('a', 'codex', 12, '/repo'), session('b', 'codex', 22, '/repo')]);
   expect(both.size).toBe(0);
 
   // One Herdr agent, two sessions in its folder (the other runs outside Herdr).

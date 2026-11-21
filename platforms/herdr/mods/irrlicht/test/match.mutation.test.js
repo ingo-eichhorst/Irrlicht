@@ -57,8 +57,8 @@ describe('committed mutants of the matching rules', () => {
   test('counting only the undecided agents lets a folder look unambiguous', async () => {
     const { matchAgents } = await loadMutant(
       'count-undecided-only',
-      'const agentsPerKey = countBy(agents, agentKeyOf);',
-      'const agentsPerKey = countBy(undecided, agentKeyOf);',
+      'const agentsPerKey = countBy(herdr, agentKey);',
+      'const agentsPerKey = countBy(undecided, agentKey);',
     );
     expect(() => pidMatchedAgentsCountInTheirFolder(matchAgents)).toThrow();
   });
@@ -66,8 +66,8 @@ describe('committed mutants of the matching rules', () => {
   test('asking the terminal pid first picks the wrapper\'s session', async () => {
     const { matchAgents } = await loadMutant(
       'terminal-pid-first',
-      'const pids = [terminal?.foreground?.pid, terminal?.pid];',
-      'const pids = [terminal?.pid, terminal?.foreground?.pid];',
+      'const pids = [(terminal.foreground || {}).pid, terminal.pid];',
+      'const pids = [terminal.pid, (terminal.foreground || {}).pid];',
     );
     expect(() => foregroundPidWinsOverTerminalPid(matchAgents)).toThrow();
   });
@@ -75,8 +75,8 @@ describe('committed mutants of the matching rules', () => {
   test('matching agents on other machines lets a remote pid show a local session', async () => {
     const { matchAgents } = await loadMutant(
       'remote-agents-matched',
-      'const agents = allAgents.filter(isLocal);',
-      'const agents = allAgents;',
+      'allAgents.filter(isLocal).map(',
+      'allAgents.map(',
     );
     expect(() => remoteAgentsAreNeverMatched(matchAgents)).toThrow();
   });

@@ -34,32 +34,49 @@ export const RERESOLVE_MS = 30_000;
 // an exception anywhere else is the panel's own fault and propagates, so it is
 // shown as one instead of as a stopped daemon.
 export async function pollOnce(prev, io) {
-  const now = io.now();
-  const fresh = !prev?.resolved || (prev.phase !== 'ok' && now - prev.resolvedAt >= RERESOLVE_MS);
-  const resolved = fresh ? await resolveDaemonAddress(io.ladder) : prev.resolved;
-  const kept = { where: hostPortOf(resolved), resolved, resolvedAt: fresh ? now : prev.resolvedAt };
-
+  const kept = await addressFor(prev, io);
   let response;
   try {
-    response = await io.fetch(sessionsURL(resolved));
+    response = await io.fetch(sessionsURL(kept.resolved));
   } catch {
     return { phase: 'unreachable', ...kept };
   }
-  let payload = null;
-  if (response?.ok) {
-    try { payload = await response.json(); } catch { /* not JSON: unexpected below */ }
-  }
-  const sessions = readSessions(payload);
+  const sessions = readSessions(await bodyOf(response));
   if (sessions === null) return { phase: 'unexpected', ...kept };
   return { phase: 'ok', ...kept, sessions };
+}
+
+// addressFor is the address this poll asks, kept from `prev` or looked up
+// again (lookUpAgain), with when it was looked up.
+async function addressFor(prev, io) {
+  const now = io.now();
+  if (!lookUpAgain(prev, now)) return { where: prev.where, resolved: prev.resolved, resolvedAt: prev.resolvedAt };
+  const resolved = await resolveDaemonAddress(io.ladder);
+  return { where: hostPortOf(resolved), resolved, resolvedAt: now };
+}
+
+function lookUpAgain(prev, now) {
+  if (!prev || !prev.resolved) return true;
+  return prev.phase !== 'ok' && now - prev.resolvedAt >= RERESOLVE_MS;
+}
+
+// bodyOf is a successful response's JSON, or null for an error status or a
+// body that is not JSON (readSessions then answers null: "unexpected").
+async function bodyOf(response) {
+  if (!response || !response.ok) return null;
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 // stallState is the state to show while a request is still in flight:
 // `{ phase: 'stalled', where }` once it has run STALL_MS, else null (keep
 // what is shown).
 export function stallState(state, startedAt, now) {
-  if (state?.phase === 'stalled' || !(now - startedAt >= STALL_MS)) return null;
-  return { phase: 'stalled', where: state?.where };
+  if (state.phase === 'stalled' || !(now - startedAt >= STALL_MS)) return null;
+  return { phase: 'stalled', where: state.where };
 }
 
 // createPoller owns the one request allowed in flight. Each timer tick calls
