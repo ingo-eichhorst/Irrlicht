@@ -81,15 +81,16 @@ export const CODEX_SESSION = {
 };
 
 // A session outside Herdr (another terminal app), and a subagent child as the
-// live payload carried it: no pid of its own.
+// live payload carried it: no pid of its own. Synthetic ids and folder, in the
+// shape of a session read on the same run.
 export const OTHER_SESSION = {
   version: 1,
-  session_id: '19bc08fb-8a59-4c86-b8fa-e53510d08f0c',
+  session_id: '00000000-0000-4000-8000-000000000001',
   state: 'ready',
   adapter: 'claude-code',
-  cwd: '/Users/dev/articles',
-  pid: 72988,
-  launcher: { term_program: 'zed', tty: '/dev/ttys011' },
+  cwd: '/Users/dev/other-repo',
+  pid: 70001,
+  launcher: { term_program: 'zed', tty: '/dev/ttys040' },
   metrics: {
     total_tokens: 199022,
     model_name: 'claude-opus-5-5',
@@ -101,10 +102,10 @@ export const OTHER_SESSION = {
     {
       version: 1,
       session_id: 'agent-a1b2c3',
-      parent_session_id: '19bc08fb-8a59-4c86-b8fa-e53510d08f0c',
+      parent_session_id: '00000000-0000-4000-8000-000000000001',
       state: 'working',
       adapter: 'claude-code',
-      cwd: '/Users/dev/articles',
+      cwd: '/Users/dev/other-repo',
       metrics: { total_tokens: 900, context_utilization_percentage: 0.09, pressure_level: 'safe' },
     },
   ],
@@ -115,7 +116,7 @@ export function livePayload(...extraGroups) {
     groups: [
       { name: 'codex', agents: [CODEX_SESSION] },
       { name: 'claude', agents: [CLAUDE_SESSION] },
-      { name: 'articles', agents: [OTHER_SESSION] },
+      { name: 'other-repo', agents: [OTHER_SESSION] },
       ...extraGroups,
     ],
     provider_costs: {},

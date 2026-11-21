@@ -32,7 +32,7 @@ describe('pollOnce', () => {
     const got = await pollOnce({ phase: 'starting' }, w.io);
     expect(got.phase).toBe('ok');
     expect(got.where).toBe('localhost:7843');
-    expect(got.sessions.map((s) => s.pid)).toEqual([46690, 46222, 72988]);
+    expect(got.sessions.map((s) => s.pid)).toEqual([46690, 46222, 70001]);
     expect(w.fetches).toEqual(['http://localhost:7843/api/v1/sessions']);
   });
 
