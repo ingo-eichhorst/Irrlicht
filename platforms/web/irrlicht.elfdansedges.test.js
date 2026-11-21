@@ -81,9 +81,14 @@ describe('the disconnect edge (arc42 §8.5)', () => {
     mocks.publishLedgerSnapshot.mockClear()
 
     // Same set, republished only because the socket went away and came back.
+    // A closed relay socket drops the rows it delivered (#2149), and the relay
+    // replays the survivors on reconnect — so the replay is part of the story.
     ws.close()
     await settle()
     ws.simulateOpen()
+    ws.simulateMessage(sessionFrame({
+      session_id: 'proc-1', state: 'ready', project_name: 'irrlicht', adapter: 'claude-code',
+    }))
     await afterDebounce()
 
     expect(mocks.publishLedgerSnapshot).toHaveBeenCalled()
@@ -97,10 +102,17 @@ describe('a publish that did not happen is not remembered as one', () => {
     // signature unconditionally would mark an unpaired-or-failed attempt as
     // delivered, and the retry that a pairing a minute later should produce
     // would be suppressed as "unchanged".
-    // The dashboard's own reconnect timer fires during the test above and
-    // builds a fresh socket, so the one this file opened is no longer the
-    // source's. Take the current one and open it, or the publish is skipped
-    // for want of a connected source rather than for the reason under test.
+    // The dashboard's own reconnect timer (1 s after the close above) builds a
+    // fresh socket, so the one this file opened is no longer the source's.
+    // Wait for that socket and open it, or the publish is skipped for want of
+    // a connected source rather than for the reason under test: a publish
+    // re-checks the connection when its debounce fires (#2149), and the timer
+    // moving the source to 'reconnecting' inside that debounce would be read
+    // as a disconnect.
+    const closed = ws
+    const deadline = Date.now() + 3000
+    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    expect(global.lastMockWebSocket, 'no reconnect within 3 s').not.toBe(closed)
     ws = global.lastMockWebSocket
     ws.simulateOpen()
     await settle()

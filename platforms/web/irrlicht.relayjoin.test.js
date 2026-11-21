@@ -9,8 +9,8 @@ import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js'
 // has no session, the daemon is connected, and the session is a relay root
 // that no local copy shadows.
 //
-// Red-first on 8d6279df7 (the parent branch) and on this branch's phase-1
-// commit: every test except those marked LOCK fails there.
+// Red-first on 8d6279df7 (the parent branch): every test except the one
+// marked LOCK fails there.
 //
 // Own test file: the payload is consumed at module load, and vitest's
 // per-file isolation gives this file a fresh module instance.
@@ -191,17 +191,17 @@ describe('a relayed session joins the worker row its daemon is named after (#214
     expect(workerNames()).toEqual(['team-a-m1-1'])
   })
 
-  // Passes on the parent by construction (nothing joined there to unjoin);
-  // it exists for the mutation that drops onclose's re-render.
-  test('the relay socket closing unjoins what its labels joined', () => {
+  test('the relay socket closing drops its rows and gives the workers back', () => {
+    // A closed link leaves the remote set unknown, so the rows the socket
+    // delivered go (as macOS clears relaySessionMap on link-down); the
+    // relay's reconnect replay re-adds the survivors.
     ws.close()
-    // The session is kept (the web only purges on daemon_status), but with
-    // no connected label it is back in its project group.
-    expect(headerAbove(rowFor(compoundSessionId(D3, 'proc-3')))).toBe('container-proj')
+    expect(rowFor(compoundSessionId(D3, 'proc-3')), 'a closed relay socket left its row behind').toBeNull()
+    expect(headerNames()).toEqual(['irrlicht', 'Build pool', 'team-a'])
     expect(workerNames()).toEqual(['team-a-m1-1', 'team-a-m1-2'])
   })
 
-  test('turning the relay source off unjoins what its labels joined', async () => {
+  test('turning the relay source off drops its rows and gives the workers back', async () => {
     // The closed socket reconnects after its 1 s backoff; wait for the new one
     // rather than faking timers (that deadlocks on irrlicht.js's own loops).
     const closed = ws
@@ -210,7 +210,9 @@ describe('a relayed session joins the worker row its daemon is named after (#214
     expect(global.lastMockWebSocket, `no reconnect within ${Date.now() - deadline + 3000} ms`).not.toBe(closed)
     ws = global.lastMockWebSocket
     ws.simulateOpen()
+    // The relay's connect sequence: the snapshot, then the replay.
     ws.simulateMessage({ type: 'snapshot', daemons: [{ daemon_id: D3, daemon_label: 'team-a-m1-2', status: 'connected' }] })
+    ws.simulateMessage(push(D3, 'proc-3'))
     const p3 = compoundSessionId(D3, 'proc-3')
     expect(headerAbove(rowFor(p3)), 'precondition: joined again').toBe('team-a')
 
@@ -218,7 +220,7 @@ describe('a relayed session joins the worker row its daemon is named after (#214
     toggle.checked = false
     toggle.dispatchEvent(new Event('change'))
     await settle()
-    expect(headerAbove(rowFor(p3))).toBe('container-proj')
+    expect(rowFor(p3), 'a relay source turned off left its row behind').toBeNull()
     expect(workerNames()).toEqual(['team-a-m1-1', 'team-a-m1-2'])
   })
 })

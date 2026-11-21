@@ -8,7 +8,7 @@ import {
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
-import { withoutRemoteSessions, remoteRootSessions, joinRelayWorkers } from './relayRows.js';
+import { withoutRelayOnlySessions, remoteRootSessions, joinRelayWorkers } from './relayRows.js';
 import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, relayWsUrl } from './connectionProtocol.js';
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
@@ -2066,10 +2066,10 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         // branch would mean a banner that never goes away once shown.
         renderDaemonErrorBanner(resp);
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
-        // Structure / role metadata changed → adopt the daemon's tree. The
-        // payload never holds relay rows, so they are left out of the
-        // comparison (#2149) — otherwise every poll would adopt.
-        if (structureSignature(fresh) !== structureSignature(withoutRemoteSessions(dashboardGroups))) {
+        // Structure / role metadata changed → adopt the daemon's tree. A relay
+        // row no local row shadows can never be in the payload, so it is left
+        // out of the comparison (#2149) — otherwise every poll would adopt.
+        if (structureSignature(fresh) !== structureSignature(withoutRelayOnlySessions(dashboardGroups))) {
           adoptLocalTree(fresh);
           if (!Array.isArray(resp) && resp.provider_costs) dashboardProviderCosts = resp.provider_costs;
           render();
@@ -2230,7 +2230,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     function rebuildSources() {
       const desired = desiredSources();
       const desiredById = new Map(desired.map(s => [s.id, s]));
-      let droppedLabels = false;
+      let dropped = false;
       for (const [id, src] of sources) {
         const want = desiredById.get(id);
         // Drop a source that's no longer desired, OR a relay source whose token
@@ -2243,14 +2243,14 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           src.closing = true;
           try { if (src.ws) src.ws.close(); } catch (e) { console.debug('irrlicht: failed to close stale source socket', e); }
           sources.delete(id);
-          if (src.daemons.size) droppedLabels = true;
+          if (dropSourceRows(src) || src.daemons.size) dropped = true;
         }
       }
-      // Its labels went with it, so what they joined (#2149) unjoins.
-      if (droppedLabels) render();
+      // Its rows and labels went with it (#2149).
+      if (dropped) render();
       for (const d of desired) {
         if (!sources.has(d.id)) {
-          const src = { state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map(), ...d };
+          const src = { state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map(), deliveredDaemons: new Set(), ...d };
           sources.set(d.id, src);
           connectSource(src);
         }
@@ -2301,8 +2301,12 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         const hadDaemons = src.daemons.size > 0;
         src.daemons.clear();
         src.seqCursors.clear();
-        // The daemons' labels are gone, so what they joined (#2149) unjoins.
-        if (hadDaemons) render();
+        // The link is down, so this source's relay rows and the labels that
+        // joined them to workers (#2149) are no longer known. With no other
+        // source connected, Elfdans does not publish the emptied list: its
+        // debounced publish re-checks for a connected source when it fires
+        // (irrlicht.elfdansfold.test.js pins that).
+        if (dropSourceRows(src) || hadDaemons) render();
         // 4401 = auth failed/revoked: retrying with the same token just loops, so
         // stop reconnecting (until settings change) instead of a tight loop.
         if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
@@ -2330,9 +2334,33 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // fanning out per-session deletes on disconnect, so we reproduce the prior
     // behaviour here (macOS fades the rows instead).
     function purgeDaemonSessions(daemonId) {
+      if (removeDaemonRows(daemonId)) render();
+    }
+
+    // removeDaemonRows deletes one relay daemon's rows without rendering and
+    // returns how many it removed.
+    function removeDaemonRows(daemonId) {
       const ids = daemonSessionIds(dashboardGroups, daemonId);
       for (const sid of ids) applySessionDelete(sid);
-      if (ids.length) render();
+      return ids.length;
+    }
+
+    // dropSourceRows deletes every relay row a source delivered, once that
+    // source is gone (its socket closed, or Settings dropped it), and says
+    // whether it removed any. The web's counterpart of macOS clearing
+    // relaySessionMap on link-down: a session that ended while the link was
+    // down would otherwise stay as a ghost row, since the relay's reconnect
+    // replay re-adds only the survivors. Until #2149 the rehydrate's
+    // every-poll adopt wiped relay rows as a side effect; it no longer does.
+    //
+    // Keyed on the daemons the source's push frames named, not on its label
+    // map: a row can arrive with no label (a dropped connect snapshot), and
+    // another source closing must not take it.
+    function dropSourceRows(src) {
+      let removed = 0;
+      for (const daemonId of src.deliveredDaemons) removed += removeDaemonRows(daemonId);
+      src.deliveredDaemons.clear();
+      return removed > 0;
     }
 
     // trackPushSeq advances one daemon's seq cursor and, on a gap, triggers an
@@ -2382,6 +2410,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           return;
         case 'push':
           if (msg.msg) {
+            if (msg.source) src.deliveredDaemons.add(msg.source);
             trackPushSeq(src, msg.source || '', msg.msg.seq);
             dispatchRawFrame(normalizeSourcedFrame(msg.source, msg.msg));
           }

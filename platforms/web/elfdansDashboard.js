@@ -153,6 +153,10 @@ export function createElfdansDashboard(host) {
     if (elfdansPublishTimer !== null) return;
     elfdansPublishTimer = setTimeout(() => {
       elfdansPublishTimer = null;
+      // Asked again when it fires: a socket that closes inside the debounce
+      // leaves a list that is no truth either — and a closing relay socket
+      // now drops the rows it delivered (#2149).
+      if (!host.anySourceConnected()) return;
       const rows = elfdansLedgerSessions(host.groups());
       const signature = rows.map(r => r.session_id + ':' + r.state).join('|');
       if (signature === elfdansPublishedSignature) return;

@@ -8,27 +8,38 @@
 // `-  -` for it).
 import { sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote } from './sessionIdentity.js';
 
-// withoutRemoteSessions is the tree with every remote-origin row taken out of
-// its group: the shape the local daemon's REST payload describes, and so the
-// one a rehydrate compares that payload against. A relay row is never in the
-// payload, so comparing the full tree made every poll "see" a structure
-// change and replace the tree.
+// withoutRelayOnlySessions is the tree without the relay rows no local row
+// shadows — the rows a REST payload cannot hold — and so the shape a rehydrate
+// compares that payload against. Comparing the full tree made every poll with
+// such a row "see" a structure change and replace the tree.
 //
-// A group the removal empties is dropped too (a relay-only project group),
-// unless something else keeps it on screen: an orchestrator type, sub-groups,
-// or unattached workers. A group that was already empty in the payload stays.
+// A shadowed relay row stays in. Its bare twin IS in the payload, and on a
+// page whose local rows have no live socket of their own (one served by a
+// relay, or with Local off) only that replace refreshes the twin; keeping the
+// shadowed row keeps such a page adopting every poll, as it did before #2149.
+//
+// A group the removal empties is dropped too (a relay-only project group).
 // Returns copies of the groups; the rows themselves are shared.
-export function withoutRemoteSessions(groups) {
-  const out = [];
-  for (const g of (groups || [])) {
-    const all = g.agents || [];
-    const agents = all.filter(a => sessionOrigin(a) !== 'remote');
-    const sub = g.groups && withoutRemoteSessions(g.groups);
-    const emptied = agents.length === 0 && all.length > 0;
-    if (emptied && !g.type && !sub?.length && !g.unattached_workers?.length) continue;
-    out.push({ ...g, agents, groups: sub });
-  }
-  return out;
+export function withoutRelayOnlySessions(groups) {
+  const localIds = localBareIds(groups);
+  return (function strip(gs) {
+    const out = [];
+    for (const g of (gs || [])) {
+      const all = g.agents || [];
+      const agents = all.filter(a => sessionOrigin(a) !== 'remote' || isShadowedRemote(a, localIds));
+      const sub = g.groups && strip(g.groups);
+      if (emptiedAway(g, all, agents, sub, g.unattached_workers)) continue;
+      out.push({ ...g, agents, groups: sub });
+    }
+    return out;
+  })(groups);
+}
+
+// emptiedAway: g lost every row it had (`before` → `after`) and nothing else
+// keeps it on screen — not an orchestrator type, sub-groups, or unattached
+// workers. A group that was already empty is not "emptied".
+function emptiedAway(g, before, after, sub, workers) {
+  return after.length === 0 && before.length > 0 && !g.type && !sub?.length && !workers?.length;
 }
 
 // remoteRootSessions lists the remote-origin rows that sit directly in a
@@ -67,8 +78,8 @@ export function remoteRootSessions(groups) {
 // A joined session moves to the end of its worker's group's session rows, as
 // a copy carrying the worker's role, icon, description, worker_name and
 // worker_id; the worker leaves that group's unattached_workers; a project
-// group the move empties is dropped, unless an orchestrator type, sub-groups
-// or unattached workers keep it. Returns `groups` itself when nothing joins,
+// group the move empties is dropped (emptiedAway). Returns `groups` itself
+// when nothing joins,
 // and never writes into it or into a session.
 export function joinRelayWorkers(groups, labelOf) {
   const workers = workerCensus(groups);
@@ -109,8 +120,7 @@ export function joinRelayWorkers(groups, labelOf) {
       const agents = kept.concat(into.get(g) || []);
       const sub = g.groups && rebuild(g.groups);
       const workersLeft = g.unattached_workers && g.unattached_workers.filter(w => !winners.has(w.worker_name));
-      const emptied = agents.length === 0 && all.length > 0;
-      if (emptied && !g.type && !sub?.length && !workersLeft?.length) continue;
+      if (emptiedAway(g, all, agents, sub, workersLeft)) continue;
       out.push({ ...g, agents, groups: sub, unattached_workers: workersLeft });
     }
     return out;

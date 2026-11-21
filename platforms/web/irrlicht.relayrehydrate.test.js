@@ -14,8 +14,9 @@ import { compoundSessionId } from './sessionIdentity.js'
 // which notifies on first sight — so a `waiting` relay session notified again
 // after each wipe.
 //
-// Red-first on 8d6279df7 (the parent branch): every test below except the one
-// marked LOCK fails there.
+// Red-first on 8d6279df7 (the parent branch): every test below fails there
+// except the one marked LOCK and the one marked PINNED (which pins a cost of
+// this fix rather than a defect, and so passes there by construction).
 //
 // Own test file: the payload is consumed at module load, and vitest's
 // per-file isolation gives this file a fresh module instance.
@@ -160,5 +161,28 @@ describe('relay rows survive a replaced local tree (#2149 phase 1)', () => {
     await irr.rehydratePoll()
     expect(rowFor(id)).not.toBeNull()
     expect(groupNames()).toEqual(['irrlicht', 'pool', 'team', 'container-proj'])
+  })
+
+  // Pins a cost of dropping a closed socket's rows rather than proving a
+  // defect: the reconnect replay re-inserts them through insertNewSession,
+  // which notifies on first sight, so a session still `waiting` notifies
+  // again after a reconnect. (macOS does not: its relay path notifies only on
+  // a state change against the row it held.)
+  test('PINNED: a closed relay socket drops its rows, and the replay notifies a waiting one again', async () => {
+    const before = notifications
+    ws.close()
+    expect(rowFor(REMOTE_ID), 'a closed relay socket left its row behind').toBeNull()
+    expect(rowFor('loc-1'), 'a local row went with the relay socket').not.toBeNull()
+
+    const closed = ws
+    const deadline = Date.now() + 3000
+    while (global.lastMockWebSocket === closed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    expect(global.lastMockWebSocket, 'no reconnect within 3 s').not.toBe(closed)
+    ws = global.lastMockWebSocket
+    ws.simulateOpen()
+    ws.simulateMessage({ type: 'snapshot', daemons: [{ daemon_id: DAEMON, daemon_label: 'box-1', status: 'connected' }] })
+    ws.simulateMessage(relayPush('waiting'))
+    expect(rowFor(REMOTE_ID)).not.toBeNull()
+    expect(notifications).toBe(before + 1)
   })
 })

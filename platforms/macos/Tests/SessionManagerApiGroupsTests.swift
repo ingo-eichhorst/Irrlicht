@@ -598,8 +598,10 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     // A session that runs in a container and reaches this Mac through the
     // relay is shown in its orchestrator worker's row. The join key is the
     // forwarding daemon's label (the container hostname), which equals the
-    // worker's name. Red-first on 8d6279df7: the tests below fail there except
-    // the ones marked LOCK.
+    // worker's name. Red-first on 8d6279df7: six of the tests below fail
+    // there. Four pass there by construction, because nothing joins: the two
+    // `testLock…` tests, and the two whose comments name the rule they guard
+    // against a mutation (the no-label daemon, two workers sharing a name).
 
     private static func slot(_ name: String, job: String? = nil) -> SessionManager.UnattachedWorker {
         SessionManager.UnattachedWorker(

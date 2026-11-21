@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest'
 import { compoundSessionId } from './sessionIdentity.js'
-import { withoutRemoteSessions, remoteRootSessions, joinRelayWorkers } from './relayRows.js'
+import { withoutRelayOnlySessions, remoteRootSessions, joinRelayWorkers } from './relayRows.js'
 import { structureSignature } from './irrlicht.js'
 
 // Pure helpers behind #2149's relay-row fixes (relayRows.js).
@@ -29,31 +29,39 @@ const withRelay = () => {
   return t
 }
 
-describe('withoutRemoteSessions (#2149)', () => {
+describe('withoutRelayOnlySessions (#2149)', () => {
   test('a tree with relay rows compares equal to the payload it came from', () => {
-    expect(structureSignature(withoutRemoteSessions(withRelay()))).toBe(structureSignature(localTree()))
+    expect(structureSignature(withoutRelayOnlySessions(withRelay()))).toBe(structureSignature(localTree()))
+  })
+
+  test('a shadowed relay row stays in, so the comparison still adopts its twin\'s page', () => {
+    // A relay echo of local row loc-1: the payload holds loc-1, not the echo.
+    const t = withRelay()
+    t[0].agents.push(remote('d9', 'loc-1'))
+    expect(withoutRelayOnlySessions(t)[0].agents.map(a => a.session_id)).toEqual(['loc-1', compoundSessionId('d9', 'loc-1')])
+    expect(structureSignature(withoutRelayOnlySessions(t))).not.toBe(structureSignature(localTree()))
   })
 
   test('LOCK: the comparison still sees a real local change', () => {
     const changed = localTree()
     changed[0].agents.push(local('loc-2'))
-    expect(structureSignature(withoutRemoteSessions(withRelay()))).not.toBe(structureSignature(changed))
+    expect(structureSignature(withoutRelayOnlySessions(withRelay()))).not.toBe(structureSignature(changed))
   })
 
   test('drops a group only when the removal emptied it', () => {
-    expect(withoutRemoteSessions(withRelay()).map(g => g.name)).toEqual(['irrlicht', 'gt'])
+    expect(withoutRelayOnlySessions(withRelay()).map(g => g.name)).toEqual(['irrlicht', 'gt'])
     // Already empty in the payload: kept, whatever its type.
-    expect(withoutRemoteSessions([{ name: 'p', agents: [] }]).map(g => g.name)).toEqual(['p'])
+    expect(withoutRelayOnlySessions([{ name: 'p', agents: [] }]).map(g => g.name)).toEqual(['p'])
     // Emptied, but an orchestrator type, sub-groups or free workers keep it.
-    expect(withoutRemoteSessions([{ name: 'pool', type: 'workerlist', agents: [remote('d1', 'x')] }])).toHaveLength(1)
-    expect(withoutRemoteSessions([{ name: 'g', agents: [remote('d1', 'x')], groups: [{ name: 'r', agents: [local('l')] }] }])).toHaveLength(1)
-    expect(withoutRemoteSessions([{ name: 'r', agents: [remote('d1', 'x')], unattached_workers: [{ worker_name: 'w' }] }])).toHaveLength(1)
+    expect(withoutRelayOnlySessions([{ name: 'pool', type: 'workerlist', agents: [remote('d1', 'x')] }])).toHaveLength(1)
+    expect(withoutRelayOnlySessions([{ name: 'g', agents: [remote('d1', 'x')], groups: [{ name: 'r', agents: [local('l')] }] }])).toHaveLength(1)
+    expect(withoutRelayOnlySessions([{ name: 'r', agents: [remote('d1', 'x')], unattached_workers: [{ worker_name: 'w' }] }])).toHaveLength(1)
   })
 
   test('never mutates its input', () => {
     const t = withRelay()
     const before = JSON.stringify(t)
-    withoutRemoteSessions(t)
+    withoutRelayOnlySessions(t)
     expect(JSON.stringify(t)).toBe(before)
   })
 })
