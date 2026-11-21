@@ -1445,7 +1445,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // is a session state: no notification, no count, no state colour.
     function setWorkerIndications(el, worker) {
       setWorkerChip(el.querySelector('.worker-row-stale'), worker.stale ? 'stale' : '',
-        'No heartbeat for three heartbeat intervals \u2014 the worker may have stopped reporting');
+        'No heartbeat or team update for three heartbeat intervals \u2014 the worker or its scheduler may have stopped');
       const exit = worker.last_exit;
       const failed = typeof exit === 'number' && exit !== 0;
       setWorkerChip(el.querySelector('.worker-row-failed'), failed ? 'failed \u00B7 exit ' + exit : '',

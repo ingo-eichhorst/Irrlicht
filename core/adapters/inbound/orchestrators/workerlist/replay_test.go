@@ -1,6 +1,7 @@
 package workerlist
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -85,11 +86,7 @@ func TestWorkerlistReplay(t *testing.T) {
 
 func runScenario(t *testing.T, dir string) {
 	t.Helper()
-	var cfg scenarioConfig
-	mustReadJSON(t, filepath.Join(dir, "scenario.json"), &cfg)
-	if len(cfg.Ticks) == 0 {
-		t.Fatalf("%s: scenario.json lists no ticks", dir)
-	}
+	cfg := readScenario(t, filepath.Join(dir, "scenario.json"))
 	goldenDir := filepath.Join(dir, "golden")
 	if *updateGoldens {
 		if err := os.MkdirAll(goldenDir, 0o755); err != nil {
@@ -231,13 +228,27 @@ func staleNames(st *orchestrator.State) []string {
 	return out
 }
 
-func mustReadJSON(t *testing.T, path string, v any) {
+// readScenario decodes scenario.json strictly: an unknown key — a misspelt
+// verify key above all — fails rather than being ignored, and a scenario
+// must list ticks and verify something, so a verify block cannot pass while
+// checking nothing.
+func readScenario(t *testing.T, path string) scenarioConfig {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if err := json.Unmarshal(data, v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var cfg scenarioConfig
+	if err := dec.Decode(&cfg); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
+	if len(cfg.Ticks) == 0 {
+		t.Fatalf("%s lists no ticks", path)
+	}
+	if reflect.ValueOf(cfg.Verify).IsZero() {
+		t.Fatalf("%s has an empty verify block", path)
+	}
+	return cfg
 }

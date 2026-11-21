@@ -2,6 +2,7 @@ package workerlist
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,6 +169,57 @@ func TestAdapter_WatchSeesFileCreatedAfterStart(t *testing.T) {
 
 	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
 	waitState(t, a, "created file", func(st *orchestrator.State) bool { return st.Running && slotID(st) == "p-1" })
+}
+
+// The default path lives in the daemon's own data directory, beside its
+// listening unix socket, its addr file and its state files and directories
+// (11 entries in this developer's ~/.local/share/irrlicht when measured with
+// `ls -A ~/.local/share/irrlicht | wc -l`). A status file created there is
+// still seen with no tick: the directory watch tolerates a socket among the
+// entries it arms (fsnotify's kqueue addWatch returns early for a socket or a
+// pipe — backend_kqueue.go, read for #2148) and
+// filters the other entries' events by name.
+func TestAdapter_WatchSeesFileCreatedInLiveDataDir(t *testing.T) {
+	// os.MkdirTemp rather than t.TempDir: a unix socket path must stay under
+	// macOS's 104-byte sun_path limit, which t.TempDir's test-named path
+	// overruns.
+	dir, err := os.MkdirTemp("", "wl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	ln, err := net.Listen("unix", filepath.Join(dir, "irrlichd.sock"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	for _, name := range []string{"irrlichd.addr", "permissions.json", "history.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"recordings", "sessions"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := NewAdapter(filepath.Join(dir, DefaultFileName), &captureLog{})
+	a.now = func() time.Time { return t0 }
+	a.reevaluate = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = a.Watch(ctx) }()
+	waitState(t, a, "initial read of the missing file", func(st *orchestrator.State) bool { return !st.Running })
+
+	// Churn in a sibling first: it must not be mistaken for the status file.
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(`{"x":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeAtomic(t, a.Path(), oneSlot(t0, rfc(t0)))
+	waitState(t, a, "status file created in the data directory", func(st *orchestrator.State) bool {
+		return st.Running && slotID(st) == "p-1"
+	})
 }
 
 // An atomic replace of an existing file reaches State() with no tick. LOCK on

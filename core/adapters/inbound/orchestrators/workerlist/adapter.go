@@ -156,9 +156,13 @@ func (a *Adapter) Watch(ctx context.Context) error {
 				events = nil
 				continue
 			}
-			if filepath.Base(ev.Name) == base {
-				a.evaluate()
+			if filepath.Base(ev.Name) != base {
+				continue
 			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			a.evaluate()
 		case _, ok := <-errs:
 			// An fsnotify error (e.g. a kqueue overflow) can lose an event;
 			// the next tick re-reads the file regardless.
@@ -166,6 +170,11 @@ func (a *Adapter) Watch(ctx context.Context) error {
 				errs = nil
 			}
 		case <-ticker.C:
+			// select picks at random among ready cases, so after a revoke a
+			// pending tick could still win once; no read after cancellation.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if !watching {
 				watching = a.watchDir(w, false)
 			}

@@ -236,7 +236,7 @@ struct UnattachedWorkerRowView: View {
             // question pill's and the error line's (Tokens.swift).
             if worker.isStale {
                 WorkerTag(text: "stale", tint: IrrColors.waiting, textColor: IrrColors.waitingPillText,
-                          tooltip: "No heartbeat for three heartbeat intervals \u{2014} the worker may have stopped reporting")
+                          tooltip: "No heartbeat or team update for three heartbeat intervals \u{2014} the worker or its scheduler may have stopped")
             }
             if let code = worker.failedExitCode {
                 WorkerTag(text: "failed \u{00B7} exit \(code)", tint: IrrColors.error, textColor: IrrColors.errorPillText,
