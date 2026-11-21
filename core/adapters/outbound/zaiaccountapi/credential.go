@@ -16,8 +16,8 @@ import (
 // to Z.ai.
 const (
 	keyBaseURL   = "ANTHROPIC_BASE_URL"
-	keyAuthToken = "ANTHROPIC_AUTH_TOKEN"
-	keyAPIKey    = "ANTHROPIC_API_KEY"
+	keyAuthToken = "ANTHROPIC_AUTH_TOKEN" // #nosec G101 -- an env var NAME, not a credential
+	keyAPIKey    = "ANTHROPIC_API_KEY"    // #nosec G101 -- an env var NAME, not a credential
 )
 
 var credentialKeys = map[string]struct{}{keyBaseURL: {}, keyAuthToken: {}, keyAPIKey: {}}

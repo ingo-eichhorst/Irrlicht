@@ -269,7 +269,7 @@ func FlagsTouchSettings(argv []string) bool {
 const maxSettingsBytes = 1 << 20
 
 func readBounded(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- a Claude Code settings location from Sources, or the route file Sources produced
 	if err != nil {
 		return nil, err
 	}
