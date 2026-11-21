@@ -398,9 +398,9 @@ func extractPiAssistantText(piMsg map[string]interface{}) string {
 
 // usageCoverage declares what this parser counts (#2061): extractPiUsage reads
 // input, output, cacheRead and cacheWrite (as cache_write). Subagent exclusion
-// is not declared: pi has no subagents, and a /fork child copies the parent's
-// history — usage records included — into its own file, so the one
-// parent/child shape pi has would count the parent's usage twice.
+// is not declared: pi has no subagents (adapters.json marks its subagent
+// traits absent), and whether a session pi links to a parent through its
+// header's parentSession repeats that parent's usage has not been checked.
 func usageCoverage() *session.UsageCoverage {
 	return &session.UsageCoverage{
 		TokenTypes: []session.TokenType{
