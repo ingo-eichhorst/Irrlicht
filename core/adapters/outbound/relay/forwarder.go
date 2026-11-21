@@ -354,9 +354,12 @@ func (f *Forwarder) snapshotState() ([]*session.SessionState, []AgentInfo) {
 // permissions_updated is likewise host-local (#570): consent is managed on the
 // daemon's own machine, and a forwarded copy would make remote dashboards
 // re-fetch (and potentially re-open) their LOCAL wizard on this host's churn.
+// orchestrator_updated (#2145) asks clients to re-fetch this daemon's
+// orchestrator state, which the relay does not carry.
 func shouldForward(msg outbound.PushMessage) bool {
 	return msg.Type != outbound.PushTypeFocusRequested &&
 		msg.Type != outbound.PushTypePermissionsUpdated &&
+		msg.Type != outbound.PushTypeOrchestratorUpdated &&
 		msg.Type != outbound.PushTypeInputRequested
 }
 

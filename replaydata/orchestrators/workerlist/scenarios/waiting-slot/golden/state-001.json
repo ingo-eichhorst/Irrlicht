@@ -17,7 +17,8 @@
               "description": "Pool worker slot",
               "name": "team-a-m1-1",
               "id": "proj-a1b2",
-              "state": "waiting"
+              "state": "waiting",
+              "waiting": true
             },
             {
               "role": "worker",

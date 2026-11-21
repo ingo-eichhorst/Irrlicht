@@ -138,8 +138,8 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "storing an ended registration's late snapshot reddens the live-snapshot test" \
   "$MON" \
-  $'\tif rs.live() {\n\t\tm.states[rs.state.Adapter] = rs' \
-  $'\tif true {\n\t\tm.states[rs.state.Adapter] = rs' \
+  $'\tif !rs.live() {\n\t\treturn false\n\t}' \
+  $'\tif false {\n\t\treturn false\n\t}' \
   "./core/application/services/" \
   "TestOrchestratorMonitor_EndedSnapshotDoesNotReplaceLiveOne" \
   "want the live registration's snapshot"
@@ -341,6 +341,56 @@ assert_go_test_goes_red \
   "./$WL/" \
   "TestWorkerlistReplay" \
   "TestWorkerlistReplay/waiting-slot"
+
+# ── workerlist: a waiting slot leaves the flag unset (#2145) ────────────────
+assert_go_test_goes_red \
+  "leaving Waiting unset reddens the waiting-slot unit test" \
+  "$WL/document.go" \
+  $'\t\t\tout.Waiting = true' \
+  $'\t\t\tout.Waiting = false' \
+  "./$WL/" \
+  "TestBuildState_WaitingSlot" \
+  "TestBuildState_WaitingSlot/fresh_heartbeat"
+
+# ── dashboard: the Waiting copy is dropped (#2145) ──────────────────────────
+assert_go_test_goes_red \
+  "dropping the Waiting copy onto the unattached worker reddens the pool test" \
+  "$GROUPED" \
+  $'\t\t\t\tWaiting:     w.Waiting,\n' \
+  '' \
+  "./core/domain/session/" \
+  "TestBuildDashboard_PoolSlotCarriesWaiting" \
+  "waiting slot: waiting=<nil>"
+
+# ── monitor: a changed snapshot is not pushed (#2145) ───────────────────────
+assert_go_test_goes_red \
+  "pushing only first snapshots reddens the changed-snapshot push" \
+  "$MON" \
+  $'\treturn !had || !prev.live() || !sameShown(prev.state, rs.state)' \
+  $'\treturn !had || !prev.live()' \
+  "./core/application/services/" \
+  "TestOrchestratorMonitor_PushesOnlyShownChanges" \
+  "changed snapshot pushed: not observed"
+
+# ── monitor: a restamped snapshot is pushed (#2145) ─────────────────────────
+assert_go_test_goes_red \
+  "comparing UpdatedAt too pushes every restamped snapshot" \
+  "$MON" \
+  $'\ta.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}' \
+  $'\t_ = time.Time{}' \
+  "./core/application/services/" \
+  "TestOrchestratorMonitor_PushesOnlyShownChanges" \
+  "a snapshot differing only in UpdatedAt pushed"
+
+# ── relay: orchestrator_updated is forwarded (#2145) ────────────────────────
+assert_go_test_goes_red \
+  "forwarding orchestrator_updated reddens the forwarder filter test" \
+  "core/adapters/outbound/relay/forwarder.go" \
+  $'\t\tmsg.Type != outbound.PushTypeOrchestratorUpdated &&\n' \
+  '' \
+  "./core/adapters/outbound/relay/" \
+  "TestShouldForward" \
+  "orchestrator_updated must not be forwarded"
 
 # ── workerlist: the tick no longer re-reads ─────────────────────────────────
 assert_go_test_goes_red \

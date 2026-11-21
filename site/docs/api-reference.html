@@ -188,6 +188,10 @@
             <td><code>permissions_updated</code></td>
             <td>Consent state changed; carries no payload &mdash; clients re-fetch <code>GET /api/v1/permissions</code></td>
           </tr>
+          <tr>
+            <td><code>orchestrator_updated</code></td>
+            <td>An orchestrator's state changed in a way the dashboard shows, such as a worker that turned waiting; carries no payload &mdash; clients re-fetch <code>GET /api/v1/sessions</code>. Not forwarded by the relay</td>
+          </tr>
         </tbody>
       </table>
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/orchestrator"
+	"irrlicht/core/domain/session"
 )
 
 // Schema v1 of the status file (#2148 triage). Unknown fields are ignored; a
@@ -76,12 +77,12 @@ const (
 	workerDescription = "Pool worker slot"
 
 	// Worker and team status tokens. busy and idle are no session state
-	// names: a slot is not a session. workerWaiting is one on purpose
-	// (#2145): a slot whose agent waits for a person is the one worker state
-	// the clients paint in the session waiting colour and notify on.
+	// names: a slot is not a session. A waiting slot (#2145) borrows the
+	// session's word for its State text and sets Worker.Waiting, which the
+	// clients paint in the session waiting colour and notify on.
 	workerBusy        = "busy"
 	workerIdle        = "idle"
-	workerWaiting     = "waiting"
+	workerWaiting     = string(session.StateWaiting)
 	statusOperational = "operational"
 	statusStale       = "stale"
 	statusUnreadable  = "unreadable"
@@ -222,6 +223,7 @@ func buildWorker(w worker, teamUpdated time.Time, teamStale bool, now time.Time,
 		out.State = workerBusy
 		if w.State == workerWaiting {
 			out.State = workerWaiting
+			out.Waiting = true
 		}
 		ref := teamUpdated
 		if w.LastHeartbeat != nil {

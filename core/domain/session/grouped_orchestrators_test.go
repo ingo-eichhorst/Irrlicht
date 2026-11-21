@@ -152,6 +152,22 @@ func TestBuildDashboard_PoolListsEverySlotWithItsIndications(t *testing.T) {
 	}
 }
 
+// A waiting slot (#2145) carries `waiting` onto the wire; other slots omit
+// it. Red-first: failed before rigUnattachedWorkers copied Waiting.
+func TestBuildDashboard_PoolSlotCarriesWaiting(t *testing.T) {
+	waiting := slot("team-a-m1-1", "proj-a1b2", "waiting")
+	waiting.Waiting = true
+	pool := workerPool("Build pool", poolTeam("team-a", "operational", waiting, slot("team-a-m1-2", "", "busy")))
+
+	teamA := subGroup(t, topGroup(t, wireGroups(t, BuildDashboard(nil, pool)), "workerlist"), "team-a")
+	if got := unattachedEntry(t, teamA, "team-a-m1-1"); got["waiting"] != true || got["worker_state"] != "waiting" {
+		t.Errorf("waiting slot: waiting=%v worker_state=%v, want true/waiting", got["waiting"], got["worker_state"])
+	}
+	if _, ok := unattachedEntry(t, teamA, "team-a-m1-2")["waiting"]; ok {
+		t.Error("a busy slot carries waiting")
+	}
+}
+
 // A pool has no Root, so it claims no session by path: a session under a Gas
 // Town polecat path stays a project session when only the pool is running.
 // LOCK — addCWDFallbackWorkers already returned early on an empty Root before

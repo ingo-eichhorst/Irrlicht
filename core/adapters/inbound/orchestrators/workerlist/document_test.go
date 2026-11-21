@@ -99,8 +99,8 @@ func TestBuildState_WaitingSlot(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			w := buildState(doc, t0).Codebases[0].Worktrees[0].Workers[0]
-			if w.State != "waiting" {
-				t.Errorf("worker state = %q, want waiting", w.State)
+			if w.State != "waiting" || !w.Waiting {
+				t.Errorf("worker state = %q waiting = %v, want waiting/true", w.State, w.Waiting)
 			}
 			if w.Stale != tc.wantStale {
 				t.Errorf("worker stale = %v, want %v", w.Stale, tc.wantStale)
