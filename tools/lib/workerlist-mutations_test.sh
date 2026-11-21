@@ -304,6 +304,44 @@ assert_go_test_goes_red \
   "TestDecodeDocument_RefusesInvalid" \
   "TestDecodeDocument_RefusesInvalid/duplicate_worker"
 
+# ── workerlist: any `state` value is accepted (#2145) ───────────────────────
+assert_go_test_goes_red \
+  "accepting any state value reddens the unknown-state row" \
+  "$WL/document.go" \
+  $'\t\tcase w.State != "" && w.State != workerWaiting:' \
+  $'\t\tcase false && w.State != "" && w.State != workerWaiting:' \
+  "./$WL/" \
+  "TestDecodeDocument_RefusesInvalid" \
+  "TestDecodeDocument_RefusesInvalid/worker_with_an_unknown_state"
+
+# ── workerlist: a free slot may be waiting (#2145) ──────────────────────────
+assert_go_test_goes_red \
+  "accepting a waiting free slot reddens the waiting-free row" \
+  "$WL/document.go" \
+  $'\t\tcase w.State == workerWaiting && !*w.Busy:' \
+  $'\t\tcase false && w.State == workerWaiting && !*w.Busy:' \
+  "./$WL/" \
+  "TestDecodeDocument_RefusesInvalid" \
+  "TestDecodeDocument_RefusesInvalid/waiting_worker_that_is_free"
+
+# ── workerlist: a waiting slot reaches the wire as busy (#2145) ─────────────
+assert_go_test_goes_red \
+  "dropping the waiting token reddens the waiting-slot unit test" \
+  "$WL/document.go" \
+  $'\t\t\tout.State = workerWaiting' \
+  $'\t\t\tout.State = workerBusy' \
+  "./$WL/" \
+  "TestBuildState_WaitingSlot" \
+  "TestBuildState_WaitingSlot/fresh_heartbeat"
+assert_go_test_goes_red \
+  "dropping the waiting token reddens the waiting-slot replay scenario" \
+  "$WL/document.go" \
+  $'\t\t\tout.State = workerWaiting' \
+  $'\t\t\tout.State = workerBusy' \
+  "./$WL/" \
+  "TestWorkerlistReplay" \
+  "TestWorkerlistReplay/waiting-slot"
+
 # ── workerlist: the tick no longer re-reads ─────────────────────────────────
 assert_go_test_goes_red \
   "removing the tick's re-read leaves a dead pool fresh forever" \
