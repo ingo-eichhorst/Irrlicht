@@ -153,6 +153,39 @@ type SessionMetrics struct {
 	CumCacheReadTokens     int64 `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64 `json:"cum_cache_creation_tokens,omitempty"`
 
+	// --- Cost and token provenance (#2061). ---
+	//
+	// EstimatedCostUSD and the Cum*Tokens fields above are plain numbers, so
+	// on their own a 0 cannot say whether it was counted or never seen. The
+	// fields below say how each was formed. Adding them changes no existing
+	// value.
+
+	// PricingSource names what EstimatedCostUSD was priced from:
+	// "litellm@<date>" (capacity.CapacityManager.PriceTableSource) when some
+	// tokens were priced from the price table, "provider-reported" when some
+	// turn's cost came from the agent itself, both joined by "+" when both
+	// contributed, and "" when nothing was priced.
+	PricingSource string `json:"pricing_source,omitempty"`
+
+	// UnpricedModels lists the models whose tokens are counted in Cum*Tokens
+	// but contributed 0 to EstimatedCostUSD because no price was known for
+	// them ("" for tokens that carried no model name). Non-empty means
+	// EstimatedCostUSD understates the cost. Recomputed on every pass from the
+	// per-model token buckets, so a model the price table learns later drops
+	// out of the list on the next pass.
+	UnpricedModels []string `json:"unpriced_models,omitempty"`
+
+	// TokensUnobserved is true when some turn reported a provider cost, which
+	// the tailer takes instead of that turn's token counts (applyContribution
+	// in core/pkg/tailer/tailer_metrics.go returns before the tokens are
+	// added). The Cum*Tokens fields then understate the session's tokens.
+	TokensUnobserved bool `json:"tokens_unobserved,omitempty"`
+
+	// UsageCoverage is the session adapter's declaration of which token types
+	// it counts (session.UsageCoverage), stamped by the metrics adapter on
+	// every pass. Nil means the adapter declares nothing.
+	UsageCoverage *UsageCoverage `json:"usage_coverage,omitempty"`
+
 	// CompletedTurns counts the finished agent turns for this session — each
 	// rising edge of IsAgentDone (a turn ending in ready, or in waiting on a
 	// question), not just working→waiting. The cache-bloat detector (issue
@@ -786,6 +819,15 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		ExecutionConfidence:        newM.ExecutionConfidence,
 		ExecutionConfidenceLow:     newM.ExecutionConfidenceLow,
 		ExecutionConfidenceTooltip: newM.ExecutionConfidenceTooltip,
+
+		// Cost and token provenance (#2061): every metrics path republishes
+		// it whole each pass, so newM's value is current. The carry-forward
+		// helpers below move it together with the cost or token values it
+		// describes when those are carried from oldM instead.
+		PricingSource:    newM.PricingSource,
+		UnpricedModels:   newM.UnpricedModels,
+		TokensUnobserved: newM.TokensUnobserved,
+		UsageCoverage:    newM.UsageCoverage,
 	}
 }
 
@@ -841,6 +883,16 @@ func carryForwardCoreMeasurements(merged, oldM *SessionMetrics) {
 func carryForwardCostFields(merged, oldM *SessionMetrics) {
 	if merged.EstimatedCostUSD == 0 && oldM.EstimatedCostUSD > 0 {
 		merged.EstimatedCostUSD = oldM.EstimatedCostUSD
+		// The provenance describes the number shown, so it travels with it
+		// (#2061): an old cost labelled with this pass's (empty) source would
+		// read as priced from nothing.
+		merged.PricingSource = oldM.PricingSource
+		merged.UnpricedModels = oldM.UnpricedModels
+	}
+	// The coverage is a static per-adapter declaration; a pass from a path
+	// that did not stamp it has not withdrawn it.
+	if merged.UsageCoverage == nil && oldM.UsageCoverage != nil {
+		merged.UsageCoverage = oldM.UsageCoverage
 	}
 	if merged.EstimatedCO2Grams == 0 && oldM.EstimatedCO2Grams > 0 {
 		merged.EstimatedCO2Grams = oldM.EstimatedCO2Grams
@@ -866,17 +918,14 @@ func carryForwardIdentityFields(merged, oldM *SessionMetrics) {
 // counters across passes that didn't recompute them — their zero value
 // means "not observed this pass", not "reset to zero".
 func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
-	if merged.CumInputTokens == 0 && oldM.CumInputTokens > 0 {
-		merged.CumInputTokens = oldM.CumInputTokens
-	}
-	if merged.CumOutputTokens == 0 && oldM.CumOutputTokens > 0 {
-		merged.CumOutputTokens = oldM.CumOutputTokens
-	}
-	if merged.CumCacheReadTokens == 0 && oldM.CumCacheReadTokens > 0 {
-		merged.CumCacheReadTokens = oldM.CumCacheReadTokens
-	}
-	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
-		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
+	carried := carryCount(&merged.CumInputTokens, oldM.CumInputTokens)
+	carried = carryCount(&merged.CumOutputTokens, oldM.CumOutputTokens) || carried
+	carried = carryCount(&merged.CumCacheReadTokens, oldM.CumCacheReadTokens) || carried
+	carried = carryCount(&merged.CumCacheCreationTokens, oldM.CumCacheCreationTokens) || carried
+	// A carried count keeps the caveat it was published with (#2061): old
+	// tokens with this pass's "all observed" would read as complete.
+	if carried && oldM.TokensUnobserved {
+		merged.TokensUnobserved = true
 	}
 	// CompletedTurns is incremented by the detector on the SessionState *after*
 	// this merge; the tailer never sets it, so newM always carries 0. Carry the
@@ -891,6 +940,16 @@ func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
 	if merged.UserTurns == 0 && oldM.UserTurns > 0 {
 		merged.UserTurns = oldM.UserTurns
 	}
+}
+
+// carryCount keeps old in *merged when merged reads 0 ("not observed this
+// pass") and old is a real count, and reports whether it did.
+func carryCount(merged *int64, old int64) bool {
+	if *merged == 0 && old > 0 {
+		*merged = old
+		return true
+	}
+	return false
 }
 
 // carryForwardOverlayState preserves detector-set overlay signals (the

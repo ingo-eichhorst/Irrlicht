@@ -44,6 +44,8 @@ func Agent() agent.Agent {
 	// something the rest of the UI doesn't.
 	const displayName = "Claude Code"
 	return agent.Agent{
+		// What this adapter counts (#2061), declared beside the parser.
+		Usage: usageCoverage(),
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  displayName,

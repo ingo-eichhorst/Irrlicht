@@ -1,0 +1,19 @@
+# Irrlicht's herdr plugin (#2061). One action, `usage`: herdr hands it the pane
+# it is asked about as HERDR_PANE_ID, and it prints one schema-1 usage
+# document for the agent sessions Irrlicht has seen running in that pane.
+# The schema is Factory's (ingo-eichhorst/factory, crates/factory-agents/src/
+# usage.rs); the document itself comes from `irrlicht-ls --herdr-usage`.
+id = "irrlicht-usage"
+name = "Irrlicht usage"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Token, cost and rate-limit usage of the agent sessions in a pane, from Irrlicht"
+# macOS only: irrlicht-ls ships inside the macOS app bundle and is not yet a
+# Linux release asset.
+platforms = ["macos"]
+
+[[actions]]
+id = "usage"
+title = "Irrlicht: usage of this pane"
+contexts = ["pane"]
+command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/usage.sh\""]

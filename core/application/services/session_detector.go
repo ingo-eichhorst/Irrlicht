@@ -40,6 +40,11 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// finishedSubagentPruneInterval is how often the detector checks whether the
+// roots of retained subagent records still exist (#2061). Coarse: the
+// retention window it enforces is days long.
+const finishedSubagentPruneInterval = 10 * time.Minute
+
 // maxIdleProjectResolveAttempts bounds how many refreshStaleSessions ticks
 // retry CWD/project resolution for an idle (waiting/ready) session whose
 // ProjectName never resolved — e.g. mistral-vibe's meta.json sidecar hadn't
@@ -129,6 +134,10 @@ type SessionDetector struct {
 	cacheBloat     *CacheBloatDetector        // optional; nil = disabled (#374)
 	hookLiveness   *HookLivenessWatchdog      // optional; nil = disabled (#1368)
 	metrics        outbound.MetricsCollector
+
+	// finishedSubagents keeps the final usage of removed child sessions
+	// (#2061). Optional; nil = nothing retained.
+	finishedSubagents outbound.FinishedSubagentStore
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -405,7 +414,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		ProcessNames:      deps.ProcessNames,
 		LiveCWDs:          deps.LiveCWDs,
 		OnSessionDeleted:  det.removeFromProjectSessions,
-		OnSessionRemoved:  det.cacheDeletedSnapshot,
+		OnSessionRemoved:  det.onSessionRemoved,
 		OnSessionReplaced: det.recordReplacement,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
@@ -537,6 +546,87 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 func (d *SessionDetector) SetAutonomySpanStore(s outbound.AutonomySpanStore) {
 	d.autonomySpans = s
 	d.loadRecoverableAutonomySpans()
+}
+
+// onSessionRemoved is PIDManagerDeps.OnSessionRemoved. deleteSession fires it
+// before it deletes the session's row, and the PIDManager's child removals —
+// cleanupChildren at parent-ready, reapStaleChild on the liveness sweep,
+// deleteWithChildren — all go through deleteSession (same-PID dedup skips
+// child sessions: isDedupDeleteCandidate).
+func (d *SessionDetector) onSessionRemoved(state *session.SessionState) {
+	d.cacheDeletedSnapshot(state)
+	d.retainFinishedSubagent(state)
+}
+
+// retainFinishedSubagent records a removed child session's final usage
+// (#2061), so `irrlicht-ls --herdr-usage` still lists the subagent after its
+// session is gone. A removed root keeps its records: the same session ID can
+// come back (`claude --continue`), and pruneFinishedSubagents drops them only
+// once the root has been absent for the store's retention window.
+//
+// The record goes to the FinishedSubagentStore, never onto the parent's
+// session state. At parent-ready this call runs inside the parent's own
+// activity pass (finalizeActivityPass → cleanupFinishedParent →
+// cleanupChildren), and cleanupFinishedParent then saves the parent from the
+// in-memory copy that pass holds — so a record written onto the parent's row
+// here would be overwritten by that save. The store has one writer: this.
+func (d *SessionDetector) retainFinishedSubagent(state *session.SessionState) {
+	if d.finishedSubagents == nil || state == nil || state.ParentSessionID == "" {
+		return
+	}
+	err := d.finishedSubagents.Retain(session.FinishedSubagent{
+		SessionID:       state.SessionID,
+		ParentSessionID: state.ParentSessionID,
+		Adapter:         state.Adapter,
+		FirstSeen:       state.FirstSeen,
+		FinishedAt:      d.nowFn().Unix(),
+		Usage:           session.UsageSnapshot(d.finalMetrics(state)),
+	})
+	if err != nil {
+		d.log.LogError(logComponentSessionDetector, state.SessionID,
+			fmt.Sprintf("failed to keep the removed subagent's usage: %v", err))
+	}
+}
+
+// finalMetrics is state's metrics plus whatever its transcript holds that the
+// last activity pass had not read: the session is being removed, so no later
+// pass will read it. The re-read is an observation like any other, so it
+// waits on the adapter's observe consent; without it the stored metrics are
+// what is kept.
+func (d *SessionDetector) finalMetrics(state *session.SessionState) *session.SessionMetrics {
+	if d.metrics == nil || state.TranscriptPath == "" || !d.observeAllowed(state.Adapter) {
+		return state.Metrics
+	}
+	fresh, _ := d.metrics.ComputeMetrics(state.TranscriptPath, state.Adapter)
+	return session.MergeMetrics(fresh, state.Metrics)
+}
+
+// pruneFinishedSubagents drops the retained records of roots that have been
+// gone from the session list for the store's retention window (#2061). Run
+// at start and on finishedSubagentPruneInterval; it writes only when a root's
+// presence changes.
+func (d *SessionDetector) pruneFinishedSubagents() {
+	if d.finishedSubagents == nil {
+		return
+	}
+	err := d.finishedSubagents.PruneOrphans(func(rootID string) bool {
+		s, _ := d.repo.Load(rootID)
+		return s != nil
+	})
+	if err != nil {
+		d.log.LogError(logComponentSessionDetector, "", fmt.Sprintf("finished-subagent prune: %v", err))
+	}
+}
+
+// RunFinishedSubagentPruneForTest runs one pruneFinishedSubagents pass.
+func (d *SessionDetector) RunFinishedSubagentPruneForTest() {
+	d.pruneFinishedSubagents()
+}
+
+// SetFinishedSubagentStore wires the store that keeps a removed child
+// session's final usage (#2061). Pass nil to disable.
+func (d *SessionDetector) SetFinishedSubagentStore(s outbound.FinishedSubagentStore) {
+	d.finishedSubagents = s
 }
 
 // SetHistoryTracker wires an optional HistoryTracker that records per-session
@@ -799,6 +889,9 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	// next user action.
 	refreshTicker := time.NewTicker(staleWorkingRefreshInterval)
 	defer refreshTicker.Stop()
+	d.pruneFinishedSubagents()
+	pruneTicker := time.NewTicker(finishedSubagentPruneInterval)
+	defer pruneTicker.Stop()
 
 	for {
 		select {
@@ -812,6 +905,8 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 			d.processActivityWithoutIdentity(ev)
 		case <-refreshTicker.C:
 			d.refreshStaleSessions()
+		case <-pruneTicker.C:
+			d.pruneFinishedSubagents()
 		}
 	}
 }

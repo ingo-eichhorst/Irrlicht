@@ -1,0 +1,213 @@
+{
+  "groups": [
+    {
+      "name": "demo",
+      "agents": [
+        {
+          "version": 1,
+          "session_id": "cc-parent",
+          "state": "working",
+          "adapter": "claude-code",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000000,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 180,
+            "total_tokens": 60000,
+            "model_name": "claude-opus-4-6",
+            "context_utilization_percentage": 12.5,
+            "pressure_level": "safe",
+            "estimated_cost_usd": 0.42,
+            "cum_input_tokens": 1200,
+            "cum_output_tokens": 340,
+            "cum_cache_read_tokens": 50000,
+            "cum_cache_creation_tokens": 4000,
+            "pricing_source": "litellm@2026-11-20",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ],
+              "excludes_subagents": true
+            },
+            "last_assistant_text": "prompt text that must never reach the usage document"
+          },
+          "children": [
+            {
+              "version": 1,
+              "session_id": "cc-child-b",
+              "state": "working",
+              "adapter": "claude-code",
+              "cwd": "/tmp/demo",
+              "project_name": "demo",
+              "first_seen": 1794990200,
+              "updated_at": 1795000000,
+              "confidence": "high",
+              "event_count": 12,
+              "last_event": "assistant",
+              "launcher": {
+                "term_program": "ghostty",
+                "herdr_pane_id": "w1:p1",
+                "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+              },
+              "parent_session_id": "cc-parent",
+              "metrics": {
+                "elapsed_seconds": 180,
+                "total_tokens": 60000,
+                "model_name": "claude-opus-4-6",
+                "context_utilization_percentage": 12.5,
+                "pressure_level": "safe",
+                "estimated_cost_usd": 0.01,
+                "cum_input_tokens": 10,
+                "cum_output_tokens": 20,
+                "cum_cache_read_tokens": 300,
+                "cum_cache_creation_tokens": 40,
+                "pricing_source": "litellm@2026-11-20",
+                "usage_coverage": {
+                  "token_types": [
+                    "input",
+                    "output",
+                    "cache_read",
+                    "cache_write"
+                  ],
+                  "excludes_subagents": true
+                },
+                "last_assistant_text": "prompt text that must never reach the usage document"
+              }
+            },
+            {
+              "version": 1,
+              "session_id": "cc-child-a",
+              "state": "working",
+              "adapter": "claude-code",
+              "cwd": "/tmp/demo",
+              "project_name": "demo",
+              "first_seen": 1794990100,
+              "updated_at": 1795000000,
+              "confidence": "high",
+              "event_count": 12,
+              "last_event": "assistant",
+              "launcher": {
+                "term_program": "ghostty",
+                "herdr_pane_id": "w1:p1",
+                "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+              },
+              "parent_session_id": "cc-parent",
+              "metrics": {
+                "elapsed_seconds": 180,
+                "total_tokens": 60000,
+                "model_name": "claude-opus-4-6",
+                "context_utilization_percentage": 12.5,
+                "pressure_level": "safe",
+                "estimated_cost_usd": 0.001,
+                "cum_input_tokens": 1,
+                "cum_output_tokens": 2,
+                "cum_cache_read_tokens": 30,
+                "cum_cache_creation_tokens": 4,
+                "pricing_source": "litellm@2026-11-20",
+                "usage_coverage": {
+                  "token_types": [
+                    "input",
+                    "output",
+                    "cache_read",
+                    "cache_write"
+                  ],
+                  "excludes_subagents": true
+                },
+                "last_assistant_text": "prompt text that must never reach the usage document"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "other",
+      "groups": [
+        {
+          "name": "nested",
+          "agents": [
+            {
+              "version": 1,
+              "session_id": "oc-parent",
+              "state": "working",
+              "adapter": "opencode",
+              "cwd": "/tmp/demo",
+              "project_name": "demo",
+              "first_seen": 1794990000,
+              "updated_at": 1795000000,
+              "confidence": "high",
+              "event_count": 12,
+              "last_event": "assistant",
+              "launcher": {
+                "term_program": "ghostty",
+                "herdr_pane_id": "w2:p1",
+                "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+              },
+              "metrics": {
+                "elapsed_seconds": 30,
+                "model_name": "qwen",
+                "estimated_cost_usd": 0.04,
+                "cum_input_tokens": 2254,
+                "cum_output_tokens": 370,
+                "cum_cache_read_tokens": 23040,
+                "pricing_source": "provider-reported",
+                "usage_coverage": {
+                  "token_types": [
+                    "input",
+                    "output",
+                    "cache_read",
+                    "cache_write"
+                  ]
+                }
+              },
+              "children": [
+                {
+                  "version": 1,
+                  "session_id": "oc-child",
+                  "state": "working",
+                  "adapter": "opencode",
+                  "cwd": "/tmp/demo",
+                  "project_name": "demo",
+                  "first_seen": 1794990000,
+                  "updated_at": 1795000000,
+                  "confidence": "high",
+                  "event_count": 12,
+                  "last_event": "assistant",
+                  "parent_session_id": "oc-parent",
+                  "metrics": {
+                    "elapsed_seconds": 10,
+                    "model_name": "qwen",
+                    "estimated_cost_usd": 0.01,
+                    "cum_input_tokens": 500,
+                    "cum_output_tokens": 40,
+                    "pricing_source": "provider-reported",
+                    "usage_coverage": {
+                      "token_types": [
+                        "input",
+                        "output",
+                        "cache_read",
+                        "cache_write"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

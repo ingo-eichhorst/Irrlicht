@@ -1,0 +1,91 @@
+{
+  "groups": [
+    {
+      "name": "demo",
+      "agents": [
+        {
+          "version": 1,
+          "session_id": "on-server-a",
+          "state": "working",
+          "adapter": "claude-code",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000000,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 180,
+            "total_tokens": 60000,
+            "model_name": "claude-opus-4-6",
+            "context_utilization_percentage": 12.5,
+            "pressure_level": "safe",
+            "estimated_cost_usd": 0.42,
+            "cum_input_tokens": 1200,
+            "cum_output_tokens": 340,
+            "cum_cache_read_tokens": 50000,
+            "cum_cache_creation_tokens": 4000,
+            "pricing_source": "litellm@2026-11-20",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ],
+              "excludes_subagents": true
+            },
+            "last_assistant_text": "prompt text that must never reach the usage document"
+          }
+        },
+        {
+          "version": 1,
+          "session_id": "on-server-b",
+          "state": "working",
+          "adapter": "claude-code",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000000,
+          "confidence": "high",
+          "event_count": 12,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-b/herdr.sock"
+          },
+          "metrics": {
+            "elapsed_seconds": 180,
+            "total_tokens": 60000,
+            "model_name": "claude-opus-4-6",
+            "context_utilization_percentage": 12.5,
+            "pressure_level": "safe",
+            "estimated_cost_usd": 0.002,
+            "cum_input_tokens": 5,
+            "cum_output_tokens": 6,
+            "cum_cache_read_tokens": 7,
+            "cum_cache_creation_tokens": 8,
+            "pricing_source": "litellm@2026-11-20",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ],
+              "excludes_subagents": true
+            },
+            "last_assistant_text": "prompt text that must never reach the usage document"
+          }
+        }
+      ]
+    }
+  ]
+}

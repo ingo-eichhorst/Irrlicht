@@ -1,6 +1,7 @@
 package junie
 
 import (
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -146,4 +147,16 @@ func f64(m map[string]any, key string) float64 {
 	}
 	v, _ := m[key].(float64)
 	return v
+}
+
+// usageCoverage declares what this adapter counts (#2061): parseLlmMetadata
+// reads inputTokens, outputTokens, cacheInputTokens (cache_read) and
+// cacheCreateTokens (cache_write) from every modelUsage entry. Junie has no
+// subagents.
+func usageCoverage() *session.UsageCoverage {
+	return &session.UsageCoverage{
+		TokenTypes: []session.TokenType{
+			session.TokenInput, session.TokenOutput, session.TokenCacheRead, session.TokenCacheWrite,
+		},
+	}
 }

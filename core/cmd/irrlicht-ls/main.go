@@ -28,7 +28,12 @@ func main() {
 		format    string
 		showYield bool
 		f         filterSpec
+		usage     bool
 	)
+	// #2061: the herdr `usage` plugin action. It reads the live daemon over
+	// HTTP, never the state files below, and exits before they are opened.
+	flag.BoolVar(&usage, "herdr-usage", false,
+		"print the schema-1 usage document for the herdr pane in $HERDR_PANE_ID (herdr's usage plugin action) and exit")
 	flag.BoolVar(&watch, "w", false, "watch mode — refresh every second")
 	flag.BoolVar(&watch, "watch", false, "watch mode — refresh every second")
 	flag.StringVar(&format, "format", "text", `output format: "text" or "json"`)
@@ -44,6 +49,10 @@ func main() {
 	flag.StringVar(&f.project, "project", "", "filter: project name substring")
 	flag.StringVar(&f.adapter, "adapter", "", "filter: agent adapter (e.g. claude-code, codex)")
 	flag.Parse()
+
+	if usage {
+		os.Exit(runHerdrUsage(defaultHerdrUsageEnv(os.Getenv), os.Stdout, os.Stderr))
+	}
 
 	if err := validateFlags(format, f.state); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
