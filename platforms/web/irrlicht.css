@@ -647,7 +647,10 @@
        meta cluster (bar/tokens/cost/model/icon) never wraps onto a second
        line. The macOS overlay row uses the same rule (one HStack, no
        wrapping). */
-    .session-row {
+    /* Layout shared with the unattached orchestrator worker row (#2140), so
+       free and busy workers in one rig line up. */
+    .session-row,
+    .worker-row {
       display: flex;
       align-items: center;
       flex-wrap: nowrap;
@@ -655,13 +658,15 @@
       padding: 3px 10px;
       font-family: var(--font-mono);
       font-size: 10px;
-      color: var(--text);
       border-radius: 3px;
       min-width: 0;
       /* Pin to the height the history bar (16) takes so toggling Context↔
          history modes doesn't shift the row. Mirrors macOS row pin at
          SessionListView.swift:586 (`.frame(minHeight: 16)`). */
       min-height: 22px;
+    }
+    .session-row {
+      color: var(--text);
       transition: background 0.12s;
       opacity: 0;
       animation: row-reveal 0.2s ease forwards;
@@ -676,7 +681,8 @@
 
     .session-row.child { padding-left: 30px; }
     /* Rig worker rows nested under a Gas Town rig header. */
-    .session-row.nested { padding-left: 26px; }
+    .session-row.nested,
+    .worker-row.nested { padding-left: 26px; }
 
     /* The row a Elfdans notification tap landed on (docs/
        mobile-notifications-arc42.md R6). Stronger than :hover on purpose —
@@ -1274,6 +1280,26 @@
       flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       max-width: 100px;
     }
+    /* Worker name + work item (#2140) beside the role badge on an
+       orchestrator session row; widths mirror the macOS row
+       (SessionRowView.swift: name capped at 60pt, item at 8 characters). */
+    .row-worker-name {
+      font-size: 9px; color: var(--text);
+      flex: 0 1 auto; min-width: 0; max-width: 60px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .row-worker-id {
+      font-size: 9px; color: var(--muted);
+      flex-shrink: 0; white-space: nowrap;
+    }
+    /* Unattached orchestrator worker row (#2140): a free polecat or pool slot
+       with no session. Layout is shared with .session-row above; the name and
+       work item reuse .row-worker-name / .row-worker-id. Muted, since nothing
+       about it is live. */
+    .worker-row { color: var(--muted); }
+    .worker-row-glyph { width: 12px; flex-shrink: 0; text-align: center; }
+    .worker-row-icon { flex-shrink: 0; }
+    .worker-row-state { font-size: 9px; flex-shrink: 0; white-space: nowrap; }
     /* Origin glyph (#538) — a cloud marking a session delivered by a relay
        (remote daemon). Hidden for local sessions, so a local-only dashboard
        is visually unchanged. Muted to read as secondary metadata. */

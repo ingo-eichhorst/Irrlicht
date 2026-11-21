@@ -129,6 +129,95 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(patched.agents?.first?.metrics?.estimatedCostUSD, 0)
     }
 
+    // MARK: - unattached_workers (#2140)
+    //
+    // A named orchestrator worker with no session (a free polecat, an idle
+    // pool slot) arrives in its rig group's `unattached_workers`. Every group
+    // rebuild must carry it, or the free-worker rows vanish on the next
+    // session update until the 30 s hydrate brings them back.
+
+    private static let freeWorker = SessionManager.UnattachedWorker(
+        role: "polecat", icon: "\u{1F477}", description: "Worker agent",
+        workerName: "free-2", workerID: "proj-zz99yy88", workerState: "idle"
+    )
+
+    private func decodeGroups(_ json: String) throws -> [AgentGroup] {
+        try JSONDecoder().decode(SessionManager.SessionsResponse.self, from: Data(json.utf8)).groups
+    }
+
+    func testDecodeFillsUnattachedWorkers() throws {
+        let groups = try decodeGroups("""
+        {"groups":[{"name":"gt","type":"gastown","groups":[{"name":"irrlicht","status":"operational",
+          "agents":[{"session_id":"pole-1","state":"working","role":"polecat","worker_name":"busy-1","worker_id":"proj-a1b2"}],
+          "unattached_workers":[{"role":"polecat","icon":"\u{1F477}","description":"Worker agent",
+            "worker_name":"free-2","worker_id":"proj-zz99yy88","worker_state":"idle"}]}]}]}
+        """)
+        let rig = try XCTUnwrap(groups.first?.groups?.first)
+        XCTAssertEqual(rig.agents?.map(\.id), ["pole-1"])
+        XCTAssertEqual(rig.unattachedWorkers, [Self.freeWorker])
+    }
+
+    func testDecodeAllIdleRigWithoutAgentsKey() throws {
+        // The daemon omits an empty `agents` (json omitempty), so an all-idle
+        // Gas Town arrives with no agents key at either level.
+        let groups = try decodeGroups("""
+        {"groups":[{"name":"gt","type":"gastown","groups":[{"name":"quiet",
+          "unattached_workers":[{"worker_name":"free-3","worker_state":"idle"}]}]}]}
+        """)
+        let rig = try XCTUnwrap(groups.first?.groups?.first)
+        XCTAssertNil(rig.agents)
+        XCTAssertEqual(rig.unattachedWorkers?.map(\.workerName), ["free-3"])
+        XCTAssertEqual(sut.collectSessionIds(from: groups[0]), [],
+                       "a free worker must never become a session id")
+        XCTAssertTrue(sut.flattenAgents(from: groups[0]).isEmpty,
+                      "a free worker must never enter sessionMap")
+    }
+
+    func testPatchGroupKeepsUnattachedWorkers() {
+        // The patch must hit a session INSIDE the rig: patchGroup's no-match
+        // early return hands back the group untouched, field and all.
+        let rig = AgentGroup(name: "irrlicht", agents: [makeSession(id: "pole-1", cost: 1)],
+                             unattachedWorkers: [Self.freeWorker])
+        let gasTown = AgentGroup(name: "gt", type: "gastown", groups: [rig])
+
+        let patched = sut.patchGroup(gasTown, with: makeSession(id: "pole-1", cost: 2))
+
+        let patchedRig = patched.groups?.first
+        XCTAssertEqual(patchedRig?.agents?.first?.metrics?.estimatedCostUSD, 2,
+                       "precondition: the patch reached the rig's session")
+        XCTAssertEqual(patchedRig?.unattachedWorkers, [Self.freeWorker],
+                       "patching a session dropped the rig's free workers")
+    }
+
+    func testPruneGroupKeepsUnattachedWorkers() {
+        let rig = AgentGroup(name: "irrlicht",
+                             agents: [makeSession(id: "pole-1"), makeSession(id: "pole-2")],
+                             unattachedWorkers: [Self.freeWorker])
+        let gasTown = AgentGroup(name: "gt", type: "gastown", groups: [rig])
+        sut.seedLocalApiGroups([gasTown])
+
+        sut.removeFromApiGroups(sessionId: "pole-1")
+
+        let prunedRig = sut.apiGroups.first?.groups?.first
+        XCTAssertEqual(prunedRig?.agents?.map(\.id), ["pole-2"], "precondition: the prune ran")
+        XCTAssertEqual(prunedRig?.unattachedWorkers, [Self.freeWorker],
+                       "pruning a session dropped the rig's free workers")
+    }
+
+    func testPruneGroupKeepsRigWhoseLastSessionLeftWhileWorkersRemain() {
+        let rig = AgentGroup(name: "irrlicht", agents: [makeSession(id: "pole-1")],
+                             unattachedWorkers: [Self.freeWorker])
+        let gasTown = AgentGroup(name: "gt", type: "gastown", groups: [rig])
+        sut.seedLocalApiGroups([gasTown])
+
+        sut.removeFromApiGroups(sessionId: "pole-1")
+
+        let rigs = sut.apiGroups.first?.groups ?? []
+        XCTAssertEqual(rigs.map(\.name), ["irrlicht"],
+                       "a rig with free workers must survive its last session leaving")
+        XCTAssertEqual(rigs.first?.unattachedWorkers, [Self.freeWorker])
+    }
+
     // MARK: - patchApiGroups (end-to-end through SessionManager state)
 
     func testPatchApiGroupsUpdatesAgentMetricsWhenIdKnown() {

@@ -763,6 +763,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-bg-badge" style="display:none"></span>' +
         '<span class="row-role-badge" style="display:none"></span>' +
+        '<span class="row-worker-name" style="display:none"></span>' +
+        '<span class="row-worker-id" style="display:none"></span>' +
         '<span class="row-origin" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
@@ -830,6 +832,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       renderRowCreated(el, agent);
       renderRowId(el, agent);
       renderRowRoleBadge(el, agent);
+      renderRowWorker(el, agent);
       renderRowTool(el, metrics, state);
 
       // Per-row history canvas is repainted by repaintHistory() on the
@@ -1108,6 +1111,37 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       }
     }
 
+    // Worker name + work item (#2140) beside the role badge — web parity with
+    // the macOS row (SessionRowView.swift's workerName / workerID block): gated
+    // on role so non-orchestrator rows are unchanged, the item shortened to 8
+    // characters with the full id in the tooltip.
+    function renderRowWorker(el, agent) {
+      const hasRole = !!agent.role;
+      setWorkerChip(el.querySelector('.row-worker-name'), hasRole ? agent.worker_name : '', '');
+      const wid = hasRole ? (agent.worker_id || '') : '';
+      setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
+    }
+
+    // setWorkerChip shows text in chip (hidden when empty) with title as its
+    // tooltip. Shared by session rows and unattached-worker rows, whose
+    // templates both create every chip it is handed.
+    function setWorkerChip(chip, text, title) {
+      const t = text || '';
+      setIfChanged(chip.style, 'display', t ? '' : 'none');
+      setIfChanged(chip, 'textContent', t);
+      setIfChanged(chip, 'title', title || '');
+    }
+
+    // setIfChanged writes target[prop] only when it differs, so an unchanged
+    // re-render costs no DOM write.
+    function setIfChanged(target, prop, value) {
+      if (target[prop] !== value) target[prop] = value;
+    }
+
+    function workItemShort(id) {
+      return id ? String(id).slice(0, 8) : '';
+    }
+
     // Active tool label — shown only when agent is working and inside a tool call.
     // When no tool is open but the session is held working by a live Bash
     // background process (run_in_background), surface that instead so the row
@@ -1225,6 +1259,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       if (taskProgress) items.push(taskProgress);
     }
 
+    // emitWorkerRowItems pushes one row per orchestrator worker with no
+    // session (#2140), keyed by group path and worker name, after the group's
+    // session rows. Not sessions: no agent number, never in sessionIndex,
+    // never counted in a header or the state summary.
+    function emitWorkerRowItems(items, g, groupKey, depth) {
+      for (const w of (g.unattached_workers || [])) {
+        items.push({type: 'worker', key: 'w:' + groupKey + '/' + w.worker_name, worker: w, depth: depth});
+      }
+    }
+
     function isAlertPressure(pressure) {
       return pressure === 'high' || pressure === 'warning' || pressure === 'critical';
     }
@@ -1282,6 +1326,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             agentNum++;
             emitAgentRowItems(items, a, agentNum, depth);
           }
+          emitWorkerRowItems(items, g, key, depth);
           for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
         for (const g of dashboardGroups) emitGroup(g, '', 0);
@@ -1291,6 +1336,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           item => item.key,
           item => {
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
+            if (item.type === 'worker') return createWorkerRow(item.worker, item.depth);
             if (item.type === 'error') return createSessionErrorRow(item.agent, item.isChild);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'cachebloat') return createCacheBloatRow(item.agent);
@@ -1303,6 +1349,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           },
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
+            if (item.type === 'worker') { updateWorkerRow(el, item.worker, item.depth); return; }
             if (item.type === 'error') { updateSessionErrorRow(el, item.agent); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'cachebloat') { updateCacheBloatRow(el, item.agent); return; }
@@ -1355,6 +1402,38 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       btn.textContent = waitingMode ? '⊟' : '⏸';
       btn.title = waitingMode ? 'Collapse all pending questions' : 'Show questions for sessions waiting on you';
       btn.setAttribute('aria-label', btn.title);
+    }
+
+    // Unattached orchestrator worker row (#2140): a free polecat or pool slot
+    // with no session. Its own class, not .session-row — every .session-row
+    // consumer (theme repaint, history repaint, the Elfdans selection) assumes
+    // a session behind the row. The leading hollow circle is a placeholder in
+    // the state-icon column, not a session state; the worker's own state is
+    // neutral text at the end.
+    function createWorkerRow(worker, depth) {
+      const el = document.createElement('div');
+      el.className = 'worker-row';
+      el.innerHTML =
+        '<span class="worker-row-glyph" title="No session">\u25CB</span>' +
+        '<span class="worker-row-icon" style="display:none"></span>' +
+        '<span class="row-worker-name" style="display:none"></span>' +
+        '<span class="row-worker-id" style="display:none"></span>' +
+        '<span class="worker-row-state" style="display:none"></span>';
+      updateWorkerRow(el, worker, depth);
+      return el;
+    }
+
+    // The name and work item reuse the session row's .row-worker-* chips, so
+    // free and busy workers in one rig share their widths.
+    function updateWorkerRow(el, worker, depth) {
+      el.classList.toggle('nested', !!depth);
+      const role = worker.role || '';
+      const name = worker.worker_name || '';
+      const wid = worker.worker_id || '';
+      setWorkerChip(el.querySelector('.worker-row-icon'), worker.icon, worker.description || role);
+      setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
+      setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
+      setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
     }
 
     function createAlertRow(pressure) {
@@ -1894,7 +1973,9 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     }
     // structureSignature captures the daemon-computed shape of the group tree:
     // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
-    // id. WS session deltas carry NONE of this (just the flat session), and the
+    // id + each group's unattached workers (#2140: name, work item, state —
+    // a free slot taking or finishing work changes them with no session
+    // event at all). WS session deltas carry NONE of this (just the flat session), and the
     // daemon re-nests a session / fills in its role asynchronously as the
     // orchestrator poller catches up — with no create/delete event. So the only
     // reliable way to reflect nesting + role-emoji changes is to poll the REST
@@ -1912,10 +1993,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
               if (a.children) agents(a.children);
             }
           })(g.agents);
+          parts.push(...unattachedWorkerSignatures(g));
           if (g.groups) walk(g.groups, depth + 1);
         }
       })(groups);
       return parts.join('|');
+    }
+    // One structureSignature part per unattached worker of g (#2140).
+    function unattachedWorkerSignatures(g) {
+      return (g.unattached_workers || []).map(w =>
+        'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || ''));
     }
     // Periodic re-hydration. Two jobs, one fetch:
     //   1. STRUCTURE — if the daemon's group tree / role metadata changed

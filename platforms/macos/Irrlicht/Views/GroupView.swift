@@ -150,6 +150,12 @@ struct GroupView: View {
                     .padding(.leading, isTopLevel ? 8 : 16)
                 }
 
+                // Free orchestrator workers (#2140), after the session rows.
+                ForEach(group.unattachedWorkers ?? []) { worker in
+                    UnattachedWorkerRowView(worker: worker)
+                        .padding(.leading, isTopLevel ? 8 : 16)
+                }
+
                 ForEach(group.groups ?? [], id: \.name) { subGroup in
                     GroupView(group: subGroup, depth: depth + 1)
                 }
@@ -171,5 +177,64 @@ struct GroupView: View {
         .disabled(disabled)
         .opacity(disabled ? 0.3 : 1.0)
         .tooltip(tooltip)
+    }
+}
+
+// MARK: - Free orchestrator worker row (#2140)
+
+/// One orchestrator worker with no session: a free polecat, an idle pool slot.
+/// Deliberately not a `SessionRowView` — there is no session behind it, so it
+/// has no session state icon, no click-to-focus, and it never reaches
+/// `sessionMap`, the menu bar or a notification. The leading columns are meant
+/// to line up with `SessionRowView`'s (state slot, role icon, worker name
+/// capped at 60pt, work item shortened to 8 characters); the two are kept in
+/// step by hand, so a change to that block there belongs here too.
+struct UnattachedWorkerRowView: View {
+    let worker: SessionManager.UnattachedWorker
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // A placeholder in the state-icon column, not a session state.
+            Image(systemName: "circle")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary.opacity(0.6))
+                .frame(width: 12, height: 12)
+                .tooltip("No session")
+
+            if let icon = worker.icon, !icon.isEmpty {
+                Text(icon)
+                    .font(.system(size: 10))
+                    .frame(width: 14, alignment: .center)
+                    .tooltip(worker.description ?? worker.role?.capitalized ?? "")
+            }
+
+            Text(worker.workerName)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 60, alignment: .leading)
+
+            if let wid = worker.workerID, !wid.isEmpty {
+                Text(String(wid.prefix(8)))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .tooltip(wid)
+            }
+
+            // The orchestrator's own state string, as plain text.
+            if let state = worker.workerState, !state.isEmpty {
+                Text(state)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("unattached-worker-\(worker.workerName)")
     }
 }

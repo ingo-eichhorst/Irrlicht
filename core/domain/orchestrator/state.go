@@ -56,10 +56,16 @@ type Worker struct {
 	Role        string `json:"role"`
 	Icon        string `json:"icon,omitempty"`        // Display icon, set by each adapter.
 	Description string `json:"description,omitempty"` // Human-readable role description, set by each adapter.
-	Name        string `json:"name,omitempty"`
-	ID          string `json:"id,omitempty"` // bead ID, task ID, etc.
-	SessionID   string `json:"session_id,omitempty"`
-	State       string `json:"state"`
+	// Name marks a worker as an individual slot (a Gas Town polecat, crew
+	// member or dog). The dashboard lists a named worker that no session is
+	// attached to as an unattached worker (session.BuildDashboard), so an
+	// adapter leaves Name empty for a singleton role it emits on every poll
+	// whether or not a session matched (Gas Town's witness and refinery) —
+	// a name there would show a permanent placeholder row.
+	Name      string `json:"name,omitempty"`
+	ID        string `json:"id,omitempty"` // bead ID, task ID, etc.
+	SessionID string `json:"session_id,omitempty"`
+	State     string `json:"state"`
 }
 
 // workUnit represents a trackable unit of work with progress.
