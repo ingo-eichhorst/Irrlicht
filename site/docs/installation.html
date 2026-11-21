@@ -314,6 +314,14 @@ cd Irrlicht
         When you grant Claude Code's statusline permission, Irrlicht registers a <code>statusLine.command</code> entry in <code>~/.claude/settings.json</code>. Any Claude Code session already running at that point won't pick it up &mdash; close and reopen it once to activate the integration.
       </div>
 
+      <h3 id="claude-code-panel">Optional: the Irrlicht panel inside Claude Code</h3>
+
+      <p>If you work in a full-screen Claude Code terminal and the menu bar is out of sight, you can add a read-only Irrlicht panel beside the chat. It lists every session the daemon watches, from every agent, along with your quota. It reads the same <code>/api/v1/sessions</code> endpoint as the dashboard and changes nothing. Install it at a Claude Code prompt:</p>
+
+      <pre><code>/plugin install irrlicht-panel --marketplace ingo-eichhorst/Irrlicht</code></pre>
+
+      <p>Open it with <code>/irrlicht</code>. In Claude Code's full-screen layout it also docks itself as a sidebar once the terminal is wide enough. See the <a href="https://github.com/ingo-eichhorst/Irrlicht/tree/main/platforms/claude-code">panel's README</a> for what it shows and which daemon it asks.</p>
+
       <!-- ── Troubleshooting ── -->
       <h2 id="troubleshooting">Troubleshooting</h2>
 

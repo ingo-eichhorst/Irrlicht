@@ -8,7 +8,7 @@
 #   - open GitHub CodeQL code-scanning alerts (Critical/High)
 #   - govulncheck ./...   (every module in go.work)
 #   - gosec ./...         (every module in go.work)
-#   - npm audit --audit-level=high (both web trees)
+#   - npm audit --audit-level=high (every web tree in WEB_TREES)
 #
 # Local mode (--local, used by preflight.sh's pre-push gate): skips the two
 # GitHub API calls — no repo/network dependency, and Dependabot/CodeQL alerts
@@ -115,7 +115,7 @@ fi
 # enumerates them the way go.work enumerates modules — so this list stays
 # hand-maintained. tools/lib/module-list_test.sh holds both it and GO_MODULES
 # against .github/dependabot.yml.
-WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web)
+WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web platforms/claude-code)
 
 FAILED=0
 fail() { local msg="$1"; echo "FAIL: $msg" >&2; FAILED=1; return 0; }

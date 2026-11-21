@@ -16,7 +16,7 @@
 #   .github/workflows/test.yml      — gofmt, core + onboarding-factory tests,
 #                                      of validate, recording-rig smoke test,
 #                                      shared shell libs, skill-file lint
-#   .github/workflows/web-test.yml  — npm test in both web trees
+#   .github/workflows/web-test.yml  — npm test in each web tree
 #   .github/workflows/ars-gate.yml  — ARS architecture-regression gate
 #                                      (composite/category score vs origin/main)
 #   .github/workflows/macos-swift.yml — swift build + swift test for the
@@ -61,7 +61,7 @@
 #   tools/preflight.sh                 # everything except the Linux gate
 #   tools/preflight.sh --linux         # + full Linux parity via Docker
 #   tools/preflight.sh --only go       # just the go-test.yml-equivalent gates
-#   tools/preflight.sh --only web      # just the two npm test trees
+#   tools/preflight.sh --only web      # just the npm test trees
 #   tools/preflight.sh --only arch     # just the ARS architecture gate
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
@@ -721,6 +721,15 @@ if want web; then
                   "web: platforms/web"             web_tree platforms/web
   run_gate_scoped '^tools/onboarding-factory/internal/viewer/web/' \
                   "web: onboarding-factory viewer" web_tree tools/onboarding-factory/internal/viewer/web
+  # The platforms/web/ half is not a mistake either. The Claude Code panel's
+  # lib/quota.parity.test.js imports the dashboard's quotaChips.js as it ships
+  # (and, through it, irrlicht.js, the modules irrlicht.js imports, and the
+  # dashboard's vitest.setup.js scaffold) and requires identical quota buckets
+  # from both. A push that edits only that shared rule is the change the parity
+  # test exists to catch, so every top-level module of platforms/web re-runs
+  # it under --changed, not only quotaChips.js.
+  run_gate_scoped '^platforms/claude-code/|^platforms/web/[^/]+\.js$' \
+                  "web: Claude Code panel"         web_tree platforms/claude-code
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same

@@ -785,9 +785,15 @@ CI parity section (chunking, the budget, and what it makes visible).
   immediately by an explicit emptiness guard that does the work pipefail would.
 
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
-  two independent suites, each with its own `node_modules`:
+  three independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
   - `tools/onboarding-factory/internal/viewer/web/` — the onboarding viewer.
+  - `platforms/claude-code/` — the Claude Code panel's `lib/` modules. Its
+    `lib/quota.parity.test.js` imports the dashboard's `quotaChips.js`, so the
+    preflight gate for this tree also runs when a top-level `platforms/web/*.js`
+    module changes. The mod's own `tests/*.test.tsx` run under
+    `claude plugin test platforms/claude-code`, which needs the `claude` CLI and
+    is not in CI.
 
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
 

@@ -1,0 +1,28 @@
+{
+  "name": "irrlicht-panel",
+  "version": "0.1.0",
+  "description": "A read-only Irrlicht panel inside Claude Code: every agent session the Irrlicht daemon watches, across agents, with state, branch, tokens, context and model, plus the quota of the account this session bills against. Reads GET /api/v1/sessions from the local daemon; writes nothing.",
+  "author": {
+    "name": "Irrlicht contributors",
+    "url": "https://github.com/ingo-eichhorst/Irrlicht"
+  },
+  "homepage": "https://github.com/ingo-eichhorst/Irrlicht/tree/main/platforms/claude-code",
+  "repository": "https://github.com/ingo-eichhorst/Irrlicht",
+  "license": "MIT",
+  "keywords": [
+    "irrlicht",
+    "sessions",
+    "agents",
+    "quota",
+    "pane"
+  ],
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the panel by itself",
+      "description": "In the full-screen layout, open the Irrlicht panel as a sidebar by itself when the terminal is wide enough. Off: it opens only when you type /irrlicht, which always works.",
+      "default": true
+    }
+  },
+  "types": "./types/index.d.ts"
+}

@@ -37,6 +37,12 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 **DMG:** download `Irrlicht-<version>.dmg` from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases) and drag **Irrlicht.app** to **Applications**.
 
+**Inside Claude Code (optional):** a read-only panel beside the chat that lists every session the daemon watches, plus your quota. Type this at a Claude Code prompt, then open the panel with `/irrlicht` ([details](platforms/claude-code/README.md)):
+
+```
+/plugin install irrlicht-panel --marketplace ingo-eichhorst/Irrlicht
+```
+
 → [Quickstart](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) gets you to your first purple dot in 60 seconds.
 
 ## What it does
