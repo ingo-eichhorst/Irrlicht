@@ -36,6 +36,7 @@ pending_background_agent_count:int
 pending_bash_polls:map[string]string
 pending_task_creates:map[string]string
 pending_waiting_cue:bool
+provider_cost_seen:bool
 resume_fingerprint:uint64
 schema_version:int
 session_error:*tailer.SessionError

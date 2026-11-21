@@ -45,6 +45,15 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		if m.EstimatedCostUSD != 0.0421 {
 			t.Errorf("EstimatedCostUSD = %v, want session_v2.cost 0.0421", m.EstimatedCostUSD)
 		}
+		// #2061: the cost is opencode's own, and this path declares all four
+		// token columns it reads.
+		if m.PricingSource != tailer.PricingSourceProviderReported || len(m.UnpricedModels) != 0 || m.TokensUnobserved {
+			t.Errorf("provenance = (%q, %q, %t), want (provider-reported, none, false)",
+				m.PricingSource, m.UnpricedModels, m.TokensUnobserved)
+		}
+		if m.UsageCoverage == nil || !m.UsageCoverage.ObservesAll() || m.UsageCoverage.ExcludesSubagents {
+			t.Errorf("UsageCoverage = %+v, want all four token types, subagent exclusion undeclared", m.UsageCoverage)
+		}
 		if want := tailer.NormalizeModelName("qwen3.8-27b-splash"); m.ModelName != want {
 			t.Errorf("ModelName = %q, want %q (the assistant row's data.model.id)", m.ModelName, want)
 		}

@@ -2,6 +2,7 @@ package tailer
 
 import (
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -339,6 +340,9 @@ func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
 	}
 	if c.ProviderCostUSD != nil {
 		t.cumProviderCostUSD += *c.ProviderCostUSD
+		// The early return below drops this turn's tokens; record that, so
+		// the Cum*Tokens totals are never read as complete (#2061).
+		t.providerCostSeen = true
 		return
 	}
 	model := c.Model
@@ -434,15 +438,20 @@ func (t *TranscriptTailer) computeCumulativeTokensPriced(pending *PerTurnContrib
 	var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
 	var pricedCost, co2Grams float64
 	var co2Tier capacity.CO2Tier
+	var prov costProvenance
 	accumulate := func(model string, bd UsageBreakdown) {
 		totalInput += bd.Input
 		totalOutput += bd.Output
 		totalCacheRead += bd.CacheRead
 		totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
+		priced := false
 		if t.capacityMgr != nil && model != "" {
-			pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
+			cost, ok := t.capacityMgr.PricedCostFromBreakdown(
 				model, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+			pricedCost += cost
+			priced = ok
 		}
+		prov.bucket(model, bd.Total(), priced)
 		grams, tier := capacity.EstimateCO2Grams(model, bd.Total())
 		co2Grams += grams
 		co2Tier = capacity.WeakerCO2Tier(co2Tier, tier)
@@ -463,7 +472,58 @@ func (t *TranscriptTailer) computeCumulativeTokensPriced(pending *PerTurnContrib
 	t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
 	t.metrics.EstimatedCO2Grams = co2Grams
 	t.metrics.CO2Tier = string(co2Tier)
+	t.publishCostProvenance(prov)
 }
+
+// costProvenance collects, over one pricing pass, which token buckets were
+// priced from the price table and which could not be (#2061).
+type costProvenance struct {
+	usedTable bool
+	unpriced  map[string]bool
+}
+
+// bucket records one model's token bucket: priced from the table, or — when
+// it holds tokens but no price was known (no model name, no price table, or
+// a model the table lacks) — unpriced. An empty bucket is neither.
+func (p *costProvenance) bucket(model string, tokens int64, priced bool) {
+	if tokens == 0 {
+		return
+	}
+	if priced {
+		p.usedTable = true
+		return
+	}
+	if p.unpriced == nil {
+		p.unpriced = make(map[string]bool)
+	}
+	p.unpriced[model] = true
+}
+
+// publishCostProvenance writes the pass's provenance onto t.metrics:
+// PricingSource names every source that contributed to EstimatedCostUSD,
+// UnpricedModels the buckets that contributed nothing for want of a price
+// (sorted, since cumByModel iterates in random order), and TokensUnobserved
+// whether a provider-cost turn's tokens were dropped.
+func (t *TranscriptTailer) publishCostProvenance(p costProvenance) {
+	var sources []string
+	if p.usedTable && t.capacityMgr != nil {
+		sources = append(sources, t.capacityMgr.PriceTableSource())
+	}
+	if t.providerCostSeen {
+		sources = append(sources, PricingSourceProviderReported)
+	}
+	t.metrics.PricingSource = strings.Join(sources, "+")
+	t.metrics.UnpricedModels = nil
+	for model := range p.unpriced {
+		t.metrics.UnpricedModels = append(t.metrics.UnpricedModels, model)
+	}
+	sort.Strings(t.metrics.UnpricedModels)
+	t.metrics.TokensUnobserved = t.providerCostSeen
+}
+
+// PricingSourceProviderReported is the PricingSource part for a cost the
+// agent reported itself rather than one priced from Irrlicht's table.
+const PricingSourceProviderReported = "provider-reported"
 
 // computeCumulativeTokensLegacy is the legacy path: scalar accumulators
 // (testParser and pre-Contribution adapters).
@@ -483,9 +543,11 @@ func (t *TranscriptTailer) computeCumulativeTokensLegacy() {
 	t.metrics.CumCacheReadTokens = effectiveCumCacheRead
 	t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
 
+	var prov costProvenance
+	priced := false
 	if t.metrics.ModelName != "" {
 		if t.capacityMgr != nil {
-			t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+			t.metrics.EstimatedCostUSD, priced = t.capacityMgr.PricedCostUSD(
 				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
 				effectiveCumCacheRead, effectiveCumCacheCreate)
 		}
@@ -494,6 +556,9 @@ func (t *TranscriptTailer) computeCumulativeTokensLegacy() {
 		t.metrics.EstimatedCO2Grams = grams
 		t.metrics.CO2Tier = string(tier)
 	}
+	prov.bucket(t.metrics.ModelName,
+		effectiveCumInput+effectiveCumOutput+effectiveCumCacheRead+effectiveCumCacheCreate, priced)
+	t.publishCostProvenance(prov)
 }
 
 // computeMetrics calculates messages per minute and elapsed time

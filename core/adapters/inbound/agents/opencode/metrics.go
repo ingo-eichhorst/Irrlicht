@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -138,6 +139,13 @@ type sessionFold struct {
 	// sticky field is simply this one.
 	sessionErr *tailer.SessionError
 
+	// Cost provenance (#2061). This path never prices from Irrlicht's table:
+	// its cost is only what opencode itself reported. A turn with tokens and
+	// no reported cost therefore added nothing to EstimatedCostUSD, and its
+	// model is recorded as unpriced rather than read as free.
+	providerCostSeen bool
+	unpricedModels   map[string]bool
+
 	// Execution confidence (#737), folded here because this path bypasses the
 	// tailer that normally holds it. Like sessionErr it needs no persistence:
 	// every pass re-folds every row, so it is rebuilt from scratch.
@@ -190,7 +198,7 @@ func (f *sessionFold) observe(raw map[string]interface{}) {
 	// delta path skips by design. reconcileTaskSnapshot no-ops when
 	// there is no snapshot or no tasks yet.
 	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &m.Tasks, &f.taskByID)
-	applyContribution(ev.Contribution, &m.CumInputTokens, &m.CumOutputTokens, &m.CumCacheReadTokens, &m.EstimatedCostUSD)
+	f.applyContribution(ev.Contribution)
 	trackTokensAndText(ev, m, &m.LastAssistantText)
 	f.confidence.Observe(ev.Hedge)
 
@@ -215,6 +223,7 @@ func (f *sessionFold) result() *session.SessionMetrics {
 	metrics.ElapsedSeconds = int64(f.lastTS.Sub(f.firstTS).Seconds())
 	metrics.SessionError = convertSessionError(f.sessionErr)
 	session.ApplyExecutionConfidence(metrics, f.confidence)
+	f.publishCostProvenance()
 
 	// Surface the agent-authored task estimate + projected completion ETA
 	// (issue #558) — mirrors the conversion the shared metrics adapter does
@@ -382,17 +391,46 @@ func openToolNamesFrom(openTools map[string]string) []string {
 
 // applyContribution accumulates per-turn usage and cost from a
 // PerTurnContribution onto the running totals. A nil contribution is a
-// no-op.
-func applyContribution(contribution *tailer.PerTurnContribution, cumInput, cumOutput, cumCacheRead *int64, cumCost *float64) {
+// no-op. Unlike the tailer's applyContribution, the tokens are added even
+// when the turn reports a cost, so this path never leaves tokens unobserved.
+// It never adds cache-creation tokens either, which is one reason this 1.x
+// path declares no usage coverage (#2061; see v2UsageCoverage in
+// metrics_v2.go for the other, and for the 2.x path that does declare one).
+func (f *sessionFold) applyContribution(contribution *tailer.PerTurnContribution) {
 	if contribution == nil {
 		return
 	}
-	*cumInput += contribution.Usage.Input
-	*cumOutput += contribution.Usage.Output
-	*cumCacheRead += contribution.Usage.CacheRead
+	m := f.metrics
+	m.CumInputTokens += contribution.Usage.Input
+	m.CumOutputTokens += contribution.Usage.Output
+	m.CumCacheReadTokens += contribution.Usage.CacheRead
 	if contribution.ProviderCostUSD != nil {
-		*cumCost += *contribution.ProviderCostUSD
+		m.EstimatedCostUSD += *contribution.ProviderCostUSD
+		f.providerCostSeen = true
+		return
 	}
+	if contribution.Usage.Total() > 0 {
+		if f.unpricedModels == nil {
+			f.unpricedModels = make(map[string]bool)
+		}
+		f.unpricedModels[contribution.Model] = true
+	}
+}
+
+// publishCostProvenance writes the fold's cost provenance onto its metrics
+// (#2061): provider-reported when opencode reported any cost, and every
+// model whose tokens arrived without one as unpriced, sorted.
+func (f *sessionFold) publishCostProvenance() {
+	m := f.metrics
+	m.PricingSource = ""
+	if f.providerCostSeen {
+		m.PricingSource = tailer.PricingSourceProviderReported
+	}
+	m.UnpricedModels = nil
+	for model := range f.unpricedModels {
+		m.UnpricedModels = append(m.UnpricedModels, model)
+	}
+	sort.Strings(m.UnpricedModels)
 }
 
 // trackTokensAndText updates the latest token snapshot (for context

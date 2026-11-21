@@ -43,6 +43,8 @@ func Source() agent.Source {
 // Agent returns the Pi adapter registration.
 func Agent() agent.Agent {
 	return agent.Agent{
+		// What this adapter counts (#2061), declared beside the parser.
+		Usage: usageCoverage(),
 		Identity: agent.Identity{
 			Name:         AdapterName,
 			DisplayName:  "Pi",

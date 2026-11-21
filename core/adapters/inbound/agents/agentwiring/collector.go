@@ -50,6 +50,7 @@ func BuildMetricsCollector(adapters []agent.Agent) outbound.MetricsCollector {
 		Parsers:          ParserFactories(adapters),
 		SubagentCounters: agents.SubagentCounters(adapters),
 		MetricsProviders: agents.MetricsProviders(adapters),
+		UsageCoverage:    agents.UsageCoverages(adapters),
 		FallbackName:     claudecode.AdapterName,
 		// Default headline compaction (issue #759). A future setting or LLM
 		// adapter swaps this one line.

@@ -167,10 +167,20 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 	// worth — the repo convention is that cost is general pricing and only
 	// quota counters are taken from the agent verbatim.
 	cm := capacity.DefaultCapacityManager()
+	priced := false
 	if cm != nil && metrics.ModelName != "" {
-		metrics.EstimatedCostUSD = cm.EstimateCostUSD(
+		metrics.EstimatedCostUSD, priced = cm.PricedCostUSD(
 			metrics.ModelName, metrics.CumInputTokens, metrics.CumOutputTokens,
 			metrics.CumCacheReadTokens, metrics.CumCacheCreationTokens)
+	}
+	// Cost provenance (#2061): priced from the table, or — tokens with no
+	// known price — unpriced, never read as free.
+	if metrics.CumInputTokens+metrics.CumOutputTokens+metrics.CumCacheReadTokens+metrics.CumCacheCreationTokens > 0 {
+		if priced {
+			metrics.PricingSource = cm.PriceTableSource()
+		} else {
+			metrics.UnpricedModels = []string{model.String}
+		}
 	}
 	grams, tier := capacity.EstimateCO2Grams(metrics.ModelName,
 		metrics.CumInputTokens+metrics.CumOutputTokens+
