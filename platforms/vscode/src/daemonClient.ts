@@ -3,7 +3,7 @@
 import { WebSocket } from 'ws';
 import type { ResolvedDaemonUrl } from './config';
 import type { PushMessage, SessionRecord, SessionStore } from './sessionStore';
-import type { ConnectionState } from './statusText';
+import { Emitter } from './emitter';
 
 export interface WsLike {
   on(event: 'open' | 'message' | 'close' | 'error', cb: (...args: any[]) => void): void;
@@ -12,7 +12,7 @@ export interface WsLike {
 export interface DaemonClientOptions { getUrl(): ResolvedDaemonUrl; store: SessionStore; log(msg: string): void;
   fetchImpl?: typeof fetch; createSocket?: (url: string) => WsLike; backoffMs?: { initial: number; max: number } }
 
-type Listener<T> = (v: T) => void;
+export type ConnectionState = 'connecting' | 'online' | 'offline';
 
 export class DaemonClient {
   private _state: ConnectionState = 'offline';
@@ -21,16 +21,22 @@ export class DaemonClient {
   private socket: WsLike | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delay: number;
-  private rehydrating = false;
+  /** Seq of the last stamped frame of this socket; every frame passes the check on arrival. */
+  private lastSeq = 0;
+  private hydrating = false;
+  /** A gap or rehydrate request arrived while a hydrate was running: fetch once more when it lands. */
+  private again = false;
   /** Session frames received while a hydrate GET is in flight; replayed over the snapshot. */
   private pending: PushMessage[] | undefined;
-  private readonly statusListeners = new Set<Listener<ConnectionState>>();
-  private readonly focusListeners = new Set<Listener<SessionRecord>>();
+  private readonly status: Emitter<ConnectionState>;
+  private readonly focus: Emitter<SessionRecord>;
   private readonly backoff: { initial: number; max: number };
 
   constructor(private readonly opts: DaemonClientOptions) {
     this.backoff = opts.backoffMs ?? { initial: 1000, max: 10000 };
     this.delay = this.backoff.initial;
+    this.status = new Emitter((e) => opts.log(`status listener failed: ${String(e)}`));
+    this.focus = new Emitter((e) => opts.log(`focus listener failed: ${String(e)}`));
   }
 
   get state(): ConnectionState {
@@ -45,11 +51,7 @@ export class DaemonClient {
 
   stop(): void {
     this.running = false;
-    this.gen++;
-    this.rehydrating = false;
-    this.pending = undefined;
-    this.cancelTimer();
-    this.closeSocket();
+    this.teardown();
     this.setState('offline');
   }
 
@@ -59,18 +61,17 @@ export class DaemonClient {
     this.start();
   }
 
-  onStatus(l: Listener<ConnectionState>): { dispose(): void } {
-    this.statusListeners.add(l);
-    return { dispose: () => { this.statusListeners.delete(l); } };
+  onStatus(l: (s: ConnectionState) => void): { dispose(): void } {
+    return this.status.event(l);
   }
 
-  onFocusRequested(l: Listener<SessionRecord>): { dispose(): void } {
-    this.focusListeners.add(l);
-    return { dispose: () => { this.focusListeners.delete(l); } };
+  onFocusRequested(l: (s: SessionRecord) => void): { dispose(): void } {
+    return this.focus.event(l);
   }
 
   private connect(): void {
     const gen = ++this.gen;
+    this.lastSeq = 0;
     const url = this.opts.getUrl();
     this.setState('connecting');
     let sock: WsLike;
@@ -84,7 +85,7 @@ export class DaemonClient {
     this.socket = sock;
     sock.on('open', () => {
       if (gen !== this.gen) return;
-      void this.hydrate(gen, true);
+      void this.hydrate(gen);
     });
     sock.on('message', (data: unknown) => {
       if (gen !== this.gen) return;
@@ -97,77 +98,77 @@ export class DaemonClient {
     sock.on('close', () => this.fail(gen));
   }
 
-  private async hydrate(gen: number, initial: boolean): Promise<void> {
-    this.pending = [];
+  private async hydrate(gen: number): Promise<void> {
+    if (this.hydrating) {
+      this.again = true;
+      return;
+    }
+    this.hydrating = true;
     try {
-      const url = this.opts.getUrl();
-      const doFetch = this.opts.fetchImpl ?? fetch;
-      const res = await doFetch(`${url.origin}/api/v1/sessions`);
-      if (!res.ok) throw new Error(`GET /api/v1/sessions -> HTTP ${res.status}`);
-      const body: unknown = await res.json();
-      if (gen !== this.gen) return;
-      this.opts.store.hydrate(body);
-      const buffered = this.pending ?? [];
-      this.pending = undefined;
-      for (const m of buffered) this.opts.store.apply(m, true);
+      do {
+        this.again = false;
+        this.pending = [];
+        const url = this.opts.getUrl();
+        const doFetch = this.opts.fetchImpl ?? fetch;
+        const res = await doFetch(`${url.origin}/api/v1/sessions`);
+        if (!res.ok) throw new Error(`GET /api/v1/sessions -> HTTP ${res.status}`);
+        const body: unknown = await res.json();
+        if (gen !== this.gen) return;
+        this.opts.store.hydrate(body);
+        const buffered = this.pending;
+        this.pending = undefined;
+        for (const m of buffered) this.opts.store.apply(m, true);
+      } while (this.again);
       this.delay = this.backoff.initial;
-      if (initial) this.setState('online');
+      this.setState('online');
     } catch (e) {
       if (gen !== this.gen) return;
       this.opts.log(`hydrate failed: ${String(e)}`);
       this.fail(gen);
     } finally {
-      if (gen === this.gen) this.pending = undefined;
-      if (!initial && gen === this.gen) this.rehydrating = false;
+      if (gen === this.gen) this.hydrating = false;
     }
   }
 
   private onMessage(gen: number, data: unknown): void {
     try {
-      const raw = typeof data === 'string' ? data : String(data);
-      const msg = JSON.parse(raw) as PushMessage;
+      const msg = JSON.parse(String(data)) as PushMessage;
       if (typeof msg !== 'object' || msg === null || typeof msg.type !== 'string') return;
+      // Every frame advances the cursor on arrival, whatever its type and whether or not it is buffered.
+      if (typeof msg.seq === 'number' && msg.seq > 0) {
+        const gap = this.lastSeq > 0 && msg.seq > this.lastSeq + 1;
+        this.lastSeq = msg.seq;
+        if (gap) void this.hydrate(gen);
+      }
       if (msg.type === 'focus_requested') {
-        // Focus frames carry a seq from the same global counter as every other broadcast.
-        const gap = this.opts.store.trackSeq(msg);
-        if (msg.session) this.emitFocus(msg.session);
-        if (gap) this.rehydrate(gen);
-        return;
-      }
-      if (this.pending) {
+        if (msg.session) this.focus.fire(msg.session);
+      } else if (this.pending) {
         this.pending.push(msg);
-        return;
+      } else {
+        this.opts.store.apply(msg);
       }
-      if (this.opts.store.apply(msg) === 'gap') this.rehydrate(gen);
     } catch (e) {
       this.opts.log(`ignoring bad frame: ${String(e)}`);
     }
   }
 
-  private rehydrate(gen: number): void {
-    if (this.rehydrating) return;
-    this.rehydrating = true;
-    void this.hydrate(gen, false);
-  }
-
-  private emitFocus(s: SessionRecord): void {
-    for (const l of this.focusListeners) {
-      try { l(s); } catch (e) { this.opts.log(`focus listener failed: ${String(e)}`); }
-    }
+  private teardown(): void {
+    this.gen++;
+    this.hydrating = false;
+    this.again = false;
+    this.pending = undefined;
+    this.cancelTimer();
+    this.closeSocket();
   }
 
   private fail(gen: number): void {
     if (gen !== this.gen) return;
-    this.gen++;
-    this.rehydrating = false;
-    this.pending = undefined;
-    this.closeSocket();
+    this.teardown();
     this.setState('offline');
     this.opts.store.clear();
     if (!this.running) return;
     const wait = this.delay;
     this.delay = Math.min(this.delay * 2, this.backoff.max);
-    this.cancelTimer();
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (this.running) this.connect();
@@ -189,8 +190,6 @@ export class DaemonClient {
   private setState(s: ConnectionState): void {
     if (this._state === s) return;
     this._state = s;
-    for (const l of this.statusListeners) {
-      try { l(s); } catch (e) { this.opts.log(`status listener failed: ${String(e)}`); }
-    }
+    this.status.fire(s);
   }
 }

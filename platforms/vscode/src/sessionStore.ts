@@ -1,10 +1,10 @@
 // In-memory mirror of the daemon's sessions. Pure: no vscode import.
+import { Emitter } from './emitter';
 import { STATES, isStateName, type StateName } from './states';
 
 export interface SessionRecord { session_id: string; state: StateName | string; parent_session_id?: string; updated_at?: number;
-  launcher?: { tty?: string; term_program?: string; vscode_pid?: number }; project_name?: string; adapter?: string; model?: string }
+  launcher?: { tty?: string }; project_name?: string; adapter?: string; model?: string }
 export interface PushMessage { type: string; session?: SessionRecord; seq?: number }
-export type ApplyResult = 'changed' | 'unchanged' | 'gap';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -33,33 +33,21 @@ function collectGroups(groups: unknown, out: SessionRecord[]): void {
 
 export class SessionStore {
   private sessions = new Map<string, SessionRecord>();
-  private lastSeq = 0;
-  private readonly listeners = new Set<() => void>();
+  private readonly changed = new Emitter<void>();
 
   hydrate(sessionsResponse: unknown): void {
     const flat: SessionRecord[] = [];
     if (Array.isArray(sessionsResponse)) collectGroups(sessionsResponse, flat);
     else if (isRecord(sessionsResponse)) collectGroups(sessionsResponse.groups, flat);
     this.sessions = new Map(flat.map((s) => [s.session_id, s]));
-    this.lastSeq = 0;
-    this.fire();
-  }
-
-  /** Advances the seq cursor; true when the frame skipped ahead of it. Every frame must pass through here. */
-  trackSeq(msg: PushMessage): boolean {
-    if (typeof msg.seq !== 'number' || msg.seq <= 0) return false;
-    const gap = this.lastSeq > 0 && msg.seq > this.lastSeq + 1;
-    this.lastSeq = msg.seq;
-    return gap;
+    this.changed.fire();
   }
 
   /** With newerOnly (replay over a snapshot) an upsert strictly older than the held record is dropped (a same-second tie applies). */
-  apply(msg: PushMessage, newerOnly = false): ApplyResult {
+  apply(msg: PushMessage, newerOnly = false): boolean {
     const changed = this.applySession(msg, newerOnly);
-    const gap = this.trackSeq(msg);
-    const result: ApplyResult = gap ? 'gap' : changed ? 'changed' : 'unchanged';
-    if (changed || gap) this.fire();
-    return result;
+    if (changed) this.changed.fire();
+    return changed;
   }
 
   private applySession(msg: PushMessage, newerOnly: boolean): boolean {
@@ -74,9 +62,9 @@ export class SessionStore {
   }
 
   clear(): void {
+    if (this.sessions.size === 0) return;
     this.sessions.clear();
-    this.lastSeq = 0;
-    this.fire();
+    this.changed.fire();
   }
 
   all(): SessionRecord[] {
@@ -95,13 +83,6 @@ export class SessionStore {
   }
 
   onDidChange(listener: () => void): { dispose(): void } {
-    this.listeners.add(listener);
-    return { dispose: () => { this.listeners.delete(listener); } };
-  }
-
-  private fire(): void {
-    for (const l of this.listeners) {
-      try { l(); } catch { /* a listener must not break the store */ }
-    }
+    return this.changed.event(listener);
   }
 }

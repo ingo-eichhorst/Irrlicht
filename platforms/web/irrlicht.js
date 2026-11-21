@@ -760,7 +760,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // Only the local daemon (this page's own origin) can focus a session; a
     // relay-origin id is compound and does nothing.
     function focusSessionRow(id) {
-      if (!id || sessionOrigin({ session_id: id }) !== 'local') return;
+      if (!id || sourceIdOf(id) !== '') return;
       fetch('/api/v1/sessions/' + encodeURIComponent(id) + '/focus', { method: 'POST' })
         .then((r) => { if (!r.ok) console.debug('irrlicht: focus request refused', r.status); })
         .catch((e) => console.debug('irrlicht: focus request failed', e));

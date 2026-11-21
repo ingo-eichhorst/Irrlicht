@@ -1,57 +1,40 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
-import type { ResolvedDaemonUrl } from './config';
+import type { DaemonUrlSource } from './config';
 import type { DaemonClient } from './daemonClient';
 import { buildWrapperHtml } from './webviewHtml';
-
-type GetUrl = () => ResolvedDaemonUrl;
 
 function newNonce(): string {
   return randomBytes(16).toString('base64').replace(/[^A-Za-z0-9]/g, '');
 }
 
-function render(webview: vscode.Webview, getUrl: GetUrl): void {
-  const { origin } = getUrl();
-  webview.html = buildWrapperHtml({
-    daemonOrigin: origin,
-    iframeUrl: `${origin}/?embed=vscode`,
-    cspSource: webview.cspSource,
-    nonce: newNonce(),
-  });
+function render(webview: vscode.Webview, origin: string): void {
+  webview.html = buildWrapperHtml({ daemonOrigin: origin, cspSource: webview.cspSource, nonce: newNonce() });
 }
 
 /** Wires a webview to the daemon client: renders the wrapper, relays connectivity, re-renders on origin change. */
-function attach(webview: vscode.Webview, client: DaemonClient, getUrl: GetUrl): vscode.Disposable {
+function attach(webview: vscode.Webview, client: DaemonClient, urls: DaemonUrlSource): vscode.Disposable {
   const post = (): void => {
     const state = client.state;
     // 'connecting' sends nothing so the initial connecting notice is not replaced by offline wording.
     if (state === 'connecting') return;
-    void webview.postMessage({ type: 'daemon', connected: state === 'online', url: getUrl().url });
+    void webview.postMessage({ type: 'daemon', connected: state === 'online', url: urls.current().origin });
   };
-  render(webview, getUrl);
-  let origin = getUrl().origin;
+  render(webview, urls.current().origin);
   return vscode.Disposable.from(
     webview.onDidReceiveMessage((m: unknown) => {
       if ((m as { type?: unknown } | null)?.type === 'ready') post();
     }),
     client.onStatus(() => post()),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('irrlicht.daemonUrl')) return;
-      const next = getUrl().origin;
-      if (next !== origin) {
-        origin = next;
-        render(webview, getUrl); // CSP frame-src changes with the origin; page re-posts 'ready'
-      } else {
-        post(); // same origin: only the displayed url text may differ
-      }
-    }),
+    // CSP frame-src changes with the origin; the re-rendered page re-posts 'ready'.
+    urls.onDidChangeOrigin((u) => render(webview, u.origin)),
   );
 }
 
 export class DashboardPanel {
   private static current: DashboardPanel | undefined;
 
-  static show(ctx: vscode.ExtensionContext, client: DaemonClient, getUrl: GetUrl): void {
+  static show(ctx: vscode.ExtensionContext, client: DaemonClient, urls: DaemonUrlSource): void {
     if (DashboardPanel.current) {
       DashboardPanel.current.panel.reveal();
       return;
@@ -63,13 +46,13 @@ export class DashboardPanel {
       localResourceRoots: [media],
     });
     panel.iconPath = vscode.Uri.joinPath(media, 'irrlicht.svg');
-    DashboardPanel.current = new DashboardPanel(panel, client, getUrl);
+    DashboardPanel.current = new DashboardPanel(panel, client, urls);
   }
 
   private readonly sub: vscode.Disposable;
 
-  private constructor(private readonly panel: vscode.WebviewPanel, client: DaemonClient, getUrl: GetUrl) {
-    this.sub = attach(panel.webview, client, getUrl);
+  private constructor(private readonly panel: vscode.WebviewPanel, client: DaemonClient, urls: DaemonUrlSource) {
+    this.sub = attach(panel.webview, client, urls);
     panel.onDidDispose(() => {
       this.sub.dispose();
       DashboardPanel.current = undefined;
@@ -83,7 +66,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly ctx: vscode.ExtensionContext,
     private readonly client: DaemonClient,
-    private readonly getUrl: GetUrl,
+    private readonly urls: DaemonUrlSource,
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -91,7 +74,7 @@ export class DashboardViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     };
-    const sub = attach(view.webview, this.client, this.getUrl);
+    const sub = attach(view.webview, this.client, this.urls);
     view.onDidDispose(() => sub.dispose());
   }
 }

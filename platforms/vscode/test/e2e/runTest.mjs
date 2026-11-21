@@ -23,6 +23,7 @@ const fakeHome = fs.mkdtempSync(path.join(root, 'irr-home-'));
 
 // VS Code writes ~/.vscode-shared; never let that be the real home.
 process.env.HOME = fakeHome;
+// The throwaway VS Code's terminals must not attach to a live herdr session on the host.
 process.env.HERDR_SESSION = 'qa-none';
 
 let code = 0;

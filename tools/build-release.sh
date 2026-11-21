@@ -42,12 +42,9 @@ build_vscode_extension() {
             return 1
         fi
     done
-    mkdir -p "$ROOT_DIR/$BUILD_DIR"
     rm -rf "$staging" "$out"
     mkdir -p "$staging"
-    rsync -a \
-        --exclude 'node_modules/' --exclude 'dist/' --exclude 'out/' \
-        --exclude '.vscode-test/' --exclude '*.vsix' \
+    rsync -a --exclude-from="$src/.gitignore" \
         --exclude 'media/*.webm' --exclude 'media/*.mp4' --exclude 'media/*.gif' \
         "$src/" "$staging/" || return 1
     ( cd "$staging" \
@@ -186,6 +183,13 @@ fi
 # Clean build directory
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
+
+# ── 0b. VS Code extension (.vsix) ─────────────────────────────────────
+# Built up front for the same reason as step 0: a missing npm or a registry
+# failure aborts here, not after the ~5-minute build and notarisation.
+echo ""
+echo "Building VS Code extension..."
+build_vscode_extension || exit 1
 
 # ── 1. Build Go binaries (universal) ─────────────────────────────────
 echo ""
@@ -715,10 +719,7 @@ productbuild \
 
 echo "  Created $BUILD_DIR/$PKG_NAME"
 
-# ── 6b. VS Code extension (.vsix) ────────────────────────────────────
-echo ""
-echo "Building VS Code extension..."
-build_vscode_extension
+# (The VS Code .vsix was built in step 0b; it is only checksummed below.)
 
 # ── 7. Checksums ───────────────────────────────────────────────────────
 echo ""

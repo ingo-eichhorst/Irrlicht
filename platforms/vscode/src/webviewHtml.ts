@@ -72,7 +72,7 @@ window.addEventListener('message', (e) => {
 vscode.postMessage({ type: 'ready' });
 `;
 
-export function buildWrapperHtml(o: { daemonOrigin: string; iframeUrl: string; cspSource: string; nonce: string }): string {
+export function buildWrapperHtml(o: { daemonOrigin: string; cspSource: string; nonce: string }): string {
   const csp = buildCsp(o);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -85,7 +85,7 @@ export function buildWrapperHtml(o: { daemonOrigin: string; iframeUrl: string; c
 </head>
 <body>
 <div id="notice"><div id="notice-msg">Connecting to the Irrlicht daemon at ${esc(o.daemonOrigin)}…</div><div id="notice-hint" class="hint" hidden>Start Irrlicht, or set irrlicht.daemonUrl if it runs on another port.</div></div>
-<iframe id="dashboard" title="Irrlicht dashboard" data-url="${esc(o.iframeUrl)}" hidden></iframe>
+<iframe id="dashboard" title="Irrlicht dashboard" data-url="${esc(o.daemonOrigin)}/?embed=vscode" hidden></iframe>
 <script nonce="${o.nonce}">${SCRIPT}</script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyPsFailure, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from '../../src/tty';
+import { applyPsRows, isPsError, isUnresolved, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from '../../src/tty';
 import type { SessionRecord } from '../../src/sessionStore';
 
 const sess = (id: string, tty: string | undefined, updated_at?: number): SessionRecord => ({
@@ -40,16 +40,44 @@ describe('normalizeTty', () => {
 });
 
 describe('parsePsTtyOutput', () => {
-  it('parses macOS output with leading spaces and ?? ttys', () => {
+  it('reports a present pid with ?? as present without a tty', () => {
     const m = parsePsTtyOutput('  4242 ttys042\n 4243 ??\n');
-    expect([...m.entries()]).toEqual([[4242, '/dev/ttys042']]);
+    expect([...m.entries()]).toEqual([[4242, '/dev/ttys042'], [4243, undefined]]);
   });
   it('parses Linux output', () => {
     expect(parsePsTtyOutput('4242 pts/3\n').get(4242)).toBe('/dev/pts/3');
   });
+  it('does not report a pid ps did not print (a dead shell)', () => {
+    const m = parsePsTtyOutput('4242 ttys001\n');
+    expect(m.has(4242)).toBe(true);
+    expect(m.has(9999)).toBe(false);
+  });
   it('ignores blank and garbage lines', () => {
     const m = parsePsTtyOutput('\nnot a line\n 7 ttys001\n');
     expect([...m.keys()]).toEqual([7]);
+  });
+});
+
+describe('applyPsRows / isUnresolved', () => {
+  const rows = (o: string) => parsePsTtyOutput(o);
+  it('records the tty of a present pid and stops being unresolved', () => {
+    const s = applyPsRows({ pid: 5, attempts: 2 }, rows('5 ttys001\n'));
+    expect(s.tty).toBe('/dev/ttys001');
+    expect(isUnresolved(s)).toBe(false);
+  });
+  it('counts an attempt for a present pid without a tty and keeps it unresolved', () => {
+    const s = applyPsRows({ pid: 5, attempts: 2 }, rows('5 ??\n'));
+    expect(s).toEqual({ pid: 5, attempts: 3 });
+    expect(isUnresolved(s)).toBe(true);
+  });
+  it('marks a pid absent from ps output dead: permanently not unresolved, no attempt counted', () => {
+    const s = applyPsRows({ pid: 5, attempts: 12 }, rows(''));
+    expect(s.dead).toBe(true);
+    expect(isUnresolved(s)).toBe(false);
+    expect(s.attempts).toBe(12);
+  });
+  it('is never unresolved without a pid', () => {
+    expect(isUnresolved({ attempts: 0 })).toBe(false);
   });
 });
 
@@ -105,37 +133,27 @@ describe('nextRetryDelay', () => {
   it('backs off 0.5s, 1s, 2s then holds at 5s', () => {
     expect([0, 1, 2, 3, 4, 11].map(nextRetryDelay)).toEqual([500, 1000, 2000, 5000, 5000, 5000]);
   });
-  it('clamps invalid attempts to the first delay', () => {
-    expect(nextRetryDelay(-1)).toBe(500);
-    expect(nextRetryDelay(NaN)).toBe(500);
-  });
-});
-
-describe('nextRetryDelay cap', () => {
   it('stops timed retries once the attempt cap is reached', () => {
     expect(nextRetryDelay(12)).toBeUndefined();
     expect(nextRetryDelay(50)).toBeUndefined();
-    expect(nextRetryDelay(Infinity)).toBeUndefined();
   });
 });
 
-describe('classifyPsFailure', () => {
-  it('treats exit 1 with no output as "no pid matched"', () => {
-    expect(classifyPsFailure({ code: 1 }, '', '')).toBe('no-match');
+describe('isPsError', () => {
+  it('treats exit 1 with no output as "no pid matched", not an error', () => {
+    expect(isPsError({ code: 1 }, '', '')).toBe(false);
   });
   it('treats spawn failures as errors', () => {
-    expect(classifyPsFailure({ code: 'ENOENT' }, '', '')).toBe('error');
-    expect(classifyPsFailure({ code: 'EACCES' }, '', '')).toBe('error');
+    expect(isPsError({ code: 'ENOENT' }, '', '')).toBe(true);
+    expect(isPsError({ code: 'EACCES' }, '', '')).toBe(true);
   });
   it('treats stderr text or other exit codes as errors', () => {
-    expect(classifyPsFailure({ code: 1 }, '', 'ps: illegal option')).toBe('error');
-    expect(classifyPsFailure({ code: 2 }, '', '')).toBe('error');
+    expect(isPsError({ code: 1 }, '', 'ps: illegal option')).toBe(true);
+    expect(isPsError({ code: 2 }, '', '')).toBe(true);
   });
-  it('is ok when there is no error', () => {
-    expect(classifyPsFailure(null, '4242 ttys001\n', '')).toBe('ok');
-  });
-  it('is ok when ps printed output despite a non-zero exit', () => {
-    expect(classifyPsFailure({ code: 1 }, '4242 ttys001\n', '')).toBe('ok');
+  it('is no error when there is no error, or ps printed output despite a non-zero exit', () => {
+    expect(isPsError(null, '4242 ttys001\n', '')).toBe(false);
+    expect(isPsError({ code: 1 }, '4242 ttys001\n', '')).toBe(false);
   });
 });
 

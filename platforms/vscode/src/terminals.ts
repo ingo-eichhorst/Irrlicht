@@ -3,18 +3,16 @@ import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import type { SessionRecord, SessionStore } from './sessionStore';
 import { isStateName, stateColorId } from './states';
-import { classifyPsFailure, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from './tty';
+import { applyPsRows, isPsError, isUnresolved, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from './tty';
+import type { TermState } from './tty';
 
 interface Pairing { terminal: vscode.Terminal; session: SessionRecord }
 
 export class TerminalPairing implements vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChange: vscode.Event<void> = this.emitter.event;
-  // Resolved TTYs only; a terminal absent here is either not looked up yet or still unresolved.
-  private readonly ttys = new Map<vscode.Terminal, string>();
-  // Shell pid per terminal once processId has been awaited (undefined = unresolvable, never retried).
-  private readonly pidOf = new Map<vscode.Terminal, number | undefined>();
-  private readonly attempts = new Map<vscode.Terminal, number>();
+  // One entry per terminal once its shell pid has been awaited.
+  private readonly terms = new Map<vscode.Terminal, TermState>();
   private current: Pairing[] = [];
   private signature = '';
   private psFailureLogged = false;
@@ -22,20 +20,16 @@ export class TerminalPairing implements vscode.Disposable {
   private readonly psPath = process.platform === 'win32' ? undefined : resolvePsPath(existsSync);
   private running = false;
   private again = false;
-  private lastPassEnd = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   private readonly disposables: Array<{ dispose(): void }> = [];
 
   constructor(private readonly store: SessionStore, private readonly log: (m: string) => void) {
+    // A store change cannot change what ps reports for a shell pid, so it only re-pairs.
     this.disposables.push(
-      store.onDidChange(() => {
-        this.recompute();
-        // A new session is exactly when an unresolved terminal may need pairing; throttled.
-        if (this.hasUnresolved() && Date.now() - this.lastPassEnd >= 500) void this.resolve();
-      }),
+      store.onDidChange(() => this.recompute()),
       vscode.window.onDidOpenTerminal(() => void this.resolve()),
-      vscode.window.onDidCloseTerminal(() => void this.resolve()),
+      vscode.window.onDidCloseTerminal(() => { this.forgetClosed(new Set(vscode.window.terminals)); this.recompute(); }),
     );
   }
 
@@ -51,53 +45,38 @@ export class TerminalPairing implements vscode.Disposable {
     const tty = normalizeTty(s.launcher?.tty);
     if (!tty) return undefined;
     for (const t of vscode.window.terminals) {
-      if (this.ttys.get(t) === tty) return t;
+      if (this.terms.get(t)?.tty === tty) return t;
     }
     return undefined;
   }
 
-  private hasUnresolved(): boolean {
-    for (const t of vscode.window.terminals) {
-      if (this.pidOf.get(t) !== undefined && !this.ttys.has(t)) return true;
-    }
-    return false;
-  }
-
   // Passes are serialized; a request arriving mid-pass schedules exactly one more.
   private async resolve(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || !this.psPath) return;
     if (this.running) { this.again = true; return; }
     this.running = true;
     try {
       do {
         this.again = false;
-        await this.pass();
+        await this.pass(this.psPath);
       } while (this.again && !this.disposed);
     } finally {
       this.running = false;
-      this.lastPassEnd = Date.now();
     }
     this.scheduleRetry();
   }
 
-  private async pass(): Promise<void> {
+  private async pass(psPath: string): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     const live = new Set(vscode.window.terminals);
     this.forgetClosed(live);
-    await this.resolvePids([...live].filter((t) => !this.pidOf.has(t)));
-    await this.resolveTtys([...live].filter((t) => this.isUnresolved(t)));
+    await this.resolvePids([...live].filter((t) => !this.terms.has(t)));
+    await this.resolveTtys(psPath, [...live].filter((t) => isUnresolved(this.terms.get(t))));
     this.recompute();
   }
 
   private forgetClosed(live: Set<vscode.Terminal>): void {
-    for (const m of [this.ttys, this.pidOf, this.attempts] as Array<Map<vscode.Terminal, unknown>>) {
-      for (const t of Array.from(m.keys())) if (!live.has(t)) m.delete(t);
-    }
-  }
-
-  // A terminal with a known shell pid whose TTY has not been found yet.
-  private isUnresolved(t: vscode.Terminal): boolean {
-    return this.pidOf.get(t) !== undefined && !this.ttys.has(t);
+    for (const t of Array.from(this.terms.keys())) if (!live.has(t)) this.terms.delete(t);
   }
 
   private async resolvePids(terminals: vscode.Terminal[]): Promise<void> {
@@ -107,19 +86,18 @@ export class TerminalPairing implements vscode.Disposable {
         const p = await t.processId;
         if (typeof p === 'number' && p > 0) pid = p;
       } catch { /* unresolvable */ }
-      // Without ps (win32, or none found) a terminal can never be paired: mark it
-      // unresolvable so it is never retried.
-      this.pidOf.set(t, this.psPath ? pid : undefined);
+      this.terms.set(t, { pid, attempts: 0 });
     }));
   }
 
-  private async resolveTtys(pending: vscode.Terminal[]): Promise<void> {
+  private async resolveTtys(psPath: string, pending: vscode.Terminal[]): Promise<void> {
     if (pending.length === 0) return;
-    const byPid = await this.runPs(pending.map((t) => this.pidOf.get(t) as number));
+    const rows = await this.runPs(psPath, pending.map((t) => (this.terms.get(t) as TermState).pid as number));
     for (const t of pending) {
-      const tty = byPid.get(this.pidOf.get(t) as number);
-      if (tty) { this.ttys.set(t, tty); this.attempts.delete(t); }
-      else this.attempts.set(t, (this.attempts.get(t) ?? 0) + 1);
+      const s = this.terms.get(t);
+      if (!s) continue; // closed while ps ran
+      // ps itself failed: that says nothing about the pid, so retry rather than mark it dead.
+      this.terms.set(t, rows ? applyPsRows(s, rows) : { ...s, attempts: s.attempts + 1 });
     }
   }
 
@@ -127,21 +105,23 @@ export class TerminalPairing implements vscode.Disposable {
     if (this.disposed || this.timer) return;
     let attempt = Infinity;
     for (const t of vscode.window.terminals) {
-      if (this.isUnresolved(t)) attempt = Math.min(attempt, this.attempts.get(t) ?? 0);
+      const s = this.terms.get(t);
+      if (isUnresolved(s)) attempt = Math.min(attempt, s?.attempts ?? 0);
     }
     const delay = nextRetryDelay(attempt);
     if (delay === undefined) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.resolve(); }, delay);
   }
 
-  private runPs(pids: number[]): Promise<Map<number, string>> {
+  private runPs(psPath: string, pids: number[]): Promise<Map<number, string | undefined> | undefined> {
     return new Promise((resolve) => {
-      if (!this.psPath) { resolve(new Map()); return; }
-      execFile(this.psPath, ['-o', 'pid=,tty=', '-p', pids.join(',')], (err, stdout, stderr) => {
-        // ps exits 1 with no output when none of the pids exist (a dead shell); that is
-        // not a failure. A spawn error or stderr text is.
+      execFile(psPath, ['-o', 'pid=,tty=', '-p', pids.join(',')], (err, stdout, stderr) => {
         const out = String(stdout);
-        if (classifyPsFailure(err, out, String(stderr)) === 'error') this.logPsFailureOnce(err?.message ?? String(stderr));
+        if (isPsError(err, out, String(stderr))) {
+          this.logPsFailureOnce(err?.message ?? String(stderr));
+          resolve(undefined);
+          return;
+        }
         resolve(parsePsTtyOutput(out));
       });
     });
@@ -157,7 +137,7 @@ export class TerminalPairing implements vscode.Disposable {
     if (this.disposed) return;
     const terminals = vscode.window.terminals;
     const paired = pairTerminals(
-      terminals.map((t) => ({ key: t, tty: this.ttys.get(t) })),
+      terminals.map((t) => ({ key: t, tty: this.terms.get(t)?.tty })),
       this.store.topLevel(),
     );
     const next: Pairing[] = [];

@@ -14,7 +14,6 @@ const REJECTED: unknown[] = [
 function checkRejects(resolve: Resolver, raw: unknown): void {
   const r = resolve(raw);
   expect(r.origin).toBe('http://127.0.0.1:7837');
-  expect(r.url).toBe(DEFAULT_DAEMON_URL);
   expect(r.wsUrl).toBe('ws://127.0.0.1:7837/api/v1/sessions/stream');
   expect(r.warning).toBeTruthy();
   expect(r.warning).not.toContain('\n');
@@ -61,7 +60,7 @@ describe('resolveDaemonUrl', () => {
       try {
         const u = new URL(raw.trim());
         if (u.protocol === 'http:' || u.protocol === 'https:') {
-          return { url: u.origin, origin: u.origin, wsUrl: u.origin.replace(/^http/, 'ws') + '/api/v1/sessions/stream' };
+          return { origin: u.origin, wsUrl: u.origin.replace(/^http/, 'ws') + '/api/v1/sessions/stream' };
         }
       } catch { /* unparseable stays rejected */ }
       return r;

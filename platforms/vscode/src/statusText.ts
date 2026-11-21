@@ -1,7 +1,7 @@
 // Status bar text. Pure: no vscode import. Segments derive from STATES.
+import type { ConnectionState } from './daemonClient';
 import { STATES, type StateName } from './states';
 
-export type ConnectionState = 'connecting' | 'online' | 'offline';
 
 const ICON: Record<StateName, string> = {
   working: '$(sync~spin)',
@@ -22,8 +22,8 @@ export function formatStatus(counts: Record<StateName, number>, conn: Connection
   }
   const text = STATES
     .filter((s) => s !== 'error' || counts[s] > 0)
-    .map((s) => `${ICON[s]} ${counts[s] ?? 0}`)
+    .map((s) => `${ICON[s]} ${counts[s]}`)
     .join('  ');
-  const tooltip = [...STATES.map((s) => `${counts[s] ?? 0} ${s}`), `Daemon: ${daemonUrl}`].join('\n');
+  const tooltip = [...STATES.map((s) => `${counts[s]} ${s}`), `Daemon: ${daemonUrl}`].join('\n');
   return { text, tooltip };
 }

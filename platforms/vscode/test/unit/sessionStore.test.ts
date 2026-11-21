@@ -102,19 +102,19 @@ describe('SessionStore.counts / topLevel', () => {
 describe('SessionStore.apply', () => {
   it('upserts on created/updated and removes on deleted', () => {
     const s = hydrated();
-    expect(s.apply({ type: 'session_updated', session: { session_id: 'sess-b', state: 'ready' } })).toBe('changed');
+    expect(s.apply({ type: 'session_updated', session: { session_id: 'sess-b', state: 'ready' } })).toBe(true);
     expect(s.all().find((x) => x.session_id === 'sess-b')?.state).toBe('ready');
-    expect(s.apply({ type: 'session_created', session: { session_id: 'new', state: 'working' } })).toBe('changed');
+    expect(s.apply({ type: 'session_created', session: { session_id: 'new', state: 'working' } })).toBe(true);
     expect(s.all()).toHaveLength(7);
-    expect(s.apply({ type: 'session_deleted', session: { session_id: 'new', state: 'working' } })).toBe('changed');
+    expect(s.apply({ type: 'session_deleted', session: { session_id: 'new', state: 'working' } })).toBe(true);
     expect(s.all()).toHaveLength(6);
   });
 
   it('returns unchanged for other types and malformed messages', () => {
     const s = hydrated();
-    expect(s.apply({ type: 'history_snapshot' })).toBe('unchanged');
-    expect(s.apply({ type: 'session_updated' })).toBe('unchanged');
-    expect(s.apply({ type: 'session_deleted', session: { session_id: 'nope', state: 'ready' } })).toBe('unchanged');
+    expect(s.apply({ type: 'history_snapshot' })).toBe(false);
+    expect(s.apply({ type: 'session_updated' })).toBe(false);
+    expect(s.apply({ type: 'session_deleted', session: { session_id: 'nope', state: 'ready' } })).toBe(false);
     expect(s.all()).toHaveLength(6);
   });
 
@@ -124,28 +124,11 @@ describe('SessionStore.apply', () => {
     const d = s.onDidChange(l);
     s.apply({ type: 'session_updated', session: { session_id: 'sess-b', state: 'error' } });
     s.clear();
+    s.clear(); // already empty: no second fire
     expect(l).toHaveBeenCalledTimes(2);
     d.dispose();
     s.hydrate(fixture);
     expect(l).toHaveBeenCalledTimes(2);
-  });
-
-  it('detects a seq gap after applying the message', () => {
-    const s = hydrated();
-    expect(s.apply({ type: 'session_updated', seq: 10, session: { session_id: 'sess-b', state: 'ready' } })).toBe('changed');
-    expect(s.apply({ type: 'session_updated', seq: 11, session: { session_id: 'sess-b', state: 'working' } })).toBe('changed');
-    expect(s.apply({ type: 'session_updated', seq: 13, session: { session_id: 'sess-b', state: 'error' } })).toBe('gap');
-    expect(s.all().find((x) => x.session_id === 'sess-b')?.state).toBe('error');
-    expect(s.apply({ type: 'session_updated', seq: 14, session: { session_id: 'sess-b', state: 'ready' } })).toBe('changed');
-  });
-
-  it('ignores absent/zero seq for gap detection and hydrate resets the cursor', () => {
-    const s = hydrated();
-    s.apply({ type: 'session_updated', seq: 5, session: { session_id: 'sess-b', state: 'ready' } });
-    expect(s.apply({ type: 'session_updated', seq: 0, session: { session_id: 'sess-b', state: 'working' } })).toBe('changed');
-    expect(s.apply({ type: 'session_updated', session: { session_id: 'sess-b', state: 'ready' } })).toBe('changed');
-    s.hydrate(fixture);
-    expect(s.apply({ type: 'session_updated', seq: 500, session: { session_id: 'sess-b', state: 'ready' } })).toBe('changed');
   });
 
   it('clear empties the store', () => {

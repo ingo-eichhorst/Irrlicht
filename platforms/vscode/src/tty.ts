@@ -13,16 +13,32 @@ export function normalizeTty(raw: string | undefined): string | undefined {
   return '/dev/' + t;
 }
 
-// Parses the output of `ps -o pid=,tty= -p a,b,c`.
-export function parsePsTtyOutput(out: string): Map<number, string> {
-  const result = new Map<number, string>();
+// Parses the output of `ps -o pid=,tty= -p a,b,c`. A pid is in the map iff ps printed
+// it (the process exists); its value is the normalized tty, undefined for `??`.
+// A pid missing from the map is a dead process.
+export function parsePsTtyOutput(out: string): Map<number, string | undefined> {
+  const result = new Map<number, string | undefined>();
   for (const line of out.split(/\r?\n/)) {
-    const m = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
-    if (!m) continue;
-    const tty = normalizeTty(m[2]);
-    if (tty) result.set(Number(m[1]), tty);
+    const m = /^\s*(\d+)(?:\s+(\S+))?\s*$/.exec(line);
+    if (m) result.set(Number(m[1]), normalizeTty(m[2]));
   }
   return result;
+}
+
+// Per-terminal pairing state. `dead`: the shell pid was absent from ps, which a
+// later lookup cannot change, so the terminal is never retried.
+export interface TermState { pid?: number; tty?: string; attempts: number; dead?: boolean }
+
+// A terminal with a live-as-far-as-known shell pid whose TTY has not been found yet.
+export function isUnresolved(s: TermState | undefined): boolean {
+  return s?.pid !== undefined && !s.tty && !s.dead;
+}
+
+// Folds one ps run into a terminal's state.
+export function applyPsRows(s: TermState, rows: Map<number, string | undefined>): TermState {
+  if (s.pid === undefined || !rows.has(s.pid)) return { ...s, dead: true };
+  const tty = rows.get(s.pid);
+  return tty ? { ...s, tty } : { ...s, attempts: s.attempts + 1 };
 }
 
 export function pairTerminals<K>(
@@ -47,30 +63,24 @@ export function pairTerminals<K>(
 
 const RETRY_DELAYS_MS = [500, 1000, 2000];
 const RETRY_STEADY_MS = 5000;
-// Timed retries stop at this attempt count (3 fast + 9 steady = ~50s); a terminal
-// open/close or a store change may still trigger one more pass afterwards.
-export const MAX_RETRY_ATTEMPTS = 12;
+// Timed retries stop at this attempt count (3 fast + 9 steady = ~50s). Only a
+// terminal that exists but has no tty yet is retried; opening another terminal
+// starts one more pass.
+const MAX_RETRY_ATTEMPTS = 12;
 
 // Delay before retrying a still-unresolved TTY lookup; attempt counts from 0.
 // Returns undefined once the cap is reached: stop scheduling timed retries.
 export function nextRetryDelay(attempt: number): number | undefined {
   if (attempt >= MAX_RETRY_ATTEMPTS) return undefined;
-  if (!Number.isFinite(attempt) || attempt < 0) return RETRY_DELAYS_MS[0];
-  const i = Math.floor(attempt);
-  return i < RETRY_DELAYS_MS.length ? RETRY_DELAYS_MS[i] : RETRY_STEADY_MS;
+  return attempt < RETRY_DELAYS_MS.length ? RETRY_DELAYS_MS[attempt] : RETRY_STEADY_MS;
 }
 
-// Classifies a finished `ps -p` run. "no-match" is ps's normal answer when none of
-// the pids exist (exit 1, nothing printed anywhere); anything else that failed is a
-// real error (spawn failure such as ENOENT, stderr text, or another exit code).
-export function classifyPsFailure(
-  err: { code?: unknown } | null | undefined,
-  stdout: string,
-  stderr: string,
-): 'ok' | 'no-match' | 'error' {
-  if (!err || stdout.trim() !== '') return 'ok';
-  if (err.code === 1 && stderr.trim() === '') return 'no-match';
-  return 'error';
+// True for a failed `ps -p` run that is a real error (spawn failure such as ENOENT,
+// stderr text, or an exit code other than 1). Exit 1 with nothing printed anywhere
+// is ps's normal answer when none of the pids exist.
+export function isPsError(err: { code?: unknown } | null | undefined, stdout: string, stderr: string): boolean {
+  if (!err || stdout.trim() !== '') return false;
+  return !(err.code === 1 && stderr.trim() === '');
 }
 
 const PS_CANDIDATES = ['/bin/ps', '/usr/bin/ps'];

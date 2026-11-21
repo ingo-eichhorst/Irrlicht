@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCsp, buildWrapperHtml } from '../../src/webviewHtml';
 
 const base = { daemonOrigin: 'http://127.0.0.1:7837', cspSource: 'vscode-webview://abc', nonce: 'AbC123xyz' };
-const wrap = { ...base, iframeUrl: 'http://127.0.0.1:7837/?embed=vscode' };
+const wrap = base;
 
 type CspBuilder = typeof buildCsp;
 
@@ -85,10 +85,8 @@ describe('buildWrapperHtml', () => {
     expect(html).toContain('acquireVsCodeApi()');
     expect(html).toContain("type: 'ready'");
   });
-  it('escapes an injected iframeUrl instead of breaking out', () => {
-    const evil = buildWrapperHtml({ ...wrap, iframeUrl: 'http://127.0.0.1:7838/"><script>alert(1)</script>' });
-    expect(evil).not.toContain('<script>alert(1)');
-    expect(evil).not.toContain('"><script>');
-    expect(evil).toContain('&lt;script&gt;');
+  it('derives the iframe URL from the daemon origin', () => {
+    expect(html).toContain('data-url="http://127.0.0.1:7837/?embed=vscode"');
+    expect(buildWrapperHtml({ ...wrap, daemonOrigin: 'http://[::1]:9000' })).toContain('data-url="http://[::1]:9000/?embed=vscode"');
   });
 });

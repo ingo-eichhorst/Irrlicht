@@ -1,6 +1,6 @@
 // Resolves the irrlicht.daemonUrl setting. Pure: no vscode import.
 export const DEFAULT_DAEMON_URL = 'http://127.0.0.1:7837';
-export interface ResolvedDaemonUrl { url: string; origin: string; wsUrl: string; warning?: string }
+export interface ResolvedDaemonUrl { origin: string; wsUrl: string; warning?: string }
 
 const STREAM_PATH = '/api/v1/sessions/stream';
 
@@ -12,7 +12,7 @@ function isLoopbackHost(hostname: string): boolean {
 
 function build(origin: string, warning?: string): ResolvedDaemonUrl {
   const wsUrl = origin.replace(/^http/, 'ws') + STREAM_PATH;
-  return warning === undefined ? { url: origin, origin, wsUrl } : { url: origin, origin, wsUrl, warning };
+  return { origin, wsUrl, warning };
 }
 
 export function resolveDaemonUrl(raw: unknown): ResolvedDaemonUrl {
@@ -30,4 +30,11 @@ export function resolveDaemonUrl(raw: unknown): ResolvedDaemonUrl {
   }
   if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !isLoopbackHost(u.hostname)) return reject();
   return build(u.origin);
+}
+
+/** The resolved daemon URL, read once and re-resolved only when the setting changes. */
+export interface DaemonUrlSource {
+  current(): ResolvedDaemonUrl;
+  /** Fires only when the origin changed. */
+  onDidChangeOrigin(l: (u: ResolvedDaemonUrl) => void): { dispose(): void };
 }

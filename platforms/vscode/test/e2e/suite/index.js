@@ -38,14 +38,14 @@ class StubDaemon {
   async start(port) {
     const server = http.createServer((req, res) => {
       this.requests.push({ method: req.method, url: req.url, dest: req.headers['sec-fetch-dest'] });
-      const u = { pathname: String(req.url).split('?')[0] };
-      if (req.method === 'GET' && u.pathname === '/') {
+      const pathname = String(req.url).split('?')[0];
+      if (req.method === 'GET' && pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end('<!doctype html><title>stub</title><p>stub dashboard</p>');
-      } else if (req.method === 'GET' && u.pathname === '/api/v1/sessions') {
+      } else if (req.method === 'GET' && pathname === '/api/v1/sessions') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ groups: this.groups }));
-      } else if (req.method === 'POST' && /^\/api\/v1\/sessions\/[^/]+\/focus$/.test(u.pathname)) {
+      } else if (req.method === 'POST' && /^\/api\/v1\/sessions\/[^/]+\/focus$/.test(pathname)) {
         res.writeHead(200);
         res.end();
       } else {
@@ -82,14 +82,12 @@ function session(id, state, tty) {
 
 async function ttyOf(pid) {
   let last = '';
-  const start = Date.now();
-  while (Date.now() - start < 10000) {
+  await poll(`tty of pid ${pid}`, async () => {
     const { stdout } = await execFileP('ps', ['-o', 'tty=', '-p', String(pid)]);
     last = stdout.trim();
-    if (last && last !== '??') return last.startsWith('/dev/') ? last : `/dev/${last}`;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(`no tty for pid ${pid} after ${Date.now() - start} ms; last ps output: ${JSON.stringify(last)}`);
+    return last && last !== '??';
+  }, () => `last ps output: ${JSON.stringify(last)}`, 10000);
+  return last.startsWith('/dev/') ? last : `/dev/${last}`;
 }
 
 async function run() {
@@ -168,13 +166,12 @@ async function run() {
     step('4e offline detected', s);
 
     s = Date.now();
-    const restartDeadline = Date.now() + 20000;
-    for (;;) {
-      try { await stub.start(port); break; } catch (e) {
-        if (e.code !== 'EADDRINUSE' || Date.now() > restartDeadline) throw e;
-        await new Promise((r) => setTimeout(r, 100));
+    await poll('4e restart stub on same port', async () => {
+      try { await stub.start(port); return true; } catch (e) {
+        if (e.code !== 'EADDRINUSE') throw e;
+        return false;
       }
-    }
+    }, () => `port ${port} still in use`);
     await poll('4e reconnect online', () => api.getConnectionState() === 'online', () => `state=${api.getConnectionState()}`, 25000);
     step('4e auto-reconnect', s);
   } finally {

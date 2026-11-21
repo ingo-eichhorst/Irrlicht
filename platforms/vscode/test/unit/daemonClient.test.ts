@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveDaemonUrl, type ResolvedDaemonUrl } from '../../src/config';
-import { DaemonClient, type WsLike } from '../../src/daemonClient';
+import { DaemonClient, type ConnectionState, type WsLike } from '../../src/daemonClient';
 import { SessionStore } from '../../src/sessionStore';
-import type { ConnectionState } from '../../src/statusText';
 
 class FakeSocket implements WsLike {
   handlers: Record<string, Array<(...a: any[]) => void>> = {};
@@ -91,13 +90,13 @@ describe('DaemonClient', () => {
     expect(r.store.all().map((x) => x.session_id)).toEqual(['s2']);
   });
 
-  it('a seq gap triggers exactly one coalesced rehydrate', async () => {
-    let resolveGet: (v: any) => void = () => {};
+  it('a seq gap rehydrates; further gaps during that hydrate coalesce into exactly one more', async () => {
+    const resolvers: Array<(v: any) => void> = [];
     let calls = 0;
     const r = rig(() => {
       calls++;
       if (calls === 1) return Promise.resolve({ ok: true, json: async () => body(['s1']) });
-      return new Promise((res) => { resolveGet = res; });
+      return new Promise((res) => { resolvers.push(res); });
     });
     r.client.start();
     r.sockets[0].open();
@@ -105,14 +104,17 @@ describe('DaemonClient', () => {
     const m = (seq: number) => ({ type: 'session_updated', seq, session: { session_id: 's1', state: 'ready' } });
     r.sockets[0].message(m(1));
     r.sockets[0].message(m(5)); // gap -> rehydrate (GET #2 pending)
-    r.sockets[0].message(m(9)); // another gap while pending -> coalesced
+    r.sockets[0].message(m(9)); // another gap while pending -> run again, not a parallel GET
     await tick();
     expect(r.fetchMock).toHaveBeenCalledTimes(2);
-    resolveGet({ ok: true, json: async () => body(['fresh']) });
+    resolvers[0]({ ok: true, json: async () => body(['fresh']) });
     await tick();
-    // s1's frames arrived while the GET was in flight: they are replayed over the snapshot.
-    expect(r.store.all().map((x) => x.session_id).sort()).toEqual(['fresh', 's1']);
-    expect(r.fetchMock).toHaveBeenCalledTimes(2);
+    expect(r.fetchMock).toHaveBeenCalledTimes(3);
+    resolvers[1]({ ok: true, json: async () => body(['fresh2']) });
+    await tick();
+    // The final snapshot is authoritative; frames buffered for the earlier GET were replayed over that one only.
+    expect(r.store.all().map((x) => x.session_id)).toEqual(['fresh2']);
+    expect(r.fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('close goes offline, clears the store and reconnects after 1s then 2s', async () => {
@@ -251,5 +253,72 @@ describe('DaemonClient', () => {
     resolveFetch({ ok: true, json: async () => ({ groups: [{ name: 'g', agents: [{ session_id: 'X', state: 'working', updated_at: 100 }] }] }) });
     await tick();
     expect(r.store.all().find((x) => x.session_id === 'X')?.state).toBe('waiting');
+  });
+
+  describe('seq cursor advances for every frame on arrival, including buffered ones', () => {
+    // A hydrate GET the test resolves by hand, one deferred per call.
+    function deferredRig() {
+      const gets: Array<(v: any) => void> = [];
+      const r = rig(() => new Promise((res) => { gets.push(res); }));
+      const reply = (i: number, ids: Array<[string, string, number]>) =>
+        gets[i]({ ok: true, json: async () => ({ groups: [{ name: 'g', agents: ids.map(([id, state, ua]) => ({ session_id: id, state, updated_at: ua })) }] }) });
+      return { r, gets, reply };
+    }
+    const upd = (seq: number, state: string, ua: number) => ({ type: 'session_updated', seq, session: { session_id: 's1', state, updated_at: ua } });
+    const focus = (seq: number) => ({ type: 'focus_requested', seq, session: { session_id: 's1', state: 'ready' } });
+    const stateOf = (r: Rig) => r.store.all().find((x) => x.session_id === 's1')?.state;
+
+    it('focus frames around a buffered session frame are not a gap: one hydrate, no lost update, no stale overwrite', async () => {
+      const { r, gets, reply } = deferredRig();
+      r.client.start();
+      r.sockets[0].open();
+      await tick(); // GET #1 in flight
+      r.sockets[0].message(focus(5));
+      r.sockets[0].message(upd(6, 'waiting', 200)); // buffered
+      r.sockets[0].message(focus(7));
+      await tick();
+      expect(gets).toHaveLength(1); // no second, overlapping hydrate
+      reply(0, [['s1', 'working', 100]]);
+      await tick();
+      expect(stateOf(r)).toBe('waiting'); // the buffered seq-6 update survived the snapshot
+      r.sockets[0].message(upd(8, 'error', 300)); // live
+      await tick();
+      expect(gets).toHaveLength(1);
+      expect(stateOf(r)).toBe('error'); // never overwritten by an older snapshot
+    });
+
+    it('a real gap among buffered frames triggers a second GET once the first lands', async () => {
+      const { r, gets, reply } = deferredRig();
+      r.client.start();
+      r.sockets[0].open();
+      await tick();
+      r.sockets[0].message(upd(1, 'waiting', 200));
+      r.sockets[0].message(upd(3, 'ready', 300)); // seq 2 is missing
+      await tick();
+      expect(gets).toHaveLength(1); // still one hydrate at a time
+      reply(0, [['s1', 'working', 100]]);
+      await tick();
+      expect(gets).toHaveLength(2);
+      reply(1, [['s1', 'ready', 300]]);
+      await tick();
+      expect(gets).toHaveLength(2);
+      expect(stateOf(r)).toBe('ready');
+      expect(r.client.state).toBe('online');
+    });
+
+    it('a new socket restarts the cursor', async () => {
+      const r = rig();
+      r.client.start();
+      r.sockets[0].open();
+      await tick();
+      r.sockets[0].message(upd(500, 'ready', 1));
+      r.sockets[0].emit('close');
+      await tick(1000);
+      r.sockets[1].open();
+      await tick();
+      r.sockets[1].message(upd(3, 'working', 2)); // lower than the old socket's cursor, and not a gap
+      await tick();
+      expect(r.fetchMock).toHaveBeenCalledTimes(2);
+    });
   });
 });
