@@ -97,6 +97,20 @@ final class KeychainSecretsCacheTests: XCTestCase {
         XCTAssertEqual(backend.reads, 1)
     }
 
+    /// Settings re-saves the token it just loaded; on the system backend
+    /// every write was a delete-then-add of the item. A value the store
+    /// already holds must not reach the backend at all.
+    func testSettingTheValueAlreadyHeldPerformsNoWrite() {
+        let backend = CountingKeychainBackend(items: [account: "tok"])
+        let store = KeychainSecrets(backend: backend)
+        XCTAssertEqual(store.get(account: account), "tok")
+
+        XCTAssertTrue(store.set("tok", account: account))
+
+        XCTAssertEqual(backend.writes, 0, "re-setting the held value must not write")
+        XCTAssertEqual(store.get(account: account), "tok")
+    }
+
     /// LOCK, not a red-first defect test: it passes without any cache too.
     /// What it pins is that a write the backend REFUSED is not cached — the
     /// next get must report what the keychain actually holds.
@@ -118,58 +132,6 @@ final class KeychainSecretsCacheTests: XCTestCase {
         XCTAssertEqual(store.get(account: "a"), "1")
         XCTAssertEqual(store.get(account: "b"), "2")
         XCTAssertEqual(backend.reads, 2)
-    }
-}
-
-/// A `KeychainBackend` double that counts every call and can be told to fail.
-private final class CountingKeychainBackend: KeychainBackend, @unchecked Sendable {
-    private var items: [String: String]
-    private let readStatus: OSStatus
-    private let writeSucceeds: Bool
-    private let readDelay: TimeInterval
-    private let lock = NSLock()
-    private var readCount = 0
-    private var writeCount = 0
-    private var deleteCount = 0
-
-    init(items: [String: String], readStatus: OSStatus = errSecSuccess,
-         writeSucceeds: Bool = true, readDelay: TimeInterval = 0) {
-        self.items = items
-        self.readStatus = readStatus
-        self.writeSucceeds = writeSucceeds
-        self.readDelay = readDelay
-    }
-
-    var reads: Int { lock.lock(); defer { lock.unlock() }; return readCount }
-    var writes: Int { lock.lock(); defer { lock.unlock() }; return writeCount }
-    var deletes: Int { lock.lock(); defer { lock.unlock() }; return deleteCount }
-
-    func read(account: String) -> (value: String?, status: OSStatus) {
-        lock.lock()
-        readCount += 1
-        lock.unlock()
-        if readDelay > 0 { Thread.sleep(forTimeInterval: readDelay) }
-        lock.lock()
-        defer { lock.unlock() }
-        guard readStatus == errSecSuccess else { return (nil, readStatus) }
-        guard let value = items[account] else { return (nil, errSecItemNotFound) }
-        return (value, errSecSuccess)
-    }
-
-    func write(_ value: String, account: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        writeCount += 1
-        guard writeSucceeds else { return false }
-        items[account] = value
-        return true
-    }
-
-    func delete(account: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        deleteCount += 1
-        items[account] = nil
     }
 }
 

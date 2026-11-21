@@ -85,7 +85,8 @@ enum KeychainStore {
 ///     is not re-raised in a loop; its `OSStatus` is logged, never a value;
 ///   * `set` and `delete` update the cache. A write the backend refuses drops
 ///     the account's entry instead, so the next `get` reports what the
-///     keychain actually holds.
+///     keychain actually holds. A `set` of the value already cached writes
+///     nothing at all.
 ///
 /// The lock is held across the backend read on purpose: concurrent first
 /// reads (a detached publish task and the main actor's relay connect, both at
@@ -107,6 +108,11 @@ final class KeychainSecrets: @unchecked Sendable {
     func set(_ value: String, account: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        // The store already holds exactly this value: nothing to write. This
+        // includes "" over a cached "" — and a cached "" can be a read that
+        // FAILED, in which case skipping the delete leaves an item this
+        // process could not read rather than destroying it.
+        if cache[account] == value { return true }
         if value.isEmpty {
             deleteLocked(account: account)
             return true
