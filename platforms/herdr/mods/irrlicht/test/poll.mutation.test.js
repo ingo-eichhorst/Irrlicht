@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
+import { stallIsReportedOnceAfterStallMs } from './contracts.js';
 import { HOME_ADDR, livePayload, world } from './fixtures.js';
 
 const LIB = new URL('../lib/', import.meta.url);
@@ -73,6 +74,6 @@ describe('committed mutants of the poll rules', () => {
       "if (state.phase === 'stalled' || now - startedAt < STALL_MS) return null;",
       'return null;',
     );
-    expect(poll.stallState({ phase: 'ok', where: 'localhost:7843' }, 0, poll.STALL_MS)).toBeNull();
+    expect(() => stallIsReportedOnceAfterStallMs(poll.stallState, poll.STALL_MS)).toThrow();
   });
 });

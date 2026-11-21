@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { RERESOLVE_MS, STALL_MS, createPoller, pollOnce, stallState } from '../lib/poll.js';
 import { focusAddress, panelRows, signature, statusLine } from '../lib/rows.js';
+import { stallIsReportedOnceAfterStallMs } from './contracts.js';
 import { HOME_ADDR, LIVE_AGENTS, LIVE_TERMINALS, livePayload, world } from './fixtures.js';
 
 // io for pollOnce and createPoller: an addr file naming `port`, a fetch that
@@ -97,6 +98,10 @@ describe('pollOnce', () => {
 
 describe('stallState', () => {
   const ok = { phase: 'ok', where: 'localhost:7843', sessions: [] };
+
+  test('reports a stall once, from STALL_MS on', () => {
+    stallIsReportedOnceAfterStallMs(stallState, STALL_MS);
+  });
 
   test('a request in flight for less than STALL_MS keeps what is shown', () => {
     expect(stallState(ok, 1000, 1000 + STALL_MS - 1)).toBeNull();

@@ -1,6 +1,6 @@
-// The matching contracts, as functions taking the match function under test,
-// so test/match.test.js runs them against lib/match.js and
-// test/match.mutation.test.js against a committed mutant of it.
+// The matching and stall contracts, as functions taking the code under test,
+// so the *.test.js files run them against lib/ and the *.mutation.test.js
+// files against committed mutants of it.
 
 import { expect } from 'vitest';
 import { readSessions } from '../lib/sessions.js';
@@ -90,4 +90,14 @@ export function foregroundPidWinsOverTerminalPid(matchFn) {
 export function remoteAgentsAreNeverMatched(matchFn) {
   const remote = herdrAgent('vps/t7', 'claude-code', { pid: 10, foregroundPid: 11, cwd: '/repo' });
   expect(matchHerdr(matchFn, [remote], [session('local', 'claude-code', 11, '/repo')]).size).toBe(0);
+}
+
+// A request in flight shows nothing new before STALL_MS, then one stalled
+// state that keeps the address and drops the numbers, and not again on later
+// ticks.
+export function stallIsReportedOnceAfterStallMs(stallStateFn, stallMs) {
+  const ok = { phase: 'ok', where: 'localhost:7843', sessions: [] };
+  expect(stallStateFn(ok, 1000, 1000 + stallMs - 1)).toBeNull();
+  expect(stallStateFn(ok, 1000, 1000 + stallMs)).toEqual({ phase: 'stalled', where: 'localhost:7843' });
+  expect(stallStateFn({ phase: 'stalled', where: 'localhost:7843' }, 0, 10 * stallMs)).toBeNull();
 }

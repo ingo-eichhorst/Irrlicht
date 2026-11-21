@@ -2,7 +2,7 @@
 // draws can be tested without Herdr's runtime.
 
 import { gaugeOf } from './gauge.js';
-import { matchAgents } from './match.js';
+import { isLocal, matchAgents } from './match.js';
 
 // cleanTitle drops what an agent puts before its title (a status glyph or
 // spinner and the separator after it), as Herdr's own agents mod does.
@@ -18,9 +18,9 @@ function rowLabel(a) {
 
 // unmatchedTooltip says why a row has no gauge.
 function unmatchedTooltip(a) {
-  return String(a.address).includes('/')
-    ? 'on another machine: Irrlicht reads this machine\'s sessions only'
-    : 'no Irrlicht session matched';
+  return isLocal(a)
+    ? 'no Irrlicht session matched'
+    : 'on another machine: Irrlicht reads this machine\'s sessions only';
 }
 
 // MATCHED_BY says, in the row's tooltip, how its numbers were found.

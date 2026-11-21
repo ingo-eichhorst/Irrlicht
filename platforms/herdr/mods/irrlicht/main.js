@@ -62,15 +62,21 @@ export default class Irrlicht extends View {
     this.tick(cx);
     // Keyboard and script access to the row action: "irrlicht.focus-<n>"
     // focuses the agent in row n (from 1), exactly as clicking that row does.
-    cx.spawn(async () => {
+    // Each turn uses its `cx`: Herdr's AGENTS.md says a reloaded build's old
+    // loop "ends at its next `cx` use", so without one the old loop would
+    // keep waiting beside the new build's.
+    cx.spawn(async (cx) => {
       while (!this.closed) {
         const address = focusAddress(await nextCommand(), agents()); // NOSONAR (javascript:S9382): commands arrive one at a time; waiting for the next is the loop
         if (address) focusAgent(address);
+        cx.notify();
       }
     });
   }
 
-  // close is Herdr's last call to a copy; it ends the command loop above.
+  // close is Herdr's last call to a copy. Herdr cancels the copy's pending
+  // calls then, so the loop above stops at its `await`; the flag only keeps
+  // it from asking again should that await ever return.
   async close() {
     this.closed = true;
   }

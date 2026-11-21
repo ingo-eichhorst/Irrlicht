@@ -62,7 +62,7 @@ function countBy(items, keyOf) {
 // mod tells them apart the same way. The daemon only knows this machine's
 // processes and folders, so a remote agent's pid or cwd matching a local
 // session would be a coincidence.
-const isLocal = (agent) => !String(agent.address).includes('/');
+export const isLocal = (agent) => !String(agent.address).includes('/');
 
 // candidatePids are the pids a terminal's agent can be known by: the
 // foreground process group's leader first, then the terminal's own process.
