@@ -136,21 +136,16 @@ func v2MetricsFor(t *testing.T, w *Watcher, id string) *session.SessionMetrics {
 // path declares all four token columns it reads.
 func checkV2ReportedCostProvenance(t *testing.T, m *session.SessionMetrics) {
 	t.Helper()
-	if !isProviderReportedOverCountedTokens(m) {
+	providerReported := m.PricingSource == session.PricingSourceProviderReported && len(m.UnpricedModels) == 0 && !m.TokensUnobserved
+	if !providerReported {
 		t.Errorf("provenance = (%q, %q, %t), want (provider-reported, none, false)",
 			m.PricingSource, m.UnpricedModels, m.TokensUnobserved)
 	}
-	if !declaresAllTokenTypesNotExclusion(m.UsageCoverage) {
+	c := m.UsageCoverage
+	declaresAllNotExclusion := c != nil && c.ObservesAll() && !c.ExcludesSubagents
+	if !declaresAllNotExclusion {
 		t.Errorf("UsageCoverage = %+v, want all four token types, subagent exclusion undeclared", m.UsageCoverage)
 	}
-}
-
-func isProviderReportedOverCountedTokens(m *session.SessionMetrics) bool {
-	return m.PricingSource == session.PricingSourceProviderReported && len(m.UnpricedModels) == 0 && !m.TokensUnobserved
-}
-
-func declaresAllTokenTypesNotExclusion(c *session.UsageCoverage) bool {
-	return c != nil && c.ObservesAll() && !c.ExcludesSubagents
 }
 
 // checkV2ZeroCostIsUnpriced (#2061): a zero cost beside counted tokens cannot
