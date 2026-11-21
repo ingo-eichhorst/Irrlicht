@@ -209,3 +209,54 @@ func TestSessionDetector_PeriodicDedup_RetiresDuplicateMintedAfterSeed(t *testin
 			"way every other reconciliation delete does (issue #1992)")
 	}
 }
+
+// TestCheckPIDLiveness_PeriodicDedup_PIDZeroRootsAreNotDuplicates is issue
+// #2157's acceptance evidence. PID 0 means "no PID found yet", not a PID two
+// sessions share: two root sessions both still at PID 0 are not same-PID
+// duplicates, so the periodic sweep must keep both.
+//
+// Both rows have a fresh UpdatedAt and transcript and a CWD that exists, so
+// none of PID 0's own cleanup paths applies to them: the ready-TTL reap and
+// the 30s ready-ghost reap both need a stale UpdatedAt, reapDeadOrInfraPID
+// returns early for pid <= 0, and the pre-session sweep only matches proc-*
+// rows. That leaves the same-PID dedupe as the only thing in CheckPIDLiveness
+// that could delete either one.
+//
+// Seen red on the unfixed code: dedupeByPIDPeriodic tracked PID 0 like any
+// other PID, kept "pid0-new" (newest FirstSeen) as the winner and deleted
+// "pid0-old" with "duplicate pid 0 (keeping pid0-new) — deleting".
+func TestCheckPIDLiveness_PeriodicDedup_PIDZeroRootsAreNotDuplicates(t *testing.T) {
+	tmpDir := t.TempDir()
+	now := time.Now()
+	repo := newMockRepo()
+	for _, row := range []struct {
+		id        string
+		firstSeen time.Time
+	}{
+		{"pid0-old", now.Add(-time.Minute)},
+		{"pid0-new", now},
+	} {
+		transcript := filepath.Join(tmpDir, row.id+".jsonl")
+		writeTranscript(t, transcript, now)
+		repo.states[row.id] = &session.SessionState{
+			SessionID:      row.id,
+			Adapter:        "claude-code",
+			State:          session.StateWorking,
+			PID:            0,
+			CWD:            tmpDir,
+			TranscriptPath: transcript,
+			FirstSeen:      row.firstSeen.Unix(),
+			UpdatedAt:      now.Unix(),
+		}
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["pid0-old"] == nil {
+		t.Fatal("the older of two PID-0 root sessions was deleted by the periodic sweep — " +
+			"PID 0 is \"no PID found yet\", not a PID they share (issue #2157)")
+	}
+	if repo.states["pid0-new"] == nil {
+		t.Fatal("the newer PID-0 root session should survive the periodic sweep")
+	}
+}
