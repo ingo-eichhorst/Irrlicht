@@ -83,10 +83,10 @@ enum KeychainStore {
 ///   * a FAILED read (denied, cancelled, interaction not allowed — not only
 ///     not-found) caches "" for the rest of the process, so a declined dialog
 ///     is not re-raised in a loop; its `OSStatus` is logged, never a value;
-///   * `set` and `delete` update the cache. A write the backend refuses drops
-///     the account's entry instead, so the next `get` reports what the
-///     keychain actually holds. A `set` of the value already cached writes
-///     nothing at all.
+///   * `set` and `delete` update the cache. A write the backend refuses leaves
+///     the cache as it was — the item did not change either — so a refused
+///     write cannot re-open the read it follows. A `set` of the value already
+///     cached writes nothing at all.
 ///
 /// The lock is held across the backend read on purpose: concurrent first
 /// reads (a detached publish task and the main actor's relay connect, both at
@@ -118,11 +118,12 @@ final class KeychainSecrets: @unchecked Sendable {
             return true
         }
         let written = backend.write(value, account: account)
-        if written {
-            cache[account] = value
-        } else {
-            cache[account] = nil
-        }
+        // A refused write leaves the item as it was (an update in place
+        // changes nothing when refused), so whatever the cache holds is still
+        // the truth. Dropping it would send the next `get` back to the backend
+        // — for a process the item does not trust, one more prompt per
+        // keystroke in the token field.
+        if written { cache[account] = value }
         return written
     }
 

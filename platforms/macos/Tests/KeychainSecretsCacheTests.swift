@@ -111,9 +111,28 @@ final class KeychainSecretsCacheTests: XCTestCase {
         XCTAssertEqual(store.get(account: account), "tok")
     }
 
+    /// A process the item does not trust: its read was declined (cached "")
+    /// and its write is refused too. Dropping the cache entry on the refused
+    /// write made the NEXT get read the backend again — with the token field's
+    /// per-keystroke commit, one prompt per keystroke. A refused write leaves
+    /// the item as it was, so the cached answer is still true.
+    func testARefusedWriteDoesNotReopenTheRead() {
+        let backend = CountingKeychainBackend(items: [account: "tok"],
+                                              readStatus: errSecUserCanceled,
+                                              writeSucceeds: false)
+        let store = KeychainSecrets(backend: backend)
+        XCTAssertEqual(store.get(account: account), "")
+
+        XCTAssertFalse(store.set("new", account: account))
+
+        XCTAssertEqual(store.get(account: account), "")
+        XCTAssertEqual(backend.reads, 1, "a refused write must not send the next get back to the backend")
+    }
+
     /// LOCK, not a red-first defect test: it passes without any cache too.
     /// What it pins is that a write the backend REFUSED is not cached — the
-    /// next get must report what the keychain actually holds.
+    /// next get must report what the keychain actually holds (here, with
+    /// nothing cached yet, a backend read).
     func testAFailedWriteIsNotCached() {
         let backend = CountingKeychainBackend(items: [account: "old"], writeSucceeds: false)
         let store = KeychainSecrets(backend: backend)
