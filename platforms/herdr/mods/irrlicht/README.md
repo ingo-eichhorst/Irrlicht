@@ -66,8 +66,10 @@ matched.
 
 The status line under the header says which daemon the panel reads, for example
 `Irrlicht at localhost:7837`. It says *not reachable* when nothing answers
-there. It says *panel error* when the mod itself failed, so a broken panel never
-looks like a stopped daemon.
+there, and *not answering* when a request has hung for 10 seconds (a daemon
+that accepts the connection but never replies). In both cases the gauges turn
+to dashes. It says *panel error* when the mod itself failed, so a broken panel
+never looks like a stopped daemon.
 
 ## Which daemon it reads
 
@@ -122,4 +124,6 @@ cd platforms/herdr && npm ci --ignore-scripts && npm test
 `main.js` is the only file that uses Herdr's runtime. Check it with
 `herdr-app check`, which needs Herdr.app installed and is not part of CI.
 Herdr writes `jsconfig.json` and `gpui-kit.d.ts` into a mod folder it loads.
-`.gitignore` keeps them out of the repository.
+`.gitignore` keeps them out of the repository. In one test on Herdr 0.1.16, an
+open panel window kept running the old code after a save in the linked folder.
+Closing and reopening it (`mod.open` twice) loaded the new code.

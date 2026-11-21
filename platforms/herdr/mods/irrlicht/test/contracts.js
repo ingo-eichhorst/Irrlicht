@@ -61,3 +61,25 @@ export function claimedSessionsStayWithTheirRow(matchFn) {
   expect(summary(got)).toEqual({ t1: ['s1', 'pid'] });
 }
 
+
+// "Exactly one Herdr agent" counts every agent in the folder, pid-matched
+// ones too: t1 runs in /repo but its pid matched a session started in /x, so
+// /repo holds two Herdr agents and s2 (an unrelated pid in /repo) goes to
+// neither of them.
+export function pidMatchedAgentsCountInTheirFolder(matchFn) {
+  const sessionsOf = (list) => readSessions({ groups: [{ agents: list }] });
+  const t1 = herdrAgent('t1', 'claude-code', { pid: 10, foregroundPid: 11, cwd: '/repo' });
+  const t2 = herdrAgent('t2', 'claude-code', { pid: 20, foregroundPid: 21, cwd: '/repo' });
+  const got = matchFn([t1.agent, t2.agent], [t1.terminal, t2.terminal],
+    sessionsOf([session('s1', 'claude-code', 11, '/x'), session('s2', 'claude-code', 99, '/repo')]));
+  expect(summary(got)).toEqual({ t1: ['s1', 'pid'] });
+}
+
+// The foreground process is asked first, the terminal's own process second.
+export function foregroundPidWinsOverTerminalPid(matchFn) {
+  const sessionsOf = (list) => readSessions({ groups: [{ agents: list }] });
+  const t1 = herdrAgent('t1', 'pi', { pid: 10, foregroundPid: 11, cwd: '/repo' });
+  const got = matchFn([t1.agent], [t1.terminal],
+    sessionsOf([session('term', 'pi', 10, '/a'), session('fg', 'pi', 11, '/b')]));
+  expect(summary(got)).toEqual({ t1: ['fg', 'pid'] });
+}

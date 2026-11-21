@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { pollOnce, signature } from '../lib/poll.js';
+import { STALL_MS, pollOnce, signature, stallState } from '../lib/poll.js';
 import { panelRows, statusLine } from '../lib/rows.js';
 import { LIVE_AGENTS, LIVE_TERMINALS, livePayload } from './fixtures.js';
 
@@ -70,18 +70,48 @@ describe('pollOnce', () => {
   });
 });
 
+describe('stallState', () => {
+  const ok = { phase: 'ok', where: 'localhost:7843', sessions: [] };
+
+  test('a request in flight for less than STALL_MS keeps what is shown', () => {
+    expect(stallState(ok, 1000, 1000 + STALL_MS - 1)).toBeNull();
+  });
+
+  test('from STALL_MS on, the panel says the daemon is not answering, and drops the old numbers', () => {
+    const got = stallState(ok, 1000, 1000 + STALL_MS);
+    expect(got).toEqual({ phase: 'stalled', where: 'localhost:7843' });
+    expect(got.sessions).toBeUndefined();
+    expect(statusLine(got).text).toBe('Irrlicht daemon at localhost:7843 is not answering');
+  });
+
+  test('a stall is reported once, not again on every tick', () => {
+    expect(stallState({ phase: 'stalled', where: 'localhost:7843' }, 0, 10 * STALL_MS)).toBeNull();
+  });
+
+  test('a first request that hangs, before any address was shown, still reads plainly', () => {
+    expect(statusLine(stallState({ phase: 'starting' }, 0, STALL_MS)).text).toBe('Irrlicht daemon is not answering');
+  });
+
+  test('the poll after a stall looks the address up again', async () => {
+    const w = io({ port: 7843, respond: () => answer(livePayload()) });
+    await pollOnce({ phase: 'stalled', where: 'localhost:7843' }, w.io);
+    expect(w.asked.filter(([k]) => k === 'stat').length).toBe(1);
+  });
+});
+
 describe('statusLine', () => {
-  test('tells an unreachable daemon, a foreign answer and a panel fault apart', () => {
+  test('tells an unreachable daemon, a foreign answer, a stalled daemon and a panel fault apart', () => {
     const lines = [
       statusLine({ phase: 'ok', where: 'localhost:7843' }),
       statusLine({ phase: 'unreachable', where: 'localhost:7843' }),
       statusLine({ phase: 'unexpected', where: 'localhost:7843' }),
+      statusLine({ phase: 'stalled', where: 'localhost:7843' }),
       statusLine({ phase: 'error', message: 'x is not a function' }),
       statusLine({ phase: 'starting' }),
     ].map((l) => l.text);
     expect(new Set(lines).size).toBe(lines.length);
     expect(lines[1]).toBe('Irrlicht daemon not reachable at localhost:7843');
-    expect(lines[3]).toBe('Irrlicht panel error: x is not a function');
+    expect(lines[4]).toBe('Irrlicht panel error: x is not a function');
   });
 });
 

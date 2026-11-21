@@ -14,7 +14,9 @@ daemon. A Claude Code row reads `4.8%` with a thin bar, and a Codex row reads
     16px of padding at the sides.
   - A status line (11px). When the daemon answers it is `dim` and reads
     `Irrlicht at localhost:<port>`. When nothing answers it is `dim` and reads
-    `Irrlicht daemon not reachable at localhost:<port>`. When something else
+    `Irrlicht daemon not reachable at localhost:<port>`. When a request has
+    gone 10 s without an answer it is `dim` and reads
+    `Irrlicht daemon at localhost:<port> is not answering`. When something else
     answers it uses `blocked` and reads
     `Irrlicht at localhost:<port> sent an unexpected answer`. When the mod
     itself threw it uses `blocked` and reads `Irrlicht panel error: <message>`.
@@ -48,7 +50,9 @@ daemon. A Claude Code row reads `4.8%` with a thin bar, and a Codex row reads
 - **Hover** shows a tooltip such as
   `1. 4.8% of 1.0M context, safe · claude-opus-5-5 · matched by pid`.
 - **Polling:** every 3 s it GETs `/api/v1/sessions` and redraws only when a
-  status line, gauge or tooltip changed.
+  status line, gauge or tooltip changed. It sends one request at a time.
+  Herdr's `fetch` has no timeout, so a request still unanswered after 10 s
+  turns the status line to "not answering" and the gauges to dashes.
 
 ## Built from
 
@@ -110,5 +114,7 @@ daemon. A Claude Code row reads `4.8%` with a thin bar, and a Codex row reads
 - Stopping the daemon turns the status line to "not reachable" and the gauges
   to dashes, while the rows stay. Starting it again restores the gauges within
   one poll.
+- Pausing the daemon (`kill -STOP`) turns the status line to "not answering"
+  within about 13 s, and resuming it (`kill -CONT`) restores the gauges.
 - Clicking a row, or running `herdr-app do irrlicht.focus-<n>`, focuses that
   agent's pane.

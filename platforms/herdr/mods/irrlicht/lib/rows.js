@@ -45,7 +45,7 @@ export function panelRows(agents, terminals, sessions) {
 // statusLine is the line under the header: which daemon the panel reads, or
 // why it reads none. An unreachable daemon and a failure inside the panel are
 // told apart, so a broken panel never passes for a stopped daemon.
-//   state: { phase: 'starting' | 'ok' | 'unreachable' | 'unexpected' | 'error',
+//   state: { phase: 'starting' | 'ok' | 'unreachable' | 'stalled' | 'unexpected' | 'error',
 //            where?: 'localhost:7837', message?: string }
 export function statusLine(state) {
   switch (state?.phase) {
@@ -53,6 +53,8 @@ export function statusLine(state) {
       return { text: 'Irrlicht at ' + state.where, tone: 'dim' };
     case 'unreachable':
       return { text: 'Irrlicht daemon not reachable at ' + state.where, tone: 'dim' };
+    case 'stalled':
+      return { text: 'Irrlicht daemon ' + (state.where ? 'at ' + state.where + ' ' : '') + 'is not answering', tone: 'dim' };
     case 'unexpected':
       return { text: 'Irrlicht at ' + state.where + ' sent an unexpected answer', tone: 'warn' };
     case 'error':

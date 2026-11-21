@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { matchAgents } from '../lib/match.js';
 import { readSessions } from '../lib/sessions.js';
 import {
-  ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, herdrAgent, session, summary,
+  ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, foregroundPidWinsOverTerminalPid,
+  herdrAgent, pidMatchedAgentsCountInTheirFolder, session, summary,
 } from './contracts.js';
 import {
   CLAUDE_SESSION, CODEX_SESSION, LIVE_AGENTS, LIVE_TERMINALS, OTHER_SESSION, livePayload,
@@ -91,5 +92,13 @@ describe('never trade numbers', () => {
 
   test('a pid-claimed session stays with its row', () => {
     claimedSessionsStayWithTheirRow(matchAgents);
+  });
+
+  test('an agent a pid matched still counts in its folder', () => {
+    pidMatchedAgentsCountInTheirFolder(matchAgents);
+  });
+
+  test('the foreground pid is asked before the terminal pid', () => {
+    foregroundPidWinsOverTerminalPid(matchAgents);
   });
 });

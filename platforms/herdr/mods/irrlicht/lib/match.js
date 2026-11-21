@@ -91,9 +91,12 @@ export function matchAgents(agents, terminals, sessions) {
     }
   }
 
-  // The folder rule, for agents no pid decided. The counts run over EVERY
-  // agent and EVERY session, pid-matched ones included: a second agent in the
-  // same folder must never borrow a session another row already shows.
+  // The folder rule, for agents no pid decided. It decides only when exactly
+  // one Herdr agent and exactly one session share the pair, both counted over
+  // everything, pid-matched ones included: an agent a pid already matched
+  // that also runs in the folder still makes the folder ambiguous. Apart from
+  // the counts, a session a pid already gave to a row (`claimed`) is never
+  // handed to a second row.
   const agentKeyOf = (a) => agentKey(a, terminalOf.get(a.address));
   const agentsPerKey = countBy(agents, agentKeyOf);
   const sessionsPerKey = new Map();

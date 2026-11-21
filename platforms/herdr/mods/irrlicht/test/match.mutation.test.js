@@ -1,7 +1,7 @@
 // Committed mutants of lib/match.js (AGENTS.md: commit the mutation rather than
-// describing it). Each mutant removes one guard of the folder rule; the
-// contract that guard exists for must then fail. A mutant that still passes
-// means the contract no longer reaches the guard it claims to protect.
+// describing it). Each mutant breaks one matching rule; the contract that
+// rule exists for must then fail. A mutant that still passes means the
+// contract no longer reaches the rule it claims to protect.
 //
 // Each anchor must occur exactly once in lib/match.js: an anchor that stopped
 // matching fails here as stale instead of silently testing the unmutated file.
@@ -11,7 +11,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
-import { ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow } from './contracts.js';
+import {
+  ambiguousPairsGetNoGauge, claimedSessionsStayWithTheirRow, foregroundPidWinsOverTerminalPid,
+  pidMatchedAgentsCountInTheirFolder,
+} from './contracts.js';
 
 const LIB = new URL('../lib/', import.meta.url);
 const source = (name) => readFileSync(new URL(name, LIB), 'utf8');
@@ -32,7 +35,7 @@ async function loadMutant(name, anchor, replacement) {
   return import(pathToFileURL(join(sub, 'match.js')).href);
 }
 
-describe('committed mutants of the folder rule', () => {
+describe('committed mutants of the matching rules', () => {
   test('dropping the uniqueness check lets an ambiguous pair trade numbers', async () => {
     const { matchAgents } = await loadMutant(
       'no-uniqueness',
@@ -49,5 +52,23 @@ describe('committed mutants of the folder rule', () => {
       'if (unique) {',
     );
     expect(() => claimedSessionsStayWithTheirRow(matchAgents)).toThrow();
+  });
+
+  test('counting only the undecided agents lets a folder look unambiguous', async () => {
+    const { matchAgents } = await loadMutant(
+      'count-undecided-only',
+      'const agentsPerKey = countBy(agents, agentKeyOf);',
+      'const agentsPerKey = countBy(undecided, agentKeyOf);',
+    );
+    expect(() => pidMatchedAgentsCountInTheirFolder(matchAgents)).toThrow();
+  });
+
+  test('asking the terminal pid first picks the wrapper\'s session', async () => {
+    const { matchAgents } = await loadMutant(
+      'terminal-pid-first',
+      'const pids = [terminal?.foreground?.pid, terminal?.pid];',
+      'const pids = [terminal?.pid, terminal?.foreground?.pid];',
+    );
+    expect(() => foregroundPidWinsOverTerminalPid(matchAgents)).toThrow();
   });
 });

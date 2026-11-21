@@ -9,7 +9,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, theme, run, exec, home, readTextFile, checking, nextCommand } from "herdr";
-import { pollOnce, signature } from "./lib/poll.js";
+import { pollOnce, signature, stallState } from "./lib/poll.js";
 import { panelRows, statusLine } from "./lib/rows.js";
 
 const POLL_MS = 3000;
@@ -71,8 +71,13 @@ export default class Irrlicht extends View {
   }
 
   tick(cx) {
-    if (this.busy) return;
+    if (this.busy) {
+      const stalled = stallState(this.state, this.busySince, Date.now());
+      if (stalled) this.show(cx, stalled);
+      return;
+    }
     this.busy = true;
+    this.busySince = Date.now();
     cx.spawn(async (cx) => {
       let next;
       try {
@@ -82,13 +87,18 @@ export default class Irrlicht extends View {
       } finally {
         this.busy = false;
       }
-      this.state = next;
-      const sig = signature(next, panelRows(agents(), terminals(), next.sessions ?? null));
-      if (sig !== this.sig) {
-        this.sig = sig;
-        cx.notify();
-      }
+      this.show(cx, next);
     });
+  }
+
+  // show adopts a state and redraws only when what is drawn changed.
+  show(cx, next) {
+    this.state = next;
+    const sig = signature(next, panelRows(agents(), terminals(), next.sessions ?? null));
+    if (sig !== this.sig) {
+      this.sig = sig;
+      cx.notify();
+    }
   }
 
   gauge(t, g) {
