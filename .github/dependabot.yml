@@ -25,13 +25,15 @@
 version: 2
 
 updates:
-  # The three web suites from AGENTS.md, each with its own node_modules and its
-  # own independently-resolved lockfile.
+  # The npm trees (tools/security-scan.sh's WEB_TREES; module-list_test.sh
+  # holds the two lists equal), each with its own node_modules and its own
+  # independently-resolved lockfile.
   - package-ecosystem: npm
     directories:
       - /platforms/web
       - /tools/onboarding-factory/internal/viewer/web
       - /platforms/claude-code
+      - /platforms/herdr
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

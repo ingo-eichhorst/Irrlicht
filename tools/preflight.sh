@@ -730,6 +730,11 @@ if want web; then
   # it under --changed, not only quotaChips.js.
   run_gate_scoped '^platforms/claude-code/|^platforms/web/[^/]+\.js$' \
                   "web: Claude Code panel"         web_tree platforms/claude-code
+  # The Herdr mod's lib/ modules (platforms/herdr/mods/irrlicht). The mod's
+  # main.js imports Herdr's runtime and is checked by `herdr-app check`, which
+  # needs Herdr.app and is not in CI.
+  run_gate_scoped '^platforms/herdr/' \
+                  "web: Herdr mod"                 web_tree platforms/herdr
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same

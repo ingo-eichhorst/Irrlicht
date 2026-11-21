@@ -1,0 +1,120 @@
+// Fixtures taken from a live run on 2026-11-21: Herdr 0.1.16 with herdr-core
+// 0.1.21, Claude Code 2.1.330 and Codex 0.163.0 each started in a Herdr tab,
+// and the Irrlicht daemon's GET /api/v1/sessions read at the same moment.
+// Trimmed to the fields the mod reads plus a few neighbours, with the user's
+// home directory replaced by /Users/dev. The pids are the measured ones: they
+// carry the finding that Codex's session pid (46690) is the native binary
+// below the `node` launcher Herdr reports as the foreground (46686).
+
+export const LIVE_AGENTS = [
+  {
+    address: 't3', pane: 'p35e207e9', space: 'spa2c7bb0', space_name: 'herdr-demo',
+    tab: 'tb55c6b36', tab_index: 1, tab_name: '1', status: 'done', app: 'claude-code',
+    program: { key: 'claude', name: 'Claude Code', icon: 'icons/claude.svg', tint: false, agent: true },
+    title: 'TCP slow start notes', seq: 11, pinned: false, focused: false,
+  },
+  {
+    address: 't4', pane: 'p6de9a2fe', space: 'spa2c7bb0', space_name: 'herdr-demo',
+    tab: 'tbd9ae64d', tab_index: 2, tab_name: '2', status: 'done', app: 'codex',
+    program: { key: 'codex', name: 'Codex', icon: 'icons/codex.svg', tint: false, agent: true },
+    title: 'Create DNS resolution notes | codex', seq: 12, pinned: false, focused: false,
+  },
+];
+
+export const LIVE_TERMINALS = [
+  {
+    address: 't1', pid: 21596, cwd: '/Users/dev', state: 'live', status: null, report: null,
+    foreground: { argv: ['/bin/zsh', '-l'], cwd: '/Users/dev', name: 'zsh', pid: 21596 },
+  },
+  {
+    address: 't3', pid: 45877, cwd: '/tmp/herdr-demo/claude', state: 'live', status: 'done',
+    report: { app: 'claude-code', state: 'done' },
+    foreground: { argv: ['claude'], cwd: '/private/tmp/herdr-demo/claude', name: '2.1.330', pid: 46222 },
+  },
+  {
+    address: 't4', pid: 46387, cwd: '/tmp/herdr-demo/codex', state: 'live', status: 'idle',
+    report: { app: 'codex', state: 'idle' },
+    foreground: {
+      argv: ['node', '/Users/dev/.nvm/versions/node/v22.18.0/bin/codex', '--no-daemon'],
+      cwd: '/private/tmp/herdr-demo/codex', name: 'node', pid: 46686,
+    },
+  },
+];
+
+export const CLAUDE_SESSION = {
+  version: 1,
+  session_id: 'd042c4a9-aeed-43fe-929b-012be3d17727',
+  state: 'waiting',
+  adapter: 'claude-code',
+  cwd: '/private/tmp/herdr-demo/claude',
+  project_name: 'claude',
+  pid: 46222,
+  launcher: { term_program: 'ghostty', tty: '/dev/ttys025' },
+  metrics: {
+    total_tokens: 46400,
+    model_name: 'claude-opus-5-5',
+    context_window: 1000000,
+    context_utilization_percentage: 4.64,
+    pressure_level: 'safe',
+  },
+};
+
+export const CODEX_SESSION = {
+  version: 1,
+  session_id: '01a1fcba-f6c8-7840-9448-b12d3b6e51cc',
+  state: 'ready',
+  adapter: 'codex',
+  cwd: '/private/tmp/herdr-demo/codex',
+  project_name: 'codex',
+  pid: 46690,
+  launcher: { term_program: 'ghostty', tty: '/dev/ttys029' },
+  metrics: {
+    total_tokens: 18758,
+    model_name: 'gpt-6.1-sol',
+    context_window: 475000,
+    context_utilization_percentage: 3.9490526315789474,
+    pressure_level: 'safe',
+  },
+};
+
+// A session outside Herdr (another terminal app), and a subagent child as the
+// live payload carried it: no pid of its own.
+export const OTHER_SESSION = {
+  version: 1,
+  session_id: '19bc08fb-8a59-4c86-b8fa-e53510d08f0c',
+  state: 'ready',
+  adapter: 'claude-code',
+  cwd: '/Users/dev/articles',
+  pid: 72988,
+  launcher: { term_program: 'zed', tty: '/dev/ttys011' },
+  metrics: {
+    total_tokens: 199022,
+    model_name: 'claude-opus-5-5',
+    context_window: 1000000,
+    context_utilization_percentage: 19.9022,
+    pressure_level: 'safe',
+  },
+  children: [
+    {
+      version: 1,
+      session_id: 'agent-a1b2c3',
+      parent_session_id: '19bc08fb-8a59-4c86-b8fa-e53510d08f0c',
+      state: 'working',
+      adapter: 'claude-code',
+      cwd: '/Users/dev/articles',
+      metrics: { total_tokens: 900, context_utilization_percentage: 0.09, pressure_level: 'safe' },
+    },
+  ],
+};
+
+export function livePayload(...extraGroups) {
+  return {
+    groups: [
+      { name: 'codex', agents: [CODEX_SESSION] },
+      { name: 'claude', agents: [CLAUDE_SESSION] },
+      { name: 'articles', agents: [OTHER_SESSION] },
+      ...extraGroups,
+    ],
+    provider_costs: {},
+  };
+}
