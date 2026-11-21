@@ -20,12 +20,15 @@ final class DaemonManagerTests: XCTestCase {
     // MARK: - Health Check Tests
 
     func testDaemonNotReachableWhenNothingListening() async {
-        // Port 7837 should not be reachable in CI / fresh test env
-        // (unless irrlichd happens to be running — skip gracefully).
+        // The probe goes through the process control. Before that seam this
+        // test sent a real GET to whatever daemon was listening on the default
+        // port — the developer's production daemon — and could not assert
+        // anything about the answer. The recorder answers false by default.
+        let control = RecordingDaemonProcessControl()
+        let manager = DaemonManager(publisher: RecordingRelayPublisher(), processControl: control)
         let reachable = await manager.isDaemonReachable()
-        // We can't assert false because irrlichd might actually be running.
-        // Instead just ensure the method completes without crashing.
-        _ = reachable
+        XCTAssertFalse(reachable)
+        XCTAssertEqual(control.calls, [.probe])
     }
 
     func testInitialState() {
@@ -103,20 +106,54 @@ final class DaemonManagerTests: XCTestCase {
 
     // MARK: - Bundle Path Tests
 
-    func testBundledDaemonURLNilInTestHost() {
-        // When running under xctest the bundle doesn't contain irrlichd,
-        // so start() should handle the missing binary gracefully.
+    func testBundledDaemonURLNilInTestHost() async {
+        // start() on a missed probe kills stale daemons and spawns one. Live,
+        // that kill is `pkill -x irrlichd` — every irrlichd on the machine,
+        // production included — and the spawn launches core/bin/irrlichd when
+        // a dev build exists. So the test drives a recorder and asserts on what
+        // start() ASKED for, never on what happened to the machine.
+        let control = RecordingDaemonProcessControl(reachable: false)
+        let recorder = RecordingRelayPublisher()
+        let manager = DaemonManager(publisher: recorder, processControl: control)
+        defer { manager.stop() }
+
         manager.start()
 
-        // Give async task a moment to execute
-        let expectation = XCTestExpectation(description: "start completes without crash")
-        Task {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 s
-            expectation.fulfill()
+        // Poll to a deadline for the spawn request rather than sleeping.
+        let begin = Date()
+        while !control.calls.contains(where: { if case .run = $0 { return true } else { return false } }),
+              Date().timeIntervalSince(begin) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        wait(for: [expectation], timeout: 2)
+        let elapsed = String(format: "%.2f", Date().timeIntervalSince(begin))
 
-        // Should not crash — daemonRunning may be true if an external daemon is running,
-        // or false if nothing is listening and the binary isn't in the bundle.
+        XCTAssertEqual(Array(control.calls.prefix(3)),
+                       [.probe, .killStaleDaemons, .run(executable: RecordingDaemonProcessControl.placeholderExecutable)],
+                       "a missed probe must kill-then-spawn through the process control "
+                       + "(calls after \(elapsed)s: \(control.calls))")
+        let process = try? XCTUnwrap(manager.currentProcessForTesting)
+        XCTAssertEqual(process?.executableURL, RecordingDaemonProcessControl.placeholderExecutable)
+        XCTAssertEqual(process?.isRunning, false, "the recorder must never start the process it is handed")
+    }
+
+    func testStartAdoptsAReachableDaemonWithoutKillingOrSpawning() async {
+        let control = RecordingDaemonProcessControl(reachable: true)
+        let recorder = RecordingRelayPublisher()
+        let manager = DaemonManager(publisher: recorder, processControl: control)
+        defer { manager.stop() }
+
+        manager.start()
+
+        let begin = Date()
+        while recorder.published.isEmpty, Date().timeIntervalSince(begin) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let elapsed = String(format: "%.2f", Date().timeIntervalSince(begin))
+
+        XCTAssertEqual(recorder.published.count, 1,
+                       "the adopt path publishes once (observed after \(elapsed)s)")
+        XCTAssertEqual(control.calls, [.probe], "adopting must neither kill nor spawn")
+        XCTAssertTrue(manager.daemonRunning)
+        XCTAssertNil(manager.currentProcessForTesting)
     }
 }
