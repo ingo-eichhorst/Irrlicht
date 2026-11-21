@@ -93,9 +93,7 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.resumeFingerprint = s.ResumeFingerprint
 	t.restoreCumByModel(s.CumByModel)
 	t.cumProviderCostUSD = s.CumProviderCostUSD
-	// A pre-#2061 ledger has no ProviderCostSeen; a positive provider cost
-	// is evidence enough that a provider-cost turn was counted.
-	t.providerCostSeen = s.ProviderCostSeen || s.CumProviderCostUSD > 0
+	t.providerCostSeen = s.providerCostSeen()
 	if s.ModelName != "" {
 		t.metrics.ModelName = s.ModelName
 	}
@@ -241,4 +239,11 @@ func restoreStringMap(dst *map[string]string, src map[string]string) {
 	}
 	*dst = make(map[string]string, len(src))
 	maps.Copy(*dst, src)
+}
+
+// providerCostSeen reads LedgerState.ProviderCostSeen. A pre-#2061 ledger has
+// no such field; for it, a positive provider cost is evidence enough that a
+// provider-cost turn was counted.
+func (s LedgerState) providerCostSeen() bool {
+	return s.ProviderCostSeen || s.CumProviderCostUSD > 0
 }

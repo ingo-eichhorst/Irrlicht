@@ -81,13 +81,22 @@ func queryV2SessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetric
 	metrics.CumCacheCreationTokens = totals.cacheWrite
 	// The cost and the tokens are opencode's own session totals, replacing
 	// whatever the message fold accumulated, so their provenance is replaced
-	// with them (#2061): every figure here is the agent's own report.
+	// with them (#2061). A cost opencode reported is provider-reported; tokens
+	// with a zero cost are unpriced, not free — the row cannot say whether the
+	// model costs nothing or opencode had no price for it.
 	metrics.PricingSource = ""
-	if totals.cost > 0 || totals.input+totals.output+totals.cacheRead+totals.cacheWrite > 0 {
-		metrics.PricingSource = tailer.PricingSourceProviderReported
-	}
 	metrics.UnpricedModels = nil
 	metrics.TokensUnobserved = false
+	switch {
+	case totals.cost > 0:
+		metrics.PricingSource = session.PricingSourceProviderReported
+	case totals.input+totals.output+totals.cacheRead+totals.cacheWrite > 0:
+		model := metrics.ModelName
+		if model == "unknown" {
+			model = "" // SessionMetrics.UnpricedModels' word for "no model name"
+		}
+		metrics.UnpricedModels = []string{model}
+	}
 	metrics.UsageCoverage = v2UsageCoverage()
 	return metrics, nil
 }

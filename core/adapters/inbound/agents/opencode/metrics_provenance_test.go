@@ -1,36 +1,36 @@
 package opencode
 
-import (
-	"reflect"
-	"testing"
+import "testing"
 
-	"irrlicht/core/pkg/tailer"
-)
+// TestComputeMetrics_V1RecordsNoCostProvenance (#2061): the 1.x store fold's
+// cost omits every "tool-calls" step, because applyStepFinishTokens builds no
+// contribution for one. The fold must therefore not label that cost
+// provider-reported, which the usage export would print as a vouched number.
+func TestComputeMetrics_V1RecordsNoCostProvenance(t *testing.T) {
+	db, dbPath := openTestOpencodeDB(t)
+	const sid = "ses_test_cost_provenance"
+	insertTestSession(t, db, sid, "/tmp/opencode-cost-provenance-test")
+	insertTestMessage(t, db, testMessageRow{id: "msg_1", sid: sid, ts: 1000,
+		data: `{"role":"assistant","time":{"created":1000},"model":{"providerID":"test","modelID":"test-model"}}`})
+	for _, p := range []testPartRow{
+		{id: "part_1", msgID: "msg_1", sid: sid, ts: 1100,
+			data: `{"type":"step-finish","reason":"tool-calls","cost":0.01,"tokens":{"input":10,"output":2,"cache":{"read":0,"write":0}}}`},
+		{id: "part_2", msgID: "msg_1", sid: sid, ts: 1200,
+			data: `{"type":"step-finish","reason":"stop","cost":0.05,"tokens":{"input":20,"output":4,"cache":{"read":0,"write":0}}}`},
+	} {
+		insertTestPart(t, db, p)
+	}
 
-// TestSessionFold_CostProvenance (#2061): the 1.x store fold prices nothing
-// from Irrlicht's table, so its cost is only what opencode reported. A step
-// with tokens and no reported cost added nothing to the cost; its model must
-// be listed as unpriced rather than read as free. Tokens are always added on
-// this path, so none are unobserved.
-func TestSessionFold_CostProvenance(t *testing.T) {
-	cost := 0.02
-	f := newSessionFold("/tmp/x")
-	f.applyContribution(&tailer.PerTurnContribution{Model: "claude-sonnet-4-5", Usage: tailer.UsageBreakdown{Input: 10, Output: 2}, ProviderCostUSD: &cost})
-	f.applyContribution(&tailer.PerTurnContribution{Model: "local-model", Usage: tailer.UsageBreakdown{Input: 30, Output: 4}})
-	f.applyContribution(&tailer.PerTurnContribution{Model: "empty-step"})
-	f.publishCostProvenance()
-
-	m := f.metrics
-	if m.CumInputTokens != 40 || m.CumOutputTokens != 6 || m.EstimatedCostUSD != 0.02 {
-		t.Fatalf("lock: totals in %d / out %d / cost %v, want 40 / 6 / 0.02", m.CumInputTokens, m.CumOutputTokens, m.EstimatedCostUSD)
+	m, err := ComputeMetrics(dbPath, sid)
+	if err != nil || m == nil {
+		t.Fatalf("ComputeMetrics = (%v, %v)", m, err)
 	}
-	if m.PricingSource != tailer.PricingSourceProviderReported {
-		t.Errorf("PricingSource = %q, want %q", m.PricingSource, tailer.PricingSourceProviderReported)
+	// Lock: only the "stop" step's cost is summed.
+	if m.EstimatedCostUSD != 0.05 {
+		t.Fatalf("lock: EstimatedCostUSD = %v, want 0.05 (the tool-calls step's 0.01 is not counted)", m.EstimatedCostUSD)
 	}
-	if want := []string{"local-model"}; !reflect.DeepEqual(m.UnpricedModels, want) {
-		t.Errorf("UnpricedModels = %q, want %q", m.UnpricedModels, want)
-	}
-	if m.TokensUnobserved {
-		t.Error("TokensUnobserved = true; this path adds every contribution's tokens")
+	if m.PricingSource != "" || len(m.UnpricedModels) != 0 {
+		t.Errorf("provenance = (%q, %q), want none: a cost that omits the tool-calls steps must not be vouched for",
+			m.PricingSource, m.UnpricedModels)
 	}
 }

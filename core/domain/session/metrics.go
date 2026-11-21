@@ -918,23 +918,10 @@ func carryForwardIdentityFields(merged, oldM *SessionMetrics) {
 // counters across passes that didn't recompute them — their zero value
 // means "not observed this pass", not "reset to zero".
 func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
-	carried := false
-	if merged.CumInputTokens == 0 && oldM.CumInputTokens > 0 {
-		merged.CumInputTokens = oldM.CumInputTokens
-		carried = true
-	}
-	if merged.CumOutputTokens == 0 && oldM.CumOutputTokens > 0 {
-		merged.CumOutputTokens = oldM.CumOutputTokens
-		carried = true
-	}
-	if merged.CumCacheReadTokens == 0 && oldM.CumCacheReadTokens > 0 {
-		merged.CumCacheReadTokens = oldM.CumCacheReadTokens
-		carried = true
-	}
-	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
-		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
-		carried = true
-	}
+	carried := carryCount(&merged.CumInputTokens, oldM.CumInputTokens)
+	carried = carryCount(&merged.CumOutputTokens, oldM.CumOutputTokens) || carried
+	carried = carryCount(&merged.CumCacheReadTokens, oldM.CumCacheReadTokens) || carried
+	carried = carryCount(&merged.CumCacheCreationTokens, oldM.CumCacheCreationTokens) || carried
 	// A carried count keeps the caveat it was published with (#2061): old
 	// tokens with this pass's "all observed" would read as complete.
 	if carried && oldM.TokensUnobserved {
@@ -953,6 +940,16 @@ func carryForwardCumulativeCounters(merged, oldM *SessionMetrics) {
 	if merged.UserTurns == 0 && oldM.UserTurns > 0 {
 		merged.UserTurns = oldM.UserTurns
 	}
+}
+
+// carryCount keeps old in *merged when merged reads 0 ("not observed this
+// pass") and old is a real count, and reports whether it did.
+func carryCount(merged *int64, old int64) bool {
+	if *merged == 0 && old > 0 {
+		*merged = old
+		return true
+	}
+	return false
 }
 
 // carryForwardOverlayState preserves detector-set overlay signals (the

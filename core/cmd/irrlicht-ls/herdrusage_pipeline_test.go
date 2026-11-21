@@ -135,8 +135,8 @@ func TestHerdrUsage_PipelineKeepsUnknownsNull(t *testing.T) {
 		if got := field(s, "cost.usd"); got != 0.5 {
 			t.Errorf("cost.usd = %v, want the provider's 0.5", got)
 		}
-		if got := field(s, "cost.pricing_source"); got != tailer.PricingSourceProviderReported {
-			t.Errorf("cost.pricing_source = %v, want %s", got, tailer.PricingSourceProviderReported)
+		if got := field(s, "cost.pricing_source"); got != session.PricingSourceProviderReported {
+			t.Errorf("cost.pricing_source = %v, want %s", got, session.PricingSourceProviderReported)
 		}
 	})
 }

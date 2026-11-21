@@ -167,21 +167,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 	// worth — the repo convention is that cost is general pricing and only
 	// quota counters are taken from the agent verbatim.
 	cm := capacity.DefaultCapacityManager()
-	priced := false
-	if cm != nil && metrics.ModelName != "" {
-		metrics.EstimatedCostUSD, priced = cm.PricedCostUSD(
-			metrics.ModelName, metrics.CumInputTokens, metrics.CumOutputTokens,
-			metrics.CumCacheReadTokens, metrics.CumCacheCreationTokens)
-	}
-	// Cost provenance (#2061): priced from the table, or — tokens with no
-	// known price — unpriced, never read as free.
-	if metrics.CumInputTokens+metrics.CumOutputTokens+metrics.CumCacheReadTokens+metrics.CumCacheCreationTokens > 0 {
-		if priced {
-			metrics.PricingSource = cm.PriceTableSource()
-		} else {
-			metrics.UnpricedModels = []string{model.String}
-		}
-	}
+	priceSession(cm, model.String, metrics)
 	grams, tier := capacity.EstimateCO2Grams(metrics.ModelName,
 		metrics.CumInputTokens+metrics.CumOutputTokens+
 			metrics.CumCacheReadTokens+metrics.CumCacheCreationTokens)
@@ -328,4 +314,26 @@ func firstNonEmpty(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// priceSession sets m.EstimatedCostUSD from the session's token columns,
+// priced by cm, and records how (#2061): the price table when the model is
+// priced, or the model as unpriced when it is not — an unpriced model's 0 is
+// never left to read as free. rawModel is the sessions row's model column,
+// "" when it has none.
+func priceSession(cm *capacity.CapacityManager, rawModel string, m *session.SessionMetrics) {
+	priced := false
+	if cm != nil && m.ModelName != "" {
+		m.EstimatedCostUSD, priced = cm.PricedCostUSD(
+			m.ModelName, m.CumInputTokens, m.CumOutputTokens,
+			m.CumCacheReadTokens, m.CumCacheCreationTokens)
+	}
+	if m.CumInputTokens+m.CumOutputTokens+m.CumCacheReadTokens+m.CumCacheCreationTokens == 0 {
+		return
+	}
+	if priced {
+		m.PricingSource = cm.PriceTableSource()
+		return
+	}
+	m.UnpricedModels = []string{rawModel}
 }

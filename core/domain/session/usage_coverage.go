@@ -1,5 +1,7 @@
 package session
 
+import "strings"
+
 // TokenType names one kind of token a usage record can count (#2061). The
 // set is closed; TokenTypes returns it in its canonical order.
 type TokenType string
@@ -76,4 +78,25 @@ func (c *UsageCoverage) ObservesAll() bool {
 		}
 	}
 	return true
+}
+
+// PricingSourceProviderReported is the SessionMetrics.PricingSource part for
+// a cost the agent reported itself rather than one priced from Irrlicht's
+// price table (#2061).
+const PricingSourceProviderReported = "provider-reported"
+
+// PricingSourceSeparator joins the parts of a PricingSource that names more
+// than one source.
+const PricingSourceSeparator = "+"
+
+// PricedFromTable reports whether a PricingSource includes a part priced from
+// Irrlicht's price table — any part other than PricingSourceProviderReported.
+// Such a cost is only as complete as the token types the adapter counts.
+func PricedFromTable(source string) bool {
+	for _, part := range strings.Split(source, PricingSourceSeparator) {
+		if part != "" && part != PricingSourceProviderReported {
+			return true
+		}
+	}
+	return false
 }

@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,12 +48,27 @@ func TestComputeMetrics_V2Store(t *testing.T) {
 		}
 		// #2061: the cost is opencode's own, and this path declares all four
 		// token columns it reads.
-		if m.PricingSource != tailer.PricingSourceProviderReported || len(m.UnpricedModels) != 0 || m.TokensUnobserved {
+		if m.PricingSource != session.PricingSourceProviderReported || len(m.UnpricedModels) != 0 || m.TokensUnobserved {
 			t.Errorf("provenance = (%q, %q, %t), want (provider-reported, none, false)",
 				m.PricingSource, m.UnpricedModels, m.TokensUnobserved)
 		}
 		if m.UsageCoverage == nil || !m.UsageCoverage.ObservesAll() || m.UsageCoverage.ExcludesSubagents {
 			t.Errorf("UsageCoverage = %+v, want all four token types, subagent exclusion undeclared", m.UsageCoverage)
+		}
+	})
+
+	t.Run("tokens_with_no_reported_cost_are_unpriced_not_free", func(t *testing.T) {
+		w, db := newV2Store(t)
+		loadV2Fixture(t, db, v2StoreRows) // the fixture's local model: session_v2.cost 0
+		m := metricsFor(t, w, sesToolTurn)
+		if m.EstimatedCostUSD != 0 {
+			t.Fatalf("lock: EstimatedCostUSD = %v, want session_v2.cost 0", m.EstimatedCostUSD)
+		}
+		// #2061: a zero cost beside counted tokens cannot say "free"; the row
+		// does not tell a model that costs nothing from one opencode had no
+		// price for.
+		if want := []string{tailer.NormalizeModelName("qwen3.8-27b-splash")}; m.PricingSource != "" || !reflect.DeepEqual(m.UnpricedModels, want) {
+			t.Errorf("provenance = (%q, %q), want (\"\", %q)", m.PricingSource, m.UnpricedModels, want)
 		}
 		if want := tailer.NormalizeModelName("qwen3.8-27b-splash"); m.ModelName != want {
 			t.Errorf("ModelName = %q, want %q (the assistant row's data.model.id)", m.ModelName, want)

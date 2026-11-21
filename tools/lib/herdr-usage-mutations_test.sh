@@ -104,7 +104,7 @@ PIPELINE=TestHerdrUsage_PipelineKeepsUnknownsNull
 # shows the priced part as the whole cost.
 assert_go_test_goes_red \
   "not marking an unpriced model prints its partial cost instead of null" \
-  "core/pkg/tailer/tailer_metrics.go" \
+  "core/pkg/tailer/cost_provenance.go" \
   $'\tp.unpriced[model] = true\n' \
   $'\t_ = model\n' \
   "$LS_PKG" "$PIPELINE" \
@@ -149,6 +149,23 @@ assert_go_test_goes_red \
   $'\n' \
   "$LS_PKG" "$PIPELINE" \
   "want 1000000"
+
+# ── Phase A: hermes' store path records its provenance ─────────────────────
+assert_go_test_goes_red \
+  "hermes not naming the price table for a priced session" \
+  "core/adapters/inbound/agents/hermes/metrics.go" \
+  $'\tif priced {\n\t\tm.PricingSource = cm.PriceTableSource()\n\t\treturn\n\t}\n' \
+  $'\tif priced {\n\t\treturn\n\t}\n' \
+  "./core/adapters/inbound/agents/hermes/" "TestPriceSession_RecordsCostProvenance" \
+  "want 2, litellm, none"
+
+assert_go_test_goes_red \
+  "hermes not listing an unpriced model" \
+  "core/adapters/inbound/agents/hermes/metrics.go" \
+  $'\tm.UnpricedModels = []string{rawModel}\n' \
+  $'\t_ = rawModel\n' \
+  "./core/adapters/inbound/agents/hermes/" "TestPriceSession_RecordsCostProvenance" \
+  "want none and [gpt-5.6-luna]"
 
 # ── Phase A: the declaration agrees with adapters.json ──────────────────────
 # No shipped column says token_usage is "absent", so the mutation creates one:

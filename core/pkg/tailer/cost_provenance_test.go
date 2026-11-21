@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"irrlicht/core/domain/session"
 )
 
 // Cost and token provenance (#2061). EstimatedCostUSD and the Cum*Tokens
@@ -86,8 +88,8 @@ func TestCostProvenance_ProviderCostTurnLeavesTokensUnobserved(t *testing.T) {
 		if !m.TokensUnobserved {
 			t.Errorf("cost %v: TokensUnobserved = false, want true — the turn's 990 tokens were never counted", cost)
 		}
-		if m.PricingSource != PricingSourceProviderReported {
-			t.Errorf("cost %v: PricingSource = %q, want %q", cost, m.PricingSource, PricingSourceProviderReported)
+		if m.PricingSource != session.PricingSourceProviderReported {
+			t.Errorf("cost %v: PricingSource = %q, want %q", cost, m.PricingSource, session.PricingSourceProviderReported)
 		}
 	}
 }
@@ -103,7 +105,7 @@ func TestCostProvenance_MixedSourcesNameBoth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "litellm+" + PricingSourceProviderReported; m.PricingSource != want {
+	if want := "litellm+" + session.PricingSourceProviderReported; m.PricingSource != want {
 		t.Errorf("PricingSource = %q, want %q", m.PricingSource, want)
 	}
 	if !m.TokensUnobserved {

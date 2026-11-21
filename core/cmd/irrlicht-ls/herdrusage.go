@@ -178,31 +178,31 @@ func fetchSessions(env herdrUsageEnv) ([]*session.SessionState, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("unreadable answer from daemon at %s: %v", env.url, err)
 	}
-	var out []*session.SessionState
-	var walkAgents func([]*session.Agent)
-	walkAgents = func(agents []*session.Agent) {
-		for _, a := range agents {
-			if a == nil {
-				continue
-			}
-			if a.SessionState != nil {
-				out = append(out, a.SessionState)
-			}
-			walkAgents(a.Children)
+	return flattenGroups(nil, payload.Groups), nil
+}
+
+// flattenGroups appends every session in a dashboard group tree — nested
+// groups and agents' children included — to out.
+func flattenGroups(out []*session.SessionState, groups []*session.AgentGroup) []*session.SessionState {
+	for _, g := range groups {
+		if g != nil {
+			out = flattenGroups(flattenAgents(out, g.Agents), g.Groups)
 		}
 	}
-	var walkGroups func([]*session.AgentGroup)
-	walkGroups = func(groups []*session.AgentGroup) {
-		for _, g := range groups {
-			if g == nil {
-				continue
-			}
-			walkAgents(g.Agents)
-			walkGroups(g.Groups)
+	return out
+}
+
+func flattenAgents(out []*session.SessionState, agents []*session.Agent) []*session.SessionState {
+	for _, a := range agents {
+		if a == nil {
+			continue
 		}
+		if a.SessionState != nil {
+			out = append(out, a.SessionState)
+		}
+		out = flattenAgents(out, a.Children)
 	}
-	walkGroups(payload.Groups)
-	return out, nil
+	return out
 }
 
 // buildUsageDoc answers for one pane: every root session running in it, each
@@ -323,73 +323,84 @@ func harnessUsageFor(s *session.SessionState, subs []*session.SessionState) harn
 	u := harnessUsage{
 		SessionID:   s.SessionID,
 		Adapter:     strPtr(s.Adapter),
-		Subagents:   []subagentUsage{},
+		Model:       modelOf(s),
 		Unavailable: map[string]string{},
 	}
-	m := s.Metrics
-	adapter := s.Adapter
-	if adapter == "" {
-		adapter = "unnamed"
-	}
-
-	u.Model = modelOf(s)
 	if u.Model == nil {
 		u.Unavailable["model"] = "no model name observed"
 	}
-
-	u.Tokens, u.Cost = accountUsage(m, adapter, "", u.Unavailable)
+	m := s.Metrics
+	adapter := adapterOrUnnamed(s.Adapter)
 
 	// Children listed beside their parent must not be counted twice. Only an
 	// adapter that has established its parents exclude their children's usage
-	// may show the parent's own counts next to them; for any other, the
-	// parent's counts and cost — and those of any listed child that itself
-	// has listed children — are withheld.
-	hasKids := map[string]bool{}
-	for _, c := range subs {
-		hasKids[c.ParentSessionID] = true
-	}
+	// may show a parent's own counts next to them; for any other, the counts
+	// of every listed session that has listed children — the root included —
+	// are withheld.
 	excludes := m != nil && m.UsageCoverage != nil && m.UsageCoverage.ExcludesSubagents
-	withhold := func(prefix string) (tokenCounts, usageCost) {
-		reason := fmt.Sprintf("the %s adapter has not established that a parent's counts exclude its listed subagents", adapter)
-		for _, f := range tokenFields {
-			u.Unavailable[prefix+"tokens."+f.name] = reason
-		}
-		u.Unavailable[prefix+"cost.usd"] = reason
-		return tokenCounts{}, usageCost{}
-	}
+	u.Tokens, u.Cost = accountUsage(m, adapter, "", u.Unavailable)
 	if len(subs) > 0 && !excludes {
-		u.Tokens, u.Cost = withhold("")
+		u.Tokens, u.Cost = withheld(adapter, "", u.Unavailable)
 	}
+	u.Subagents = subagentsOf(subs, excludes, u.Unavailable)
 
-	for i, c := range subs {
-		prefix := fmt.Sprintf("subagents.%d.", i)
-		tokens, cost := accountUsage(c.Metrics, adapterOrUnnamed(c.Adapter), prefix, u.Unavailable)
-		if hasKids[c.SessionID] && !excludes {
-			tokens, cost = withhold(prefix)
-		}
-		u.Subagents = append(u.Subagents, subagentUsage{SessionID: c.SessionID, Tokens: tokens, Cost: cost})
-	}
-
-	// ElapsedSeconds is whole seconds from the first observed event to the
-	// last. 0 is what it reads with no event, one event, or two under a second
-	// apart, and those are not a measured zero.
-	if m != nil && m.ElapsedSeconds > 0 {
-		v := float64(m.ElapsedSeconds)
-		u.ElapsedSeconds = &v
-	} else {
-		u.Unavailable["elapsed_seconds"] = "the observed events span less than a second so far"
-	}
+	u.ElapsedSeconds = elapsedOf(m, u.Unavailable)
 	u.Unavailable["active_seconds"] = "Irrlicht does not record per-session active time"
-
 	if m != nil && m.RateLimit != nil {
 		u.RateLimit = rateLimitOf(m.RateLimit)
 	} else {
 		u.Unavailable["rate_limit"] = "no rate-limit snapshot observed for this session"
 	}
-	if len(u.Unavailable) == 0 {
-		u.Unavailable = nil
-	}
 	return u
+}
+
+// subagentsOf maps a root's descendants to subagent entries, recording why
+// each null is null under "subagents.<i>." in unavailable.
+func subagentsOf(subs []*session.SessionState, excludes bool, unavailable map[string]string) []subagentUsage {
+	hasKids := map[string]bool{}
+	for _, c := range subs {
+		hasKids[c.ParentSessionID] = true
+	}
+	out := make([]subagentUsage, 0, len(subs))
+	for i, c := range subs {
+		prefix := fmt.Sprintf("subagents.%d.", i)
+		adapter := adapterOrUnnamed(c.Adapter)
+		tokens, cost := accountUsage(c.Metrics, adapter, prefix, unavailable)
+		if hasKids[c.SessionID] && !excludes {
+			tokens, cost = withheld(adapter, prefix, unavailable)
+		}
+		out = append(out, subagentUsage{SessionID: c.SessionID, Tokens: tokens, Cost: cost})
+	}
+	return out
+}
+
+// withheld nulls one session's counts and cost because its adapter has not
+// established that they exclude its listed subagents.
+func withheld(adapter, prefix string, unavailable map[string]string) (tokenCounts, usageCost) {
+	reason := fmt.Sprintf("the %s adapter has not established that a parent's counts exclude its listed subagents", adapter)
+	for _, f := range tokenFields {
+		unavailable[prefix+"tokens."+f.name] = reason
+	}
+	unavailable[prefix+"cost.usd"] = reason
+	return tokenCounts{}, usageCost{}
+}
+
+// elapsedOf returns the session's elapsed seconds, or nil with a reason.
+// SessionMetrics.ElapsedSeconds reads 0 whenever a metrics path has measured
+// no span yet — the tailer's computeMetrics with no event, one event, or
+// events under a second apart; hermes' fold until the session row has an
+// ended_at — so a 0 is never printed as a measured zero.
+func elapsedOf(m *session.SessionMetrics, unavailable map[string]string) *float64 {
+	switch {
+	case m == nil:
+		unavailable["elapsed_seconds"] = "no usage observed for this session yet"
+	case m.ElapsedSeconds <= 0:
+		unavailable["elapsed_seconds"] = "no elapsed time measured for this session yet"
+	default:
+		v := float64(m.ElapsedSeconds)
+		return &v
+	}
+	return nil
 }
 
 func adapterOrUnnamed(a string) string {
@@ -426,16 +437,20 @@ var tokenFields = []struct {
 // accountUsage maps one session's metrics to its token counts and cost,
 // recording why each null is null under prefix in unavailable.
 func accountUsage(m *session.SessionMetrics, adapter, prefix string, unavailable map[string]string) (tokenCounts, usageCost) {
-	var tokens tokenCounts
-	var cost usageCost
 	if m == nil {
 		for _, f := range tokenFields {
 			unavailable[prefix+"tokens."+f.name] = "no usage observed for this session yet"
 		}
 		unavailable[prefix+"cost.usd"] = "no usage observed for this session yet"
-		return tokens, cost
+		return tokenCounts{}, usageCost{}
 	}
+	return tokensOf(m, adapter, prefix, unavailable), costOf(m, adapter, prefix+"cost.usd", unavailable)
+}
 
+// tokensOf prints a counted token type, and nulls one the adapter does not
+// declare, does not read, or whose turns went uncounted.
+func tokensOf(m *session.SessionMetrics, adapter, prefix string, unavailable map[string]string) tokenCounts {
+	var tokens tokenCounts
 	cov := m.UsageCoverage
 	for _, f := range tokenFields {
 		key := prefix + "tokens." + f.name
@@ -451,28 +466,33 @@ func accountUsage(m *session.SessionMetrics, adapter, prefix string, unavailable
 			*f.slot(&tokens) = &v
 		}
 	}
+	return tokens
+}
 
-	key := prefix + "cost.usd"
-	tablePriced := strings.Contains(m.PricingSource, "litellm")
+// costOf prints the cost only when its provenance vouches for it: nothing
+// unpriced, and a table price only over a complete set of counted token
+// types. key is the cost's dotted path.
+func costOf(m *session.SessionMetrics, adapter, key string, unavailable map[string]string) usageCost {
+	cov := m.UsageCoverage
+	fromTable := session.PricedFromTable(m.PricingSource)
 	switch {
 	case len(m.UnpricedModels) > 0:
 		unavailable[key] = "no price known for " + describeModels(m.UnpricedModels)
-	case tablePriced && cov == nil:
+	case fromTable && cov == nil:
 		unavailable[key] = fmt.Sprintf("priced from token counts the %s adapter does not declare", adapter)
-	case tablePriced && !cov.ObservesAll():
+	case fromTable && !cov.ObservesAll():
 		unavailable[key] = fmt.Sprintf("priced from only the token types the %s adapter reads", adapter)
 	case m.PricingSource != "":
-		v := m.EstimatedCostUSD
-		cost.USD = &v
-		cost.PricingSource = strPtr(m.PricingSource)
+		usd := m.EstimatedCostUSD
+		return usageCost{USD: &usd, PricingSource: strPtr(m.PricingSource)}
 	case cov != nil && !m.TokensUnobserved && m.EstimatedCostUSD == 0 && countedTokens(m) == 0:
 		// A declared adapter that has counted nothing yet: nothing to price.
 		zero := 0.0
-		cost.USD = &zero
+		return usageCost{USD: &zero}
 	default:
-		unavailable[key] = "the cost's pricing source was not recorded"
+		unavailable[key] = "Irrlicht did not record how this cost was formed"
 	}
-	return tokens, cost
+	return usageCost{}
 }
 
 func countedTokens(m *session.SessionMetrics) int64 {

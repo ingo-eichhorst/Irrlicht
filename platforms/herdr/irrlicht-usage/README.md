@@ -51,6 +51,14 @@ under `unavailable`, keyed by the field's dotted path. For example:
 - a parent whose adapter has not established that its counts exclude its subagents leaves
   its own counts null.
 
+## What it does not list
+
+`subagents[]` lists the subagents that Irrlicht's daemon still tracks. The daemon drops a
+finished subagent's session soon after its parent's turn ends. From then on, that
+subagent's usage is no longer in the document, and the parent's own counts never included
+it. So the sum of `sessions[]` and `subagents[]` covers what the daemon tracks at sampling
+time, which can be less than everything the pane has used.
+
 ## When it fails
 
 If Irrlicht's daemon is unreachable or answers badly, the action exits non-zero with one

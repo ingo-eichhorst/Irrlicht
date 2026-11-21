@@ -101,7 +101,7 @@
       "unavailable": {
         "active_seconds": "Irrlicht does not record per-session active time",
         "cost.usd": "priced from token counts the codex adapter does not declare",
-        "elapsed_seconds": "the observed events span less than a second so far",
+        "elapsed_seconds": "no elapsed time measured for this session yet",
         "model": "no model name observed",
         "rate_limit": "no rate-limit snapshot observed for this session",
         "tokens.cache_read": "the codex adapter does not declare which token types it counts",
@@ -130,7 +130,7 @@
       "rate_limit": null,
       "unavailable": {
         "active_seconds": "Irrlicht does not record per-session active time",
-        "elapsed_seconds": "the observed events span less than a second so far",
+        "elapsed_seconds": "no elapsed time measured for this session yet",
         "model": "no model name observed",
         "rate_limit": "no rate-limit snapshot observed for this session"
       }
