@@ -8,7 +8,7 @@ import {
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
-import { withoutRemoteSessions, remoteRootSessions } from './relayRows.js';
+import { withoutRemoteSessions, remoteRootSessions, joinRelayWorkers } from './relayRows.js';
 import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, relayWsUrl } from './connectionProtocol.js';
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
@@ -21,6 +21,10 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
 
     // --- State ---
     let dashboardGroups = [];
+    // The tree as last rendered: dashboardGroups with relayed sessions joined
+    // into their orchestrator workers' rows (#2149). Derived on every render
+    // and never written back, so it cannot outlive what it was derived from.
+    let displayedGroups = [];
     // Per-provider trailing-window spend (providerKey → timeframe → USD) from
     // the /api/v1/sessions `provider_costs` field. Feeds the usage chips.
     let dashboardProviderCosts = {};
@@ -1291,7 +1295,8 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       // the macOS overlay doesn't do (SessionListView.swift:994 iterates
       // group.agents straight). Match that.
 
-      if (dashboardGroups.length === 0) {
+      displayedGroups = joinRelayWorkers(dashboardGroups, connectedDaemonLabel);
+      if (displayedGroups.length === 0) {
         empty.style.display = 'flex';
         list.innerHTML = '';
       } else {
@@ -1301,13 +1306,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         const items = [];
         // Show headers when there's more than one top-level group, or when any
         // group nests sub-groups (Gas Town rigs) that need their own headers.
-        const showHeaders = dashboardGroups.length > 1 ||
-          dashboardGroups.some(g => g.groups?.length);
+        const showHeaders = displayedGroups.length > 1 ||
+          displayedGroups.some(g => g.groups?.length);
         let agentNum = 0;
 
         // Local-wins (#538): a relay session whose bare id is also delivered by
         // a local source collapses to the local row — skip the relay duplicate.
-        const localIds = localBareIds(dashboardGroups);
+        const localIds = localBareIds(displayedGroups);
 
         // Emit a group header followed by its agents, then recurse into nested
         // sub-groups (Gas Town rigs) as further collapsible headers. Collapse
@@ -1330,7 +1335,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           emitWorkerRowItems(items, g, key, depth);
           for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
-        for (const g of dashboardGroups) emitGroup(g, '', 0);
+        for (const g of displayedGroups) emitGroup(g, '', 0);
 
         // Reconcile
         reconcile(list, items,
@@ -1382,7 +1387,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           collectAll(g.agents || []);
           if (g.groups?.length) walk(g.groups);
         }
-      })(dashboardGroups);
+      })(displayedGroups);
       updateSummary(all, topLevel);
       renderHeaderTitle();
       refreshSummaryCollapseAllBtn();
@@ -2192,6 +2197,20 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       return daemonId;
     }
 
+    // connectedDaemonLabel is the name a connected relay daemon gave itself,
+    // or '' — the relay-worker join's key (#2149). Unlike daemonLabelFor it
+    // never falls back to the id, and it skips the id the snapshot and
+    // daemon_status arms store in place of a missing daemon_label: a worker
+    // joins only a daemon that named itself after it. `src.daemons` holds
+    // connected daemons only (the disconnect arm and onclose remove them).
+    function connectedDaemonLabel(daemonId) {
+      for (const src of sources.values()) {
+        const label = src.daemons?.get(daemonId)?.label;
+        if (label && label !== daemonId) return label;
+      }
+      return '';
+    }
+
     function desiredSources() {
       const out = [];
       if (settings.enableLocalSource) {
@@ -2211,6 +2230,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     function rebuildSources() {
       const desired = desiredSources();
       const desiredById = new Map(desired.map(s => [s.id, s]));
+      let droppedLabels = false;
       for (const [id, src] of sources) {
         const want = desiredById.get(id);
         // Drop a source that's no longer desired, OR a relay source whose token
@@ -2223,8 +2243,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           src.closing = true;
           try { if (src.ws) src.ws.close(); } catch (e) { console.debug('irrlicht: failed to close stale source socket', e); }
           sources.delete(id);
+          if (src.daemons.size) droppedLabels = true;
         }
       }
+      // Its labels went with it, so what they joined (#2149) unjoins.
+      if (droppedLabels) render();
       for (const d of desired) {
         if (!sources.has(d.id)) {
           const src = { state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map(), ...d };
@@ -2275,8 +2298,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       ws.onerror = function() {};
       ws.onclose = function(ev) {
         if (src.closing) return;
+        const hadDaemons = src.daemons.size > 0;
         src.daemons.clear();
         src.seqCursors.clear();
+        // The daemons' labels are gone, so what they joined (#2149) unjoins.
+        if (hadDaemons) render();
         // 4401 = auth failed/revoked: retrying with the same token just loops, so
         // stop reconnecting (until settings change) instead of a tight loop.
         if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
@@ -2339,6 +2365,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
             if (d?.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
           }
           updateWsStatus();
+          render(); // labels changed: re-join relayed sessions to workers (#2149)
           return;
         case 'daemon_status':
           if (msg.daemon_id) {
@@ -2348,6 +2375,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
               purgeDaemonSessions(msg.daemon_id);   // #540: relay no longer deletes them for us
             } else {
               src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+              render(); // a label arrived: re-join relayed sessions to workers (#2149)
             }
           }
           updateWsStatus();
@@ -2449,13 +2477,31 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // dashboard holds no Elfdans state and takes no Elfdans branch, so the
     // feature can be dropped, or shipped as its own artifact, without being
     // unpicked from this file.
+    // groups/groupOf answer from the displayed tree, so a tap on a session
+    // joined into a worker's row (#2149) expands that row's group, not the
+    // project group it is stored in.
     const elfdansDash = createElfdansDashboard({
       sessionIds: () => sessionIndex.keys(),
-      groupOf: (sessionId) => sessionIndex.get(sessionId)?.group || null,
-      groups: () => dashboardGroups,
+      groupOf: displayedGroupOf,
+      groups: () => displayedGroups,
       render,
       anySourceConnected: () => [...sources.values()].some(s => s.state === 'connected'),
     });
+
+    // displayedGroupOf is the displayed group a session's row sits in (its own
+    // or a parent's), or null.
+    function displayedGroupOf(sessionId) {
+      const holds = (arr) => (arr || []).some(a => a.session_id === sessionId || holds(a.children));
+      let found = null;
+      (function walk(gs) {
+        for (const g of gs) {
+          if (found) return;
+          if (holds(g.agents)) found = g;
+          else if (g.groups) walk(g.groups);
+        }
+      })(displayedGroups);
+      return found;
+    }
 
     // Kept as a named export because it IS the dashboard's entry point for a
     // notification tap — irrlicht.elfdans.test.js drives it as one.
