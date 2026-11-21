@@ -130,6 +130,10 @@ type SessionDetector struct {
 	hookLiveness   *HookLivenessWatchdog      // optional; nil = disabled (#1368)
 	metrics        outbound.MetricsCollector
 
+	// finishedSubagents keeps the final usage of removed child sessions
+	// (#2061). Optional; nil = nothing retained.
+	finishedSubagents outbound.FinishedSubagentStore
+
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
 	projectSessions map[string]string // sessionID → projectDir
@@ -405,7 +409,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		ProcessNames:      deps.ProcessNames,
 		LiveCWDs:          deps.LiveCWDs,
 		OnSessionDeleted:  det.removeFromProjectSessions,
-		OnSessionRemoved:  det.cacheDeletedSnapshot,
+		OnSessionRemoved:  det.onSessionRemoved,
 		OnSessionReplaced: det.recordReplacement,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
@@ -537,6 +541,62 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 func (d *SessionDetector) SetAutonomySpanStore(s outbound.AutonomySpanStore) {
 	d.autonomySpans = s
 	d.loadRecoverableAutonomySpans()
+}
+
+// onSessionRemoved is PIDManagerDeps.OnSessionRemoved. deleteSession fires it
+// before it deletes the session's row, and the PIDManager's child removals —
+// cleanupChildren at parent-ready, reapStaleChild on the liveness sweep,
+// deleteWithChildren — all go through deleteSession (same-PID dedup skips
+// child sessions: isDedupDeleteCandidate).
+func (d *SessionDetector) onSessionRemoved(state *session.SessionState) {
+	d.cacheDeletedSnapshot(state)
+	d.retainFinishedSubagent(state)
+}
+
+// retainFinishedSubagent records a removed child session's final usage
+// (#2061), so `irrlicht-ls --herdr-usage` still lists the subagent after its
+// session is gone. A removed root takes its records with it: nothing can ask
+// for its subagents any more.
+//
+// The record goes to the FinishedSubagentStore, never onto the parent's
+// session state. At parent-ready this call runs inside the parent's own
+// activity pass (finalizeActivityPass → cleanupFinishedParent →
+// cleanupChildren), and cleanupFinishedParent then saves the parent from the
+// in-memory copy that pass holds — so a record written onto the parent's row
+// here would be overwritten by that save. The store has one writer: this.
+func (d *SessionDetector) retainFinishedSubagent(state *session.SessionState) {
+	if d.finishedSubagents == nil || state == nil {
+		return
+	}
+	if state.ParentSessionID == "" {
+		d.finishedSubagents.ForgetTree(state.SessionID)
+		return
+	}
+	d.finishedSubagents.Retain(session.FinishedSubagent{
+		SessionID:       state.SessionID,
+		ParentSessionID: state.ParentSessionID,
+		Adapter:         state.Adapter,
+		FirstSeen:       state.FirstSeen,
+		FinishedAt:      d.nowFn().Unix(),
+		Usage:           session.UsageSnapshot(d.finalMetrics(state)),
+	})
+}
+
+// finalMetrics is state's metrics plus whatever its transcript holds that the
+// last activity pass had not read: the session is being removed, so no later
+// pass will read it.
+func (d *SessionDetector) finalMetrics(state *session.SessionState) *session.SessionMetrics {
+	if d.metrics == nil || state.TranscriptPath == "" {
+		return state.Metrics
+	}
+	fresh, _ := d.metrics.ComputeMetrics(state.TranscriptPath, state.Adapter)
+	return session.MergeMetrics(fresh, state.Metrics)
+}
+
+// SetFinishedSubagentStore wires the store that keeps a removed child
+// session's final usage (#2061). Pass nil to disable.
+func (d *SessionDetector) SetFinishedSubagentStore(s outbound.FinishedSubagentStore) {
+	d.finishedSubagents = s
 }
 
 // SetHistoryTracker wires an optional HistoryTracker that records per-session

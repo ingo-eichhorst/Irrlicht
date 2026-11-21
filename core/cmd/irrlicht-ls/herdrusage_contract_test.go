@@ -80,8 +80,8 @@ func TestHerdrUsage_GoldensMatchFactorysSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(goldens) < 9 {
-		t.Fatalf("found %d goldens, want every case's (9); the glob must have missed them", len(goldens))
+	if len(goldens) < 10 {
+		t.Fatalf("found %d goldens, want every case's (10); the glob must have missed them", len(goldens))
 	}
 	for _, path := range goldens {
 		t.Run(path, func(t *testing.T) {

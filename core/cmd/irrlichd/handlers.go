@@ -75,7 +75,16 @@ type sessionsResponse struct {
 	Groups        []*session.AgentGroup         `json:"groups"`
 	ProviderCosts map[string]map[string]float64 `json:"provider_costs,omitempty"`
 	DaemonErrors  []services.DaemonError        `json:"daemon_errors,omitempty"`
+	// FinishedSubagents is served only on request (?include=finished_subagents,
+	// #2061): the final usage of child sessions the daemon has removed, for
+	// `irrlicht-ls --herdr-usage`. Without the parameter the payload is what
+	// it always was, so no dashboard sees a change.
+	FinishedSubagents []session.FinishedSubagent `json:"finished_subagents,omitempty"`
 }
+
+// includeFinishedSubagents is the /api/v1/sessions ?include= value that adds
+// FinishedSubagents to the payload.
+const includeFinishedSubagents = "finished_subagents"
 
 // costAttachCache caches the last project + provider cost scans so successive
 // /api/v1/sessions hits within costAttachTTL reuse them. A single TTL governs
@@ -110,7 +119,10 @@ func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]ma
 // same nil-meaningful seam liveHookHealth already documents for the
 // diagnostics bundle. observeGranted gates the rate-limit inheritance pass's
 // wrapper auth.json reads per adapter; nil fails closed.
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, hookHealth func() services.HookHealthSnapshot, observeGranted func(adapter string) bool) http.HandlerFunc {
+//
+// finished is nil-tolerant too: with no store, ?include=finished_subagents
+// adds nothing.
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, hookHealth func() services.HookHealthSnapshot, observeGranted func(adapter string) bool, finished outbound.FinishedSubagentStore) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -138,6 +150,9 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			byProject, byProvider := costMaps(tracker, cache)
 			attachGroupCosts(groups, byProject)
 			resp.ProviderCosts = providerCostsByProvider(byProvider)
+		}
+		if finished != nil && r.URL.Query().Get("include") == includeFinishedSubagents {
+			resp.FinishedSubagents = finished.List()
 		}
 		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)

@@ -147,7 +147,7 @@ func defaultHerdrUsageEnv(getenv func(string) string) herdrUsageEnv {
 	return herdrUsageEnv{
 		paneID:     getenv("HERDR_PANE_ID"),
 		socketPath: getenv("HERDR_SOCKET_PATH"),
-		url:        daemonaddr.ClientURL("/api/v1/sessions"),
+		url:        daemonaddr.ClientURL("/api/v1/sessions?include=finished_subagents"),
 		warning:    daemonaddr.ClientConfigWarning(),
 		client:     &http.Client{Timeout: herdrUsageTimeout},
 		now:        time.Now,
@@ -173,12 +173,41 @@ func fetchSessions(env herdrUsageEnv) ([]*session.SessionState, error) {
 		return nil, fmt.Errorf("daemon at %s answered %s", env.url, resp.Status)
 	}
 	var payload struct {
-		Groups []*session.AgentGroup `json:"groups"`
+		Groups            []*session.AgentGroup      `json:"groups"`
+		FinishedSubagents []session.FinishedSubagent `json:"finished_subagents"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("unreadable answer from daemon at %s: %v", env.url, err)
 	}
-	return flattenGroups(nil, payload.Groups), nil
+	return withFinishedSubagents(flattenGroups(nil, payload.Groups), payload.FinishedSubagents), nil
+}
+
+// withFinishedSubagents adds the daemon's records of removed child sessions
+// (#2061) to the live list, as sessions with their final usage, so a parent's
+// subagents are still found after the daemon has deleted them. A record for a
+// session that is still live is skipped: the live session is the newer
+// answer, and a subagent is listed once. A record never carries a launcher,
+// so it can be a subagent but never a pane's root.
+func withFinishedSubagents(live []*session.SessionState, finished []session.FinishedSubagent) []*session.SessionState {
+	seen := make(map[string]bool, len(live)+len(finished))
+	for _, s := range live {
+		seen[s.SessionID] = true
+	}
+	out := live
+	for _, f := range finished {
+		if f.SessionID == "" || seen[f.SessionID] {
+			continue
+		}
+		seen[f.SessionID] = true
+		out = append(out, &session.SessionState{
+			SessionID:       f.SessionID,
+			ParentSessionID: f.ParentSessionID,
+			Adapter:         f.Adapter,
+			FirstSeen:       f.FirstSeen,
+			Metrics:         f.Usage,
+		})
+	}
+	return out
 }
 
 // flattenGroups appends every session in a dashboard group tree — nested

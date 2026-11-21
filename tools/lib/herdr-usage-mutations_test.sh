@@ -179,6 +179,41 @@ assert_go_test_goes_red \
   "./tools/onboarding-factory/cmd/of/" "TestUsageCoverage_AgreesWithTheCapabilityModel" \
   "says token_usage is absent"
 
+# ── Finished subagents (#2061 review finding 1) ────────────────────────────
+# The daemon deletes a subagent's session at parent-ready (cleanupChildren) or
+# on the liveness sweep; the record the detector keeps is what still lists it.
+assert_go_test_goes_red \
+  "not retaining a removed child drops it from the usage document" \
+  "core/application/services/session_detector.go" \
+  $'\td.retainFinishedSubagent(state)\n' \
+  $'\n' \
+  "./core/cmd/irrlichd/" "TestHerdrUsage_ListsSubagentsTheDaemonHasRemoved" \
+  "a subagent the daemon removed at parent-ready must still be listed"
+
+assert_go_test_goes_red \
+  "a removed root keeping its subagents' records" \
+  "core/application/services/session_detector.go" \
+  $'\t\td.finishedSubagents.ForgetTree(state.SessionID)\n' \
+  $'\n' \
+  "./core/application/services/" "TestSessionDetector_RemovedRootForgetsItsRecords" \
+  "want only keep-child"
+
+assert_go_test_goes_red \
+  "records never expiring" \
+  "core/adapters/outbound/filesystem/finished_subagents.go" \
+  $'\t\tif r.FinishedAt < cutoff {\n' \
+  $'\t\tif false && r.FinishedAt < cutoff {\n' \
+  "./core/adapters/outbound/filesystem/" "TestFinishedSubagentStore_RetentionBoundsGrowth" \
+  "want [fresh]"
+
+assert_go_test_goes_red \
+  "listing a still-live subagent twice, once from its stale record" \
+  "core/cmd/irrlicht-ls/herdrusage.go" \
+  $'\t\tif f.SessionID == "" || seen[f.SessionID] {\n' \
+  $'\t\tif f.SessionID == "" {\n' \
+  "$LS_PKG" "TestHerdrUsage_Goldens/finished_subagents" \
+  "document differs from testdata/herdr-usage/finished-subagents/want.json"
+
 # ── Not here: Claude Code's ExcludesSubagents evidence ──────────────────────
 # TestUsageCoverage_ParentIgnoresSubagentUsageSummary is held by two sites in
 # claudecode/parser.go at once; as run on 2026-11-21 each single-site mutation

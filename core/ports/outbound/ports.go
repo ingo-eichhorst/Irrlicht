@@ -685,6 +685,23 @@ type AutonomySpanProvenance struct {
 // formatting a date.
 func (p AutonomySpanProvenance) LiveSince() int64 { return p.EraStarts[""] }
 
+// FinishedSubagentStore keeps the final usage of child sessions the daemon
+// has removed (#2061), so a usage answer can still list a subagent after its
+// session is gone. The store, not the parent's session state, owns these
+// records: nothing else writes them, so they cannot race the detector's own
+// saves of the parent.
+type FinishedSubagentStore interface {
+	// Retain records one removed child, replacing any earlier record for the
+	// same SessionID.
+	Retain(rec session.FinishedSubagent)
+	// ForgetTree drops every record that descends from rootSessionID —
+	// called when that session is itself removed, after which nothing can
+	// ask for its subagents.
+	ForgetTree(rootSessionID string)
+	// List returns a copy of every record held.
+	List() []session.FinishedSubagent
+}
+
 // AutonomySpanStore persists closed autonomy spans and reads them back over a
 // trailing window. Implementations must be safe for concurrent use.
 //

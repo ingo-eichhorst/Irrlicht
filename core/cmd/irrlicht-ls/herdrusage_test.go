@@ -80,6 +80,14 @@ func TestHerdrUsage_Goldens(t *testing.T) {
 		// A pane id that exists on two herdr servers, told apart by socket.
 		{"two sockets a", "two-sockets", "w1:p1", "/tmp/herdr-a/herdr.sock", "want-a.json"},
 		{"two sockets b", "two-sockets", "w1:p1", "/tmp/herdr-b//herdr.sock", "want-b.json"},
+		// A parent whose subagents the daemon has partly removed (#2061): the
+		// removed ones come from finished_subagents, a grandchild included;
+		// the one still live is listed once, from its live session, never
+		// from its stale record — which, like the record of a session the
+		// daemon removed and then admitted again, carries an earlier
+		// FirstSeen and so would sort first; a record of another root's
+		// child is not listed.
+		{"finished subagents", "finished-subagents", "w1:p1", "", "want.json"},
 		// A pane with no session: a valid document with no sessions.
 		{"empty pane", "two-panes", "w9:p9", "", "want-empty.json"},
 	}
