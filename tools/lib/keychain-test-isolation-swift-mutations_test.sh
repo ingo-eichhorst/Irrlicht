@@ -1,28 +1,33 @@
 #!/usr/bin/env bash
 # keychain-test-isolation-swift-mutations_test.sh — the committed mutation
-# fixtures for the two guards that keep `swift test` away from the
+# fixtures for the three guards that keep `swift test` away from the
 # developer's real login keychain and live daemon (KeychainStore's backend
 # seam in platforms/macos/Irrlicht/Managers/KeychainStore.swift, DaemonManager's
-# publisher seam in platforms/macos/Irrlicht/Managers/DaemonManager.swift;
-# guards in platforms/macos/Tests/KeychainStoreBackendGuardTests.swift and
-# platforms/macos/Tests/DaemonManagerPublisherGuardTests.swift).
+# publisher and process-control seams in
+# platforms/macos/Irrlicht/Managers/DaemonManager.swift; guards in
+# platforms/macos/Tests/KeychainStoreBackendGuardTests.swift,
+# platforms/macos/Tests/DaemonManagerPublisherGuardTests.swift and
+# platforms/macos/Tests/DaemonManagerProcessControlGuardTests.swift).
 #
 # WHY THIS FILE EXISTS. Both guards are something the change ADDS, so they
 # have no "before the fix" to run red; per AGENTS.md and
 # docs/testing-philosophy.md each earns its place by being seen to fail when
-# what it protects is broken. Five mutations, each run by hand with these
+# what it protects is broken. Seven mutations, each run by hand with these
 # exact anchors before this file was written, and red with the messages
 # asserted below:
 #   1. the process-wide KeychainStore goes back to the real keychain;
 #   2. the backend rule is inverted;
 #   3. the test-process detector (AppHome.isRunningTests) stops firing;
 #   4. DaemonManager's default publisher goes back to the live PUT;
-#   5. the publisher rule is inverted.
+#   5. the publisher rule is inverted;
+#   6. DaemonManager's default process control goes back to the live probe /
+#      `pkill -x irrlichd` / spawn;
+#   7. the process-control rule is inverted.
 #
 # SAFE TO RUN ON A DEVELOPER MAC, and only because of how it runs. Under
-# mutations 1, 3 and 4 a KeychainStore.get or a DaemonManager publish in this
-# process WOULD reach the real keychain (a securityd dialog) or the live
-# daemon on :7837. Each mutation therefore runs exactly ONE guard test via
+# mutations 1, 3, 4 and 6 a KeychainStore.get, a DaemonManager publish or a
+# DaemonManager.start() in this process WOULD reach the real keychain (a
+# securityd dialog), the live daemon on :7837, or `pkill -x irrlichd`. Each mutation therefore runs exactly ONE guard test via
 # `swift test --filter`, and every guard arm is inert by construction — it
 # inspects which backend/publisher was selected and calls nothing on it (the
 # guard classes' doc comments say so, and have no setUp). Never widen a
@@ -170,6 +175,24 @@ assert_swift_test_goes_red \
   $'        underXCTest ? LiveRelayPublisher() : RecordingRelayPublisher()' \
   "DaemonManagerPublisherGuardTests/testThePublisherRuleRecordsUnderXCTestAndSendsInTheApp" \
   'a test process must get the recording publisher'
+
+# ── 6. DaemonManager's default process control goes back to the live one ────
+assert_swift_test_goes_red \
+  "restoring LiveDaemonProcessControl as DaemonManager's default is caught" \
+  "$DM" \
+  $'         processControl: DaemonProcessControl = DaemonManager.defaultProcessControl(underXCTest: AppHome.isRunningTests)) {' \
+  $'         processControl: DaemonProcessControl = LiveDaemonProcessControl()) {' \
+  "DaemonManagerProcessControlGuardTests/testADefaultDaemonManagerInATestProcessDoesNotUseTheLiveProcessControl" \
+  'DaemonManager() in a test process selected LiveDaemonProcessControl'
+
+# ── 7. the process-control rule is inverted ─────────────────────────────────
+assert_swift_test_goes_red \
+  "inverting the process-control rule is caught on both arms" \
+  "$DM" \
+  $'        underXCTest ? RecordingDaemonProcessControl() : LiveDaemonProcessControl()' \
+  $'        underXCTest ? LiveDaemonProcessControl() : RecordingDaemonProcessControl()' \
+  "DaemonManagerProcessControlGuardTests/testTheProcessControlRuleRecordsUnderXCTestAndActsInTheApp" \
+  'a test process must get the recording process control'
 
 if [[ $fails -gt 0 ]]; then
   echo "keychain-test-isolation-swift-mutations: $fails FAILED"
