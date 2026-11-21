@@ -101,7 +101,8 @@ func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error
 // sample fills it back in, attributed. Checked for #2030 by grepping
 // `RateLimitSnapshot{` under core/: every non-test producer
 // (claudecode/statusline.go, codex/parser.go, pi/parser.go,
-// museaccountapi/parser.go) stamps AttributionQuality "confirmed".
+// museaccountapi/parser.go, and mistralvibe/parser.go since #2012) stamps
+// AttributionQuality "confirmed".
 func dropLegacyRateLimit(state *session.SessionState) {
 	m := state.Metrics
 	if m == nil || !m.RateLimit.IsUnattributed() {

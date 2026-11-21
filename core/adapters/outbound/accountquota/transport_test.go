@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -389,34 +388,9 @@ func TestReadBounded_AllowsExactlyTheCeiling(t *testing.T) {
 // one call site" comment a checked claim rather than an assertion nobody
 // re-runs: it greps this package's own non-test sources.
 func TestCredential_RevealHasOneCallSite(t *testing.T) {
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	count := 0
-	var foundFile string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatalf("ReadFile %s: %v", name, err)
-		}
-		n := strings.Count(string(data), ".Reveal()")
-		if n > 0 {
-			foundFile = name
-		}
-		count += n
-	}
-	if count != 1 {
-		t.Fatalf("found %d call(s) to .Reveal() in this package's non-test sources (last seen in %s), want exactly 1 — "+
-			"a second call site is a second place a credential can leak into a log or an error", count, foundFile)
+	if n := countInProductionSources(t, ".Reveal()"); n != 1 {
+		t.Fatalf("found %d call(s) to .Reveal() in this package's non-test sources, want exactly 1 — "+
+			"a second call site is a second place a credential can leak into a log or an error", n)
 	}
 }
 
@@ -478,4 +452,155 @@ func TestHTTPTransport_AuthRejectedIgnoresOversizedBody(t *testing.T) {
 	if !errors.As(err, &qerr) || qerr.Reason != outbound.QuotaFailureAuthRejected {
 		t.Fatalf("expected an auth_rejected QuotaError even with an oversized body, got err=%v", err)
 	}
+}
+
+// TestHTTPTransport_SendsExactlyTheCredentialHeaders is issue #2012's
+// on-the-wire half of "only the selected cookies leave the machine": a
+// credential built with NewCredentialWithCompanion reaches the server as
+// exactly one Cookie header carrying exactly the credential's secret, plus the
+// companion header, and nothing else credential-shaped. The transport's
+// http.Client has no cookie jar, so nothing can add a cookie on the way; this
+// test is what checks that, at the server, rather than trusting it.
+func TestHTTPTransport_SendsExactlyTheCredentialHeaders(t *testing.T) {
+	type seen struct {
+		cookies []string
+		csrf    []string
+		auth    string
+	}
+	got := make(chan seen, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{cookies: r.Header.Values("Cookie"), csrf: r.Header.Values("X-CSRFToken"), auth: r.Header.Get("Authorization")}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	guard := &loopbackDialGuard{}
+	tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, newLoopbackOnlyTransport(guard, certPool(server)))
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+	const cookieHeader = "csrftoken=tok; ory_session_abc=sess"
+	_, err = tr.Fetch(t.Context(), outbound.AccountQuotaRequest{
+		DestinationKey: "primary",
+		Credential:     outbound.NewCredentialWithCompanion(cookieHeader, "tok"),
+		Auth:           outbound.AuthMethod{Header: "Cookie", CompanionHeader: "X-CSRFToken"},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	s := <-got
+	if len(s.cookies) != 1 || s.cookies[0] != cookieHeader {
+		t.Errorf("server saw Cookie headers %q, want exactly [%q]", s.cookies, cookieHeader)
+	}
+	if len(s.csrf) != 1 || s.csrf[0] != "tok" {
+		t.Errorf("server saw X-CSRFToken headers %q, want exactly [\"tok\"] — the companion header was not sent", s.csrf)
+	}
+	if s.auth != "" {
+		t.Errorf("server saw an Authorization header %q, want none", s.auth)
+	}
+	if guard.dials.Load() < 1 {
+		t.Fatal("vacuity: the dial guard recorded zero dials — this test exercised no network at all")
+	}
+	if guard.refused.Load() != 0 {
+		t.Fatalf("dial guard refused %d non-loopback dial(s) — this test attempted to leave the machine", guard.refused.Load())
+	}
+}
+
+// TestHTTPTransport_CompanionCannotReplaceTheCredential: a companion that
+// names the auth header itself is overwritten by the credential, never the
+// other way round (transport.go sets the companion first).
+func TestHTTPTransport_CompanionCannotReplaceTheCredential(t *testing.T) {
+	got := make(chan []string, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Values("Cookie")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	guard := &loopbackDialGuard{}
+	tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, newLoopbackOnlyTransport(guard, certPool(server)))
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+	_, err = tr.Fetch(t.Context(), outbound.AccountQuotaRequest{
+		DestinationKey: "primary",
+		Credential:     outbound.NewCredentialWithCompanion("a=1", "everything=else"),
+		Auth:           outbound.AuthMethod{Header: "Cookie", CompanionHeader: "Cookie"},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if c := <-got; len(c) != 1 || c[0] != "a=1" {
+		t.Fatalf("server saw Cookie headers %q, want exactly [\"a=1\"]", c)
+	}
+	if guard.refused.Load() != 0 {
+		t.Fatalf("dial guard refused %d non-loopback dial(s)", guard.refused.Load())
+	}
+}
+
+// TestHTTPTransport_RefusesACompanionMismatch: a companion the auth method
+// declares no header for, or a declared companion header with no value, is
+// refused before anything is dialled.
+func TestHTTPTransport_RefusesACompanionMismatch(t *testing.T) {
+	for name, req := range map[string]outbound.AccountQuotaRequest{
+		"undeclared companion": {DestinationKey: "primary", Credential: outbound.NewCredentialWithCompanion("a=1", "tok"),
+			Auth: outbound.AuthMethod{Header: "Cookie"}},
+		"declared but missing": {DestinationKey: "primary", Credential: outbound.NewCredential("a=1"),
+			Auth: outbound.AuthMethod{Header: "Cookie", CompanionHeader: "X-CSRFToken"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`[]`))
+			}))
+			defer server.Close()
+			guard := &loopbackDialGuard{}
+			tr, err := newHTTPTransport([]outbound.FixedDestination{destinationFor(server)}, newLoopbackOnlyTransport(guard, certPool(server)))
+			if err != nil {
+				t.Fatalf("newHTTPTransport: %v", err)
+			}
+			_, err = tr.Fetch(t.Context(), req)
+			var qerr *outbound.QuotaError
+			if !errors.As(err, &qerr) || qerr.Reason != outbound.QuotaFailureCredential {
+				t.Fatalf("err = %v, want a credential QuotaError: a companion mismatch was sent", err)
+			}
+			if guard.dials.Load() != 0 {
+				t.Fatalf("a companion mismatch dialled %d time(s), want none", guard.dials.Load())
+			}
+		})
+	}
+}
+
+// TestCredential_RevealCompanionHasOneCallSite is TestCredential_RevealHasOneCallSite
+// for the companion value (issue #2012): one place in this package unwraps it.
+func TestCredential_RevealCompanionHasOneCallSite(t *testing.T) {
+	if n := countInProductionSources(t, ".RevealCompanion()"); n != 1 {
+		t.Fatalf("found %d call(s) to .RevealCompanion() in this package's non-test sources, want exactly 1 — "+
+			"a second call site is a second place a credential can leak into a log or an error", n)
+	}
+}
+
+// countInProductionSources counts needle across this package's non-test .go
+// files, failing when there are none to scan.
+func countInProductionSources(t *testing.T, needle string) int {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	count, scanned := 0, 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", name, err)
+		}
+		scanned++
+		count += strings.Count(string(data), needle)
+	}
+	if scanned == 0 {
+		t.Fatal("vacuity: scanned no production .go files")
+	}
+	return count
 }

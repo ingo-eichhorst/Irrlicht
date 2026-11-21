@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "id": "mistral",
+  "display_name": "Mistral — Vibe plan",
+  "_comment": [
+    "Issue #2012, epic #1977 work package E: the browser-session route.",
+    "The billing provider is 'mistral'; the coding-agent adapter is",
+    "'mistral-vibe'; the pseudo-adapter holding the consent row is",
+    "'mistral-vibe-browser-session'. Three identifiers, one integration.",
+    "",
+    "Mistral sells three separate products and this route reads one of",
+    "them, the Vibe plan quota. Mistral API usage (requests and EUR on",
+    "admin.mistral.ai) and prepaid credits are named below so the separation",
+    "is on record; neither is read by anything in Irrlicht.",
+    "",
+    "Supported: Google Chrome on macOS only. The resolver returns",
+    "not-implemented on every other platform, so platforms is darwin alone.",
+    "",
+    "The response names no account. Granting the permission is the user's",
+    "assertion that the Chrome profile's Mistral account is the vibe CLI's;",
+    "snapshots record it as attribution_evidence 'user-asserted', never as",
+    "provider-issued, and account_identity stays source-specific-unavailable.",
+    "",
+    "Live evidence: two 200 bodies and one 401 shape from the maintainer's",
+    "Chrome on 2026-11-21 (issue #2012, comment 7063552453). Reading Chrome's",
+    "cookie store from outside the browser has not run; that is the",
+    "maintainer's live acceptance step, recorded in the PR."
+  ],
+  "products": [
+    {
+      "id": "mistral-vibe",
+      "name": "Mistral Vibe plan (monthly usage percentage)",
+      "quota_scope": "account"
+    },
+    {
+      "id": "mistral-api-usage",
+      "name": "Mistral API usage (requests and EUR; not read by this route)",
+      "quota_scope": "account"
+    },
+    {
+      "id": "mistral-prepaid-credits",
+      "name": "Mistral prepaid credits (not read by this route)",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "browser-session",
+    "destination_keys": ["mistral-vibe-usage"],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/outbound/mistralvibe",
+      "permission_name": "mistral-vibe-browser-session",
+      "permission_key": "browser-session",
+      "tests": [
+        "core/adapters/outbound/mistralvibe/parser_test.go",
+        "core/adapters/outbound/mistralvibe/resolver_test.go",
+        "core/adapters/outbound/mistralvibe/cookies_test.go",
+        "core/adapters/outbound/mistralvibe/package_test.go",
+        "core/adapters/outbound/chromecookies/store_test.go",
+        "core/adapters/outbound/accountquota/transport_test.go",
+        "core/application/services/mistralvibesweep_test.go",
+        "core/cmd/irrlichd/mistralvibe_effects_test.go"
+      ],
+      "mutation_fixtures": [
+        "tools/lib/mistralvibe-mutations_test.sh"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "cookie",
+    "header": "Cookie"
+  },
+  "credential_resolvers": [
+    {
+      "kind": "browser-profile",
+      "location": "Google Chrome on macOS: the Local State profile.last_used profile's Cookies database under ~/Library/Application Support/Google/Chrome, hosts console.mistral.ai and .mistral.ai, cookies csrftoken and ory_session_*",
+      "format": "sqlite"
+    },
+    {
+      "kind": "keychain",
+      "location": "service Chrome Safe Storage, account Chrome (the key that decrypts the cookies; never sent)",
+      "format": "plain"
+    }
+  ],
+  "platforms": ["darwin"],
+  "redaction": {
+    "allowed_fields": ["usage_percentage", "payg_enabled", "reset_at"],
+    "note": "The response is a one-element tRPC batch whose result.data.json carries exactly these three fields (measured 2026-11-21). The fixture holds that inner object, re-marshaled by RedactUsage through the same allowlist the parser decodes."
+  },
+  "fixtures": [
+    {
+      "name": "vibe-usage-response",
+      "kind": "response",
+      "path": "fixtures/vibe-usage-response.redacted.json",
+      "note": "RedactUsage of the 2026-11-21T13:38:33Z live body (0.081567 after one vibe -p turn). The verbatim bodies are Go testdata in core/adapters/outbound/mistralvibe/testdata."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "unassessed",
+      "note": "The usage response names no plan. The vibe CLI's /api/vibe/whoami (plan_type, plan_name) would; its probe is pending and its runtime use is a follow-up."
+    },
+    "quota_windows": {
+      "claim": "live-verified",
+      "evidence": ["mistral-live-probe-2026-11-21-before", "mistral-live-probe-2026-11-21-after", "mistral-vibe-usage-response-fixture"],
+      "note": "One monthly window: usage_percentage (0 to 100, read as sent, never rescaled) and reset_at (2026-12-01T00:00:00Z, a UTC month). The reading moved from 0 to 0.081567 after one vibe -p turn. The 0-100 scale is source-backed (CodexBar b6e65a8), not measured. No used or limit count exists."
+    },
+    "balance": {
+      "claim": "source-specific-unavailable",
+      "evidence": ["mistral-live-probe-2026-11-21-after"],
+      "note": "This route carries no balance. Prepaid credits are a separate product on admin.mistral.ai that nothing here has probed or reads (#1977 §5: that is not proof the provider has no balance source)."
+    },
+    "account_identity": {
+      "claim": "source-specific-unavailable",
+      "evidence": ["mistral-live-probe-2026-11-21-after", "mistral-parser-source"],
+      "note": "The response carries no account, organization or plan id, so accountRef() returns the empty string by construction. The poll is keyed on the Chrome profile, and the link to the vibe CLI's account is user-asserted by the grant. A cookie value is never used as an account id."
+    }
+  },
+  "evidence": [
+    {
+      "id": "mistral-live-probe-2026-11-21-before",
+      "kind": "live-probe",
+      "date": "2026-11-21",
+      "ref": "core/adapters/outbound/mistralvibe/testdata/live_probe_2026-11-21T133745Z_usage.json",
+      "note": "200, 108 bytes, signed in with nothing used: usage_percentage 0. A fetch() from a console.mistral.ai page in the maintainer's Chrome; no cookie value was read. Byte-exact reconstruction (length matches the measured 108)."
+    },
+    {
+      "id": "mistral-live-probe-2026-11-21-after",
+      "kind": "live-probe",
+      "date": "2026-11-21",
+      "ref": "core/adapters/outbound/mistralvibe/testdata/live_probe_2026-11-21T133833Z_usage_after_one_turn.json",
+      "note": "200, 115 bytes, after one vibe 2.19.1 -p turn on the CLI's own API key: usage_percentage 0.081567. Byte-exact reconstruction (length matches the measured 115)."
+    },
+    {
+      "id": "mistral-vibe-usage-response-fixture",
+      "kind": "fixture",
+      "date": "2026-11-21",
+      "ref": "replaydata/providers/mistral/fixtures/vibe-usage-response.redacted.json"
+    },
+    {
+      "id": "mistral-parser-source",
+      "kind": "source",
+      "date": "2026-11-21",
+      "ref": "core/adapters/outbound/mistralvibe/parser.go",
+      "note": "The three-field allowlist decode, the 0-100 refusal, and accountRef()."
+    }
+  ]
+}

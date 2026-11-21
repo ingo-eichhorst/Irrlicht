@@ -1,0 +1,377 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"irrlicht/core/domain/session"
+	outbound "irrlicht/core/ports/outbound"
+)
+
+// Issue #2012: the Mistral Vibe plan reading, bound to vibe sessions by the
+// user-asserted browser-session permission.
+
+// vibeProbeAfterOneTurn is the 115-byte 200 body issue #2012's live probe
+// captured at 2026-11-21T13:38:33Z
+// (core/adapters/outbound/mistralvibe/testdata/live_probe_2026-11-21T133833Z_usage_after_one_turn.json).
+const vibeProbeAfterOneTurn = `[{"result":{"data":{"json":{"usage_percentage":0.081567,"payg_enabled":false,"reset_at":"2026-12-01T00:00:00Z"}}}}]`
+
+// fakeBrowserSession stands in for mistralvibe.Session. It counts cookie
+// reads (Resolve), which stand for reads of the Chrome profile's cookies.
+type fakeBrowserSession struct {
+	account string
+	reads   atomic.Int64
+	err     error
+}
+
+func (b *fakeBrowserSession) Account() string { return b.account }
+func (b *fakeBrowserSession) Resolve(context.Context) (outbound.Credential, error) {
+	b.reads.Add(1)
+	if b.err != nil {
+		return outbound.Credential{}, b.err
+	}
+	return outbound.NewCredentialWithCompanion("csrftoken=c; ory_session_x=s", "c"), nil
+}
+
+func vibeTransport(status func(n int) error) *fakeTransport {
+	return &fakeTransport{fn: func(n int, _ outbound.AccountQuotaRequest) (outbound.AccountQuotaResponse, error) {
+		if err := status(n); err != nil {
+			return outbound.AccountQuotaResponse{}, err
+		}
+		return outbound.AccountQuotaResponse{StatusCode: 200, Body: []byte(vibeProbeAfterOneTurn)}, nil
+	}}
+}
+
+func authRejected() error {
+	return &outbound.QuotaError{Reason: outbound.QuotaFailureAuthRejected, Detail: "status 401"}
+}
+
+// TestMistralVibeRefresh_NeverPublishesZeroOnAuthFailure is #2012 §7.2's
+// target: a signed-out browser (401) is a classified failure on the first
+// poll and on the retries the backoff serves from cache, never a 0 %
+// reading.
+func TestMistralVibeRefresh_NeverPublishesZeroOnAuthFailure(t *testing.T) {
+	poller := NewAccountPoller()
+	browser := &fakeBrowserSession{account: "chrome-profile:/p/Default"}
+	transport := vibeTransport(func(int) error { return authRejected() })
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		snap, err := MistralVibeRefresh(context.Background(), poller, browser, transport, alwaysGranted, "v1")
+		if snap != nil {
+			t.Fatalf("attempt %d: a reading was published after a 401: %+v", attempt, *snap)
+		}
+		if err == nil {
+			t.Fatalf("attempt %d: expected an error on the immediate retry, got none", attempt)
+		}
+		if !strings.Contains(err.Error(), string(outbound.QuotaFailureAuthRejected)) {
+			t.Fatalf("attempt %d: err = %v, want the auth_rejected classification", attempt, err)
+		}
+	}
+	if transport.callCount() != 1 {
+		t.Fatalf("transport called %d times, want 1 (the retry is served from backoff)", transport.callCount())
+	}
+}
+
+// TestMistralVibeRefresh_StaleReadingKeepsItsTimeOnAuthFailure: after an
+// earlier success, a 401 keeps that reading, at its original time, marked
+// stale with the classified failure.
+func TestMistralVibeRefresh_StaleReadingKeepsItsTimeOnAuthFailure(t *testing.T) {
+	poller := NewAccountPoller()
+	t0 := time.Date(2026, 11, 21, 13, 38, 33, 0, time.UTC)
+	now := t0
+	poller.now = func() time.Time { return now }
+	browser := &fakeBrowserSession{account: "chrome-profile:/p/Default"}
+	transport := vibeTransport(func(n int) error {
+		if n > 1 {
+			return authRejected()
+		}
+		return nil
+	})
+	if _, err := MistralVibeRefresh(context.Background(), poller, browser, transport, alwaysGranted, "v1"); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	now = t0.Add(pollFreshWindow + time.Second)
+	snap, err := MistralVibeRefresh(context.Background(), poller, browser, transport, alwaysGranted, "v1")
+	if err == nil || snap == nil {
+		t.Fatalf("after a 401: snap=%v err=%v, want the stale reading and an error", snap, err)
+	}
+	if snap.SampledAt != t0.Unix() || snap.LastSuccessAt != t0.Unix() {
+		t.Errorf("stale reading SampledAt=%d LastSuccessAt=%d, want its original time %d", snap.SampledAt, snap.LastSuccessAt, t0.Unix())
+	}
+	if snap.RetrievalFailure != string(outbound.QuotaFailureAuthRejected) {
+		t.Errorf("RetrievalFailure = %q, want auth_rejected", snap.RetrievalFailure)
+	}
+	if snap.Windows[0].UsedPercent != 0.081567 {
+		t.Errorf("UsedPercent = %v, want the earlier reading 0.081567", snap.Windows[0].UsedPercent)
+	}
+}
+
+type vibeSweepHarness struct {
+	sweeper      *MistralVibeSweeper
+	writer       *fakeRateLimitWriter
+	transport    *fakeTransport
+	browser      *fakeBrowserSession
+	browserCalls *atomic.Int64
+	granted      *atomic.Bool
+	poller       *AccountPoller
+}
+
+func newVibeSweepHarness(sessions sessionLister, transport *fakeTransport) *vibeSweepHarness {
+	h := &vibeSweepHarness{
+		writer:       &fakeRateLimitWriter{},
+		transport:    transport,
+		browser:      &fakeBrowserSession{account: "chrome-profile:/p/Default"},
+		browserCalls: &atomic.Int64{},
+		granted:      &atomic.Bool{},
+		poller:       NewAccountPoller(),
+	}
+	h.granted.Store(true)
+	h.sweeper = NewMistralVibeSweeper(MistralVibeSweeperDeps{
+		Sessions: sessions,
+		Writer:   h.writer,
+		Poller:   h.poller,
+		Browser: func() (MistralBrowserSession, error) {
+			h.browserCalls.Add(1)
+			return h.browser, nil
+		},
+		Transport: transport,
+		Granted:   h.granted.Load,
+		Adapter:   "mistral-vibe",
+		Log:       &sweepLogger{},
+		Interval:  time.Minute,
+	})
+	return h
+}
+
+func mistralListed() *session.SessionMetrics {
+	return &session.SessionMetrics{RateLimit: &session.RateLimitSnapshot{Provider: session.ProviderMistral,
+		Windows: []session.RateLimitWindow{{UsedPercent: 1}}, AttributionQuality: session.AttributionQualityConfirmed}}
+}
+
+// TestMistralVibeSweep_OnePollBindsEveryVibeSession: three vibe sessions on
+// one profile cost one request, and each gets the reading; another adapter's
+// session and a vibe subagent get nothing.
+func TestMistralVibeSweep_OnePollBindsEveryVibeSession(t *testing.T) {
+	sessions := staticSessions{
+		{SessionID: "v1", Adapter: "mistral-vibe"},
+		{SessionID: "v2", Adapter: "mistral-vibe"},
+		{SessionID: "v3", Adapter: "mistral-vibe"},
+		{SessionID: "v1-sub", Adapter: "mistral-vibe", ParentSessionID: "v1"},
+		{SessionID: "c1", Adapter: "claude-code"},
+	}
+	h := newVibeSweepHarness(sessions, vibeTransport(func(int) error { return nil }))
+	h.sweeper.sweep(context.Background())
+	h.sweeper.sweep(context.Background())
+
+	if n := h.transport.callCount(); n != 1 {
+		t.Fatalf("transport called %d times for three vibe sessions over two ticks, want 1", n)
+	}
+	bound := map[string]bool{}
+	for _, w := range h.writer.snapshot() {
+		if w.provider != session.ProviderMistral || w.snap == nil || w.snap.Provider != session.ProviderMistral {
+			t.Fatalf("write = %+v, want a Mistral snapshot", w)
+		}
+		bound[w.sessionID] = true
+	}
+	if !bound["v1"] || !bound["v2"] || !bound["v3"] || bound["v1-sub"] || bound["c1"] {
+		t.Fatalf("bound sessions = %v, want exactly v1, v2, v3", bound)
+	}
+}
+
+// TestMistralVibeSweep_RevokedReadsAndSendsNothing is #2012 §7.3's target:
+// once the permission is not granted, a tick neither resolves the Chrome
+// profile nor reads its cookies nor sends a request.
+func TestMistralVibeSweep_RevokedReadsAndSendsNothing(t *testing.T) {
+	h := newVibeSweepHarness(staticSessions{{SessionID: "v1", Adapter: "mistral-vibe"}}, vibeTransport(func(int) error { return nil }))
+	h.sweeper.sweep(context.Background())
+	if h.transport.callCount() != 1 || h.browserCalls.Load() != 1 {
+		t.Fatalf("vacuity: the granted tick made %d request(s) and %d profile read(s), want 1 and 1",
+			h.transport.callCount(), h.browserCalls.Load())
+	}
+
+	h.granted.Store(false)
+	h.poller.Revoke(session.ProviderMistral) // what the daemon's Stop effect does
+	for range 3 {
+		h.sweeper.sweep(context.Background())
+	}
+	if n := h.browserCalls.Load(); n != 1 {
+		t.Fatalf("the sweep read the Chrome profile %d more time(s) after the permission was revoked", n-1)
+	}
+	if n := h.browser.reads.Load(); n != 1 {
+		t.Fatalf("the sweep read the browser cookies %d more time(s) after the permission was revoked", n-1)
+	}
+	if n := h.transport.callCount(); n != 1 {
+		t.Fatalf("the sweep sent %d more request(s) after the permission was revoked", n-1)
+	}
+}
+
+// TestMistralVibeSweep_NotGrantedUnbindsEverySession is the target of #2012
+// testing-strategy mutation 4 ("bind a vibe session while the user-asserted
+// permission is not granted"): every vibe session carrying a Mistral reading
+// loses it on the first tick without the grant, and nothing is fetched.
+func TestMistralVibeSweep_NotGrantedUnbindsEverySession(t *testing.T) {
+	sessions := staticSessions{
+		{SessionID: "v1", Adapter: "mistral-vibe", Metrics: mistralListed()},
+		{SessionID: "v2", Adapter: "mistral-vibe", Metrics: mistralListed()},
+		{SessionID: "v3", Adapter: "mistral-vibe"},
+	}
+	h := newVibeSweepHarness(sessions, vibeTransport(func(int) error { return nil }))
+	h.granted.Store(false)
+	h.sweeper.sweep(context.Background())
+
+	cleared := map[string]bool{}
+	for _, w := range h.writer.snapshot() {
+		if w.snap != nil {
+			t.Fatalf("a vibe session was bound while the permission was not granted: %+v", w)
+		}
+		if w.provider == session.ProviderMistral {
+			cleared[w.sessionID] = true
+		}
+	}
+	if !cleared["v1"] || !cleared["v2"] {
+		t.Fatalf("cleared = %v: a vibe session stayed bound to the Mistral reading while the permission was not granted", cleared)
+	}
+	if cleared["v3"] {
+		t.Fatal("v3 carried no reading and was written anyway")
+	}
+	if h.transport.callCount() != 0 || h.browserCalls.Load() != 0 {
+		t.Fatal("the not-granted tick read the browser or sent a request")
+	}
+}
+
+// TestMistralVibeSweep_NoVibeSessionReadsNothing: with the grant but no live
+// vibe session, nothing is read from the browser.
+func TestMistralVibeSweep_NoVibeSessionReadsNothing(t *testing.T) {
+	h := newVibeSweepHarness(staticSessions{{SessionID: "c1", Adapter: "claude-code"}}, vibeTransport(func(int) error { return nil }))
+	h.sweeper.sweep(context.Background())
+	if h.browserCalls.Load() != 0 || h.transport.callCount() != 0 {
+		t.Fatal("a tick with no vibe session read the Chrome profile or sent a request")
+	}
+}
+
+// TestMistralVibeSweep_AuthFailureWritesNoZero: a 401 with no earlier
+// reading writes nothing at all, and a session's existing reading is left
+// for the stale path rather than cleared or zeroed.
+func TestMistralVibeSweep_AuthFailureWritesNoZero(t *testing.T) {
+	h := newVibeSweepHarness(staticSessions{{SessionID: "v1", Adapter: "mistral-vibe"}}, vibeTransport(func(int) error { return authRejected() }))
+	h.sweeper.sweep(context.Background())
+	if writes := h.writer.snapshot(); len(writes) != 0 {
+		t.Fatalf("writes after a 401 = %+v, want none", writes)
+	}
+}
+
+// TestMistralVibeSweep_ProfileSwitchIsANewAccount: a different Chrome
+// profile is a different account context, polled on its own and never
+// served the old profile's reading.
+func TestMistralVibeSweep_ProfileSwitchIsANewAccount(t *testing.T) {
+	h := newVibeSweepHarness(staticSessions{{SessionID: "v1", Adapter: "mistral-vibe"}}, vibeTransport(func(int) error { return nil }))
+	h.sweeper.sweep(context.Background())
+	h.browser = &fakeBrowserSession{account: "chrome-profile:/p/Profile 2"}
+	h.sweeper.sweep(context.Background())
+	if n := h.transport.callCount(); n != 2 {
+		t.Fatalf("transport called %d times across a profile switch, want 2", n)
+	}
+	if h.browser.reads.Load() != 1 {
+		t.Fatal("the new profile's cookies were not the ones read for its poll")
+	}
+}
+
+// TestMistralVibeSweep_ProfileSwitchUnbindsTheOldReading (review of #2012,
+// finding 1): when Chrome's last-used profile changes, the previous
+// profile's reading is another account context's and leaves every vibe
+// session, even when the new profile's first poll fails.
+func TestMistralVibeSweep_ProfileSwitchUnbindsTheOldReading(t *testing.T) {
+	sessions := staticSessions{{SessionID: "v1", Adapter: "mistral-vibe", Metrics: mistralListed()}}
+	h := newVibeSweepHarness(sessions, vibeTransport(func(int) error { return nil }))
+	h.sweeper.sweep(context.Background())
+	before := len(h.writer.snapshot())
+
+	h.browser = &fakeBrowserSession{account: "chrome-profile:/p/Profile 2", err: errors.New("no Mistral session in this profile")}
+	h.sweeper.sweep(context.Background())
+
+	after := h.writer.snapshot()[before:]
+	if len(after) != 1 || after[0].sessionID != "v1" || after[0].provider != session.ProviderMistral || after[0].snap != nil {
+		t.Fatalf("writes after the profile switch = %+v, want one Mistral clear for v1 — the old profile's reading stayed bound", after)
+	}
+}
+
+// TestMistralVibeSweep_NoCurrentReadingMarksTheListedOneStale (review of
+// #2012, finding 1): with the grant and a vibe session but no current
+// reading to serve (a daemon restart whose first poll fails, or a Chrome
+// profile that cannot be resolved), the reading a session already carries
+// stays at its original time and is marked with a classified failure, never
+// left looking current.
+func TestMistralVibeSweep_NoCurrentReadingMarksTheListedOneStale(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		browserErr error
+		transport  func(int) error
+		want       string
+	}{
+		{"first poll after a restart is rejected", nil, func(int) error { return authRejected() }, string(outbound.QuotaFailureAuthRejected)},
+		{"no Chrome profile to read", errors.New("chromecookies: Chrome profile not found"), func(int) error { return nil }, string(outbound.QuotaFailureCredential)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listed := mistralListed()
+			listed.RateLimit.SampledAt = 1_700_000_000
+			sessions := staticSessions{{SessionID: "v1", Adapter: "mistral-vibe", Metrics: listed}}
+			h := newVibeSweepHarness(sessions, vibeTransport(tc.transport))
+			if tc.browserErr != nil {
+				err := tc.browserErr
+				h.sweeper.deps.Browser = func() (MistralBrowserSession, error) { return nil, err }
+			}
+			h.sweeper.sweep(context.Background())
+			writes := h.writer.snapshot()
+			if len(writes) != 1 || writes[0].snap == nil {
+				t.Fatalf("writes = %+v, want the listed reading re-written as stale", writes)
+			}
+			got := writes[0].snap
+			if got.RetrievalFailure != tc.want {
+				t.Errorf("RetrievalFailure = %q, want %q — the reading was left looking current", got.RetrievalFailure, tc.want)
+			}
+			if got.SampledAt != 1_700_000_000 || got.Windows[0].UsedPercent != 1 {
+				t.Errorf("stale reading = %+v, want the listed reading at its original time", got)
+			}
+			// A second tick in the same state writes nothing more.
+			sessions[0].Metrics.RateLimit = got
+			h.sweeper.sweep(context.Background())
+			if n := len(h.writer.snapshot()); n != 1 {
+				t.Errorf("a second failing tick re-wrote the already-stale reading (%d writes, want 1)", n)
+			}
+		})
+	}
+}
+
+// TestMistralVibeRefresh_PassesTheGrantToThePoller (review of #2012,
+// finding 3): the grant MistralVibeRefresh is given reaches AccountPoller's
+// admission and publish checks, so a revoke that lands between the sweep's
+// own check and the fetch reads no cookie and sends nothing, and one that
+// lands during the fetch publishes nothing.
+func TestMistralVibeRefresh_PassesTheGrantToThePoller(t *testing.T) {
+	t.Run("revoked before admission", func(t *testing.T) {
+		browser := &fakeBrowserSession{account: "chrome-profile:/p/Default"}
+		transport := vibeTransport(func(int) error { return nil })
+		snap, err := MistralVibeRefresh(context.Background(), NewAccountPoller(), browser, transport, func() bool { return false }, "v1")
+		if snap != nil || err == nil {
+			t.Fatalf("a revoked refresh returned snap=%v err=%v, want nothing and an error", snap, err)
+		}
+		if browser.reads.Load() != 0 || transport.callCount() != 0 {
+			t.Fatalf("a revoked refresh read the cookies %d time(s) and sent %d request(s), want none",
+				browser.reads.Load(), transport.callCount())
+		}
+	})
+	t.Run("revoked during the fetch", func(t *testing.T) {
+		var granted atomic.Bool
+		granted.Store(true)
+		browser := &fakeBrowserSession{account: "chrome-profile:/p/Default"}
+		transport := vibeTransport(func(int) error { granted.Store(false); return nil })
+		snap, err := MistralVibeRefresh(context.Background(), NewAccountPoller(), browser, transport, granted.Load, "v1")
+		if snap != nil || err == nil {
+			t.Fatalf("a reading fetched across a revoke was published: snap=%v err=%v", snap, err)
+		}
+	})
+}

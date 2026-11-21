@@ -35,6 +35,7 @@ import (
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
+	"irrlicht/core/adapters/outbound/mistralvibe"
 	"irrlicht/core/adapters/outbound/recorder"
 	"irrlicht/core/adapters/outbound/relay"
 	wshub "irrlicht/core/adapters/outbound/websocket"
@@ -870,19 +871,20 @@ func herdrPaneRecorder(permService *services.PermissionService) services.HerdrPa
 	}
 }
 
-// claudeAccountProbe returns the detection probe for Claude Code's
-// account-identity read, which is relevant exactly when Claude Code itself is
-// running, so it is detected by that agent's live-process matcher.
-func claudeAccountProbe(allAgents []agent.Agent) func() bool {
-	var claudeMatch agent.ProcessMatcher
+// adapterLiveProbe is the detection probe for a pseudo-adapter whose
+// permission is relevant exactly when the named agent adapter is running
+// (Claude Code's account-identity read, Mistral Vibe's browser-session read),
+// so it is detected by that agent's live-process matcher.
+func adapterLiveProbe(allAgents []agent.Agent, adapterName string) func() bool {
+	var match agent.ProcessMatcher
 	for _, a := range allAgents {
-		if a.Identity.Name == claudecode.AdapterName {
-			claudeMatch = a.Process.Match
+		if a.Identity.Name == adapterName {
+			match = a.Process.Match
 			break
 		}
 	}
 	return func() bool {
-		return claudeMatch != nil && processlifecycle.HasLiveProcess(claudeMatch)
+		return match != nil && processlifecycle.HasLiveProcess(match)
 	}
 }
 
@@ -965,7 +967,10 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// kitty is a host integration, not an agent: detected by a live kitty
 	// process or an existing kitty config directory.
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
-	permService.SetDetectionProbe(claudecode.AccountName, claudeAccountProbe(allAgents))
+	permService.SetDetectionProbe(claudecode.AccountName, adapterLiveProbe(allAgents, claudecode.AdapterName))
+	// The browser-session row (#2012) is offered while a vibe process runs —
+	// never keyed on Chrome's directory, which would be a read before consent.
+	permService.SetDetectionProbe(mistralvibe.Name, adapterLiveProbe(allAgents, vibe.AdapterName))
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.
@@ -1210,6 +1215,9 @@ type startBackgroundLoopsDeps struct {
 	// MuseAccountSweeper polls Meta's account API for live Muse sessions
 	// (#2057); nil when its transport could not be built.
 	MuseAccountSweeper *services.MuseAccountSweeper
+	// MistralVibeSweeper binds the Mistral Vibe plan reading to live vibe
+	// sessions (#2012); nil when its transport could not be built.
+	MistralVibeSweeper *services.MistralVibeSweeper
 }
 
 func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
@@ -1243,6 +1251,9 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 		// outside demo mode.
 		if deps.MuseAccountSweeper != nil {
 			go deps.MuseAccountSweeper.Run(detectorCtx)
+		}
+		if deps.MistralVibeSweeper != nil {
+			go deps.MistralVibeSweeper.Run(detectorCtx)
 		}
 		// Hooks are delivered by Claude Code's native `type: http` transport
 		// straight to the daemon (#1161) — no curl, no shell — so there is no
