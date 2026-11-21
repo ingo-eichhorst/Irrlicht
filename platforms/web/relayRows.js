@@ -49,15 +49,18 @@ function emptiedAway(before, next) {
 // parent_session_id too, so a relay child can only attach to a relay parent.
 export function remoteRootSessions(groups) {
   const out = [];
-  (function walk(gs) {
-    for (const g of (gs || [])) {
-      for (const a of (g.agents || [])) {
-        if (sessionOrigin(a) === 'remote') out.push(a);
-      }
-      if (g.groups) walk(g.groups);
-    }
-  })(groups);
+  forEachGroup(groups, (g) => {
+    for (const a of (g.agents || [])) if (sessionOrigin(a) === 'remote') out.push(a);
+  });
   return out;
+}
+
+// forEachGroup visits every group in tree order: a group, then its sub-groups.
+function forEachGroup(groups, visit) {
+  for (const g of (groups || [])) {
+    visit(g);
+    forEachGroup(g.groups, visit);
+  }
 }
 
 // joinRelayWorkers returns the tree as displayed (#2149): a session that runs
@@ -148,25 +151,23 @@ function placeJoins(groups, winners, workers) {
 function workerCensus(groups) {
   const byName = new Map();
   const entry = (name) => {
-    let e = byName.get(name);
-    if (!e) { e = { count: 0, free: null }; byName.set(name, e); }
+    const e = byName.get(name) || { count: 0, free: null };
+    byName.set(name, e);
     e.count++;
     return e;
   };
-  (function walk(gs) {
-    for (const g of (gs || [])) {
-      (function rows(arr) {
-        for (const a of (arr || [])) {
-          if (a.worker_name && sessionOrigin(a) === 'local') entry(a.worker_name);
-          rows(a.children);
-        }
-      })(g.agents);
-      for (const w of (g.unattached_workers || [])) {
-        if (w.worker_name) entry(w.worker_name).free = { group: g, worker: w };
-      }
-      if (g.groups) walk(g.groups);
+  const countRows = (arr) => {
+    for (const a of (arr || [])) {
+      if (a.worker_name && sessionOrigin(a) === 'local') entry(a.worker_name);
+      countRows(a.children);
     }
-  })(groups);
+  };
+  forEachGroup(groups, (g) => {
+    countRows(g.agents);
+    for (const w of (g.unattached_workers || [])) {
+      if (w.worker_name) entry(w.worker_name).free = { group: g, worker: w };
+    }
+  });
   return byName;
 }
 

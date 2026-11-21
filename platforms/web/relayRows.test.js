@@ -127,6 +127,11 @@ describe('joinRelayWorkers (#2149)', () => {
     expect(joinRelayWorkers(oneBusy, labels({ d1: 'X' }))).toBe(oneBusy)
   })
 
+  test('a worker name on a subagent row counts too, as macOS flattenAgents counts it', () => {
+    const t = tree({ more: [{ name: 'irrlicht', agents: [local('loc-1', { children: [local('sub-1', { worker_name: 'X' })] })] }] })
+    expect(joinRelayWorkers(t, labels({ d1: 'X' }))).toBe(t)
+  })
+
   test('LOCK: a worker with a local session is not free, so its local session wins', () => {
     const t = tree({ rigWorkers: [], rigAgents: [local('loc-x', { worker_name: 'X', role: 'worker' })] })
     expect(joinRelayWorkers(t, labels({ d1: 'X' }))).toBe(t)
