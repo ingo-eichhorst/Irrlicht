@@ -397,6 +397,31 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         XCTAssertEqual(got?.windows.first?.usedPercent, 42)
     }
 
+    /// Issue #2012: a Mistral Vibe snapshot carries one monthly (43200-minute)
+    /// window, which neither the bars nor the circle can draw (they draw only
+    /// the 300- and 10080-minute windows). In Auto mode it must not win the
+    /// freshest-provider pick and blank the icon while a drawable Anthropic
+    /// snapshot is present.
+    func testSelectedSnapshotSkipsAFresherSnapshotWithNoDrawableWindow() {
+        let monthly = monthlyMistralSession() // fresher than the Anthropic reading
+        let claude = makeSession(id: "2", adapter: "claude-code", usedPercent: 42, sampledSecondsAgo: 120)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [monthly, claude], providerKey: nil, now: now)
+        XCTAssertEqual(got?.windows.first?.usedPercent, 42)
+        if let got {
+            XCTAssertNotNil(QuotaMenuBarRenderer.buildSVG(for: got, now: now), "the picked snapshot must be drawable")
+        }
+    }
+
+    /// Review of #2012, finding 4: Settings' quota-provider picker must not
+    /// offer a provider the icon can never draw — the same predicate
+    /// `selectedSnapshot` applies, or a ticked "mistral" row reads as live
+    /// while its slot stays silently empty.
+    func testSettingsOffersOnlyProvidersTheIconCanDraw() {
+        let monthly = monthlyMistralSession()
+        let claude = makeSession(id: "2", adapter: "claude-code", usedPercent: 42, sampledSecondsAgo: 120)
+        XCTAssertEqual(SettingsView.quotaProviderKeys(in: [monthly, claude]), ["anthropic"])
+    }
+
     func testSelectedSnapshotReturnsNilWhenNoSessionCarriesRateLimit() {
         let plain = SessionState(
             id: "sess_1", state: .working, model: "claude-sonnet", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
@@ -453,6 +478,20 @@ final class QuotaMenuBarRendererTests: XCTestCase {
             attributionQuality: RateLimitInfo.attributionQualityConfirmed
         )
         return sessionState(id: id, adapter: adapter, rateLimit: rateLimit)
+    }
+
+    /// A Mistral Vibe session (#2012): one monthly window the icon cannot
+    /// draw, sampled now.
+    private func monthlyMistralSession() -> SessionState {
+        sessionState(
+            id: "vibe", adapter: "mistral-vibe",
+            rateLimit: RateLimitInfo(
+                windows: [RateLimitWindowInfo(usedPercent: 0.08, windowMinutes: 43200, resetsAt: now.addingTimeInterval(9 * 86400))],
+                sampledAt: now,
+                provider: "mistral",
+                attributionQuality: RateLimitInfo.attributionQualityConfirmed
+            )
+        )
     }
 
     private func sessionState(id: String, adapter: String, rateLimit: RateLimitInfo) -> SessionState {

@@ -25,6 +25,13 @@ const (
 	// an agent that can be pointed at DeepSeek or at any other provider. The
 	// adapter name is never evidence for this provider.
 	ProviderDeepSeek = "deepseek"
+	// ProviderMistral is the Mistral Vibe plan's billing provider (issue
+	// #2012, epic #1977 §10 work package E), distinct from the
+	// "mistral-vibe" coding-agent adapter name. Its one source is the
+	// browser-session route (core/adapters/outbound/mistralvibe), which
+	// stamps Product with the Vibe plan, never Mistral's API usage or
+	// prepaid credits.
+	ProviderMistral = "mistral"
 )
 
 // AttributionQualityConfirmed is the only AttributionQuality value that
@@ -33,7 +40,11 @@ const (
 // heuristic source; nothing sets it yet, and until something does, the only
 // two states a snapshot's AttributionQuality is ever seen in are "confirmed"
 // (stamped by an adapter that observed native evidence) and "" (unstamped —
-// unpopulated fields, or a legacy row).
+// unpopulated fields, or a legacy row). Since #2012 "confirmed" also covers a
+// link the user asserted by granting a consent row (Mistral Vibe's browser
+// session, whose response names no account); AttributionEvidence
+// "user-asserted" is what tells that apart from native evidence, and its
+// ConfirmedAccountRef stays empty.
 const (
 	AttributionQualityConfirmed = "confirmed"
 	AttributionQualityEstimated = "estimated"
@@ -165,7 +176,9 @@ type RateLimitSnapshot struct {
 
 	// AttributionQuality is the confidence in the attribution above: one of
 	// the AttributionQuality* constants — AttributionQualityConfirmed
-	// (session-specific evidence established the provider) or
+	// (session-specific evidence established the provider, or, with
+	// AttributionEvidence "user-asserted", the user's consent-time assertion,
+	// #2012) or
 	// AttributionQualityEstimated (a heuristic, not evidence; nothing sets
 	// this yet). ProviderForSession treats anything other than
 	// AttributionQualityConfirmed — including "", the zero value — as no

@@ -185,6 +185,23 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 	if header == "" {
 		header = "Authorization"
 	}
+	// The companion header is set BEFORE the auth header, so a companion
+	// that names the same header can never replace the credential itself.
+	// RevealCompanion() is called here and nowhere else in this package
+	// (TestCredential_RevealCompanionHasOneCallSite greps for it). A
+	// companion with no declared header, or a declared header with no
+	// companion, is a resolver/auth mismatch: refused before anything is
+	// sent, never sent under a guessed name or without its pair.
+	companion := req.Credential.RevealCompanion()
+	if (companion == "") != (req.Auth.CompanionHeader == "") {
+		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{
+			Reason: outbound.QuotaFailureCredential,
+			Detail: "credential companion and auth method companion header do not match",
+		}
+	}
+	if companion != "" {
+		httpReq.Header.Set(req.Auth.CompanionHeader, companion)
+	}
 	// The ONE call site: Reveal() is invoked here and nowhere else in this
 	// package (TestCredential_RevealHasOneCallSite in this package's own
 	// tests greps the package source for it, so a second call site fails
