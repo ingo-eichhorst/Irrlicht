@@ -11,3 +11,4 @@ media/*.webm
 media/*.mp4
 media/*.gif
 **/*.map
+media/spike/**
