@@ -46,3 +46,46 @@ enum PublishClient {
         }
     }
 }
+
+/// Something that can deliver a publish config to a daemon. `DaemonManager`
+/// takes one so a test process never reaches `PublishClient.apply`'s live
+/// loopback endpoint (see `DaemonManager.publisher`).
+protocol RelayPublishing: Sendable {
+    /// Delivers `config`. True when the daemon accepted it.
+    func publish(_ config: PublishClient.Config) async -> Bool
+}
+
+/// The app's publisher: `PublishClient.apply`, i.e. a PUT to
+/// `DaemonEndpoint.httpBase` + `PublishClient.path`.
+struct LiveRelayPublisher: RelayPublishing {
+    func publish(_ config: PublishClient.Config) async -> Bool {
+        await PublishClient.apply(enabled: config.enabled, url: config.url, token: config.token)
+    }
+}
+
+/// Records every config it is handed and reports success, sending nothing.
+/// The test-process default for `DaemonManager`, and what a test reads to
+/// assert on what would have been published.
+final class RecordingRelayPublisher: RelayPublishing, @unchecked Sendable {
+    private var configs: [PublishClient.Config] = []
+    private let lock = NSLock()
+
+    /// Every config published so far, oldest first.
+    var published: [PublishClient.Config] {
+        lock.lock()
+        defer { lock.unlock() }
+        return configs
+    }
+
+    func publish(_ config: PublishClient.Config) async -> Bool {
+        record(config)
+        return true
+    }
+
+    /// Synchronous so the lock is never held across a suspension point.
+    private func record(_ config: PublishClient.Config) {
+        lock.lock()
+        defer { lock.unlock() }
+        configs.append(config)
+    }
+}
