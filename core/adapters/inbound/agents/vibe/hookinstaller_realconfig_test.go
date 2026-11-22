@@ -231,8 +231,8 @@ func assertOnlyAddedTheFlagLine(t *testing.T, before, after []byte) {
 }
 
 // TestUninstallHooks_FromAConfigVibeItselfWrote is the other half of the round
-// trip: the flag added to a real config is cleared again, and the user's own
-// twelve arrays are still byte-identical to what vibe wrote.
+// trip: the flag added to a real config is removed again, and the whole file
+// is byte-identical to what vibe wrote, its twelve arrays included.
 func TestUninstallHooks_FromAConfigVibeItselfWrote(t *testing.T) {
 	_, configPath := seedRealConfig(t)
 	before, err := os.ReadFile(configPath)
@@ -259,11 +259,10 @@ func TestUninstallHooks_FromAConfigVibeItselfWrote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the config after uninstall: %v", err)
 	}
-	// The flag line survives as `= false` — ClearBoolIfPresent rewrites the
-	// line it added rather than deleting it, which is the documented
-	// behaviour. Everything else must be untouched.
-	stripped := strings.Replace(string(after), experimentalHooksFlag+" = false\n", "", 1)
-	if stripped != string(before) {
-		t.Errorf("uninstall did not restore the user's own bytes:\n--- want ---\n%s\n--- got ---\n%s", before, stripped)
+	// Since #2171 the uninstall deletes the flag line rather than rewriting
+	// it to `= false` (3.1.4 warns about the key at any value), so the round
+	// trip restores the file exactly.
+	if string(after) != string(before) {
+		t.Errorf("uninstall did not restore the user's own bytes:\n--- want ---\n%s\n--- got ---\n%s", before, after)
 	}
 }

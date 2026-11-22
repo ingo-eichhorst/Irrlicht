@@ -395,6 +395,78 @@ func TestClearBoolIfPresent_SetsAnExistingKeyFalse(t *testing.T) {
 	}
 }
 
+// --- DeleteTopLevelKeyIfPresent (#2171) ---
+
+func TestDeleteTopLevelKeyIfPresent(t *testing.T) {
+	const key = "enable_experimental_hooks"
+	cases := []struct {
+		name, seed, want string
+		modified         bool
+	}{
+		{name: "true, between two keys", seed: "a = 1\n" + key + " = true\nb = 2\n", want: "a = 1\nb = 2\n", modified: true},
+		{name: "false is deleted too", seed: key + " = false\n[t]\nx = 1\n", want: "[t]\nx = 1\n", modified: true},
+		{name: "a trailing comment goes with its line", seed: "a = 1\n" + key + " = true # ours\n", want: "a = 1\n", modified: true},
+		{name: "indented", seed: "  " + key + " = true\na = 1\n", want: "a = 1\n", modified: true},
+		{name: "last line, no newline", seed: "a = 1\n" + key + " = true", want: "a = 1\n", modified: true},
+		{name: "the only line", seed: key + " = true\n", want: "", modified: true},
+		{name: "CRLF line endings", seed: "a = 1\r\n" + key + " = true\r\nb = 2\r\n", want: "a = 1\r\nb = 2\r\n", modified: true},
+		{name: "a multi-line value is deleted whole", seed: "a = 1\n" + key + " = [\n  1,\n  2,\n]\nb = 2\n", want: "a = 1\nb = 2\n", modified: true},
+		{name: "every duplicate copy", seed: key + " = true\na = 1\n" + key + " = false\n", want: "a = 1\n", modified: true},
+		{name: "absent", seed: "a = 1\n", want: "a = 1\n"},
+		{name: "a commented-out line is not the key", seed: "# " + key + " = true\n", want: "# " + key + " = true\n"},
+		{name: "the same key inside a table is not top-level", seed: "[t]\n" + key + " = true\n", want: "[t]\n" + key + " = true\n"},
+		{name: "a key that only starts with it", seed: key + "_more = true\n", want: key + "_more = true\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			modified, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
+			if err != nil || modified != tc.modified {
+				t.Fatalf("modified=%v err=%v, want %v/nil", modified, err, tc.modified)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeleteTopLevelKeyIfPresent_AbsentFileIsNotCreated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	modified, err := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
+	if err != nil || modified {
+		t.Fatalf("modified=%v err=%v, want false/nil", modified, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a delete created the file: stat err = %v", err)
+	}
+}
+
+func TestDeleteTopLevelKeyIfPresent_RefusalNamesTheDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	seed := "enable_experimental_hooks = true\nnote = \"\"\"\nmulti\n\"\"\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	modified, err := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
+	if !errors.Is(err, ErrUnsafe) || modified {
+		t.Fatalf("modified=%v err=%v, want a refusal wrapping ErrUnsafe and nothing written", modified, err)
+	}
+	if !strings.Contains(err.Error(), "deleting the top-level `enable_experimental_hooks` line") {
+		t.Errorf("refusal %q does not say which edit it wanted", err.Error())
+	}
+	if got, _ := os.ReadFile(path); string(got) != seed {
+		t.Errorf("a refused delete changed the file:\n%s", got)
+	}
+}
+
 // --- HasAnyHooksBlock ---
 
 func TestHasAnyHooksBlock(t *testing.T) {
@@ -618,8 +690,12 @@ func TestScannerRefusals_Corpus(t *testing.T) {
 			_, blocksErr := HookBlocks(path)
 			// Entry point 2: the top-level scalar scanner.
 			_, _, scalarErr := TopLevelBool(path, "enable_experimental_hooks")
+			// Entry point 3: the same scanner reached through the delete
+			// (#2171). No corpus document carries the key, so an accepted one
+			// is not rewritten.
+			_, deleteErr := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
 
-			for label, err := range map[string]error{"HookBlocks": blocksErr, "TopLevelBool": scalarErr} {
+			for label, err := range map[string]error{"HookBlocks": blocksErr, "TopLevelBool": scalarErr, "DeleteTopLevelKeyIfPresent": deleteErr} {
 				if tc.refuseNaming == "" {
 					if err != nil {
 						t.Errorf("%s refused a document it must accept: %v", label, err)

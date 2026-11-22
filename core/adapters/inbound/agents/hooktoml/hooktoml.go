@@ -1,12 +1,14 @@
 // Package hooktoml implements comment-preserving read-modify-write for a
-// narrow, purpose-built pair of TOML edits: appending/upgrading/removing ONE
-// sentinel-tagged [[hooks]] array-of-tables entry, and setting/clearing ONE
-// top-level boolean scalar. It is hookjson's sibling for TOML (issue #1718),
-// not a general TOML merge engine.
+// narrow, purpose-built set of TOML edits: appending/upgrading/removing ONE
+// sentinel-tagged [[hooks]] array-of-tables entry, and setting/clearing or
+// deleting ONE top-level scalar. It is hookjson's sibling for TOML (issue
+// #1718), not a general TOML merge engine.
 //
 // mistral-vibe's hooks.toml holds exactly one hook entry this daemon
-// installs (post_agent_turn), and its config.toml's enable_experimental_hooks
-// is exactly one boolean gate the entry cannot fire without — so a general
+// installs (post_agent_turn before Vibe 2.21.0, post_agent from it, #2171),
+// and its config.toml's enable_experimental_hooks is exactly one boolean gate
+// the older entry cannot fire without, and which the newer Vibe no longer
+// reads (so it is deleted rather than set false) — so a general
 // nested-structure differ (hookjson's shape, built for Claude Code's
 // event -> matcher-group -> entry nesting shared by claudecode/codex/
 // gemini-cli) would be solving a problem this adapter does not have. Per
@@ -841,6 +843,48 @@ func EnsureBoolTrue(path, key string, writeFile func(string, []byte) error) (boo
 // there is nothing to add). Returns whether it modified anything.
 func ClearBoolIfPresent(path, key string, writeFile func(string, []byte) error) (bool, error) {
 	return setTopLevelBool(path, key, false, writeFile)
+}
+
+// DeleteTopLevelKeyIfPresent removes key's top-level assignment from the
+// file at path: the whole logical line, through the closing line of a
+// multi-line value, and its line terminator. Every other byte is left alone,
+// and an absent file or key writes nothing. Returns whether it modified
+// anything.
+//
+// It exists for a key the CLI has dropped (#2171): Vibe 3.1.4 warns about
+// enable_experimental_hooks at every start whatever its value (measured in
+// that ticket's manual check), so setting it false would keep the warning.
+//
+// Every top-level copy is removed, not only the first. A duplicate key is
+// invalid TOML, but the caller's Verify reads "the key is still there" as
+// damage, and a repair that left a second copy behind would be re-run on
+// every #1372 pass without ever converging.
+func DeleteTopLevelKeyIfPresent(path, key string, writeFile func(string, []byte) error) (bool, error) {
+	orig, err := readOrEmpty(path)
+	if err != nil {
+		return false, err
+	}
+	out := orig
+	for {
+		start, end, found, err := topLevelKeyLine(path, out, key)
+		if err != nil {
+			if errors.Is(err, ErrUnsafe) {
+				err = fmt.Errorf("%w — the edit it wanted to make is deleting the top-level `%s` line", err, key)
+			}
+			return false, err
+		}
+		if !found {
+			break
+		}
+		if end < len(out) {
+			end++ // the line's own '\n'
+		}
+		out = spliceReplace(out, start, end, nil)
+	}
+	if len(out) == len(orig) {
+		return false, nil
+	}
+	return true, writeFile(path, out)
 }
 
 // TopLevelBool reports the top-level value of key: true/false if present

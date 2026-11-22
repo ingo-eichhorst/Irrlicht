@@ -486,7 +486,9 @@ func randomGlue(rng *rand.Rand) string {
 // subtree's comments go with it" here, because a scalar set/clear never
 // deletes a LINE, only rewrites the one line it targets (or adds one), so
 // nothing this generator places is ever a casualty the way an unrelated
-// [[hooks]] block's own comment is in the sibling property test above.
+// [[hooks]] block's own comment is in the sibling property test above. The
+// one edit that does delete a line, DeleteTopLevelKeyIfPresent (#2171), has
+// its own property below, graded byte-exact.
 func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 	const iterations = 2000
 	const seed = int64(17180002)
@@ -585,6 +587,122 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 	}
 
 	assertArrayAxisWasExercised(t, iterations, arraysSeen, preambleArraysSeen)
+}
+
+// TestDeleteTopLevelKey_PropertyRandomMutations grades
+// DeleteTopLevelKeyIfPresent (#2171) over genScalarDoc's documents, with the
+// target line additionally given what genScalarDoc never puts on it: an
+// indent, a trailing comment, and CRLF line endings for the whole document.
+//
+// The grade is byte-exact: the result must equal the input with exactly the
+// target line and its terminator cut out, which is stronger than the
+// snippet-survival check above, because it also catches an edit that leaves
+// every unrelated snippet in place but eats a blank line or a newline next to
+// the target. The second call must change nothing.
+func TestDeleteTopLevelKey_PropertyRandomMutations(t *testing.T) {
+	const iterations = 2000
+	const seed = int64(21710001)
+	rng := rand.New(rand.NewSource(seed))
+	const key = "enable_experimental_hooks"
+
+	arraysSeen, preambleArraysSeen, decorated, crlf := 0, 0, 0, 0
+	for i := 0; i < iterations; i++ {
+		_, startState, doc := genScalarDoc(rng, key)
+		if total, preamble := countGeneratedArrays(doc); total > 0 {
+			arraysSeen++
+			if preamble > 0 {
+				preambleArraysSeen++
+			}
+		}
+
+		want := doc
+		if startState != "absent" {
+			doc, want = decorateAndCut(rng, doc, key+" = "+startState, &decorated)
+		}
+		if rng.Intn(4) == 0 {
+			doc = bytes.ReplaceAll(doc, []byte("\n"), []byte("\r\n"))
+			want = bytes.ReplaceAll(want, []byte("\n"), []byte("\r\n"))
+			crlf++
+		}
+
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if len(doc) > 0 {
+			if err := os.WriteFile(path, doc, 0o600); err != nil {
+				t.Fatalf("iter %d (seed %d): seed write: %v", i, seed, err)
+			}
+		}
+		fail := func(format string, args ...interface{}) {
+			t.Helper()
+			t.Fatalf("iteration %d (seed %d), startState=%s:\ndocument:\n%q\n%s",
+				i, seed, startState, doc, fmt.Sprintf(format, args...))
+		}
+
+		modified, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
+		if err != nil {
+			fail("unexpected refusal: %v", err)
+		}
+		if modified != (startState != "absent") {
+			fail("modified=%v, want %v", modified, startState != "absent")
+		}
+		result, err := os.ReadFile(path)
+		if len(doc) == 0 {
+			if !os.IsNotExist(err) {
+				fail("a delete on an absent file created it (stat err %v)", err)
+			}
+			continue
+		}
+		if !bytes.Equal(result, want) {
+			fail("result is not the input minus the one line:\ngot  %q\nwant %q", result, want)
+		}
+		if _, found, err := TopLevelBool(path, key); err != nil || found {
+			fail("after the delete: found=%v err=%v, want false/nil", found, err)
+		}
+		modified2, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
+		if err != nil || modified2 {
+			fail("second delete: modified=%v err=%v — not idempotent", modified2, err)
+		}
+		if again, _ := os.ReadFile(path); !bytes.Equal(again, result) {
+			fail("second delete changed bytes")
+		}
+	}
+
+	assertArrayAxisWasExercised(t, iterations, arraysSeen, preambleArraysSeen)
+	// The decoration and CRLF axes are what this property adds over the
+	// scalar one above; a generator change that stopped producing them would
+	// leave the property green while grading neither.
+	if decorated < iterations/10 || crlf < iterations/10 {
+		t.Fatalf("decorated=%d crlf=%d of %d iterations — an axis this property exists for was barely exercised",
+			decorated, crlf, iterations)
+	}
+}
+
+// decorateAndCut finds the one occurrence of line (which genScalarDoc writes
+// once, terminated by "\n" unless it ends the document), maybe indents it and
+// maybe appends a comment, and returns the decorated document together with
+// that document minus the whole decorated line and its terminator.
+func decorateAndCut(rng *rand.Rand, doc []byte, line string, decorated *int) (withLine, without []byte) {
+	idx := bytes.Index(doc, []byte(line))
+	if idx < 0 || bytes.Count(doc, []byte(line)) != 1 {
+		panic(fmt.Sprintf("generator wrote %q %d times, want exactly once", line, bytes.Count(doc, []byte(line))))
+	}
+	indent, comment := "", ""
+	if rng.Intn(3) == 0 {
+		indent = "  "
+	}
+	if rng.Intn(3) == 0 {
+		comment = "  # set by hand"
+	}
+	if indent != "" || comment != "" {
+		*decorated++
+	}
+	before, after := doc[:idx], doc[idx+len(line):]
+	withLine = append(append(append([]byte{}, before...), indent+line+comment...), after...)
+	rest := after
+	if len(rest) > 0 && rest[0] == '\n' {
+		rest = rest[1:]
+	}
+	without = append(append([]byte{}, before...), rest...)
+	return withLine, without
 }
 
 func genScalarDoc(rng *rand.Rand, key string) (unrelated []string, startState string, doc []byte) {

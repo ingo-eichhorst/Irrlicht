@@ -226,7 +226,9 @@ func TestUninstall_ClearsTheFlagOnlyWhenNoOtherHooksRemain(t *testing.T) {
 }
 
 // TestUninstall_ClearsTheFlagWhenNoHooksRemain is the vacuity guard for the
-// test above: when OUR entry was the only one, the flag IS cleared.
+// test above: when OUR entry was the only one, the flag IS cleared — since
+// #2171 by deleting its line (TestUninstall_RemovesTheFlagLineRatherThan
+// WritingFalse pins that form).
 func TestUninstall_ClearsTheFlagWhenNoHooksRemain(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(vibeHomeEnvVar, "")

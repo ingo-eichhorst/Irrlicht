@@ -1,9 +1,15 @@
 // hooks.go provides the HTTP handler for receiving Mistral Vibe hook events
 // (issue #1718, epic #1355).
 //
-// Exactly one event is installed: post_agent_turn, dispatched to
-// HandleStopHook with an empty text and a false waitingCue. Vibe's own
-// payload for this event carries no message content at all — source-read
+// Exactly one event is installed: post_agent_turn on Vibe 2.19.1 up to
+// 2.21.0, and the same turn-end event under its newer name, post_agent, from
+// 2.21.0 on (#2171, see hookinstaller.go). Both are dispatched to
+// HandleStopHook with an empty text and a false waitingCue. The post_agent
+// payload has the same fields as post_agent_turn's in 2.21.0 (the wire
+// protocol its bundled vibe/core/skills/builtins/vibe.py documents, and its
+// agent_loop_hooks.py's _hook_session_context, both source-read; not
+// live-fired). Vibe 2.19.1's payload for post_agent_turn carries no message
+// content at all — source-read
 // (vibe/core/hooks/models.go: PostAgentTurnInvocation adds nothing to the
 // shared HookSessionContext) AND live-fired against the installed 2.19.1
 // CLI during this issue's audit, which confirmed the delivered body is
@@ -172,8 +178,8 @@ func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.
 	}
 
 	switch payload.HookEventName {
-	case hookEventPostAgentTurn:
-		log.LogInfo(logComponentHookReceiver, sessionID, "received post_agent_turn")
+	case hookEventPostAgentTurn, hookEventPostAgent:
+		log.LogInfo(logComponentHookReceiver, sessionID, "received "+payload.HookEventName)
 		target.HandleStopHook(sessionID, transcriptPath, "", false)
 	default:
 		// Unrecognized hook event — accept but ignore, counted per name and

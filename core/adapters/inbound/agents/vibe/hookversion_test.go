@@ -1,10 +1,12 @@
 // hookversion_test.go wires the Mistral Vibe hooks permission into the
 // shared issue #1365 contract.
 //
-// Like geminicli, this adapter declares no Observed version source: nothing
-// in a Vibe transcript's meta.json sidecar carries a CLI version field this
-// adapter's parser reads, so the gate falls straight through to Probe
-// (`vibe --version`), which cliversion runs itself.
+// Since #2171 the permission declares two variants, and the gate is their
+// envelope. Its Observed source is uv's dist-info folder name
+// (installedVersionFromUvTool, graded in hookvariant_test.go), not a
+// transcript field: nothing in a Vibe transcript's meta.json sidecar carries
+// a CLI version field this adapter's parser reads. The probe
+// (`vibe --version`) is the fallback.
 package vibe
 
 import (
@@ -15,12 +17,38 @@ import (
 )
 
 func TestHooksPermission_DeclaresVersionGate(t *testing.T) {
+	// No Installed or Since: with variants declared, the contract reads each
+	// variant's own Events and Since, and refuses a wiring that passes either.
 	contracttesting.AssertHookVersionGate(t, contracttesting.HookVersionGate{
 		Agent:         Agent(),
 		PermissionKey: PermissionKeyHooks,
-		Installed:     installedHookEvents,
-		Since:         map[string]string{hookEventPostAgentTurn: minVibeVersion},
 	})
+}
+
+// TestHooksGate_SelectsTheArtifactByVersion pins the cutover the two
+// variants declare (#2171): 2.20.x selects the legacy artifact and 2.21.0
+// the current one, so the boundary sits between two adjacent releases whose
+// bundled hook references disagree.
+func TestHooksGate_SelectsTheArtifactByVersion(t *testing.T) {
+	w := hooksDeclaration(t).Writes
+	for version, want := range map[string]string{
+		"2.19.1": hookEventPostAgentTurn,
+		"2.20.9": hookEventPostAgentTurn,
+		"2.21.0": hookEventPostAgent,
+		"3.1.4":  hookEventPostAgent,
+	} {
+		v, bound, why := w.SelectVariant(version)
+		if v == nil {
+			t.Errorf("Vibe %s selects no artifact (bound %d): %s", version, bound, why)
+			continue
+		}
+		if len(v.Events) != 1 || v.Events[0] != want {
+			t.Errorf("Vibe %s selects the artifact for %v, want %s", version, v.Events, want)
+		}
+	}
+	if v, bound, _ := w.SelectVariant("2.19.0"); v != nil || bound != agent.BelowFloor {
+		t.Errorf("Vibe 2.19.0: variant=%v bound=%d, want none, BelowFloor", v, bound)
+	}
 }
 
 // hooksVersionGate returns the declared gate, read off the real registration

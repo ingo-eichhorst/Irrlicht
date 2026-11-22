@@ -34,7 +34,7 @@ func TestHookEntry_IsABeaconCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving the beacon command: %v", err)
 	}
-	block := vibeHookEntryBlock(command)
+	block := vibeHookEntryBlock(hookEventPostAgent, command)
 	got, ok := hooktoml.FieldValue(block, "command")
 	if !ok || got != command {
 		t.Errorf("command field = %q, ok=%v, want %q, true", got, ok, command)
@@ -82,7 +82,20 @@ func vibeEndpointOfRaw(entry []byte) string {
 	return v
 }
 
+// TestHookEndpointFollowsBindAddr wires the contract once per artifact
+// (#2171), the way opencode's hookport_test.go does for its two plugins: each
+// variant's installer must write an address-free delivery and rewrite a
+// foreign install of its OWN shape in place.
 func TestHookEndpointFollowsBindAddr(t *testing.T) {
+	assertEndpointFollowsBindAddr(t, hookEventPostAgentTurn, installedHookEvents, EnsureHooksInstalled)
+}
+
+func TestHookEndpointFollowsBindAddr_Current(t *testing.T) {
+	assertEndpointFollowsBindAddr(t, hookEventPostAgent, installedHookEventsCurrent, EnsureHooksInstalledCurrent)
+}
+
+func assertEndpointFollowsBindAddr(t *testing.T, hookType string, events []string, ensure func() (bool, error)) {
+	t.Helper()
 	// Checked up front so a resolution failure reads as itself rather than
 	// as the empty-delivery wiring error assertDeliveryIsOurs would report.
 	if _, err := hookbeacon.InstalledCommand(AdapterName); err != nil {
@@ -102,7 +115,7 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 			return path
 		},
 		Sentinel:      hookbeacon.Sentinel(AdapterName),
-		Events:        installedHookEvents,
+		Events:        events,
 		Entry:         vibeEntryNow,
 		EndpointOf:    vibeEndpointOfMap,
 		ReadEntries:   vibeReadEntries,
@@ -113,7 +126,7 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 		// (it only reads hooks.toml back through ReadEntries) but which is
 		// exactly the production code path a fake substitute would not
 		// exercise.
-		EnsureInstalled: EnsureHooksInstalled,
+		EnsureInstalled: ensure,
 		Uninstall:       UninstallHooks,
 		// ForeignInstall seeds an entry naming a DIFFERENT (nonexistent)
 		// irrlicht binary — the address-free counterpart of seeding a
@@ -129,7 +142,7 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			return hooktoml.EnsureInstalled(vibeHookConfig(path, command))
+			return hooktoml.EnsureInstalled(vibeHookConfig(path, hookType, command))
 		},
 	})
 }
