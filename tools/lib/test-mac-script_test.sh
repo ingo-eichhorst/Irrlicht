@@ -96,7 +96,7 @@ for seam in IRRLICHT_TESTMAC_REPO_ROOT IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTM
     exit 2
   fi
 done
-for seam in IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP IRRLICHT_TESTMAC_PORT; do
+for seam in IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP IRRLICHT_TESTMAC_PORT IRRLICHT_TESTMAC_PLISTBUDDY; do
   if ! grep -q -- "$seam" "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh"; then
     echo "FAIL: $NAME — REFUSING TO RUN: restore-prod.sh no longer honours \$$seam." >&2
     echo "      Without it the restore cases below delete the real /Applications/Irrlicht.app." >&2
@@ -168,6 +168,13 @@ new_env() {
   echo 'PRODUCTION' > "$app/Contents/Frameworks/Sparkle.framework/marker"
   echo 'PRODUCTION' > "$app/Contents/Resources/AppIcon.icns"
   echo '<plist/>'   > "$app/Contents/Info.plist"
+  # The installed bundle's CFBundleShortVersionString, held in a sidecar the
+  # plistbuddy stub below reads (`Print`) and writes (`Set`). A release-shaped
+  # value by default; a case that wants the dev marker or an unreadable plist
+  # says so. Stateful on purpose: the version test-mac.sh STAMPS is the one a
+  # later run (or restore-prod.sh) READS, so a case can prove the writer and
+  # the reader agree instead of seeding the reader's expectation by hand.
+  echo '0.9.9'      > "$app/Contents/Info.plist.CFBundleShortVersionString"
 
   # --- stubs ---
   local b="$root/bin"
@@ -263,12 +270,37 @@ case "$1" in
 esac
 exit 0
 STUB
-  # security: no "Irrlicht Dev" identity, so the ad-hoc signing branch is taken.
-  printf '#!/bin/sh\nexit 0\n' > "$b/security"
+  # security: `find-identity -v -p codesigning` prints $STUB_IDENTITIES —
+  # empty by default, so the ad-hoc signing branch is taken. A case that wants
+  # an identity passes lines in the real tool's shape:
+  #     1) <40 hex> "Irrlicht Dev"
+  printf '#!/bin/sh\n[ -n "${STUB_IDENTITIES:-}" ] && printf "%%s\\n" "$STUB_IDENTITIES"\nprintf "     0 valid identities found\\n"\nexit 0\n' > "$b/security"
   # sleep: instant, so the real polling loops run at full fidelity in no time.
   printf '#!/bin/sh\nexit 0\n' > "$b/sleep"
   # PlistBuddy is reached by absolute path, so it gets a seam of its own.
-  printf '#!/bin/sh\nprintf "plistbuddy %%s\\n" "$*" >>"$STUB_LOG"\nexit 0\n' > "$root/plistbuddy"
+  # `Set :KEY VALUE` writes VALUE to the sidecar <plist>.KEY and `Print :KEY`
+  # reads it back, so what one run stamps is what the next run reads. A
+  # missing sidecar fails the way the real tool fails on a missing file:
+  # exit 1 WITH TEXT ON STDOUT (measured: `PlistBuddy -c "Print :K" <missing>`
+  # prints "File Doesn't Exist, Will Create: …" to stdout, rc 1). A reader that
+  # ignores the status therefore gets a non-empty, non-"dev" string — which is
+  # exactly the input the release check must not mistake for a release.
+  cat > "$root/plistbuddy" <<'STUB'
+#!/bin/sh
+printf 'plistbuddy %s\n' "$*" >>"$STUB_LOG"
+cmd="$2"; plist="$3"
+case "$cmd" in
+  "Set :"*)
+    kv="${cmd#Set :}"
+    printf '%s\n' "${kv#* }" > "$plist.${kv%% *}" ;;
+  "Print :"*)
+    key="${cmd#Print :}"
+    if [ -f "$plist.$key" ]; then cat "$plist.$key"; exit 0; fi
+    printf "File Doesn't Exist, Will Create: %s\n" "$plist"
+    exit 1 ;;
+esac
+exit 0
+STUB
   chmod +x "$b"/* "$root/plistbuddy"
 
   : > "$root/stub.log"
@@ -308,6 +340,18 @@ flat() { printf '%s' "$1" | tr '\n' ' '; }
 sentinel_intact() { [[ "$(cat "$1/Applications/Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null)" == PRODUCTION ]]; }
 sparkle_intact()  { [[ "$(cat "$1/Applications/Irrlicht.app/Contents/Frameworks/Sparkle.framework/marker" 2>/dev/null)" == PRODUCTION ]]; }
 logged()          { grep -qF -- "$2" "$1/stub.log" 2>/dev/null; }
+version_of()      { cat "$1/Applications/Irrlicht.app/Contents/Info.plist.CFBundleShortVersionString" 2>/dev/null; }
+backup_holds()    { cat "$1/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null; }
+sign_line()       { grep '^codesign --force' "$1/stub.log" 2>/dev/null | head -1; }
+
+# Signing identities in the shape `security find-identity -v -p codesigning`
+# prints them. "Irrlicht Dev" is listed FIRST, as it is on the maintainer's
+# machine, so a case that gets the Developer ID identity proves a preference
+# rather than "whichever line came first".
+DEVID_NAME='Developer ID Application: Test Dev (TEAMID1234)'
+ID_IRRLICHT_DEV='  1) 1111111111111111111111111111111111111111 "Irrlicht Dev"'
+ID_DEVID="  2) 2222222222222222222222222222222222222222 \"$DEVID_NAME\""
+ID_BOTH="$ID_IRRLICHT_DEV"$'\n'"$ID_DEVID"
 
 # ─── happy: the whole run completes — the vacuity guard for everything else ──
 # Without this, every abort case could be passing because the fixture is
@@ -393,6 +437,160 @@ case_backup_refuse() {
     fail "GATE backup-refusal: it refused, but the only remaining copy of the bundle was overwritten anyway"
   else
     pass "GATE backup-refusal: dev-signed app with no backup ⇒ refuse, with the last copy left intact"
+  fi
+}
+
+# ─── GATE 3c: a Developer-ID-signed DEV build is not "production" ───────────
+# Dev builds are signed with the Developer ID identity when one is installed,
+# so they satisfy the relay-token keychain item's requirement. That makes the
+# signature useless for telling an untouched release from the dev build a
+# previous replace-mode run left behind. This case runs test-mac.sh TWICE on
+# one fixture, the way it happens on a real machine: the first run backs up
+# the release and installs a dev build, and the second must recognise that
+# build by the version the first one stamped and leave the backup alone.
+# Signature-only detection refreshes the backup FROM THE DEV BUILD on the
+# second run, destroying the only copy of production restore-prod.sh has.
+case_backup_dev_rerun() {
+  local R BACKED; local -a devid
+  R=$(new_env)   # no backup yet; the installed app is release 0.9.9
+  devid=(STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME" STUB_IDENTITIES="$ID_DEVID")
+  run_script "$R" "${devid[@]}" -- replace full
+  if [[ $ST -ne 0 ]]; then
+    fail "GATE dev-marker: COULD NOT LOOK — the first run (release installed, no backup) must complete, but it exited $ST: $(flat "$OUT")"
+    return
+  elif [[ "$(backup_holds "$R")" != PRODUCTION ]]; then
+    fail "GATE dev-marker: COULD NOT LOOK — the first run did not back up the untouched release (backup holds '$(backup_holds "$R")'), so the second run proves nothing"
+    return
+  elif [[ "$(version_of "$R")" != dev ]]; then
+    fail "GATE dev-marker: the first run installed a dev build but the bundle's CFBundleShortVersionString reads '$(version_of "$R")', not 'dev' — nothing marks it as a dev build"
+    return
+  fi
+  run_script "$R" "${devid[@]}" -- replace full
+  BACKED="$(backup_holds "$R")"
+  if [[ $ST -ne 0 ]]; then
+    fail "GATE dev-marker: the second run (dev build installed, backup present) must complete, but it exited $ST: $(flat "$OUT")"
+  elif [[ "$BACKED" != PRODUCTION ]]; then
+    fail "GATE dev-marker: a Developer-ID-signed dev build was backed up as production (backup now holds '$BACKED') — restore-prod.sh would reinstall the dev build"
+  else
+    pass "GATE dev-marker: a Developer-ID-signed dev build left by an earlier run keeps the release backup intact"
+  fi
+}
+
+# ...and an unreadable version is NOT a release. Fail closed: a check that
+# cannot read its input checks more, never less (AGENTS.md). The stub fails the
+# way the real PlistBuddy does — rc 1 with text on stdout — so a reader that
+# ignores the status sees a non-empty, non-"dev" string and calls it a release.
+case_backup_version_unreadable() {
+  local R; R=$(new_env)   # no backup
+  rm -f "$R/Applications/Irrlicht.app/Contents/Info.plist.CFBundleShortVersionString"
+  run_script "$R" STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE dev-marker: an unreadable version was treated as a release — with no backup the script must refuse, but it backed up and overwrote the bundle and exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"no backup exists"* ]]; then
+    fail "GATE dev-marker: refused (exit $ST) on an unreadable version but not with the no-backup message: $(flat "$OUT")"
+  elif ! sentinel_intact "$R"; then
+    fail "GATE dev-marker: it refused on an unreadable version, but the bundle was overwritten anyway"
+  else
+    pass "GATE dev-marker: ...and an unreadable version counts as NOT a release (fail closed)"
+  fi
+}
+
+# ─── GATE 3d: the dev marker is the FIRST write into the bundle ─────────────
+# A run that fails part-way through the install leaves a dev binary inside the
+# production bundle. If the version were stamped last, that bundle would still
+# read as a release, and the next run would back it up as production. Here the
+# Sparkle swap fails (its parent directory is read-only) AFTER the executable
+# has been replaced.
+case_stamp_first() {
+  local R FW; R=$(new_env); with_backup "$R"
+  FW="$R/Applications/Irrlicht.app/Contents/Frameworks"
+  chmod 555 "$FW"
+  run_script "$R" -- replace full
+  chmod 755 "$FW"   # or the EXIT trap's rm -rf cannot clean the fixture up
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE dev-marker-first: COULD NOT LOOK — the install was meant to fail at the Sparkle swap (read-only Frameworks/), but the run exited 0: $(flat "$OUT")"
+  elif [[ "$(cat "$R/Applications/Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null)" != FRESH-BUILD ]]; then
+    fail "GATE dev-marker-first: COULD NOT LOOK — the run failed before the executable was replaced, so it never reached the half-installed state this case is about: $(flat "$OUT")"
+  elif [[ "$(version_of "$R")" != dev ]]; then
+    fail "GATE dev-marker-first: the install failed with a dev binary in the bundle, which still reads as release '$(version_of "$R")' — the next run would back the half-installed dev bundle up as production"
+  else
+    pass "GATE dev-marker-first: a run that fails mid-install leaves the bundle already marked 'dev'"
+  fi
+}
+
+# ─── Signing: the identity, in order of preference ─────────────────────────
+# A Developer ID identity is what makes a dev build satisfy the relay-token
+# keychain item's requirement (identifier + Developer ID chain + team OU), so
+# it wins over "Irrlicht Dev", which wins over ad-hoc.
+case_sign_identity() {
+  local R L
+  R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_IDENTITIES="$ID_BOTH" -- replace full
+  L="$(sign_line "$R")"
+  if [[ $ST -ne 0 || -z "$L" ]]; then
+    fail "SIGN identity: COULD NOT LOOK — the run exited $ST and the signing call was '${L:-<none>}': $(flat "$OUT")"
+    return
+  fi
+  [[ "$L" == *"--sign $DEVID_NAME "* ]] \
+    && pass "SIGN identity: a Developer ID identity is preferred over \"Irrlicht Dev\", even when listed second" \
+    || fail "SIGN identity: a Developer ID identity exists but the build was signed otherwise — it fails the relay-token keychain item's requirement and every token read prompts: $L"
+  [[ "$L" == *"--timestamp=none"* ]] \
+    && pass "SIGN identity: ...without asking Apple's timestamp server" \
+    || fail "SIGN identity: no --timestamp=none — a Developer ID signature then requests a secure timestamp over the network (measured), so an offline rebuild fails AFTER the bundle was overwritten: $L"
+  [[ "$OUT" == *"Signed $R/Applications/Irrlicht.app with: $DEVID_NAME"* ]] \
+    && pass "SIGN identity: ...and the run says which identity signed it" \
+    || fail "SIGN identity: the run never printed which identity signed the build: $(flat "$OUT")"
+
+  R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_IDENTITIES="$ID_IRRLICHT_DEV" -- replace full
+  L="$(sign_line "$R")"
+  [[ "$L" == *"--sign Irrlicht Dev "* ]] \
+    && pass "SIGN identity: without a Developer ID identity, \"Irrlicht Dev\" is used" \
+    || fail "SIGN identity: only \"Irrlicht Dev\" exists but it was not used — TCC grants reset on every rebuild: ${L:-<no signing call>}"
+
+  R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  L="$(sign_line "$R")"
+  [[ "$L" == *"--sign - "* ]] \
+    && pass "SIGN identity: with no identity at all, the build is signed ad-hoc" \
+    || fail "SIGN identity: no identity exists but the build was not signed ad-hoc: ${L:-<no signing call>}"
+}
+
+# IRRLICHT_DEV_SIGN_IDENTITY overrides the preference — including "-" for an
+# explicit ad-hoc build.
+case_sign_override() {
+  local R L
+  R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_IDENTITIES="$ID_BOTH" IRRLICHT_DEV_SIGN_IDENTITY="Irrlicht Dev" -- replace full
+  L="$(sign_line "$R")"
+  [[ "$L" == *"--sign Irrlicht Dev "* ]] \
+    && pass "SIGN override: IRRLICHT_DEV_SIGN_IDENTITY picks the identity over the Developer ID default" \
+    || fail "SIGN override: IRRLICHT_DEV_SIGN_IDENTITY='Irrlicht Dev' was ignored: ${L:-<no signing call>} $(flat "$OUT")"
+  R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_IDENTITIES="$ID_BOTH" IRRLICHT_DEV_SIGN_IDENTITY="-" -- replace full
+  L="$(sign_line "$R")"
+  [[ "$L" == *"--sign - "* ]] \
+    && pass "SIGN override: ...and '-' forces an ad-hoc signature" \
+    || fail "SIGN override: IRRLICHT_DEV_SIGN_IDENTITY='-' did not produce an ad-hoc signature: ${L:-<no signing call>} $(flat "$OUT")"
+}
+
+# An override naming an identity the keychain does not have is refused BEFORE
+# anything is killed or written — not discovered by codesign after the
+# production bundle has already been overwritten.
+case_sign_override_missing() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_IDENTITIES="$ID_DEVID" \
+    IRRLICHT_DEV_SIGN_IDENTITY="Developer ID Application: Nobody (XXXXXXXXXX)" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "SIGN override-missing: an override naming no installed identity must refuse, but the run exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"IRRLICHT_DEV_SIGN_IDENTITY"* ]]; then
+    fail "SIGN override-missing: it failed (exit $ST) without naming IRRLICHT_DEV_SIGN_IDENTITY: $(flat "$OUT")"
+  elif logged "$R" 'pkill '; then
+    fail "SIGN override-missing: it refused only after killing the running app/daemon: $(flat "$(cat "$R/stub.log")")"
+  elif ! sentinel_intact "$R"; then
+    fail "SIGN override-missing: it refused, but the bundle had already been overwritten"
+  else
+    pass "SIGN override-missing: an unknown identity is refused before anything is killed or written"
   fi
 }
 
@@ -751,6 +949,7 @@ run_restore() {
     STUB_LOG="$root/stub.log" \
     IRRLICHT_TESTMAC_MAIN_REPO="$root/main" \
     IRRLICHT_TESTMAC_PROD_APP="$root/Applications/Irrlicht.app" \
+    IRRLICHT_TESTMAC_PLISTBUDDY="$root/plistbuddy" \
     IRRLICHT_TESTMAC_PORT=7837 \
     ${1+"$@"} \
     bash "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh" 2>&1)
@@ -784,6 +983,57 @@ case_restore_refuse() {
   fi
 }
 
+# A dev build signed with the Developer ID identity is NOT production, so with
+# no backup restore-prod.sh cannot put production back and must say so. The
+# signature-only check reported "nothing to restore" here and relaunched the
+# dev build as if it were production.
+case_restore_dev_marker() {
+  local R; R=$(new_env)   # no backup
+  echo dev > "$R/Applications/Irrlicht.app/Contents/Info.plist.CFBundleShortVersionString"
+  run_restore "$R" STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME"
+  if [[ $ST -eq 0 ]]; then
+    fail "restore-prod dev-marker: a Developer-ID-signed dev build (version 'dev') with no backup was reported as production — the user is left running the dev build: $(flat "$OUT")"
+  elif [[ "$OUT" != *"Cannot confirm production is intact"* ]]; then
+    fail "restore-prod dev-marker: refused (exit $ST) but not with the cannot-confirm message: $(flat "$OUT")"
+  else
+    pass "restore-prod dev-marker: a Developer-ID-signed dev build with no backup ⇒ refuse"
+  fi
+}
+
+case_restore_version_unreadable() {
+  local R; R=$(new_env)   # no backup
+  rm -f "$R/Applications/Irrlicht.app/Contents/Info.plist.CFBundleShortVersionString"
+  run_restore "$R" STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME"
+  if [[ $ST -eq 0 ]]; then
+    fail "restore-prod dev-marker: an unreadable version was treated as production ('nothing to restore') — fail-open: $(flat "$OUT")"
+  elif [[ "$OUT" != *"Cannot confirm production is intact"* ]]; then
+    fail "restore-prod dev-marker: refused (exit $ST) on an unreadable version but not with the cannot-confirm message: $(flat "$OUT")"
+  else
+    pass "restore-prod dev-marker: ...and an unreadable version counts as NOT production (fail closed)"
+  fi
+}
+
+# The writer and the reader are two scripts. Seeding "dev" by hand (above)
+# cannot catch them drifting apart, so here test-mac.sh stamps the bundle and
+# restore-prod.sh reads it — with the backup gone, as after a `.build` wipe.
+case_restore_after_dev_run() {
+  local R; R=$(new_env)   # release installed, no backup
+  run_script "$R" STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME" STUB_IDENTITIES="$ID_DEVID" -- replace full
+  if [[ $ST -ne 0 ]]; then
+    fail "restore-prod after-dev-run: COULD NOT LOOK — the test-mac.sh run exited $ST: $(flat "$OUT")"
+    return
+  fi
+  rm -rf "$R/main/.build/irrlicht-prod-backup"
+  run_restore "$R" STUB_CODESIGN_AUTHORITY="Authority=$DEVID_NAME"
+  if [[ $ST -eq 0 ]]; then
+    fail "restore-prod after-dev-run: restore-prod.sh does not recognise the marker test-mac.sh stamps — it called the dev build production: $(flat "$OUT")"
+  elif [[ "$OUT" != *"Cannot confirm production is intact"* ]]; then
+    fail "restore-prod after-dev-run: refused (exit $ST) but not with the cannot-confirm message: $(flat "$OUT")"
+  else
+    pass "restore-prod after-dev-run: the marker test-mac.sh writes is the one restore-prod.sh reads"
+  fi
+}
+
 # ─── The gate that runs this file must fire on this file's SUBJECT ──────────
 # tools/preflight.sh --changed scopes the `tools` gate by a trigger regex. The
 # script under test lives outside tools/, so without an explicit alternative a
@@ -813,11 +1063,14 @@ case_preflight_trigger() {
 }
 
 # ─── dispatch ───────────────────────────────────────────────────────────────
-CASES=(happy reachability app-exit backup-refresh backup-refuse build-output
+CASES=(happy reachability app-exit backup-refresh backup-refuse
+       backup-dev-rerun backup-version-unreadable stamp-first build-output
        enum kill-order freshness freshness-vacuous swift-status
        target-daemon target-macos target-macos-nodaemon
-       daemon-launch separate-full sign-order install-details abort-hint
-       seams stub-fidelity restore-signed restore-refuse preflight-trigger)
+       daemon-launch separate-full sign-order sign-identity sign-override
+       sign-override-missing install-details abort-hint
+       seams stub-fidelity restore-signed restore-refuse restore-dev-marker
+       restore-version-unreadable restore-after-dev-run preflight-trigger)
 
 echo "== $NAME: $SCRIPT${CASE_FILTER:+ (case: $CASE_FILTER)} =="
 

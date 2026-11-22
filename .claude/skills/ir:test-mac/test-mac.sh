@@ -27,6 +27,13 @@
 #           macos    — rebuild + relaunch the app only, against whatever daemon
 #                     is already up. It does NOT start one.
 #
+#   SIGNING the app is signed with, in order of preference: the identity named
+#           by IRRLICHT_DEV_SIGN_IDENTITY ("-" = ad-hoc), else the first
+#           "Developer ID Application:" identity in the keychain, else the
+#           self-signed "Irrlicht Dev" (tools/dev-sign-setup.sh), else ad-hoc.
+#           Only a Developer ID signature satisfies the relay-token keychain
+#           item's requirement, so only it reads the token without a prompt.
+#
 # WHY THIS IS A SCRIPT (#1855). The procedure used to live as nine fenced bash
 # blocks in SKILL.md that an agent copied out and ran one at a time. Every step
 # branches on MODE/TARGET/PORT/DEV_HOME/SOCK, and each fenced block runs in a
@@ -105,6 +112,12 @@ DEBUG_BIN="$DEBUG_DIR/Irrlicht"
 DEBUG_SPARKLE="$DEBUG_DIR/Sparkle.framework"
 ENTITLEMENTS="$SWIFT_SRC_DIR/Resources/Irrlicht-dev.entitlements"
 NL=$'\n'   # line-start anchor for the in-shell codesign match below
+# The CFBundleShortVersionString every dev install stamps into the bundle. It
+# is the ONLY thing that tells a dev build from an untouched release once both
+# carry a Developer ID signature (step 5). restore-prod.sh reads the same
+# literal; tools/lib/test-mac-script_test.sh's restore-after-dev-run case runs
+# this script and then that one to prove the two still agree.
+DEV_VERSION_MARKER="dev"
 
 # ─── Step 0c: everything the two axes derive ───────────────────────────────
 if [[ "$MODE" == "replace" ]]; then
@@ -146,6 +159,54 @@ on_exit() {
 trap on_exit EXIT
 
 echo "MODE=$MODE TARGET=$TARGET PORT=$PORT DEV_HOME=${DEV_HOME:-<production>}"
+
+# ─── Step 0d: the signing identity, resolved BEFORE anything is touched ─────
+# Preference: IRRLICHT_DEV_SIGN_IDENTITY ("-" = ad-hoc) > the first
+# "Developer ID Application:" identity > the self-signed "Irrlicht Dev" >
+# ad-hoc. Developer ID comes first because the relay token's keychain item
+# (service ai.irrlicht.relay) trusts the release app by REQUIREMENT —
+# identifier io.irrlicht.app, an Apple Developer ID chain, and the team OU —
+# and only a Developer ID signature satisfies it. Any other signature makes
+# every read of the token raise a keychain prompt. It also gives the dev build
+# the release's designated requirement, which is what TCC grants key on
+# (measured: `codesign -dr -` on a scratch bundle signed this way printed the
+# installed release's designated requirement verbatim).
+#
+# Resolved here rather than at the signing step so a bad override is refused
+# before the running app is killed or the production bundle is overwritten,
+# not discovered by codesign afterwards.
+#
+# Matched in-shell, not piped, for the same reason as the codesign check in
+# step 5: a keychain with many identities would eventually outgrow the pipe
+# buffer, and the failure mode is silent — the match fails and the build
+# drops to a weaker signature. Parameter expansion runs no second process.
+if want_app; then
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  SIGN_FALLBACK_NOTE=""
+  if [[ -n "${IRRLICHT_DEV_SIGN_IDENTITY:-}" ]]; then
+    SIGN_IDENTITY="$IRRLICHT_DEV_SIGN_IDENTITY"
+    if [[ "$SIGN_IDENTITY" != "-" && "$IDENTITIES" != *"$SIGN_IDENTITY"* ]]; then
+      echo "ERROR: IRRLICHT_DEV_SIGN_IDENTITY='$SIGN_IDENTITY' matches no valid codesigning identity" >&2
+      echo "       (security find-identity -v -p codesigning). Unset it, or use '-' for ad-hoc." >&2
+      exit 1
+    fi
+  elif [[ "$IDENTITIES" == *'"Developer ID Application: '* ]]; then
+    SIGN_IDENTITY="${IDENTITIES#*\"Developer ID Application: }"   # → "<name> (<team>)\" …rest"
+    SIGN_IDENTITY="Developer ID Application: ${SIGN_IDENTITY%%\"*}"
+  elif [[ "$IDENTITIES" == *'"Irrlicht Dev"'* ]]; then
+    SIGN_IDENTITY="Irrlicht Dev"
+    SIGN_FALLBACK_NOTE="with the self-signed \"Irrlicht Dev\""
+  else
+    SIGN_IDENTITY="-"
+    SIGN_FALLBACK_NOTE="ad-hoc (TCC grants reset on every rebuild; run tools/dev-sign-setup.sh for a stable identity)"
+  fi
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then SIGN_LABEL="ad-hoc (-)"; else SIGN_LABEL="$SIGN_IDENTITY"; fi
+  echo "Signing identity: $SIGN_LABEL"
+  if [[ -n "$SIGN_FALLBACK_NOTE" ]]; then
+    echo "NOTE: no Developer ID identity found — signing $SIGN_FALLBACK_NOTE. This build fails the relay-token"
+    echo "      keychain item's requirement, so every token read will raise a keychain prompt."
+  fi
+fi
 
 # ─── Step 1: build the Go daemon ───────────────────────────────────────────
 # The daemon resolves the dashboard from platforms/web/index.html at runtime
@@ -267,13 +328,25 @@ if want_app; then
     # (a full-bundle backup sidesteps any code-signature mismatch between the
     # outer bundle and its nested binaries that a partial-file restore could
     # leave behind). The backup is REFRESHED, not made once-ever, whenever the
-    # installed app is still genuinely Developer-ID-signed — never trust an
-    # existing backup blindly, since it can predate a newer production release
+    # installed app is still an untouched release — never trust an existing
+    # backup blindly, since it can predate a newer production release
     # installed since (e.g. via /ir:release), which would make restore-prod.sh
-    # silently reinstall a stale build. And if the app is NOT Developer-ID-
-    # signed (a prior replace-mode run's dev build, still installed) and no
+    # silently reinstall a stale build. And if the app is NOT an untouched
+    # release (a prior replace-mode run's dev build, still installed) and no
     # backup exists either, REFUSE rather than overwrite the only remaining
     # copy with no safety net.
+    #
+    # "UNTOUCHED RELEASE" = Developer-ID-signed AND a readable
+    # CFBundleShortVersionString other than $DEV_VERSION_MARKER. The signature
+    # alone stopped being enough when dev builds started being signed with the
+    # Developer ID identity too (step 0d): it would back a dev build up as
+    # "production" on the next run and destroy the real backup. The signature
+    # half stays because older dev builds — "Irrlicht Dev"/ad-hoc signed — are
+    # caught by it whatever their version says. An unreadable version is NOT a
+    # release: the check fails closed. PlistBuddy prints its error to STDOUT
+    # with rc 1 (measured, on a missing file), so the status decides, never
+    # the captured text.
+    #
     # NO PIPE IN THIS CONDITION — not `codesign … | grep -q`, and not a capture
     # piped into `grep -q` either. `grep -q` exits at its first match, so
     # anything still writing to that pipe dies of SIGPIPE (141), and under
@@ -287,7 +360,11 @@ if want_app; then
     # The leading newline anchors the match to the start of a line, which is
     # what the old `grep "^Authority=…"` did.
     CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
-    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then
+    if ! PROD_VERSION="$("$PLISTBUDDY" -c "Print :CFBundleShortVersionString" "$PROD_APP/Contents/Info.plist" 2>/dev/null)"; then
+      PROD_VERSION=""   # unreadable ⇒ not a confirmed release
+    fi
+    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \
+       && [[ -n "$PROD_VERSION" && "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]; then
       rm -rf "$PROD_BACKUP"
       mkdir -p "$(dirname "$PROD_BACKUP")"
       if ! cp -R "$PROD_APP" "$PROD_BACKUP"; then
@@ -295,13 +372,23 @@ if want_app; then
         rm -rf "$PROD_BACKUP"
         exit 1
       fi
-      echo "Backed up the untouched production bundle to $PROD_BACKUP (restore-prod.sh restores from this)."
+      echo "Backed up the untouched production bundle ($PROD_VERSION) to $PROD_BACKUP (restore-prod.sh restores from this)."
     elif [[ ! -d "$PROD_BACKUP" ]]; then
-      echo "ERROR: $PROD_APP isn't Developer-ID-signed (looks like a leftover dev build) and no backup exists — refusing to overwrite it with no safety net. Run the DMG/PKG installer first." >&2
+      echo "ERROR: $PROD_APP is not an untouched release (that needs a Developer ID signature AND a version other than '$DEV_VERSION_MARKER'; version read: '${PROD_VERSION:-<unreadable>}') — it looks like a leftover dev build, and no backup exists — refusing to overwrite it with no safety net. Run the DMG/PKG installer first." >&2
       exit 1
+    else
+      echo "Keeping the existing backup at $PROD_BACKUP — $PROD_APP is a dev build (version '${PROD_VERSION:-<unreadable>}'), not a release."
     fi
 
     BUNDLE_DIRTIED=1   # point of no return: every failure from here owes the user the teardown hint
+    # Stamp the dev marker FIRST, before any other write into the bundle, so a
+    # run that fails part-way through the install never leaves a dev binary
+    # under a release version — the next run would back that up as production
+    # (the check above). It also keeps Settings/About from showing a stale
+    # release version on a freshly compiled dev build, and matches separate
+    # mode's Info.plist below so both read the same in the UI.
+    "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"
+    "$PLISTBUDDY" -c "Set :CFBundleVersion $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"
     cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"
     rm -rf "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
     cp -R "$DEBUG_SPARKLE" "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
@@ -309,12 +396,6 @@ if want_app; then
     # the same result in replace mode as in separate mode instead of a stale
     # production copy.
     cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"
-    # Stamp the version string too — otherwise Info.plist still carries whatever
-    # release version was last installed (e.g. "0.5.7"), so Settings/About would
-    # show a stale release version on a freshly compiled dev build. Matches
-    # separate mode's hardcoded "dev" below so both read the same in the UI.
-    "$PLISTBUDDY" -c "Set :CFBundleShortVersionString dev" "$APP_TARGET/Contents/Info.plist"
-    "$PLISTBUDDY" -c "Set :CFBundleVersion dev" "$APP_TARGET/Contents/Info.plist"
   else
     # separate — assemble a fresh /tmp/IrrlichtDev.app from scratch so
     # UNUserNotificationCenter (desktop notifications) works.
@@ -359,23 +440,22 @@ PLIST
   # since it mutates the binary and invalidates the signature.
   install_name_tool -add_rpath @executable_path/../Frameworks "$APP_TARGET/Contents/MacOS/Irrlicht"
 
-  # codesign (both modes, identical). Sign with the persistent "Irrlicht Dev"
-  # identity if it exists; otherwise fall back to ad-hoc (TCC permissions will
-  # need re-granting each rebuild). Run tools/dev-sign-setup.sh once to install
-  # the identity. Uses the dev-only entitlements file — no com.apple.developer.*
-  # entries, which Apple gates to its own certificates and which would make
-  # launchd refuse to spawn a self-signed/ad-hoc binary that claims them.
-  # Matched in-shell, not piped, for the same reason as the codesign check
-  # above: a keychain with many identities would eventually outgrow the pipe
-  # buffer, and the failure mode is silent — it drops to ad-hoc signing and
-  # invalidates TCC on every rebuild, the exact thing the stable identity
-  # exists to prevent.
-  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
-  if [[ "$IDENTITIES" == *"Irrlicht Dev"* ]]; then
-    codesign --force --deep --sign "Irrlicht Dev" --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
-  else
-    codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
-  fi
+  # codesign (both modes, identical), with the identity step 0d resolved. Uses
+  # the dev-only entitlements file — no com.apple.developer.* entries. Those
+  # need a provisioning profile, and claiming one without it gets the launch
+  # killed: v0.4.7 stripped com.apple.developer.focus-status from the release
+  # for exactly that (AMFI, POSIX 153 — CHANGELOG.md), which is why the
+  # release's own Irrlicht.entitlements is an empty dict too.
+  # --timestamp=none: a Developer ID signature otherwise asks Apple's
+  # timestamp server for a secure timestamp (measured: a default-flag sign of
+  # a scratch bundle recorded `Timestamp=`, one with this flag `Signed Time=`),
+  # so an offline rebuild would fail HERE — after the bundle was overwritten.
+  # Dev builds are never notarized and need no secure timestamp.
+  # The first Developer ID signature on a machine can raise a one-time
+  # keychain prompt for codesign to use the identity's private key.
+  echo "Signing $APP_TARGET with: $SIGN_LABEL …"
+  codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
+  echo "Signed $APP_TARGET with: $SIGN_LABEL"
 fi
 
 # ─── Step 6: start the daemon, with --record for lifecycle event capture ───
