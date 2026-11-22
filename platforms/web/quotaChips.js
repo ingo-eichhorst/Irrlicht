@@ -159,7 +159,8 @@ export function hiddenQuotaAccounts() {
     console.debug('quotaChips: unreadable hidden quota accounts', e);
     return {};
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  // One test for "a plain object": null, arrays and scalars all fail it.
+  if (Object.prototype.toString.call(parsed) !== '[object Object]') return {};
   const hidden = {};
   for (const [key, label] of Object.entries(parsed)) {
     if (key) hidden[key] = typeof label === 'string' ? label : '';
@@ -190,33 +191,46 @@ export function visibleChips(chips, hidden) {
 // Exported for quotaChips.test.js.
 export function accountRows(chips, hidden) {
   const rows = new Map();
-  for (const c of chips) {
-    rows.set(c.key, {
-      key: c.key,
-      label: chipTierLabel(c, true) + ' · ' + accountSuffix(c),
-      tierLabel: chipTierLabel(c, false) || '',
-      live: true,
-      hidden: Object.prototype.hasOwnProperty.call(hidden, c.key),
-    });
-  }
+  for (const c of chips) rows.set(c.key, liveAccountRow(c, hidden));
   for (const [key, stored] of Object.entries(hidden)) {
-    if (rows.has(key)) continue;
-    // Split at the FIRST '|': the provider half is a provider name or
-    // `unknown:<adapter>`, the ref half is provider-issued (mirrors
-    // HiddenQuotaAccounts.parts(ofBucketKey:) in Swift).
-    const bar = key.indexOf('|');
-    const providerKey = bar < 0 ? key : key.slice(0, bar);
-    const ref = bar < 0 ? '' : key.slice(bar + 1);
-    const name = stored || (providerKey.charAt(0).toUpperCase() + providerKey.slice(1));
-    rows.set(key, {
-      key,
-      label: name + ' · ' + accountSuffix({ accountRef: ref === 'unconfirmed' ? '' : ref }) + ' — no data',
-      tierLabel: stored,
-      live: false,
-      hidden: true,
-    });
+    if (!rows.has(key)) rows.set(key, idleHiddenAccountRow(key, stored));
   }
   return Array.from(rows.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function liveAccountRow(chip, hidden) {
+  return {
+    key: chip.key,
+    label: chipTierLabel(chip, true) + ' · ' + accountSuffix(chip),
+    tierLabel: chipTierLabel(chip, false) || '',
+    live: true,
+    hidden: Object.prototype.hasOwnProperty.call(hidden, chip.key),
+  };
+}
+
+// A hidden account with no live chip, labelled from the tier stored when it
+// was hidden, else the capitalised provider key (chipTierLabel's fallback).
+function idleHiddenAccountRow(key, stored) {
+  const parts = bucketKeyParts(key);
+  const name = stored || (parts.providerKey.charAt(0).toUpperCase() + parts.providerKey.slice(1));
+  return {
+    key,
+    label: name + ' · ' + accountSuffix(parts) + ' — no data',
+    tierLabel: stored,
+    live: false,
+    hidden: true,
+  };
+}
+
+// The provider key and account ref a bucket key was built from. Split at the
+// FIRST '|': the provider half is a provider name or `unknown:<adapter>`, the
+// ref half is provider-issued. `unconfirmed` reads back as the empty ref.
+// Mirrors HiddenQuotaAccounts.parts(ofBucketKey:) in Swift.
+function bucketKeyParts(key) {
+  const bar = key.indexOf('|');
+  if (bar < 0) return { providerKey: key, accountRef: '' };
+  const ref = key.slice(bar + 1);
+  return { providerKey: key.slice(0, bar), accountRef: ref === 'unconfirmed' ? '' : ref };
 }
 
 function chipModeFor(snap, providerKey) {

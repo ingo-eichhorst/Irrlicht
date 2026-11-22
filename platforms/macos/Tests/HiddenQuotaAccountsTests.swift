@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Irrlicht
 
@@ -116,6 +117,9 @@ final class HiddenQuotaAccountsTests: XCTestCase {
             "Claude · Account unconfirmed — no data",
         ])
         XCTAssertEqual(rows.map(\.hasLiveData), [true, false, false])
+        // What hiding a row would store: the live tier for a reporting
+        // account, the stored one for the others.
+        XCTAssertEqual(rows.map(\.tierLabel), ["Claude Max", "Team", ""])
     }
 
     /// A hidden account that is still reporting is labelled from its live
@@ -124,15 +128,72 @@ final class HiddenQuotaAccountsTests: XCTestCase {
         let live = SessionListView.quotaChipData(sessions: twoAccounts, now: base)
         let rows = SettingsView.quotaAccountRows(live: live, hidden: ["anthropic|acct-BBBB": "stale label"])
         XCTAssertEqual(rows.map(\.label), ["Claude Max · Account …AAAA", "Team · Account …BBBB"])
+        XCTAssertEqual(rows.map(\.tierLabel), ["Claude Max", "Team"],
+                       "hiding a reporting account must store its live tier, not an old stored one")
     }
 
     func testHidingARowStoresItsTierLabelAndShowingItRemovesTheKey() {
-        let row = SettingsView.QuotaAccountRow(key: "anthropic|acct-BBBB", label: "", tierLabel: "Team",
-                                               hasLiveData: true)
+        let row = SettingsView.QuotaAccountRow(key: "anthropic|acct-BBBB", tierLabel: "Team", hasLiveData: true)
         let hiddenRaw = SettingsView.settingQuotaAccount(row, shown: false, in: "")
         XCTAssertEqual(HiddenQuotaAccounts.decode(hiddenRaw), ["anthropic|acct-BBBB": "Team"])
         XCTAssertEqual(SettingsView.settingQuotaAccount(row, shown: true, in: hiddenRaw), "",
                        "showing the last hidden account must store the never-set value")
+    }
+
+    // MARK: - the menu-bar hand-off
+
+    /// `combinedImage` → `iconImage` → `quotaImage` → `imageForSelectedProvider`
+    /// → `selectedSnapshot` each pass the hidden set on, and each defaults it
+    /// to "nothing hidden", so a dropped argument still compiles. These assert
+    /// through the top two, on both of `quotaImage`'s paths (Auto and a
+    /// selected provider). The first link is pinned by source in
+    /// `MenuBarAppearanceTests.testImageBuilderRoutesBothHalvesThroughTheExtractedSeams`.
+    ///
+    /// Mutations run with `tools/mutate.sh` in #2163's review: deleting the
+    /// argument between `iconImage` and `quotaImage` turned
+    /// `testTheIconFallsBackToItsDotsWhenEveryAccountIsHidden` red on both
+    /// paths; deleting it on `quotaImage`'s selected-provider call turned both
+    /// tests below red for `["anthropic"]`; deleting `combinedImage`'s argument
+    /// turned the source pin red.
+    private var usage: MenuBarAppearance {
+        MenuBarAppearance(style: .usage, grouping: .project, maxProjects: MenuBarMaxProjects.defaultValue)
+    }
+
+    func testTheQuotaHalfDrawsTheVisibleAccountOnBothPaths() throws {
+        for providerKeys in [[], ["anthropic"]] as [[String]] {
+            func quota(_ sessions: [SessionState], hidden: Set<String>) throws -> NSImage {
+                try XCTUnwrap(MenuBarImageBuilder.quotaImage(
+                    appearance: usage, sessions: sessions, providerKeys: providerKeys,
+                    hiddenAccounts: hidden, now: base))
+            }
+            let filtered = try quota(twoAccounts, hidden: ["anthropic|acct-BBBB"])
+            let visibleOnly = try quota([twoAccounts[0]], hidden: [])
+            let unfiltered = try quota(twoAccounts, hidden: [])
+            XCTAssertEqual(filtered.tiffRepresentation, visibleOnly.tiffRepresentation,
+                           "providerKeys=\(providerKeys): the slot must draw the visible account")
+            // Vacuity guard: unfiltered, D1 picks the hidden (more constrained)
+            // account, so the two renders must differ for the line above to mean
+            // anything.
+            XCTAssertNotEqual(unfiltered.tiffRepresentation, visibleOnly.tiffRepresentation,
+                              "providerKeys=\(providerKeys): the fixture must make the hidden account the pick")
+        }
+    }
+
+    func testTheIconFallsBackToItsDotsWhenEveryAccountIsHidden() throws {
+        let allHidden: Set<String> = ["anthropic|acct-AAAA", "anthropic|acct-BBBB"]
+        let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
+            appearance: usage, sessions: twoAccounts, projectGroupOrder: [], daemonLabels: [:]))
+        for providerKeys in [[], ["anthropic"]] as [[String]] {
+            func icon(hidden: Set<String>) throws -> NSImage {
+                try XCTUnwrap(MenuBarImageBuilder.iconImage(
+                    appearance: usage, sessions: twoAccounts, projectGroupOrder: [], daemonLabels: [:],
+                    providerKeys: providerKeys, hiddenAccounts: hidden, now: base))
+            }
+            XCTAssertEqual(try icon(hidden: allHidden).size.width, dots.size.width, accuracy: 0.01,
+                           "providerKeys=\(providerKeys): with no visible account .usage must compose its dots")
+            XCTAssertNotEqual(try icon(hidden: []).size.width, dots.size.width,
+                              "providerKeys=\(providerKeys): vacuity — with nothing hidden the quota half draws")
+        }
     }
 
     // MARK: - storage

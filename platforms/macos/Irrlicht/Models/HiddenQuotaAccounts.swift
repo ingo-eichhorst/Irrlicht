@@ -60,14 +60,18 @@ enum HiddenQuotaAccounts {
         decode(defaults.string(forKey: storageKey) ?? "")
     }
 
-    /// The one filter every display consumer applies AFTER bucketing (#2163):
-    /// the popover chips (`SessionListView.quotaChipData`) and the menu-bar
-    /// pick (`QuotaMenuBarRenderer.selectedSnapshot`). `key` returns an item's
-    /// account bucket key.
+    /// The one filter the two filtered surfaces share (#2163). `key` returns
+    /// an item's account bucket key.
+    /// - The popover chips: `SessionListView.quotaChipData` filters its
+    ///   finished buckets.
+    /// - The menu-bar pick: `QuotaMenuBarRenderer.selectedSnapshot` filters
+    ///   its per-session candidates. Their key is the key it then groups
+    ///   accounts by, so filtering before the grouping drops the same accounts.
     ///
     /// The Settings rows deliberately do not call it. A row is how a hidden
     /// account gets shown again, so the row list has to include hidden
-    /// accounts.
+    /// accounts. The History panel's Quota tab (`HistoryView.quotaForecasts`)
+    /// is keyed by provider, not account, and does not call it either.
     static func visible<Item>(_ items: [Item], hidden: Set<String>, key: (Item) -> String) -> [Item] {
         guard !hidden.isEmpty else { return items }
         return items.filter { !hidden.contains(key($0)) }

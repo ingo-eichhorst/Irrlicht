@@ -390,7 +390,9 @@ describe('hidden quota accounts (#2163)', () => {
     mk({ id: 's1', ref: 'acct-AAAA', planType: 'max', pct: 20 }),
     mk({ id: 's2', ref: 'acct-BBBB', planType: 'team', pct: 80 }),
   ];
-  // The chip strip's own derivation (renderHeaderTitle), fed fixture sessions.
+  // The derivation renderHeaderTitle applies, restated over fixture sessions.
+  // The real strip, driven through the Settings toggle, is covered by
+  // irrlicht.hiddenquotaaccounts.test.js.
   const strip = (sessions) => visibleChips(bucketChips(sessions, nowMs), hiddenQuotaAccounts()).map((c) => c.key);
   const accountBoxes = () => Array.from(document.querySelectorAll('#settings-providers input[data-quota-account]'));
   const cleanup = () => {
@@ -438,12 +440,15 @@ describe('hidden quota accounts (#2163)', () => {
       'Anthropic · Account unconfirmed — no data',
     ]);
     expect(rows.map((r) => r.hidden)).toEqual([false, true, true]);
+    // What hiding a row stores: the live tier, or the one already stored.
+    expect(rows.map((r) => r.tierLabel)).toEqual(['Claude Max', 'Team', '']);
   });
 
   test('a hidden account that still reports is labelled from its live snapshot', () => {
     const rows = accountRows(bucketChips(twoAccounts, nowMs), { 'anthropic|acct-BBBB': 'stale label' });
     expect(rows.map((r) => r.label)).toEqual(['Claude Max · Account …AAAA', 'Team · Account …BBBB']);
     expect(rows.map((r) => r.hidden)).toEqual([false, true]);
+    expect(rows.map((r) => r.tierLabel)).toEqual(['Claude Max', 'Team']);
   });
 
   test('turning a row off stores its tier label under the bucket key', () => {

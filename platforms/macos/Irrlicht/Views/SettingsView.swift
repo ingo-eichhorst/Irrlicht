@@ -848,11 +848,23 @@ struct SettingsView: View {
     struct QuotaAccountRow: Equatable {
         /// The account bucket key (`RateLimitInfo.accountBucketKey`).
         let key: String
-        let label: String
         /// What hiding the account stores, so its row keeps a label after
         /// the account stops reporting. "" when the account has no tier.
         let tierLabel: String
         let hasLiveData: Bool
+
+        /// "<tier> · Account …abcd", the tier label the chip's tooltip leads
+        /// with, followed by the account line under it. The account line stays
+        /// because two seats on one plan share a tier label. A row with no tier
+        /// falls back to the provider's name, and a row with no live snapshot
+        /// is marked the way `quotaProviderRowLabel` marks a slot with no data.
+        /// Both halves are read back off `key`, which is built from them.
+        var label: String {
+            let parts = HiddenQuotaAccounts.parts(ofBucketKey: key)
+            let name = tierLabel.isEmpty ? SettingsView.quotaProviderLabel(parts.providerKey) : tierLabel
+            let noData = hasLiveData ? "" : " — no data"
+            return "\(name) · \(RateLimitInfo.accountLine(ref: parts.accountRef))\(noData)"
+        }
     }
 
     /// The account rows: every account the popover would draw a chip for
@@ -877,38 +889,12 @@ struct SettingsView: View {
                                  hidden: [String: String]) -> [QuotaAccountRow] {
         var rows: [String: QuotaAccountRow] = [:]
         for chip in live {
-            let tier = chip.snapshot.tierLabel ?? ""
-            rows[chip.id] = QuotaAccountRow(
-                key: chip.id,
-                label: quotaAccountRowLabel(providerKey: chip.providerKey, accountRef: chip.accountRef,
-                                            tierLabel: tier, hasLiveData: true),
-                tierLabel: tier,
-                hasLiveData: true
-            )
+            rows[chip.id] = QuotaAccountRow(key: chip.id, tierLabel: chip.snapshot.tierLabel ?? "", hasLiveData: true)
         }
         for (key, storedTier) in hidden where rows[key] == nil {
-            let parts = HiddenQuotaAccounts.parts(ofBucketKey: key)
-            rows[key] = QuotaAccountRow(
-                key: key,
-                label: quotaAccountRowLabel(providerKey: parts.providerKey, accountRef: parts.accountRef,
-                                            tierLabel: storedTier, hasLiveData: false),
-                tierLabel: storedTier,
-                hasLiveData: false
-            )
+            rows[key] = QuotaAccountRow(key: key, tierLabel: storedTier, hasLiveData: false)
         }
         return rows.values.sorted { $0.key < $1.key }
-    }
-
-    /// "<tier> · Account …abcd", the tier label the chip's tooltip leads with
-    /// followed by the account line under it. The account line stays because
-    /// two seats on one plan share a tier label. A row with no tier falls back
-    /// to the provider's name, and a row with no live snapshot is marked the
-    /// way `quotaProviderRowLabel` marks a slot with no data.
-    static func quotaAccountRowLabel(providerKey: String, accountRef: String,
-                                     tierLabel: String, hasLiveData: Bool) -> String {
-        let name = tierLabel.isEmpty ? quotaProviderLabel(providerKey) : tierLabel
-        let noData = hasLiveData ? "" : " — no data"
-        return "\(name) · \(RateLimitInfo.accountLine(ref: accountRef))\(noData)"
     }
 
     /// A row's toggle is ON while the account is shown. Turning it off stores

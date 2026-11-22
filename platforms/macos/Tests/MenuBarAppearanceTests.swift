@@ -2173,6 +2173,13 @@ final class MenuBarAppearanceTests: XCTestCase {
             code.contains("providerKeys: MenuBarQuotaProviders.current(in: UserDefaults.standard)"),
             "combinedImage must read the ordered provider list once, from one place (#1955)"
         )
+        // #2163: the hidden accounts reach the quota half only through this
+        // argument; every parameter below it defaults to "nothing hidden", so
+        // dropping it here would compile and show hidden accounts again.
+        XCTAssertTrue(
+            code.contains("hiddenAccounts: Set(HiddenQuotaAccounts.current(in: UserDefaults.standard).keys)"),
+            "combinedImage must hand the accounts hidden in Settings to iconImage (#2163)"
+        )
         // The slot budget travels ON the appearance rather than as a second
         // argument nobody threads — pinned because a `maxGroups:` that fell
         // back to the renderer's default would leave every width assertion in
