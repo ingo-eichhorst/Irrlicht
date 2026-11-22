@@ -124,6 +124,14 @@ const (
 	// and show or dismiss the wizard accordingly — which is also how the
 	// surface that answered second dismisses live (issue #570).
 	PushTypePermissionsUpdated = "permissions_updated"
+
+	// PushTypeOrchestratorUpdated signals that an orchestrator's state
+	// changed in a way the dashboard shows (#2145), such as a worker that
+	// turned waiting. Like PushTypePermissionsUpdated it carries no payload:
+	// clients re-fetch GET /api/v1/sessions, the only surface orchestrator
+	// state rides. Host-local: the relay carries no orchestrator state, so
+	// its forwarder drops this type.
+	PushTypeOrchestratorUpdated = "orchestrator_updated"
 )
 
 // PermissionStore persists the user's per-agent consent answers for the

@@ -109,6 +109,7 @@ func TestAdapter_UnreadableKeepsLastGoodSnapshot(t *testing.T) {
 		"parse error":         `{"schema": 1, "teams": [`,
 		"missing team update": `{"schema": 1, "teams": [{"name": "team-a", "workers": []}]}`,
 		"schema 2":            strings.Replace(oneSlot(t0, rfc(t0)), `"schema": 1`, `"schema": 2`, 1),
+		"unknown state":       strings.Replace(oneSlot(t0, rfc(t0)), `"busy": true`, `"busy": true, "state": "queued"`, 1),
 	}
 	for name, content := range bad {
 		t.Run(name, func(t *testing.T) {

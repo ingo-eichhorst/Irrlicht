@@ -147,7 +147,7 @@ enum RelayEnrollmentClient {
     /// The caller then nudges the running subscribe link and daemon, exactly
     /// as the token field does.
     static func apply(token: String, origin: URL, defaults: UserDefaults = .standard,
-                      setToken: (String, String) -> Bool = { KeychainStore.set($0, account: $1) }) throws {
+                      setToken: (String, String) -> Bool = { KeychainStore.set($0, account: KeychainAccount($1)) }) throws {
         guard setToken(token, "relayToken") else { throw Failure.keychainWriteFailed }
         defaults.set(origin.absoluteString, forKey: "relayServerURL")
         defaults.set(true, forKey: "publishToRelay")

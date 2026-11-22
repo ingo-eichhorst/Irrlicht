@@ -277,16 +277,31 @@ extension SessionManager {
                 if let sid = envelope.sessionID, let prio = envelope.priority {
                     applyHistoryUpgrade(sessionID: sid, priority: prio)
                 }
-            case "permissions_updated":
-                // Consent state changed (agent detected, or the web
-                // dashboard answered the wizard). Dataless by design —
-                // re-fetch; pendingWizardAgents drives the overlay (#570).
-                Task { await refreshPermissions() }
             default:
-                break
+                handleDatalessFrame(envelope.type)
             }
         } catch {
             print("⚠️ Failed to decode WS message: \(error.localizedDescription)")
+        }
+    }
+
+    /// The frames that carry no data and only say "re-fetch"; any other type
+    /// is ignored, so an older app survives a newer daemon's vocabulary.
+    private func handleDatalessFrame(_ type: String) {
+        switch type {
+        case "permissions_updated":
+            // Consent state changed (agent detected, or the web dashboard
+            // answered the wizard). Re-fetch; pendingWizardAgents drives the
+            // overlay (#570).
+            Task { await refreshPermissions() }
+        case "orchestrator_updated":
+            // An orchestrator's shown state changed, e.g. a worker turned
+            // waiting (#2145). Orchestrator state rides only
+            // /api/v1/sessions, so re-fetch it through the debounced
+            // rehydrate.
+            scheduleRehydration()
+        default:
+            break
         }
     }
 

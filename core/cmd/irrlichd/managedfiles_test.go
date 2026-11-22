@@ -450,6 +450,8 @@ var applyWritesNoUserFile = map[string]string{
 	"muse-account-api/account-api": "Apply performs one best-effort credential resolve (async, to fail fast " +
 		"on a broken setup without blocking the grant) and writes no shared user file; it reads " +
 		"~/.config/muse/auth.json (or the macOS Keychain) and nothing else (issue #2007)",
+	"zai-account-api/account-api": "Apply does nothing: a Z.ai key is read per session by the sweep, from " +
+		"the settings file that routed it, never by Apply; nothing is written (issue #2010)",
 }
 
 // TestPrintManagedFilesNamesTheFilesTheIssueFound is the concrete arm of the

@@ -5,8 +5,21 @@ import Foundation
 /// this client only flips and mirrors it, so the Settings toggle never
 /// claims an install that didn't happen.
 enum ActivationClient {
-    private static var endpoint: URL? {
-        URL(string: "\(DaemonEndpoint.httpBase)/api/v1/activation/task-eta")
+    /// The daemon's task-eta endpoint — nil in a test process, which makes
+    /// `status()` and `set(enabled:)` answer nil ("daemon unreachable", which
+    /// Settings already treats as "leave the toggle alone") without opening a
+    /// socket. Rendering Settings with Advanced expanded runs `status()` from
+    /// `.onAppear`, and a test doing so used to GET the developer's live
+    /// daemon — one bug in the reconcile below away from a DELETE that
+    /// uninstalls their CLAUDE.md block. `ActivationClientGuardTests` is the
+    /// guard.
+    static var endpoint: URL? { endpoint(underXCTest: AppHome.isRunningTests) }
+
+    /// The rule behind `endpoint`, pure so it can be asserted without sending
+    /// anything.
+    static func endpoint(underXCTest: Bool) -> URL? {
+        guard !underXCTest else { return nil }
+        return URL(string: "\(DaemonEndpoint.httpBase)/api/v1/activation/task-eta")
     }
 
     private struct State: Codable {

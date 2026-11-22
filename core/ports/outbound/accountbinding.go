@@ -28,6 +28,12 @@ type SessionAccountReader interface {
 	// TranscriptStart is the Unix second of the first timestamped line of the
 	// session's transcript (bounded read), 0 when unknown or not granted.
 	TranscriptStart(s *session.SessionState) int64
+	// Provider is the billing provider the home's login belongs to (one of
+	// the session.Provider* constants). The binder stamps that login only
+	// onto a snapshot of this provider: a session routed elsewhere (a Claude
+	// Code session on Z.ai, issue #2010) carries another provider's
+	// snapshot, which the home's login says nothing about.
+	Provider() string
 }
 
 // HomeAccountStore persists the daemon's per-home account tracking so a

@@ -37,10 +37,22 @@ func EndpointPermissionDeclaration() agent.Agent {
 			Kind:            permission.KindObserve,
 			Title:           "Observe provider endpoint",
 			FeatureUnlocked: "Shows which API endpoint a session's requests are actually routed through, alongside its usage",
-			Touches:         "Reads a base-URL override variable from detected agent processes (ANTHROPIC_BASE_URL)",
+			Touches: "Reads a base-URL override variable from detected agent processes (ANTHROPIC_BASE_URL), " +
+				"and for a Claude Code session the same variable from Claude Code's settings files",
 			Detail: "When a session is linked to its process, irrlicht reads only " +
-				"ANTHROPIC_BASE_URL from that process's environment — never the full " +
-				"environment, and never a credential or API-key variable. Before the " +
+				"ANTHROPIC_BASE_URL and CLAUDE_CONFIG_DIR from that process's environment — " +
+				"never the full environment, and never a credential or API-key variable. " +
+				"For a Claude Code session it also reads Claude Code's settings files and " +
+				"keeps only env.ANTHROPIC_BASE_URL from them, because a value there " +
+				"overrides the process environment: managed-settings.json and " +
+				"managed-settings.d/*.json in the system directory, .claude/settings.local.json " +
+				"and .claude/settings.json under the session's project, and settings.json " +
+				"in ~/.claude (or in CLAUDE_CONFIG_DIR, which is read only to find that " +
+				"file). It reads the process's command line to check whether it was " +
+				"started with --settings or --setting-sources, and keeps nothing from " +
+				"it — the flag's value is never stored or logged; a session started " +
+				"that way, or under a macOS configuration profile for " +
+				"Claude Code, is shown as unreadable rather than guessed. Before the " +
 				"value is stored or shown, irrlicht removes any username, password, " +
 				"query string, and fragment from it, keeping only the scheme, host, " +
 				"port, and path. A loopback or private-network address (e.g. " +

@@ -63,6 +63,7 @@
       <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html" class="active">API Reference</a>
+      <a href="worker-list.html">Worker List</a>
     </div>
 
     <div class="sidebar-section">
@@ -186,6 +187,10 @@
           <tr>
             <td><code>permissions_updated</code></td>
             <td>Consent state changed; carries no payload &mdash; clients re-fetch <code>GET /api/v1/permissions</code></td>
+          </tr>
+          <tr>
+            <td><code>orchestrator_updated</code></td>
+            <td>An orchestrator's state changed in a way the dashboard shows, such as a worker that turned waiting; carries no payload &mdash; clients re-fetch <code>GET /api/v1/sessions</code>. Not forwarded by the relay</td>
           </tr>
         </tbody>
       </table>
@@ -1044,9 +1049,9 @@ curl --unix-socket ~/.local/share/irrlicht/irrlichd.sock \
           <span class="label">Previous</span>
           CLI Tools
         </a>
-        <a href="architecture.html" style="text-align:right">
+        <a href="worker-list.html" style="text-align:right">
           <span class="label">Next</span>
-          System Design &rarr;
+          Worker List &rarr;
         </a>
       </nav>
 

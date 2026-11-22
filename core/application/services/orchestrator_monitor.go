@@ -6,8 +6,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
+	"time"
 
 	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/ports/inbound"
@@ -102,13 +104,27 @@ func (m *OrchestratorMonitor) drainWatcher(ctx context.Context, w inbound.Orches
 }
 
 // store records rs as its adapter's latest snapshot unless rs's registration
-// has ended — a snapshot that was in flight when the registration ended.
-func (m *OrchestratorMonitor) store(rs registeredState) {
+// has ended — a snapshot that was in flight when the registration ended. It
+// reports whether the stored snapshot now shows something new: the first
+// one, the first of a new registration, or one that differs in more than
+// UpdatedAt.
+func (m *OrchestratorMonitor) store(rs registeredState) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if rs.live() {
-		m.states[rs.state.Adapter] = rs
+	if !rs.live() {
+		return false
 	}
+	prev, had := m.states[rs.state.Adapter]
+	m.states[rs.state.Adapter] = rs
+	return !had || !prev.live() || !sameShown(prev.state, rs.state)
+}
+
+// sameShown reports whether a and b show the same thing: equal in everything
+// but UpdatedAt, which every adapter stamps on every snapshot (the worker
+// list on each 30 s re-read, Gas Town on each poll).
+func sameShown(a, b orchestrator.State) bool {
+	a.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 
 // State returns the latest state for the given orchestrator name, or nil
@@ -155,7 +171,12 @@ func (m *OrchestratorMonitor) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case rs := <-m.merged:
-			m.store(rs)
+			// A change the dashboard shows is pushed (#2145): orchestrator
+			// state rides only /api/v1/sessions, so without the push a
+			// client learns of it at its next poll.
+			if m.store(rs) && m.broadcaster != nil {
+				m.broadcaster.Broadcast(outbound.PushMessage{Type: outbound.PushTypeOrchestratorUpdated})
+			}
 		}
 	}
 }

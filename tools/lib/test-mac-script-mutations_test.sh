@@ -5,13 +5,16 @@
 # WHY THIS FILE EXISTS. Six gates in .claude/skills/ir:test-mac/test-mac.sh
 # were MOVED there out of SKILL.md's fenced bash blocks; four more were ADDED,
 # and the review of this same PR added a further eleven CALL-SITE rows.
+# Signing dev builds with the Developer ID identity added sixteen more: the
+# identity preference, the override, and the dev-version marker that replaced
+# the signature as the "is this an untouched release?" test in both scripts.
 # Either way there is no "before the fix" to run red: the lock test passes the
 # moment it is written. Per AGENTS.md's Testing section and
 # docs/testing-philosophy.md it earns its place only by being seen to fail
 # when the thing it protects is broken — so each gate is broken here, one at a
 # time, and the lock test is required to go red naming that specific gate.
 #
-# Twenty-three mutations, applied and asserted SEPARATELY. A single combined mutation
+# Thirty-nine mutations, applied and asserted SEPARATELY. A single combined mutation
 # could go red on one gate while another was silently unguarded, which is the
 # exact shape of defect this whole file exists to rule out. Each one is written
 # as the plausible REGRESSION, not as arbitrary damage: the reachability abort
@@ -138,8 +141,8 @@ red_case "app-exit" \
 red_case "backup-refresh" \
   "backup freshness: an existing backup is trusted blindly" \
   "$SUBJECT" \
-  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then\n      rm -rf "$PROD_BACKUP"' \
-  $'    if [[ ! -d "$PROD_BACKUP" && "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then\n      rm -rf "$PROD_BACKUP"' \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \\' \
+  $'    if [[ ! -d "$PROD_BACKUP" && "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \\' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 4. The no-safety-net refusal stops refusing ─────────────────────────────
@@ -217,8 +220,8 @@ red_case "swift-status" \
 red_case "backup-refresh" \
   "F1a: the Developer-ID check goes straight back through a pipe" \
   "$SUBJECT" \
-  $'    CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then' \
-  $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \\' \
+  $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application" \\' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 10b. ...and the INTERMEDIATE wrong fix, which is the subtle one ────────
@@ -230,16 +233,16 @@ red_case "backup-refresh" \
 red_case "backup-refresh" \
   "F1b: the captured output is piped into grep -q (fix by headroom, not construction)" \
   "$SUBJECT" \
-  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then' \
-  $'    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \\' \
+  $'    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application" \\' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 11. ...and the same hazard in the teardown half ───────────────────────
 red_case "restore-signed" \
   "F1: restore-prod.sh's Developer-ID check is piped into grep -q again" \
   ".claude/skills/ir:test-mac/restore-prod.sh" \
-  $'elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n       [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; }; then' \
-  $'elif codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  $'  if [[ "$NL$codesign_info" == *"${NL}Authority=Developer ID Application"* ]]; then' \
+  $'  if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
   'restore-prod: a genuine Developer-ID app with no backup'
 
 # ── 12-14. CALL SITES: the daemon launch ──────────────────────────────────
@@ -271,8 +274,8 @@ red_case "sign-order" \
 red_case "sign-order" \
   "call site: codesign loses --entitlements" \
   "$SUBJECT" \
-  $'    codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1' \
-  $'    codesign --force --deep --sign - "$APP_TARGET" 2>&1' \
+  $'  codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1' \
+  $'  codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none "$APP_TARGET" 2>&1' \
   'codesign was called without --entitlements'
 
 # ── 17-18. CALL SITES: separate mode's bundle assembly ────────────────────
@@ -295,8 +298,8 @@ red_case "separate-full" \
 red_case "install-details" \
   "call site: the icon refresh is dropped" \
   "$SUBJECT" \
-  $'    cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"\n    # Stamp the version string too' \
-  $'    # Stamp the version string too' \
+  $'    # production copy.\n    cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"' \
+  $'    # production copy.' \
   'still holds the production copy'
 
 red_case "install-details" \
@@ -325,6 +328,152 @@ red_case "preflight-trigger" \
   $'|^\\.claude/skills/ir:test-mac/|^\\.github/workflows/(ars|codescene-badge' \
   $'|^\\.github/workflows/(ars|codescene-badge' \
   'the tools gate does NOT fire on a diff touching .claude/skills/ir:test-mac/test-mac.sh'
+
+# ── 23-38. Developer-ID dev signing ───────────────────────────────────────
+# Dev builds are now signed with the Developer ID identity so they satisfy the
+# relay-token keychain item's requirement. That made the signature useless for
+# "is the installed app an untouched release?", so both scripts now also
+# require a readable CFBundleShortVersionString other than the dev marker.
+
+# 23. The marker half is dropped — the pre-change, signature-only rule. The
+# second run of a Developer-ID-signed dev build then refreshes the backup FROM
+# the dev build and destroys the only copy of production.
+red_case "backup-dev-rerun" \
+  "dev marker: the release check goes back to signature-only" \
+  "$SUBJECT" \
+  $'       && [[ -n "$PROD_VERSION" && "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]; then' \
+  $'       && true; then' \
+  'a Developer-ID-signed dev build was backed up as production'
+
+# 24. The read status is ignored. PlistBuddy prints its error on STDOUT, so the
+# captured text is non-empty and not "dev" — an unreadable plist reads as a
+# release (fail-open).
+red_case "backup-version-unreadable" \
+  "dev marker: PlistBuddy's exit status is ignored" \
+  "$SUBJECT" \
+  $'      PROD_VERSION=""   # unreadable ⇒ not a confirmed release' \
+  $'      :   # status ignored: the captured stdout stands' \
+  'an unreadable version was treated as a release'
+
+# 25. ...or the emptiness half is dropped, so "" != "dev" passes as a release.
+red_case "backup-version-unreadable" \
+  "dev marker: an empty version is compared only against the marker" \
+  "$SUBJECT" \
+  $'       && [[ -n "$PROD_VERSION" && "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]; then' \
+  $'       && [[ "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]; then' \
+  'an unreadable version was treated as a release'
+
+# 26. The signature half is dropped — version-only. An "Irrlicht Dev"/ad-hoc
+# dev build left by an older test-mac.sh (or one whose stamp failed) then
+# counts as a release and is backed up over the real one.
+red_case "backup-refuse" \
+  "dev marker: the release check goes version-only" \
+  "$SUBJECT" \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]] \\\n       && [[ -n' \
+  $'    if true \\\n       && [[ -n' \
+  'GATE backup-refusal: dev-signed app + no backup must refuse'
+
+# 27. The marker is stamped LAST again, after the binary is copied in: a run
+# that fails mid-install leaves a dev binary under a release version.
+red_case "stamp-first" \
+  "dev marker: stamped after the binary copy instead of first" \
+  "$SUBJECT" \
+  $'    "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"\n    "$PLISTBUDDY" -c "Set :CFBundleVersion $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"\n    cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"\n    rm -rf "$APP_TARGET/Contents/Frameworks/Sparkle.framework"\n    cp -R "$DEBUG_SPARKLE" "$APP_TARGET/Contents/Frameworks/Sparkle.framework"' \
+  $'    cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"\n    rm -rf "$APP_TARGET/Contents/Frameworks/Sparkle.framework"\n    cp -R "$DEBUG_SPARKLE" "$APP_TARGET/Contents/Frameworks/Sparkle.framework"\n    "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"\n    "$PLISTBUDDY" -c "Set :CFBundleVersion $DEV_VERSION_MARKER" "$APP_TARGET/Contents/Info.plist"' \
+  'which still reads as release'
+
+# 28. The writer and the reader drift apart: test-mac.sh stamps a marker
+# restore-prod.sh does not know, which then calls the dev build production.
+red_case "restore-after-dev-run" \
+  "dev marker: test-mac.sh stamps a marker restore-prod.sh does not read" \
+  "$SUBJECT" \
+  $'DEV_VERSION_MARKER="dev"' \
+  $'DEV_VERSION_MARKER="dev-build"' \
+  'restore-prod.sh does not recognise the marker test-mac.sh stamps'
+
+# 29-31. The same three rules in the teardown half.
+red_case "restore-dev-marker" \
+  "dev marker: restore-prod.sh's release check goes back to signature-only" \
+  ".claude/skills/ir:test-mac/restore-prod.sh" \
+  $'    && [[ -n "$PROD_VERSION" && "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]' \
+  $'    && true' \
+  'restore-prod dev-marker: a Developer-ID-signed dev build (version'
+
+red_case "restore-version-unreadable" \
+  "dev marker: restore-prod.sh ignores PlistBuddy's exit status" \
+  ".claude/skills/ir:test-mac/restore-prod.sh" \
+  $'    PROD_VERSION=""   # unreadable ⇒ not a confirmed release' \
+  $'    :   # status ignored: the captured stdout stands' \
+  'restore-prod dev-marker: an unreadable version was treated as production'
+
+red_case "restore-refuse" \
+  "dev marker: restore-prod.sh's release check goes version-only" \
+  ".claude/skills/ir:test-mac/restore-prod.sh" \
+  $'  [[ "$PROD_DEVID" == "yes" ]] \\' \
+  $'  true \\' \
+  'a dev-signed app with no backup cannot be restored and must refuse'
+
+# 32. The preference order flips back to "Irrlicht Dev" first — the build then
+# fails the keychain item's requirement and every token read prompts.
+red_case "sign-identity" \
+  "signing: \"Irrlicht Dev\" is preferred over a Developer ID identity" \
+  "$SUBJECT" \
+  $'  elif [[ "$IDENTITIES" == *\'"Developer ID Application: \'* ]]; then' \
+  $'  elif [[ "$IDENTITIES" == *\'"Irrlicht Dev"\'* ]]; then\n    SIGN_IDENTITY="Irrlicht Dev"\n  elif [[ "$IDENTITIES" == *\'"Developer ID Application: \'* ]]; then' \
+  'a Developer ID identity exists but the build was signed otherwise'
+
+# 33. --timestamp=none is dropped: a Developer ID signature then needs Apple's
+# timestamp server, and an offline rebuild fails after the bundle was written.
+red_case "sign-identity" \
+  "signing: the secure-timestamp request comes back" \
+  "$SUBJECT" \
+  $'  codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1' \
+  $'  codesign --force --deep --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1' \
+  'no --timestamp=none'
+
+# 34. The override is ignored.
+red_case "sign-override" \
+  "signing: IRRLICHT_DEV_SIGN_IDENTITY is ignored" \
+  "$SUBJECT" \
+  $'  if [[ -n "${IRRLICHT_DEV_SIGN_IDENTITY:-}" ]]; then' \
+  $'  if false; then' \
+  "IRRLICHT_DEV_SIGN_IDENTITY='Irrlicht Dev' was ignored"
+
+# 35. An override naming no installed identity is no longer refused up front;
+# codesign would then fail AFTER the production bundle was overwritten.
+red_case "sign-override-missing" \
+  "signing: an unknown IRRLICHT_DEV_SIGN_IDENTITY is not refused" \
+  "$SUBJECT" \
+  $'    if [[ "$SIGN_IDENTITY" != "-" && "$IDENTITIES" != *"$SIGN_IDENTITY"* ]]; then' \
+  $'    if false; then' \
+  'an override naming no installed identity must refuse'
+
+# 36. The validator forgets the ad-hoc spelling. "-" is not an identity name,
+# so checking it against the keychain refuses the documented way to force an
+# ad-hoc build.
+red_case "sign-override" \
+  "signing: '-' is rejected as an unknown identity" \
+  "$SUBJECT" \
+  $'    if [[ "$SIGN_IDENTITY" != "-" && "$IDENTITIES" != *"$SIGN_IDENTITY"* ]]; then' \
+  $'    if [[ "$IDENTITIES" != *"$SIGN_IDENTITY"* ]]; then' \
+  "IRRLICHT_DEV_SIGN_IDENTITY='-' did not produce an ad-hoc signature"
+
+# 37-38. The two fallbacks. Both held before this change, so the sign-identity
+# case passes them by construction (locks); these rows are what show the case
+# can see them break.
+red_case "sign-identity" \
+  "signing: the \"Irrlicht Dev\" fallback is skipped" \
+  "$SUBJECT" \
+  $'  elif [[ "$IDENTITIES" == *\'"Irrlicht Dev"\'* ]]; then' \
+  $'  elif false; then' \
+  'only "Irrlicht Dev" exists but it was not used'
+
+red_case "sign-identity" \
+  "signing: with no identity at all, something other than ad-hoc is used" \
+  "$SUBJECT" \
+  $'    SIGN_IDENTITY="-"' \
+  $'    SIGN_IDENTITY="Irrlicht Dev"' \
+  'no identity exists but the build was not signed ad-hoc'
 
 if [[ $fails -gt 0 ]]; then
   echo "test-mac-script-mutations: $fails FAILED"

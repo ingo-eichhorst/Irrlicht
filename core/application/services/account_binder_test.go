@@ -30,6 +30,9 @@ func (f *fakeAccountReader) ReadHomeAccount(*session.SessionState) (outbound.Hom
 	return f.obs, f.granted
 }
 
+// Provider: the fake stands in for the claude-code reader.
+func (f *fakeAccountReader) Provider() string { return session.ProviderAnthropic }
+
 func (f *fakeAccountReader) TranscriptStart(*session.SessionState) int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -95,16 +95,23 @@ extension SessionManager {
         // re-add the local sessions that disabling the source just cleared.
         guard useLocalDaemon else { return }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
+        // The timer, a debounced rehydrate and a reconnect can overlap, and
+        // their responses complete in any order: only a response newer than
+        // the last one installed is installed (#2145 review), so a late older
+        // one cannot undo a newer one or replay a worker's waiting edge.
+        hydrateRequestSeq += 1
+        let seq = hydrateRequestSeq
         do {
             let (data, response) = try await localURLSession.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            guard seq > lastInstalledHydrateSeq else { return }
+            lastInstalledHydrateSeq = seq
             let decoder = JSONDecoder()
             let payload = try decoder.decode(SessionsResponse.self, from: data)
             let topGroups = payload.groups
             providerCosts = payload.providerCosts ?? [:]
 
-            localApiGroups = topGroups
-            recomposeApiGroups()
+            installLocalGroups(topGroups)
             if isDebugMode {
                 print("💧 hydrate: groupedSessionIds=\(groupedSessionIds.count) ids, sample=\(groupedSessionIds.prefix(3))")
             }

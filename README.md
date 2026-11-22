@@ -87,6 +87,7 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | Orchestrator          | Stage   |
 | --------------------- | ------- |
 | Gas Town              | alpha   |
+| Worker list (any pool that writes a [status file](https://irrlicht.io/docs/worker-list.html)) | alpha   |
 | Claude Squad          | planned |
 | Custom (plugin API)   | planned |
 
