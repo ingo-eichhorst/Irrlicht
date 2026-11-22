@@ -185,7 +185,10 @@ struct GroupView: View {
 /// One orchestrator worker with no session: a free polecat, an idle pool slot.
 /// Deliberately not a `SessionRowView` — there is no session behind it, so it
 /// has no session state icon, no click-to-focus, and it never reaches
-/// `sessionMap`, the menu bar or a notification. The leading columns are meant
+/// `sessionMap` or the menu bar. The one exception to "no session state" is a
+/// worker whose agent waits for a person (`isWaiting`, #2145): its dot fills in
+/// the waiting colour, and `installLocalGroups` notifies on its edge. The
+/// leading columns are meant
 /// to line up with `SessionRowView`'s (state slot, role icon, worker name
 /// capped at 60pt, work item shortened to 8 characters); the two are kept in
 /// step by hand, so a change to that block there belongs here too.
@@ -194,12 +197,13 @@ struct UnattachedWorkerRowView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // A placeholder in the state-icon column, not a session state.
-            Image(systemName: "circle")
+            // A placeholder in the state-icon column, not a session state —
+            // filled in the waiting colour while the slot waits (#2145).
+            Image(systemName: worker.isWaiting ? "circle.fill" : "circle")
                 .font(.system(size: 9))
-                .foregroundColor(.secondary.opacity(0.6))
+                .foregroundColor(worker.isWaiting ? IrrColors.waiting : .secondary.opacity(0.6))
                 .frame(width: 12, height: 12)
-                .tooltip("No session")
+                .tooltip(worker.isWaiting ? "Waiting for input" : "No session")
 
             if let icon = worker.icon, !icon.isEmpty {
                 Text(icon)
@@ -223,11 +227,12 @@ struct UnattachedWorkerRowView: View {
                     .tooltip(wid)
             }
 
-            // The orchestrator's own state string, as plain text.
+            // The orchestrator's own state string, as plain text — in the
+            // waiting colour while the slot waits.
             if let state = worker.workerState, !state.isEmpty {
                 Text(state)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(worker.isWaiting ? IrrColors.waiting : .secondary)
                     .lineLimit(1)
             }
 

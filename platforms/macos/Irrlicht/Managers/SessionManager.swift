@@ -113,6 +113,11 @@ class SessionManager: ObservableObject {
     /// WebSocket deltas only carry individual session updates.
     var projectCostsTimer: Timer?
     let projectCostsRefreshInterval: TimeInterval = 30.0
+    /// Hydrate request order (#2145 review): a response is installed only
+    /// when it is newer than the last one installed, so an older fetch that
+    /// completes late cannot undo a newer one.
+    var hydrateRequestSeq = 0
+    var lastInstalledHydrateSeq = 0
 
     /// Daemon-owned directory. `irrlichd` creates it and writes session JSON
     /// files; the app only mutates individual files for explicit user actions

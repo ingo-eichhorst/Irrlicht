@@ -115,7 +115,8 @@ trust the daemon's stamp) and re-emits to every client. **Clients read `.msg`
 and process it exactly as a raw daemon frame.** Host-local frames are filtered
 at the forwarder and never reach the relay: `focus_requested` (meaningless
 cross-host, wiki §5.4), `permissions_updated` (consent is managed on the
-daemon's own machine, #570) and `input_requested`.
+daemon's own machine, #570), `orchestrator_updated` (the relay carries no
+orchestrator state, #2145) and `input_requested`.
 
 ## Client behavior
 
