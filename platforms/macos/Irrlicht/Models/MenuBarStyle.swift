@@ -384,12 +384,16 @@ struct MenuBarIconSettings: Equatable {
     var appearance: MenuBarAppearance
     var quotaProviders: String
     var quotaVisual: String
+    /// The raw `HiddenQuotaAccounts` value (#2163): hiding an account can
+    /// change which account a provider's slot draws, or remove the slot.
+    var hiddenQuotaAccounts: String
 
     static func current(in defaults: UserDefaults) -> MenuBarIconSettings {
         MenuBarIconSettings(
             appearance: MenuBarAppearance.current(in: defaults),
             quotaProviders: defaults.string(forKey: MenuBarQuotaProviders.storageKey) ?? "",
-            quotaVisual: defaults.string(forKey: QuotaVisualStyle.storageKey) ?? ""
+            quotaVisual: defaults.string(forKey: QuotaVisualStyle.storageKey) ?? "",
+            hiddenQuotaAccounts: defaults.string(forKey: HiddenQuotaAccounts.storageKey) ?? ""
         )
     }
 }

@@ -96,7 +96,7 @@ final class QuotaAccountBucketTests: XCTestCase {
             let a = snap(used: 20, sampledAt: wall.addingTimeInterval(aNewer ? -5 : -50), resetsAt: reset, ref: "acct-A")
             let b = snap(used: 80, sampledAt: wall.addingTimeInterval(aNewer ? -50 : -5), resetsAt: reset, ref: "acct-B")
             for order in [[session("a", a), session("b", b)], [session("b", b), session("a", a)]] {
-                let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: "anthropic", now: wall)
+                let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: "anthropic", hiddenAccounts: [], now: wall)
                 XCTAssertEqual(got?.windows.first?.usedPercent, 80, "aNewer=\(aNewer)")
             }
         }
@@ -119,7 +119,7 @@ final class QuotaAccountBucketTests: XCTestCase {
             XCTAssertEqual(bucket?.snapshot.windows.first?.usedPercent, 22)
             XCTAssertEqual(bucket?.session.id, "sess_newer")
             XCTAssertEqual(bucket?.accountRef, "")
-            let chips = SessionListView.quotaChipData(sessions: order, now: base)
+            let chips = SessionListView.quotaChipData(sessions: order, hiddenAccounts: [], now: base)
             XCTAssertEqual(chips.count, 1)
             XCTAssertEqual(chips.first.map { RateLimitInfo.accountLine(ref: $0.accountRef) }, "Account unconfirmed",
                            "the shared chip keeps its \"Account unconfirmed\" tooltip line")
@@ -134,7 +134,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let confirmed = session("acct", snap(used: 10, sampledAt: base.addingTimeInterval(-1800), resetsAt: reset, ref: "acct-A"))
         let unconfirmed = session("unc", snap(used: 30, sampledAt: base.addingTimeInterval(-120), resetsAt: reset, ref: nil))
         for order in [[confirmed, unconfirmed], [unconfirmed, confirmed]] {
-            let chips = SessionListView.quotaChipData(sessions: order, now: base)
+            let chips = SessionListView.quotaChipData(sessions: order, hiddenAccounts: [], now: base)
             XCTAssertEqual(chips.count, 2)
             XCTAssertEqual(chips.first { $0.accountRef == "acct-A" }?.snapshot.windows.first?.usedPercent, 10)
             XCTAssertEqual(chips.first { $0.accountRef.isEmpty }?.snapshot.windows.first?.usedPercent, 30)
@@ -190,7 +190,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let newer = session("newer", snap(used: 20, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: nil))
         for providerKey in ["anthropic", nil] as [String?] {
             for order in [[older, newer], [newer, older]] {
-                let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: providerKey, now: wall)
+                let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: order, providerKey: providerKey, hiddenAccounts: [], now: wall)
                 XCTAssertEqual(got?.windows.first?.usedPercent, 20, "providerKey=\(providerKey ?? "auto")")
             }
         }
@@ -201,9 +201,9 @@ final class QuotaAccountBucketTests: XCTestCase {
     func testFreshBeatsStaleAcrossAccountsAndStaleStillReturnedAlone() {
         let fresh = snap(used: 10, sampledAt: wall.addingTimeInterval(-9), resetsAt: wall.addingTimeInterval(3600), ref: "acct-A")
         let stale = snap(used: 90, sampledAt: wall.addingTimeInterval(-5), resetsAt: wall.addingTimeInterval(-3600), ref: "acct-B")
-        let both = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("a", fresh), session("b", stale)], providerKey: nil, now: wall)
+        let both = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("a", fresh), session("b", stale)], providerKey: nil, hiddenAccounts: [], now: wall)
         XCTAssertEqual(both?.windows.first?.usedPercent, 10)
-        let only = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("b", stale)], providerKey: nil, now: wall)
+        let only = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("b", stale)], providerKey: nil, hiddenAccounts: [], now: wall)
         XCTAssertEqual(only?.windows.first?.usedPercent, 90)
     }
 
@@ -211,7 +211,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let reset = wall.addingTimeInterval(3600)
         let a = snap(used: 50, sampledAt: wall.addingTimeInterval(-50), resetsAt: reset, ref: "acct-A", product: "claude_max")
         let b = snap(used: 50, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: "acct-B", product: "claude_pro")
-        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("b", b), session("a", a)], providerKey: nil, now: wall)
+        let got = QuotaMenuBarRenderer.selectedSnapshot(sessions: [session("b", b), session("a", a)], providerKey: nil, hiddenAccounts: [], now: wall)
         XCTAssertEqual(got?.confirmedAccountRef, "acct-A")
     }
 
@@ -222,7 +222,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let chips = SessionListView.quotaChipData(sessions: [
             session("a", snap(used: 20, sampledAt: base, resetsAt: reset, ref: "acct-A")),
             session("u", adapter: "pi", snap(used: 5, sampledAt: base, resetsAt: reset, provider: nil, ref: nil)),
-        ], now: base)
+        ], hiddenAccounts: [], now: base)
         XCTAssertEqual(chips.map(\.providerKey), ["anthropic", "unknown:pi"])
         XCTAssertEqual(chips.map(\.accountRef), ["acct-A", ""])
         XCTAssertEqual(ProviderModePreference.storageKey(providerKey: chips[0].providerKey), "providerMode_anthropic")
@@ -253,7 +253,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let anthropic = snap(used: 30, sampledAt: wall.addingTimeInterval(-5), resetsAt: reset, ref: "acct-A")
         let openai = snap(used: 70, sampledAt: wall.addingTimeInterval(-3600), resetsAt: reset, provider: "openai", ref: "acct-O")
         let got = QuotaMenuBarRenderer.selectedSnapshot(
-            sessions: [session("o", adapter: "codex", openai), session("a", anthropic)], providerKey: nil, now: wall)
+            sessions: [session("o", adapter: "codex", openai), session("a", anthropic)], providerKey: nil, hiddenAccounts: [], now: wall)
         XCTAssertEqual(got?.windows.first?.usedPercent, 30)
     }
 
@@ -265,7 +265,7 @@ final class QuotaAccountBucketTests: XCTestCase {
         let b = snap(used: 80, sampledAt: wall.addingTimeInterval(-50), resetsAt: reset, ref: "acct-B")
         let openai = snap(used: 95, sampledAt: wall.addingTimeInterval(-3600), resetsAt: reset, provider: "openai", ref: "acct-O")
         let got = QuotaMenuBarRenderer.selectedSnapshot(
-            sessions: [session("o", adapter: "codex", openai), session("a", a), session("b", b)], providerKey: nil, now: wall)
+            sessions: [session("o", adapter: "codex", openai), session("a", a), session("b", b)], providerKey: nil, hiddenAccounts: [], now: wall)
         XCTAssertEqual(got?.windows.first?.usedPercent, 80)
     }
 }

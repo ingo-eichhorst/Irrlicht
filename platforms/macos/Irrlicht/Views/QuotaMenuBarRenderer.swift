@@ -42,9 +42,12 @@ enum QuotaMenuBarRenderer {
         sessions: [SessionState],
         providerKey: String?,
         compact: Bool = false,
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
-        guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey, now: now) else {
+        guard let info = selectedSnapshot(
+            sessions: sessions, providerKey: providerKey, hiddenAccounts: hiddenAccounts, now: now
+        ) else {
             return nil
         }
         return buildImage(for: info, compact: compact, now: now)
@@ -73,9 +76,16 @@ enum QuotaMenuBarRenderer {
     /// can draw is skipped (`hasDrawableWindow`): one with no windows at all
     /// (the credits/usage-only path), or one whose only window is monthly
     /// (Mistral Vibe, #2012), can never render.
+    ///
+    /// `hiddenAccounts` holds the bucket keys the user hid in Settings (#2163).
+    /// Their candidates are dropped BEFORE Auto chooses a provider, so a hidden
+    /// account can neither be picked nor decide which provider Auto shows. A
+    /// provider whose accounts are all hidden has no candidate left, so a slot
+    /// selected for it draws nothing and Auto skips it.
     static func selectedSnapshot(
         sessions: [SessionState],
         providerKey: String?,
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> RateLimitInfo? {
         struct Candidate {
@@ -84,7 +94,7 @@ enum QuotaMenuBarRenderer {
             let info: RateLimitInfo
             let stale: Bool
         }
-        let candidates = sessions.compactMap { s -> Candidate? in
+        let allCandidates = sessions.compactMap { s -> Candidate? in
             guard let snap = s.metrics?.rateLimit, hasDrawableWindow(snap) else { return nil }
             return Candidate(
                 provider: snap.bucketProviderKey(adapter: s.adapter),
@@ -92,6 +102,7 @@ enum QuotaMenuBarRenderer {
                 info: snap,
                 stale: SessionListView.snapshotIsStale(snap, now: now))
         }
+        let candidates = HiddenQuotaAccounts.visible(allCandidates, hidden: hiddenAccounts) { $0.key }
         let chosenProvider = providerKey ?? candidates.min { l, r in
             l.info.sampledAt != r.info.sampledAt
                 ? l.info.sampledAt > r.info.sampledAt
