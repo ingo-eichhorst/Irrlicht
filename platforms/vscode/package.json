@@ -61,6 +61,17 @@
           "default": "http://127.0.0.1:7837",
           "scope": "machine",
           "description": "URL of the Irrlicht daemon. Only loopback http(s) addresses (127.0.0.0/8, ::1, localhost) are accepted; anything else falls back to the default."
+        },
+        "irrlicht.terminalFrame": {
+          "type": "string",
+          "enum": ["off", "border", "border-and-tint"],
+          "enumDescriptions": [
+            "Do not paint anything around the terminal.",
+            "Paint a border in the agent's state colour around the terminal area.",
+            "Paint the border and tint the terminal background with the agent's state colour."
+          ],
+          "default": "border",
+          "markdownDescription": "Paints the state colour of the agent in the active terminal around the terminal area. It does this by writing `workbench.colorCustomizations` into the workspace's `.vscode/settings.json` (as Peacock does) and restores your previous values when the terminal has no agent, the setting is turned off, or the extension is deactivated. It does nothing when no folder is open."
         }
       }
     },

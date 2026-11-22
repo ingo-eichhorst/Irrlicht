@@ -1,6 +1,7 @@
 'use strict';
 // Runs inside the VS Code extension host. Plain CommonJS, no compile step.
 const http = require('node:http');
+const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const vscode = require('vscode');
@@ -23,6 +24,38 @@ async function poll(name, fn, observed, timeoutMs = 20000) {
       throw new Error(`e2e step "${name}" timed out after ${Date.now() - start} ms; observed: ${observed()}`);
     }
     await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+const SEED = {
+  'panel.border': '#123456',
+  'statusBar.background': '#654321',
+  '[Default Dark Modern]': { 'terminal.border': '#ABCDEF' },
+};
+
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+}
+
+const workspaceColors = () => vscode.workspace.getConfiguration('workbench').inspect('colorCustomizations')?.workspaceValue;
+const show = () => JSON.stringify(workspaceColors());
+
+// A check that cannot see its input must not pass: the seed has to be visible before anything else runs.
+function assertSeed() {
+  const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!folder) throw new Error('e2e: no workspace folder is open; the terminal frame cannot be tested');
+  const extRoot = path.resolve(__dirname, '..', '..', '..');
+  const rel = path.relative(extRoot, folder);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+    throw new Error(`e2e: workspace folder ${folder} is inside the extension root ${extRoot}; refusing to write into the repository`);
+  }
+  if (!deepEqual(workspaceColors(), SEED)) {
+    throw new Error(`e2e: workspace colorCustomizations is not the seed; saw ${show()}`);
   }
 }
 
@@ -91,6 +124,7 @@ async function ttyOf(pid) {
 }
 
 async function run() {
+  assertSeed();
   const stub = new StubDaemon();
   await stub.start(0);
   const cfg = vscode.workspace.getConfiguration('irrlicht');
@@ -156,6 +190,82 @@ async function run() {
     }
     step('4f focus_requested activates paired terminal', s);
 
+    // g. terminal frame: the active agent terminal's state colour is written into the workspace settings
+    s = Date.now();
+    const COLOR = { working: '#8B5CF6', waiting: '#FF9500', ready: '#34C759' };
+    const customizations = () => workspaceColors() ?? {};
+    const frameIs = (c) => { const v = customizations(); return v['modernPanel.border'] === c && v['panel.border'] === c; };
+    let plain;
+    try {
+      terminal.show();
+      await poll('4g e2e-agent active', () => vscode.window.activeTerminal?.name === 'e2e-agent',
+        () => `active=${vscode.window.activeTerminal?.name}`);
+      const pushedAt = Date.now();
+      stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 5 });
+      await poll('4g working frame', () => frameIs(COLOR.working),
+        () => `workspace colorCustomizations=${show()} pairings=${JSON.stringify(api.getPairings())}`);
+      const latency = Date.now() - pushedAt;
+      if (latency > 2000) throw new Error(`e2e step "4g" frame took ${latency} ms after the push (limit 2000 ms)`);
+      console.log(`[e2e] 4g frame latency ${latency} ms`);
+      const v = customizations();
+      if (v['statusBar.background'] !== '#654321') throw new Error(`4g statusBar.background changed: ${show()}`);
+      if (!deepEqual(v['[Default Dark Modern]'], SEED['[Default Dark Modern]'])) throw new Error(`4g theme block changed: ${show()}`);
+      if ('activityBar.background' in v) throw new Error(`4g user-scope key leaked into the workspace: ${show()}`);
+
+      stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'waiting', tty), seq: 6 });
+      await poll('4g waiting frame', () => frameIs(COLOR.waiting), () => `workspace colorCustomizations=${show()}`);
+
+      plain = vscode.window.createTerminal({ name: 'e2e-plain' });
+      plain.show();
+      await poll('4g plain terminal restores user values', () => {
+        const c = customizations();
+        return c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+
+      terminal.show();
+      await poll('4g e2e-agent again waiting frame', () => frameIs(COLOR.waiting),
+        () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+
+      // Editor location: the frame moves to the editor keys and the panel keys go back to the user's values.
+      await vscode.commands.executeCommand('workbench.action.terminal.moveToEditor');
+      await poll('4g terminal in editor frames the editor', () => {
+        const c = customizations();
+        return c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
+          && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+      await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+      await poll('4g terminal back in panel frames the panel', () => {
+        const c = customizations();
+        return frameIs(COLOR.waiting) && !('editor.border' in c) && !('tab.activeBorderTop' in c);
+      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+      terminal.show();
+      await poll('4g e2e-agent active in the panel', () => vscode.window.activeTerminal?.name === 'e2e-agent',
+        () => `active=${vscode.window.activeTerminal?.name}`);
+
+      await cfg.update('terminalFrame', 'off', vscode.ConfigurationTarget.Global);
+      await poll('4g setting off restores user values', () => {
+        const c = customizations();
+        return c['panel.border'] === '#123456' && !('modernPanel.border' in c);
+      }, () => `workspace colorCustomizations=${show()}`);
+
+      await cfg.update('terminalFrame', 'border-and-tint', vscode.ConfigurationTarget.Global);
+      await poll('4g border-and-tint tints', () => {
+        const c = customizations();
+        return c['terminal.background'] !== undefined && c['terminal.background'] === c['panel.background']
+          && c['terminal.background'] !== COLOR.waiting && c['panel.border'] === COLOR.waiting;
+      }, () => `workspace colorCustomizations=${show()}`);
+
+      await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global);
+      await poll('4g default setting removes tint', () => {
+        const c = customizations();
+        return !('terminal.background' in c) && !('panel.background' in c) && frameIs(COLOR.waiting);
+      }, () => `workspace colorCustomizations=${show()}`);
+    } finally {
+      try { if (plain) plain.dispose(); } catch { /* ignore */ }
+      try { await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global); } catch { /* ignore */ }
+    }
+    step('4g terminal frame', s);
+
     // e. daemon goes away and comes back
     s = Date.now();
     const port = stub.port;
@@ -163,6 +273,8 @@ async function run() {
     await poll('4e offline', () => api.getConnectionState() === 'offline', () => `state=${api.getConnectionState()}`);
     await poll('4e status text contains "offline"', () => api.getStatusText().includes('offline'),
       () => `status=${JSON.stringify(api.getStatusText())}`);
+    await poll('4e frame removed when sessions go away', () => deepEqual(workspaceColors(), SEED),
+      () => `workspace colorCustomizations=${show()}`);
     step('4e offline detected', s);
 
     s = Date.now();

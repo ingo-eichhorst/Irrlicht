@@ -4,6 +4,7 @@ import { DaemonClient, type ConnectionState } from './daemonClient';
 import { Emitter } from './emitter';
 import { SessionStore } from './sessionStore';
 import { createStatusBar } from './statusBar';
+import { TerminalFrameController } from './terminalFrameController';
 import { AgentTerminalsView, TerminalPairing } from './terminals';
 import { DashboardPanel, DashboardViewProvider } from './webview';
 
@@ -12,6 +13,8 @@ export interface IrrlichtTestApi {
   getConnectionState(): ConnectionState;
   getPairings(): Array<{ terminalName: string; sessionId: string; state: string }>;
 }
+
+let frameController: TerminalFrameController | undefined;
 
 export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefined {
   const out = vscode.window.createOutputChannel('Irrlicht');
@@ -31,12 +34,15 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefi
   const client = new DaemonClient({ getUrl: urls.current, store, log });
   const pairing = new TerminalPairing(store, log);
   pairing.start();
+  frameController = new TerminalFrameController(pairing, ctx.workspaceState, log);
+  frameController.start();
   const statusBar = createStatusBar(store, client, () => url.origin);
   const terminalsView = new AgentTerminalsView(pairing);
 
   ctx.subscriptions.push(
     out,
     pairing,
+    frameController,
     statusBar,
     terminalsView,
     vscode.commands.registerCommand('irrlicht.openPanel', () => DashboardPanel.show(ctx, client, urls)),
@@ -65,4 +71,9 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefi
     getPairings: () =>
       pairing.pairings().map((p) => ({ terminalName: p.terminal.name, sessionId: p.session.session_id, state: String(p.session.state) })),
   };
+}
+
+// Best effort: puts the user's colour customizations back; the memo lets the next activation finish it.
+export function deactivate(): Promise<void> | undefined {
+  return frameController?.restore();
 }

@@ -20,6 +20,23 @@ const root = shortTmpRoot();
 const userDataDir = fs.mkdtempSync(path.join(root, 'irr-ud-'));
 const extensionsDir = fs.mkdtempSync(path.join(root, 'irr-ex-'));
 const fakeHome = fs.mkdtempSync(path.join(root, 'irr-home-'));
+// The terminal frame writes workbench.colorCustomizations into the workspace's .vscode/settings.json,
+// so the window must open a throwaway copy of the fixture, never the tracked folder.
+const workspaceDir = fs.mkdtempSync(path.join(root, 'irr-ws-'));
+fs.cpSync(path.join(here, 'workspace'), workspaceDir, { recursive: true });
+fs.mkdirSync(path.join(workspaceDir, '.vscode'), { recursive: true });
+fs.writeFileSync(path.join(workspaceDir, '.vscode', 'settings.json'), JSON.stringify({
+  'workbench.colorCustomizations': {
+    'panel.border': '#123456',
+    'statusBar.background': '#654321',
+    '[Default Dark Modern]': { 'terminal.border': '#ABCDEF' },
+  },
+}, null, 2));
+// A user-scope customization that must never be copied into the workspace.
+fs.mkdirSync(path.join(userDataDir, 'User'), { recursive: true });
+fs.writeFileSync(path.join(userDataDir, 'User', 'settings.json'), JSON.stringify({
+  'workbench.colorCustomizations': { 'activityBar.background': '#0A0B0C' },
+}, null, 2));
 
 // VS Code writes ~/.vscode-shared; never let that be the real home.
 process.env.HOME = fakeHome;
@@ -35,7 +52,7 @@ try {
     extensionDevelopmentPath: extensionRoot,
     extensionTestsPath: path.join(here, 'suite', 'index.js'),
     launchArgs: [
-      path.join(here, 'workspace'),
+      workspaceDir,
       '--use-mock-keychain', // otherwise VS Code blocks on a login-keychain write
       '--use-inmemory-secretstorage',
       '--disable-workspace-trust',
@@ -53,7 +70,7 @@ try {
   console.error('e2e: FAILED:', err?.message ?? err);
   code = 1;
 } finally {
-  for (const d of [userDataDir, extensionsDir, fakeHome]) {
+  for (const d of [userDataDir, extensionsDir, fakeHome, workspaceDir]) {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 }
