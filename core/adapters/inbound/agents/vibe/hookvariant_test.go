@@ -14,6 +14,7 @@
 package vibe
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,6 +106,15 @@ func vibeFiles(t *testing.T) (hooksPath, configPath string) {
 	return hp, cp
 }
 
+// assertCurrentHooks fails unless hooks.toml holds the current artifact's
+// type line and no post_agent_turn.
+func assertCurrentHooks(t *testing.T, hooksPath string) {
+	t.Helper()
+	if hooks := readFileOrEmpty(t, hooksPath); !strings.Contains(hooks, typeLineCurrent) || strings.Contains(hooks, "post_agent_turn") {
+		t.Errorf("hooks.toml = %q, want an entry with %q and no post_agent_turn", hooks, typeLineCurrent)
+	}
+}
+
 func isolatedVibeHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -112,7 +122,7 @@ func isolatedVibeHome(t *testing.T) {
 }
 
 const (
-	flagLinePrefix  = "enable_experimental_hooks"
+	flagKey         = "enable_experimental_hooks"
 	typeLineCurrent = `type = "post_agent"` + "\n"
 	typeLineLegacy  = `type = "post_agent_turn"` + "\n"
 )
@@ -129,12 +139,9 @@ func TestCurrentVibe_InstallWritesPostAgentAndNoFlag(t *testing.T) {
 			applyAt(t, version)
 			hooksPath, configPath := vibeFiles(t)
 
-			hooks := readFileOrEmpty(t, hooksPath)
-			if !strings.Contains(hooks, typeLineCurrent) || strings.Contains(hooks, "post_agent_turn") {
-				t.Errorf("hooks.toml = %q, want one entry with %q and no post_agent_turn", hooks, typeLineCurrent)
-			}
-			if cfg := readFileOrEmpty(t, configPath); strings.Contains(cfg, flagLinePrefix) {
-				t.Errorf("config.toml = %q, want no %s key: Vibe %s does not read it", cfg, flagLinePrefix, version)
+			assertCurrentHooks(t, hooksPath)
+			if cfg := readFileOrEmpty(t, configPath); strings.Contains(cfg, flagKey) {
+				t.Errorf("config.toml = %q, want no %s key: Vibe %s does not read it", cfg, flagKey, version)
 			}
 			if status := verifyAt(t, version); !status.Intact() {
 				t.Errorf("Verify right after install: %s", status.Damage())
@@ -155,7 +162,7 @@ func TestLegacyVibe_InstallIsUnchanged(t *testing.T) {
 			if hooks := readFileOrEmpty(t, hooksPath); !strings.Contains(hooks, typeLineLegacy) {
 				t.Errorf("hooks.toml = %q, want %q", hooks, typeLineLegacy)
 			}
-			if cfg := readFileOrEmpty(t, configPath); cfg != flagLinePrefix+" = true\n" {
+			if cfg := readFileOrEmpty(t, configPath); cfg != flagKey+" = true\n" {
 				t.Errorf("config.toml = %q, want exactly the flag set true", cfg)
 			}
 			if status := verifyAt(t, version); !status.Intact() {
@@ -172,20 +179,11 @@ func TestLegacyVibe_InstallIsUnchanged(t *testing.T) {
 // config.toml unchanged. Seen red before the fix: Verify read the old install
 // as intact at every version, so nothing would ever have rewritten it.
 func TestUpgrade_LegacyInstallOnARealConfigIsRewritten(t *testing.T) {
-	isolatedVibeHome(t)
-	hooksPath, configPath := vibeFiles(t)
-	original, err := os.ReadFile(filepath.Join("testdata", "real-config-2.19.1.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(original), flagLinePrefix) {
+	_, configPath := seedRealConfig(t)
+	hooksPath, _ := vibeFiles(t)
+	original := readFileOrEmpty(t, configPath)
+	if strings.Contains(original, flagKey) {
 		t.Fatal("fixture already carries the flag; this test needs it absent before the legacy install")
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath, original, 0o600); err != nil {
-		t.Fatal(err)
 	}
 
 	applyAt(t, "2.19.1")
@@ -199,14 +197,11 @@ func TestUpgrade_LegacyInstallOnARealConfigIsRewritten(t *testing.T) {
 	}
 
 	applyAt(t, "3.1.4")
-	if got := readFileOrEmpty(t, configPath); got != string(original) {
+	if got := readFileOrEmpty(t, configPath); got != original {
 		t.Errorf("config.toml after the upgrade differs from the file Vibe wrote; want only the flag line removed.\n--- got\n%s", got)
 	}
-	hooks := readFileOrEmpty(t, hooksPath)
-	if !strings.Contains(hooks, typeLineCurrent) || strings.Contains(hooks, "post_agent_turn") {
-		t.Errorf("hooks.toml after the upgrade = %q, want the entry's type rewritten to post_agent", hooks)
-	}
-	if n := strings.Count(hooks, "[[hooks]]"); n != 1 {
+	assertCurrentHooks(t, hooksPath)
+	if n := strings.Count(readFileOrEmpty(t, hooksPath), "[[hooks]]"); n != 1 {
 		t.Errorf("hooks.toml holds %d [[hooks]] blocks after the upgrade, want 1 (rewritten in place)", n)
 	}
 	if status := verifyAt(t, "3.1.4"); !status.Intact() {
@@ -231,18 +226,48 @@ func TestCurrentVibe_AFlagLineAtAnyValueReadsStale(t *testing.T) {
 	isolatedVibeHome(t)
 	applyAt(t, "3.1.4")
 	_, configPath := vibeFiles(t)
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath, []byte("active_model = \"local\"\n"+flagLinePrefix+" = false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, filepath.Dir(configPath), "active_model = \"local\"\n"+flagKey+" = false\n")
 	if status := verifyAt(t, "3.1.4"); len(status.Stale) == 0 {
-		t.Fatalf("an install with `%s = false` under 3.1.4: %+v, want Stale", flagLinePrefix, status)
+		t.Fatalf("an install with `%s = false` under 3.1.4: %+v, want Stale", flagKey, status)
 	}
 	applyAt(t, "3.1.4")
 	if got := readFileOrEmpty(t, configPath); got != "active_model = \"local\"\n" {
 		t.Errorf("config.toml = %q, want the flag line gone and the rest untouched", got)
+	}
+}
+
+// TestCurrentVibe_AnUnscannableConfigWithoutTheFlagInstallsCleanly is a
+// defect test from #2171's review: a config.toml holding a construct hooktoml
+// refuses to scan (a triple-quoted string), but no flag, needs no edit at all,
+// so the current install must succeed and Verify must read it intact. Seen red
+// before the fix: Apply wrote the entry and then reported a refusal for a
+// delete it never needed, and Verify errored on every pass.
+func TestCurrentVibe_AnUnscannableConfigWithoutTheFlagInstallsCleanly(t *testing.T) {
+	seed := "active_model = \"local\"\nnote = \"\"\"\nmulti\n\"\"\"\n"
+	setVibeHome(t, seed)
+	_, configPath := vibeFiles(t)
+	applyAt(t, "3.1.4")
+	if status := verifyAt(t, "3.1.4"); !status.Intact() {
+		t.Errorf("Verify: %s", status.Damage())
+	}
+	if got := readFileOrEmpty(t, configPath); got != seed {
+		t.Errorf("config.toml changed: %q", got)
+	}
+}
+
+// TestLegacyVibe_ACurrentArtifactReadsStale covers the reordered legacy
+// Verify (#2171 review finding): after a downgrade, the current artifact (a
+// post_agent block and no flag) must read Stale under a legacy-selected
+// version, as agent.HookVariant.Verify's doc requires of another variant's
+// file, not Missing. It covers changed code rather than a defect, so its proof
+// is the mutation in tools/lib/vibe-hook-variants-mutations_test.sh that puts
+// the old `!present || !flagOn` arm first.
+func TestLegacyVibe_ACurrentArtifactReadsStale(t *testing.T) {
+	isolatedVibeHome(t)
+	applyAt(t, "3.1.4")
+	status := verifyAt(t, "2.19.1")
+	if len(status.Stale) == 0 || len(status.Missing) != 0 {
+		t.Errorf("the current artifact under 2.19.1: %+v, want Stale only", status)
 	}
 }
 
@@ -259,8 +284,8 @@ func TestUninstall_RemovesTheFlagLineRatherThanWritingFalse(t *testing.T) {
 		t.Fatalf("uninstall: %v", err)
 	}
 	_, configPath := vibeFiles(t)
-	if cfg := readFileOrEmpty(t, configPath); strings.Contains(cfg, flagLinePrefix) {
-		t.Errorf("config.toml after uninstall = %q, want no %s line", cfg, flagLinePrefix)
+	if cfg := readFileOrEmpty(t, configPath); strings.Contains(cfg, flagKey) {
+		t.Errorf("config.toml after uninstall = %q, want no %s line", cfg, flagKey)
 	}
 }
 
@@ -300,9 +325,11 @@ func TestPostAgentHook_DispatchesToHandleStopHook(t *testing.T) {
 // transcript_path to the session's storage ROOT, a directory, and
 // app_server/_unified_harness_backend_adapter.py's _session_dir names it
 // <save_dir>/unified/<session_id>. The payload also carries response_text,
-// agent_name and turn_id. 3.1.4 writes no messages.jsonl at all (only its
-// legacy-import code reads one), so this adapter's transcript Source does not
-// see a 3.x session either. That gap is out of this ticket's scope.
+// agent_name and turn_id. 3.1.4 writes no session messages.jsonl: its
+// session code only reads one, for legacy import, and the one file of that
+// name it writes is the ACP protocol log under ~/.vibe/logs/acp, outside the
+// session root. So this adapter's transcript Source does not see a 3.x
+// session either. That gap is out of this ticket's scope.
 //
 // What it pins: 200, no dispatch, and one error log line per POST — so a
 // 3.x user's hook costs one log line per turn, not a retry storm.
@@ -316,9 +343,15 @@ func TestPostAgentHook_A3xSessionDirectoryIsRefusedNotDispatched(t *testing.T) {
 	log := &contracttesting.RecordingLogger{}
 	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}, log)
 
-	body := `{"hook_event_name":"post_agent","session_id":"4f1c2d9e-0000-4000-8000-000000000000",` +
-		`"transcript_path":` + jsonString(sessionDir) + `,"cwd":"/tmp","parent_session_id":null,` +
-		`"agent_name":"default","turn_id":"turn-1","response_text":"done"}`
+	raw, err := json.Marshal(map[string]any{
+		"hook_event_name": "post_agent", "session_id": "4f1c2d9e-0000-4000-8000-000000000000",
+		"transcript_path": sessionDir, "cwd": "/tmp", "parent_session_id": nil,
+		"agent_name": "default", "turn_id": "turn-1", "response_text": "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
 	for i := 1; i <= 2; i++ {
 		rec := post(t, h, body)
 		if rec.Code != http.StatusOK {
@@ -331,10 +364,6 @@ func TestPostAgentHook_A3xSessionDirectoryIsRefusedNotDispatched(t *testing.T) {
 	if n := target.totalCalls(); n != 0 {
 		t.Errorf("dispatched %d times for a 3.x session directory, want 0", n)
 	}
-}
-
-func jsonString(s string) string {
-	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
 }
 
 // TestObservedReadsTheUvToolVersion is a defect test (#2171): the daemon

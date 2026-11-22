@@ -103,23 +103,7 @@ func Agent() agent.Agent {
 						Probe:    []string{"vibe", "--version"},
 						Observed: installedVersionFromUvTool,
 					},
-					Variants: []agent.HookVariant{
-						{
-							Min:    minVibeVersion,
-							Max:    minVibePostAgentVersion,
-							Events: installedHookEvents,
-							Since:  hookEventSince,
-							Apply:  applyLegacy,
-							Verify: VerifyHooksInstalled,
-						},
-						{
-							Min:    minVibePostAgentVersion,
-							Events: installedHookEventsCurrent,
-							Since:  hookEventSinceCurrent,
-							Apply:  func() error { _, err := EnsureHooksInstalledCurrent(); return err },
-							Verify: VerifyHooksInstalledCurrent,
-						},
-					},
+					Variants: hookVariants(),
 					// #1753's real fixture (captured before #1756 existed to
 					// require declaring it) — see hookinstaller_realconfig_test.go.
 					RealFixture: &agent.RealConfigFixture{
@@ -135,6 +119,32 @@ func Agent() agent.Agent {
 // applyLegacy installs the legacy artifact: the permission's own Apply and
 // the legacy variant's, one func so the two cannot drift.
 func applyLegacy() error { _, err := EnsureHooksInstalled(); return err }
+
+// applyCurrent installs the current artifact.
+func applyCurrent() error { _, err := EnsureHooksInstalledCurrent(); return err }
+
+// hookVariants declares the hooks permission's two artifacts (#2171): the
+// legacy one up to the first Vibe that accepts post_agent, and the current one
+// from there with no ceiling. The gate in Agent() is their envelope.
+func hookVariants() []agent.HookVariant {
+	return []agent.HookVariant{
+		{
+			Min:    minVibeVersion,
+			Max:    minVibePostAgentVersion,
+			Events: installedHookEvents,
+			Since:  hookEventSince,
+			Apply:  applyLegacy,
+			Verify: VerifyHooksInstalled,
+		},
+		{
+			Min:    minVibePostAgentVersion,
+			Events: installedHookEventsCurrent,
+			Since:  hookEventSinceCurrent,
+			Apply:  applyCurrent,
+			Verify: VerifyHooksInstalledCurrent,
+		},
+	}
+}
 
 // hooksDetail is the hooks permission's expanded consent copy. A function
 // because its version sentences are rendered from the same constants the gate

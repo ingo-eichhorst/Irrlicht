@@ -194,6 +194,18 @@ func vibeHookConfig(path, hookType, command string) hooktoml.HookConfig {
 	}
 }
 
+// inspectOurEntry is both Verify functions' shared read of hooks.toml: whether
+// a block of ours is there and whether it is exactly the canonical block of
+// hookType, plus the config.toml path each then reads its own way.
+func inspectOurEntry(hookType string) (present, canonical bool, configPath string, err error) {
+	hooksPath, configPath, command, err := installPaths()
+	if err != nil {
+		return false, false, "", err
+	}
+	present, canonical, err = hooktoml.Inspect(vibeHookConfig(hooksPath, hookType, command))
+	return present, canonical, configPath, err
+}
+
 // installPaths resolves both files and the beacon command every installer
 // entry point needs.
 func installPaths() (hooksPath, configPath, command string, err error) {
@@ -318,12 +330,7 @@ func UninstallHooks() (bool, error) {
 // the current artifact (a post_agent block, no flag) reads after a downgrade:
 // agent.HookVariant.Verify's rule that another variant's file reads Stale.
 func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
-	hooksPath, configPath, command, err := installPaths()
-	if err != nil {
-		return agent.HookEntryStatus{}, err
-	}
-
-	present, canonical, err := hooktoml.Inspect(vibeHookConfig(hooksPath, hookEventPostAgentTurn, command))
+	present, canonical, configPath, err := inspectOurEntry(hookEventPostAgentTurn)
 	if err != nil {
 		return agent.HookEntryStatus{}, err
 	}
@@ -351,16 +358,16 @@ func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
 // still in config.toml at any value, because the current Apply would delete
 // it and the file is therefore not as that Apply leaves it.
 func VerifyHooksInstalledCurrent() (agent.HookEntryStatus, error) {
-	hooksPath, configPath, command, err := installPaths()
+	present, canonical, configPath, err := inspectOurEntry(hookEventPostAgent)
 	if err != nil {
 		return agent.HookEntryStatus{}, err
 	}
-
-	present, canonical, err := hooktoml.Inspect(vibeHookConfig(hooksPath, hookEventPostAgent, command))
-	if err != nil {
-		return agent.HookEntryStatus{}, err
-	}
-	_, flagFound, err := hooktoml.TopLevelBool(configPath, experimentalHooksFlag)
+	// HasTopLevelKey does not scan a config.toml without the key's text, so a
+	// construct hooktoml refuses (a triple-quoted string) does not turn a
+	// config that needs no edit into an unreadable install on every #1372 pass
+	// (#2171 review). DeleteTopLevelKeyIfPresent takes the same short-circuit,
+	// so Apply and Verify agree about every file they leave alone.
+	flagFound, err := hooktoml.HasTopLevelKey(configPath, experimentalHooksFlag)
 	if err != nil {
 		return agent.HookEntryStatus{}, err
 	}

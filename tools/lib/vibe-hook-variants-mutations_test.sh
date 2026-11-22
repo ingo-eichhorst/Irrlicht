@@ -5,13 +5,16 @@
 # mutation instead"):
 #
 #   1. hooktoml.DeleteTopLevelKeyIfPresent (core/adapters/inbound/agents/
-#      hooktoml/hooktoml.go), a byte-range delete: its line terminator, and
+#      hooktoml/scalar.go), a byte-range delete: its line terminator, and
 #      its loop over duplicate copies.
 #   2. The axis guard of TestDeleteTopLevelKey_PropertyRandomMutations
 #      (property_test.go): the property must fail when the CRLF axis it
 #      exists for stops being generated.
 #   3. installedVersionFromUvTool's uv tool directory resolution
 #      (core/adapters/inbound/agents/vibe/uvtool.go): XDG_DATA_HOME.
+#   4. The legacy Verify's reordered switch (core/adapters/inbound/agents/
+#      vibe/hookinstaller.go), whose change from main's order no defect test
+#      can show red (#2171 review finding 4).
 #
 # The defect tests #2171 added (hookvariant_test.go) were seen red against
 # the code before the fix instead, and are not repeated here.
@@ -109,7 +112,7 @@ assert_go_test_goes_red() {
   echo "ok  $label"
 }
 
-HOOKTOML="core/adapters/inbound/agents/hooktoml/hooktoml.go"
+HOOKTOML="core/adapters/inbound/agents/hooktoml/scalar.go"
 HOOKTOML_PROPERTY="core/adapters/inbound/agents/hooktoml/property_test.go"
 HOOKTOML_PKG="./core/adapters/inbound/agents/hooktoml/"
 
@@ -142,11 +145,25 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "a property that never generates CRLF trips its own axis guard" \
   "$HOOKTOML_PROPERTY" \
-  $'\t\tif rng.Intn(4) == 0 {\n\t\t\tdoc = bytes.ReplaceAll' \
-  $'\t\tif rng.Intn(4) == 99 {\n\t\t\tdoc = bytes.ReplaceAll' \
+  $'\tif rng.Intn(4) == 0 {\n\t\tc.doc = bytes.ReplaceAll' \
+  $'\tif rng.Intn(4) == 99 {\n\t\tc.doc = bytes.ReplaceAll' \
   "$HOOKTOML_PKG" \
   "TestDeleteTopLevelKey_PropertyRandomMutations" \
   'an axis this property exists for was barely exercised'
+
+# ── the legacy Verify checks the gate before the block's shape ──────────────
+# After a downgrade the current artifact (a post_agent block, no flag) must read
+# Stale under a legacy-selected version, as agent.HookVariant.Verify's doc
+# requires of another variant's file. Main's order, the gate first, read it as
+# Missing, and no test noticed (#2171 review finding 4).
+assert_go_test_goes_red \
+  "a legacy Verify that checks the gate first reads the current artifact as Missing" \
+  "core/adapters/inbound/agents/vibe/hookinstaller.go" \
+  $'\tcase !present:\n\t\treturn agent.HookEntryStatus{Missing: []string{hookEventPostAgentTurn}}, nil' \
+  $'\tcase !present || !flagOn:\n\t\treturn agent.HookEntryStatus{Missing: []string{hookEventPostAgentTurn}}, nil' \
+  "./core/adapters/inbound/agents/vibe/" \
+  "TestLegacyVibe_ACurrentArtifactReadsStale" \
+  'want Stale only'
 
 # ── the version source ignores XDG_DATA_HOME ────────────────────────────────
 assert_go_test_goes_red \

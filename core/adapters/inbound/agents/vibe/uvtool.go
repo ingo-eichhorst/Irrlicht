@@ -21,9 +21,11 @@ const (
 
 // installedVersionFromUvTool is the hooks permission's VersionGate.Observed
 // (#2171): the version of a uv-installed Vibe, read from the NAME of its
-// dist-info folder. It runs nothing and reads no file, only one directory
-// listing, and returns "" whenever it cannot answer, so the gate falls
-// through to its probe (`vibe --version`).
+// dist-info folder. It runs nothing and opens no file's contents: it lists the
+// directories its glob passes through (filepath.Glob lists lib/, each
+// python*/ and each site-packages/ under the tool's folder), and returns ""
+// whenever it cannot answer, so the gate falls through to its probe
+// (`vibe --version`).
 //
 // It exists because the probe often cannot answer for the install method
 // Vibe documents. `uv tool install` puts the `vibe` launcher in

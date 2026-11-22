@@ -55,16 +55,11 @@ func TestHooksGate_SelectsTheArtifactByVersion(t *testing.T) {
 // the daemon consumes rather than a copy.
 func hooksVersionGate(t *testing.T) *agent.VersionGate {
 	t.Helper()
-	for _, p := range Agent().Permissions {
-		if p.Key == PermissionKeyHooks {
-			if p.Writes == nil || p.Writes.Version == nil {
-				t.Fatal("hooks permission declares no version gate")
-			}
-			return p.Writes.Version
-		}
+	gate := hooksDeclaration(t).Writes.Version
+	if gate == nil {
+		t.Fatal("hooks permission declares no version gate")
 	}
-	t.Fatal("no hooks permission")
-	return nil
+	return gate
 }
 
 // What is deliberately NOT here: BelowFloorSaysWhy, AtOrAboveFloorInstalls

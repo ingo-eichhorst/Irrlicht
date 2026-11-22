@@ -468,8 +468,9 @@ func randomGlue(rng *rand.Rand) string {
 // comment/blank lines; a random SUFFIX of 0-2 unrelated [table] sections
 // after the preamble, themselves optionally carrying a multi-line array
 // (present precisely to prove the scanner never inserts INSIDE a table);
-// presence or absence of a trailing newline; and which operation runs —
-// EnsureBoolTrue or ClearBoolIfPresent.
+// and presence or absence of a trailing newline. The operation is
+// EnsureBoolTrue; ClearBoolIfPresent, the clear half this property also drove
+// until #2171, lost its last caller there and was removed.
 //
 // The array axis matters most on THIS generator, not the sibling one: the
 // top-level scan is a second, independent walk over the bytes
@@ -482,8 +483,8 @@ func randomGlue(rng *rand.Rand) string {
 // is refused (the property the array axis exists for — every iteration
 // carrying an array failed here before #1753), and every unrelated scalar
 // line, every unrelated ARRAY and every table section survives verbatim
-// under BOTH operations and every starting state — there is no analogue of hookjson's "the deleted
-// subtree's comments go with it" here, because a scalar set/clear never
+// under every starting state — there is no analogue of hookjson's "the deleted
+// subtree's comments go with it" here, because a scalar set never
 // deletes a LINE, only rewrites the one line it targets (or adds one), so
 // nothing this generator places is ever a casualty the way an unrelated
 // [[hooks]] block's own comment is in the sibling property test above. The
@@ -504,11 +505,6 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 				preambleArraysSeen++
 			}
 		}
-		op := "ensure"
-		if rng.Intn(2) == 0 {
-			op = "clear"
-		}
-
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
 		if len(doc) > 0 {
@@ -520,18 +516,11 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 		fail := func(format string, args ...interface{}) {
 			t.Helper()
 			msg := fmt.Sprintf(format, args...)
-			t.Fatalf("iteration %d (seed %d), op=%s startState=%s:\ndocument:\n%s\n%s",
-				i, seed, op, startState, doc, msg)
+			t.Fatalf("iteration %d (seed %d), startState=%s:\ndocument:\n%s\n%s",
+				i, seed, startState, doc, msg)
 		}
 
-		var modified bool
-		var err error
-		switch op {
-		case "ensure":
-			modified, err = EnsureBoolTrue(path, key, atomicfile.WriteFile)
-		case "clear":
-			modified, err = ClearBoolIfPresent(path, key, atomicfile.WriteFile)
-		}
+		modified, err := EnsureBoolTrue(path, key, atomicfile.WriteFile)
 		if err != nil {
 			fail("unexpected refusal: %v", err)
 		}
@@ -543,46 +532,28 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 			}
 		}
 
-		wantModified := (op == "ensure" && startState != "true") || (op == "clear" && startState == "true")
-		if modified != wantModified {
+		if wantModified := startState != "true"; modified != wantModified {
 			fail("modified=%v, want %v", modified, wantModified)
 		}
 
 		value, found, err := TopLevelBool(path, key)
 		if err != nil {
-			fail("TopLevelBool after %s: %v", op, err)
+			fail("TopLevelBool after EnsureBoolTrue: %v", err)
 		}
-		switch op {
-		case "ensure":
-			if !found || !value {
-				fail("after EnsureBoolTrue: found=%v value=%v, want true/true", found, value)
-			}
-		case "clear":
-			if startState == "absent" {
-				if found {
-					fail("ClearBoolIfPresent created an absent key")
-				}
-			} else if !found || value {
-				fail("after ClearBoolIfPresent: found=%v value=%v, want true/false", found, value)
-			}
+		if !found || !value {
+			fail("after EnsureBoolTrue: found=%v value=%v, want true/true", found, value)
 		}
 
-		var modified2 bool
-		switch op {
-		case "ensure":
-			modified2, err = EnsureBoolTrue(path, key, atomicfile.WriteFile)
-		case "clear":
-			modified2, err = ClearBoolIfPresent(path, key, atomicfile.WriteFile)
-		}
+		modified2, err := EnsureBoolTrue(path, key, atomicfile.WriteFile)
 		if err != nil {
-			fail("second %s: %v", op, err)
+			fail("second EnsureBoolTrue: %v", err)
 		}
 		if modified2 {
-			fail("second %s reported a modification — not idempotent", op)
+			fail("second EnsureBoolTrue reported a modification — not idempotent")
 		}
 		result2, _ := os.ReadFile(path)
 		if string(result) != string(result2) {
-			fail("second %s changed bytes", op)
+			fail("second EnsureBoolTrue changed bytes")
 		}
 	}
 
@@ -607,63 +578,20 @@ func TestDeleteTopLevelKey_PropertyRandomMutations(t *testing.T) {
 
 	arraysSeen, preambleArraysSeen, decorated, crlf := 0, 0, 0, 0
 	for i := 0; i < iterations; i++ {
-		_, startState, doc := genScalarDoc(rng, key)
-		if total, preamble := countGeneratedArrays(doc); total > 0 {
+		c := genDeleteCase(rng, key)
+		if total, preamble := countGeneratedArrays(c.doc); total > 0 {
 			arraysSeen++
 			if preamble > 0 {
 				preambleArraysSeen++
 			}
 		}
-
-		want := doc
-		if startState != "absent" {
-			doc, want = decorateAndCut(rng, doc, key+" = "+startState, &decorated)
+		if c.decorated {
+			decorated++
 		}
-		if rng.Intn(4) == 0 {
-			doc = bytes.ReplaceAll(doc, []byte("\n"), []byte("\r\n"))
-			want = bytes.ReplaceAll(want, []byte("\n"), []byte("\r\n"))
+		if c.crlf {
 			crlf++
 		}
-
-		path := filepath.Join(t.TempDir(), "config.toml")
-		if len(doc) > 0 {
-			if err := os.WriteFile(path, doc, 0o600); err != nil {
-				t.Fatalf("iter %d (seed %d): seed write: %v", i, seed, err)
-			}
-		}
-		fail := func(format string, args ...interface{}) {
-			t.Helper()
-			t.Fatalf("iteration %d (seed %d), startState=%s:\ndocument:\n%q\n%s",
-				i, seed, startState, doc, fmt.Sprintf(format, args...))
-		}
-
-		modified, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
-		if err != nil {
-			fail("unexpected refusal: %v", err)
-		}
-		if modified != (startState != "absent") {
-			fail("modified=%v, want %v", modified, startState != "absent")
-		}
-		result, err := os.ReadFile(path)
-		if len(doc) == 0 {
-			if !os.IsNotExist(err) {
-				fail("a delete on an absent file created it (stat err %v)", err)
-			}
-			continue
-		}
-		if !bytes.Equal(result, want) {
-			fail("result is not the input minus the one line:\ngot  %q\nwant %q", result, want)
-		}
-		if _, found, err := TopLevelBool(path, key); err != nil || found {
-			fail("after the delete: found=%v err=%v, want false/nil", found, err)
-		}
-		modified2, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
-		if err != nil || modified2 {
-			fail("second delete: modified=%v err=%v — not idempotent", modified2, err)
-		}
-		if again, _ := os.ReadFile(path); !bytes.Equal(again, result) {
-			fail("second delete changed bytes")
-		}
+		gradeDelete(t, c, key, fmt.Sprintf("iteration %d (seed %d)", i, seed))
 	}
 
 	assertArrayAxisWasExercised(t, iterations, arraysSeen, preambleArraysSeen)
@@ -676,24 +604,89 @@ func TestDeleteTopLevelKey_PropertyRandomMutations(t *testing.T) {
 	}
 }
 
+// deleteCase is one generated input for the delete property: the document,
+// the bytes the delete must leave, and which axes it exercised.
+type deleteCase struct {
+	startState      string
+	doc, want       []byte
+	decorated, crlf bool
+}
+
+// genDeleteCase draws a genScalarDoc document, decorates its target line
+// (when there is one) and, one time in four, converts it to CRLF.
+func genDeleteCase(rng *rand.Rand, key string) deleteCase {
+	_, startState, doc := genScalarDoc(rng, key)
+	c := deleteCase{startState: startState, doc: doc, want: doc}
+	if startState != "absent" {
+		c.doc, c.want, c.decorated = decorateAndCut(rng, doc, key+" = "+startState)
+	}
+	if rng.Intn(4) == 0 {
+		c.doc = bytes.ReplaceAll(c.doc, []byte("\n"), []byte("\r\n"))
+		c.want = bytes.ReplaceAll(c.want, []byte("\n"), []byte("\r\n"))
+		c.crlf = true
+	}
+	return c
+}
+
+// gradeDelete runs DeleteTopLevelKeyIfPresent twice on c.doc and fails unless
+// the first run leaves exactly c.want, reports a change exactly when the key
+// was there, leaves no key behind, and the second run changes nothing.
+func gradeDelete(t *testing.T, c deleteCase, key, label string) {
+	t.Helper()
+	fail := func(format string, args ...interface{}) {
+		t.Helper()
+		t.Fatalf("%s, startState=%s:\ndocument:\n%q\n%s", label, c.startState, c.doc, fmt.Sprintf(format, args...))
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if len(c.doc) > 0 {
+		if err := os.WriteFile(path, c.doc, 0o600); err != nil {
+			fail("seed write: %v", err)
+		}
+	}
+
+	modified, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
+	if err != nil {
+		fail("unexpected refusal: %v", err)
+	}
+	if want := c.startState != "absent"; modified != want {
+		fail("modified=%v, want %v", modified, want)
+	}
+	result, err := os.ReadFile(path)
+	if len(c.doc) == 0 {
+		if !os.IsNotExist(err) {
+			fail("a delete on an absent file created it (stat err %v)", err)
+		}
+		return
+	}
+	if !bytes.Equal(result, c.want) {
+		fail("result is not the input minus the one line:\ngot  %q\nwant %q", result, c.want)
+	}
+	if found, err := HasTopLevelKey(path, key); err != nil || found {
+		fail("after the delete: found=%v err=%v, want false/nil", found, err)
+	}
+	if modified2, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile); err != nil || modified2 {
+		fail("second delete: modified=%v err=%v — not idempotent", modified2, err)
+	}
+	if again, _ := os.ReadFile(path); !bytes.Equal(again, result) {
+		fail("second delete changed bytes")
+	}
+}
+
 // decorateAndCut finds the one occurrence of line (which genScalarDoc writes
 // once, terminated by "\n" unless it ends the document), maybe indents it and
-// maybe appends a comment, and returns the decorated document together with
-// that document minus the whole decorated line and its terminator.
-func decorateAndCut(rng *rand.Rand, doc []byte, line string, decorated *int) (withLine, without []byte) {
-	idx := bytes.Index(doc, []byte(line))
-	if idx < 0 || bytes.Count(doc, []byte(line)) != 1 {
-		panic(fmt.Sprintf("generator wrote %q %d times, want exactly once", line, bytes.Count(doc, []byte(line))))
+// maybe appends a comment, and returns the decorated document, that document
+// minus the whole decorated line and its terminator, and whether it decorated.
+func decorateAndCut(rng *rand.Rand, doc []byte, line string) (withLine, without []byte, decorated bool) {
+	if n := bytes.Count(doc, []byte(line)); n != 1 {
+		panic(fmt.Sprintf("generator wrote %q %d times, want exactly once", line, n))
 	}
+	idx := bytes.Index(doc, []byte(line))
 	indent, comment := "", ""
 	if rng.Intn(3) == 0 {
 		indent = "  "
 	}
 	if rng.Intn(3) == 0 {
 		comment = "  # set by hand"
-	}
-	if indent != "" || comment != "" {
-		*decorated++
 	}
 	before, after := doc[:idx], doc[idx+len(line):]
 	withLine = append(append(append([]byte{}, before...), indent+line+comment...), after...)
@@ -702,7 +695,7 @@ func decorateAndCut(rng *rand.Rand, doc []byte, line string, decorated *int) (wi
 		rest = rest[1:]
 	}
 	without = append(append([]byte{}, before...), rest...)
-	return withLine, without
+	return withLine, without, indent != "" || comment != ""
 }
 
 func genScalarDoc(rng *rand.Rand, key string) (unrelated []string, startState string, doc []byte) {
