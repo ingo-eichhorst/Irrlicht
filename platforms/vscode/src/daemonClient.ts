@@ -14,6 +14,17 @@ export interface DaemonClientOptions { getUrl(): ResolvedDaemonUrl; store: Sessi
 
 export type ConnectionState = 'connecting' | 'online' | 'offline';
 
+function isFrame(v: unknown): v is PushMessage {
+  if (typeof v !== 'object' || v === null) return false;
+  return typeof (v as { type?: unknown }).type === 'string';
+}
+
+/** The frame in `data` when it is an object with a string `type`, else undefined. Throws on invalid JSON. */
+function parseFrame(data: unknown): PushMessage | undefined {
+  const msg: unknown = JSON.parse(String(data));
+  return isFrame(msg) ? msg : undefined;
+}
+
 export class DaemonClient {
   private _state: ConnectionState = 'offline';
   private running = false;
@@ -108,16 +119,9 @@ export class DaemonClient {
       do {
         this.again = false;
         this.pending = [];
-        const url = this.opts.getUrl();
-        const doFetch = this.opts.fetchImpl ?? fetch;
-        const res = await doFetch(`${url.origin}/api/v1/sessions`);
-        if (!res.ok) throw new Error(`GET /api/v1/sessions -> HTTP ${res.status}`);
-        const body: unknown = await res.json();
+        const body = await this.fetchSnapshot();
         if (gen !== this.gen) return;
-        this.opts.store.hydrate(body);
-        const buffered = this.pending;
-        this.pending = undefined;
-        for (const m of buffered) this.opts.store.apply(m, true);
+        this.applySnapshot(body);
       } while (this.again);
       this.delay = this.backoff.initial;
       this.setState('online');
@@ -130,26 +134,48 @@ export class DaemonClient {
     }
   }
 
+  private async fetchSnapshot(): Promise<unknown> {
+    const doFetch = this.opts.fetchImpl ?? fetch;
+    const res = await doFetch(`${this.opts.getUrl().origin}/api/v1/sessions`);
+    if (!res.ok) throw new Error(`GET /api/v1/sessions -> HTTP ${res.status}`);
+    return res.json();
+  }
+
+  /** Hydrates the store, then replays over it the frames buffered while the GET was in flight. */
+  private applySnapshot(body: unknown): void {
+    this.opts.store.hydrate(body);
+    const buffered = this.pending ?? [];
+    this.pending = undefined;
+    for (const m of buffered) this.opts.store.apply(m, true);
+  }
+
   private onMessage(gen: number, data: unknown): void {
     try {
-      const msg = JSON.parse(String(data)) as PushMessage;
-      if (typeof msg !== 'object' || msg === null || typeof msg.type !== 'string') return;
+      const msg = parseFrame(data);
+      if (!msg) return;
       // Every frame advances the cursor on arrival, whatever its type and whether or not it is buffered.
-      if (typeof msg.seq === 'number' && msg.seq > 0) {
-        const gap = this.lastSeq > 0 && msg.seq > this.lastSeq + 1;
-        this.lastSeq = msg.seq;
-        if (gap) void this.hydrate(gen);
-      }
-      if (msg.type === 'focus_requested') {
-        if (msg.session) this.focus.fire(msg.session);
-      } else if (this.pending) {
-        this.pending.push(msg);
-      } else {
-        this.opts.store.apply(msg);
-      }
+      this.advanceSeq(gen, msg.seq);
+      this.dispatch(msg);
     } catch (e) {
       this.opts.log(`ignoring bad frame: ${String(e)}`);
     }
+  }
+
+  /** Records a stamped frame's seq; a jump past lastSeq + 1 is a gap and rehydrates. */
+  private advanceSeq(gen: number, seq: unknown): void {
+    if (typeof seq !== 'number' || !(seq > 0)) return;
+    const gap = this.lastSeq > 0 && seq > this.lastSeq + 1;
+    this.lastSeq = seq;
+    if (gap) void this.hydrate(gen);
+  }
+
+  private dispatch(msg: PushMessage): void {
+    if (msg.type === 'focus_requested') {
+      if (msg.session) this.focus.fire(msg.session);
+      return;
+    }
+    if (this.pending) this.pending.push(msg);
+    else this.opts.store.apply(msg);
   }
 
   private teardown(): void {

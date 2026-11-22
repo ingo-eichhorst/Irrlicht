@@ -13,7 +13,9 @@ export class Emitter<T> {
   };
 
   fire(v: T): void {
-    for (const l of [...this.listeners]) {
+    // A snapshot: a listener added or removed while firing takes effect from the next fire (emitter.test.ts).
+    const snapshot = [...this.listeners];
+    for (const l of snapshot) {
       try { l(v); } catch (e) { this.onError?.(e); }
     }
   }

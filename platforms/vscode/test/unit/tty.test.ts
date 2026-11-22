@@ -30,7 +30,7 @@ describe('normalizeTty', () => {
     expect(normalizeTty('  ttys001 \n')).toBe('/dev/ttys001');
   });
   it('returns undefined for "no tty" markers', () => {
-    for (const v of [undefined, '', '?', '??', '-', '  ']) expect(normalizeTty(v)).toBeUndefined();
+    for (const v of [undefined, '', '?', '??', '-', '  ', '/dev/', ' /dev/ ']) expect(normalizeTty(v)).toBeUndefined();
   });
   it('rejects hostile or malformed input', () => {
     for (const v of ['tty s1', '../etc/passwd', '/dev/../etc', 'ttys0;rm', 'tty$1', 'a\tb']) {
@@ -98,22 +98,13 @@ describe('pairTerminals', () => {
   it('picks the latest updated_at when sessions share a tty', () => {
     checkLatestWins(pairTerminals);
   });
-  // Committed in-language mutant: always keep the first session seen per tty.
+  // Committed in-language mutant: always keep the first session seen per tty. It hands the real
+  // pairTerminals only the first session of each tty, so there is never a newer one to pick.
   it('mutant: always keeping the first session is caught by the latest-wins check', () => {
-    const keepFirst: Pairer = <K>(terminals: Array<{ key: K; tty?: string }>, topLevel: SessionRecord[]) => {
-      const byTty = new Map<string, SessionRecord>();
-      for (const s of topLevel) {
-        const tty = normalizeTty(s.launcher?.tty);
-        if (tty && !byTty.has(tty)) byTty.set(tty, s);
-      }
-      const out = new Map<K, SessionRecord>();
-      for (const t of terminals) {
-        const tty = normalizeTty(t.tty);
-        const s = tty ? byTty.get(tty) : undefined;
-        if (s) out.set(t.key, s);
-      }
-      return out;
-    };
+    const ttyOf = (s: SessionRecord): string | undefined => normalizeTty(s.launcher?.tty);
+    const firstPerTty = (list: SessionRecord[]): SessionRecord[] =>
+      list.filter((s, i) => list.findIndex((o) => ttyOf(o) === ttyOf(s)) === i);
+    const keepFirst: Pairer = (terminals, topLevel) => pairTerminals(terminals, firstPerTty(topLevel));
     expect(() => checkLatestWins(keepFirst)).toThrow();
   });
   it('treats missing updated_at as 0 and keeps the first on ties', () => {

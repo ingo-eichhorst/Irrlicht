@@ -3,6 +3,7 @@ export const DEFAULT_DAEMON_URL = 'http://127.0.0.1:7837';
 export interface ResolvedDaemonUrl { origin: string; wsUrl: string; warning?: string }
 
 const STREAM_PATH = '/api/v1/sessions/stream';
+const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 
 function isLoopbackHost(hostname: string): boolean {
   if (hostname === 'localhost' || hostname === '[::1]') return true;
@@ -28,7 +29,7 @@ export function resolveDaemonUrl(raw: unknown): ResolvedDaemonUrl {
   } catch {
     return reject();
   }
-  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !isLoopbackHost(u.hostname)) return reject();
+  if (!HTTP_PROTOCOLS.has(u.protocol) || !isLoopbackHost(u.hostname)) return reject();
   return build(u.origin);
 }
 

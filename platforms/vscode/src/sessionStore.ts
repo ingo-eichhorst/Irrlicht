@@ -2,9 +2,12 @@
 import { Emitter } from './emitter';
 import { STATES, isStateName, type StateName } from './states';
 
-export interface SessionRecord { session_id: string; state: StateName | string; parent_session_id?: string; updated_at?: number;
+/** `state` is a StateName for every state this build knows; narrow it with isStateName(). */
+export interface SessionRecord { session_id: string; state: string; parent_session_id?: string; updated_at?: number;
   launcher?: { tty?: string }; project_name?: string; adapter?: string; model?: string }
 export interface PushMessage { type: string; session?: SessionRecord; seq?: number }
+
+const UPSERT_TYPES = new Set(['session_created', 'session_updated']);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -54,11 +57,17 @@ export class SessionStore {
     const id = msg.session?.session_id;
     if (typeof id !== 'string' || id === '') return false;
     if (msg.type === 'session_deleted') return this.sessions.delete(id);
-    if (msg.type !== 'session_created' && msg.type !== 'session_updated') return false;
-    const held = this.sessions.get(id)?.updated_at;
-    if (newerOnly && held !== undefined && held > (msg.session?.updated_at ?? 0)) return false;
-    this.sessions.set(id, msg.session as SessionRecord);
+    if (!UPSERT_TYPES.has(msg.type)) return false;
+    const incoming = msg.session as SessionRecord;
+    if (newerOnly && this.heldIsNewer(incoming)) return false;
+    this.sessions.set(id, incoming);
     return true;
+  }
+
+  /** True when the held record is strictly newer than `incoming`; a same-second tie is not. */
+  private heldIsNewer(incoming: SessionRecord): boolean {
+    const held = this.sessions.get(incoming.session_id)?.updated_at;
+    return held !== undefined && held > (incoming.updated_at ?? 0);
   }
 
   clear(): void {

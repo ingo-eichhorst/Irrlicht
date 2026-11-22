@@ -58,14 +58,19 @@ function has(o: Obj, key: string): boolean {
 /** Structural equality for JSON-like values; object key order does not matter. */
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    return a.every((v, i) => deepEqual(v, b[i]));
-  }
+  if (Array.isArray(a) || Array.isArray(b)) return arraysEqual(a, b);
   if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  return objectsEqual(a, b);
+}
+
+function arraysEqual(a: unknown, b: unknown): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
+}
+
+function objectsEqual(a: Obj, b: Obj): boolean {
   const keysA = Object.keys(a);
-  if (keysA.length !== Object.keys(b).length) return false;
-  return keysA.every((k) => has(b, k) && deepEqual(a[k], b[k]));
+  return keysA.length === Object.keys(b).length && keysA.every((k) => has(b, k) && deepEqual(a[k], b[k]));
 }
 
 /** Unknown or missing values give DEFAULT_FRAME_MODE. */
@@ -177,7 +182,8 @@ function isStringRecord(v: unknown): v is Record<string, string> {
 export function normalizeMemo(raw: unknown): FrameMemo | undefined {
   if (!isPlainObject(raw)) return undefined;
   const written = has(raw, 'written') ? raw.written : raw.applied;
-  if (!isPlainObject(raw.prev) || !isStringRecord(written) || typeof raw.hadObject !== 'boolean') return undefined;
+  if (!isPlainObject(raw.prev) || !isStringRecord(written)) return undefined;
+  if (typeof raw.hadObject !== 'boolean') return undefined;
   const memo: FrameMemo = { prev: raw.prev, written, hadObject: raw.hadObject };
   if (isStringRecord(raw.pending)) memo.pending = raw.pending;
   return memo;
@@ -250,7 +256,7 @@ function mergeOwned(cur: Obj, desired: Record<string, string>, userValues: Obj):
  * See the restore rule in the module's tests.
  */
 export function planFrame(current: unknown, memo: FrameMemo | undefined, desiredIn: Record<string, string>): FramePlan {
-  if (current !== undefined && !isPlainObject(current)) {
+  if (!isPlainOrMissing(current)) {
     return { invalid: true, changed: false, next: current, memo };
   }
   const desired = ownedOnly(desiredIn);
@@ -259,12 +265,25 @@ export function planFrame(current: unknown, memo: FrameMemo | undefined, desired
 
   const cur: Obj = current ?? {};
   const userValues = userValuesOf(cur, memo);
-  let next: unknown = mergeOwned(cur, desired, userValues);
-  const hadObject = memo ? memo.hadObject : current !== undefined;
-  if (restoring && Object.keys(next as Obj).length === 0 && !hadObject) next = undefined;
+  const hadObject = hadObjectBefore(current, memo);
+  const next = mergedValue(mergeOwned(cur, desired, userValues), restoring && !hadObject);
 
   const planMemo = restoring ? undefined : { prev: userValues, written: desired, hadObject };
   return { invalid: false, changed: !deepEqual(next, current), next, memo: planMemo };
+}
+
+function isPlainOrMissing(v: unknown): v is Obj | undefined {
+  return v === undefined || isPlainObject(v);
+}
+
+/** Whether the workspace had a colorCustomizations object before our first write. */
+function hadObjectBefore(current: Obj | undefined, memo: FrameMemo | undefined): boolean {
+  return memo ? memo.hadObject : current !== undefined;
+}
+
+/** The merged value, or undefined (remove the setting) when it is empty and `removable`. */
+function mergedValue(merged: Obj, removable: boolean): Obj | undefined {
+  return removable && Object.keys(merged).length === 0 ? undefined : merged;
 }
 
 export interface FrameIO {
@@ -394,19 +413,23 @@ export class FrameSync {
    * which still describes the disk. `stored` is whether anything, readable or not, sits in storage.
    */
   private async apply(plan: FramePlan, current: unknown, loaded: FrameMemo | undefined, stored: boolean): Promise<void> {
-    if (plan.memo === undefined) {
-      if (plan.changed) await this.io.write(plan.next);
-      if (stored) await this.io.saveMemo(undefined);
-      return;
-    }
-    if (!plan.changed) {
-      if (!deepEqual(plan.memo, loaded)) await this.io.saveMemo(plan.memo);
-      return;
-    }
+    if (plan.memo === undefined) return this.applyRestore(plan, stored);
+    if (!plan.changed) return this.refreshMemo(plan.memo, loaded);
     const written = confirmedOnDisk(isPlainObject(current) ? current : {}, loaded);
     await this.io.saveMemo({ ...plan.memo, written, pending: plan.memo.written });
     await this.io.write(plan.next);
     await this.io.saveMemo(plan.memo);
+  }
+
+  /** A restoring plan: write the user's values back if they differ, then drop the stored memo. */
+  private async applyRestore(plan: FramePlan, stored: boolean): Promise<void> {
+    if (plan.changed) await this.io.write(plan.next);
+    if (stored) await this.io.saveMemo(undefined);
+  }
+
+  /** Nothing to write: only bring the stored memo up to date. */
+  private async refreshMemo(memo: FrameMemo, loaded: FrameMemo | undefined): Promise<void> {
+    if (!deepEqual(memo, loaded)) await this.io.saveMemo(memo);
   }
 
   private async pass(desired: Record<string, string>): Promise<void> {

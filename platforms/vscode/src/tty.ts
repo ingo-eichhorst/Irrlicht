@@ -5,11 +5,11 @@ const NO_TTY = new Set(['', '?', '??', '-']);
 const SAFE = /^[A-Za-z0-9/._-]+$/;
 
 export function normalizeTty(raw: string | undefined): string | undefined {
-  if (raw === undefined) return undefined;
-  let t = raw.trim();
-  if (NO_TTY.has(t)) return undefined;
-  if (t.startsWith('/dev/')) t = t.slice('/dev/'.length);
-  if (t === '' || t.includes('..') || !SAFE.test(t)) return undefined;
+  const trimmed = raw?.trim() ?? '';
+  if (NO_TTY.has(trimmed)) return undefined;
+  const t = trimmed.startsWith('/dev/') ? trimmed.slice('/dev/'.length) : trimmed;
+  // SAFE needs at least one character, so a bare '/dev/' is rejected here too (tty.test.ts pins it).
+  if (t.includes('..') || !SAFE.test(t)) return undefined;
   return '/dev/' + t;
 }
 
@@ -41,21 +41,30 @@ export function applyPsRows(s: TermState, rows: Map<number, string | undefined>)
   return tty ? { ...s, tty } : { ...s, attempts: s.attempts + 1 };
 }
 
+// True when `s` should replace `held`: nothing is held yet, or `s` is strictly newer (a tie keeps `held`).
+function supersedes(s: SessionRecord, held: SessionRecord | undefined): boolean {
+  return held === undefined || (s.updated_at ?? 0) > (held.updated_at ?? 0);
+}
+
+// The most recently updated session per tty; sessions without a usable tty are skipped.
+function latestByTty(topLevel: SessionRecord[]): Map<string, SessionRecord> {
+  const byTty = new Map<string, SessionRecord>();
+  for (const s of topLevel) {
+    const tty = normalizeTty(s.launcher?.tty);
+    if (tty && supersedes(s, byTty.get(tty))) byTty.set(tty, s);
+  }
+  return byTty;
+}
+
 export function pairTerminals<K>(
   terminals: Array<{ key: K; tty?: string }>,
   topLevel: SessionRecord[],
 ): Map<K, SessionRecord> {
-  const byTty = new Map<string, SessionRecord>();
-  for (const s of topLevel) {
-    const tty = normalizeTty(s.launcher?.tty);
-    if (!tty) continue;
-    const cur = byTty.get(tty);
-    if (!cur || (s.updated_at ?? 0) > (cur.updated_at ?? 0)) byTty.set(tty, s);
-  }
+  const byTty = latestByTty(topLevel);
   const result = new Map<K, SessionRecord>();
   for (const t of terminals) {
     const tty = normalizeTty(t.tty);
-    const s = tty ? byTty.get(tty) : undefined;
+    const s = tty && byTty.get(tty);
     if (s) result.set(t.key, s);
   }
   return result;

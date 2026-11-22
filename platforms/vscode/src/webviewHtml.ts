@@ -55,19 +55,21 @@ function setNotice(text, showHint) {
   hint.hidden = !showHint;
   notice.hidden = false;
 }
+function showDashboard() {
+  if (!loaded) { frame.src = iframeUrl; loaded = true; }
+  frame.hidden = false;
+  notice.hidden = true;
+}
+function showOffline(url) {
+  frame.hidden = true;
+  if (loaded) { frame.src = 'about:blank'; loaded = false; }
+  setNotice('Irrlicht daemon not running at ' + url + ' \u2014 retrying\u2026', true);
+}
 window.addEventListener('message', (e) => {
   const m = e.data;
   if (!m || m.type !== 'daemon') return;
-  const url = typeof m.url === 'string' ? m.url : '';
-  if (m.connected === true) {
-    if (!loaded) { frame.src = iframeUrl; loaded = true; }
-    frame.hidden = false;
-    notice.hidden = true;
-  } else {
-    frame.hidden = true;
-    if (loaded) { frame.src = 'about:blank'; loaded = false; }
-    setNotice('Irrlicht daemon not running at ' + url + ' \u2014 retrying\u2026', true);
-  }
+  if (m.connected === true) showDashboard();
+  else showOffline(typeof m.url === 'string' ? m.url : '');
 });
 vscode.postMessage({ type: 'ready' });
 `;
