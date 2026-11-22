@@ -52,7 +52,7 @@ function isPlainObject(v: unknown): v is Obj {
 }
 
 function has(o: Obj, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(o, key);
+  return Object.hasOwn(o, key);
 }
 
 /** Structural equality for JSON-like values; object key order does not matter. */
@@ -101,7 +101,7 @@ export function resolveStateColor(state: StateName, kind: ThemeKind, customizati
 }
 
 function channels(hex: string): number[] {
-  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
 }
 
 /** Opaque mix of `over` into `base` (both #RRGGBB); amount 0 = base, 1 = over. Returns uppercase '#RRGGBB'. */
@@ -315,7 +315,8 @@ export class FrameSync {
     this.cancelTimer();
     this.timer = this.timers.set(() => {
       this.timerArmed = false;
-      this.markDirtyAndPump();
+      // pass() catches every error, so this promise cannot reject.
+      void this.markDirtyAndPump();
     }, this.debounceMs);
     this.timerArmed = true;
   }
@@ -376,6 +377,7 @@ export class FrameSync {
     try {
       while (this.dirty && this.queued !== undefined) {
         this.dirty = false;
+        // Awaiting inside the loop is deliberate: passes must run one at a time.
         await this.pass(this.queued);
       }
     } finally {

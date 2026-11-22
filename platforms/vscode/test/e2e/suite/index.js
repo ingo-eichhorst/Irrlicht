@@ -39,7 +39,7 @@ function deepEqual(a, b) {
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a);
   const kb = Object.keys(b);
-  return ka.length === kb.length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+  return ka.length === kb.length && ka.every((k) => Object.hasOwn(b, k) && deepEqual(a[k], b[k]));
 }
 
 const workspaceColors = () => vscode.workspace.getConfiguration('workbench').inspect('colorCustomizations')?.workspaceValue;
@@ -123,6 +123,116 @@ async function ttyOf(pid) {
   return last.startsWith('/dev/') ? last : `/dev/${last}`;
 }
 
+const COLOR = { working: '#8B5CF6', waiting: '#FF9500', ready: '#34C759' };
+const customizations = () => workspaceColors() ?? {};
+const frameIs = (c) => { const v = customizations(); return v['modernPanel.border'] === c && v['panel.border'] === c; };
+const tabsText = () => {
+  const groups = vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => t.label + (t.isActive ? '*' : '')));
+  return JSON.stringify(groups);
+};
+
+async function frameInEditor({ terminal }) {
+  // Editor location: the frame moves to the editor keys and the panel keys go back to the user's values.
+  await vscode.commands.executeCommand('workbench.action.terminal.moveToEditor');
+  await poll('4g terminal in editor frames the editor', () => {
+    const c = customizations();
+    return c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
+      && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+  }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+  // A tab opened in front of the terminal hides it but must not move the frame back to the panel.
+  const termGroup = vscode.window.tabGroups.all.find((g) => g.tabs.some((t) => t.input instanceof vscode.TabInputTerminal && t.label === 'e2e-agent'));
+  if (!termGroup) throw new Error(`4g terminal tab not found in any group: ${show()}`);
+  const readmeUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'README.md');
+  await vscode.window.showTextDocument(readmeUri, { preview: false, viewColumn: termGroup.viewColumn, preserveFocus: false });
+  const readmeTab = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs)
+    .find((t) => t.input instanceof vscode.TabInputText && t.input.uri.path.endsWith('/README.md'));
+  try {
+    await poll('4g README.md is the active tab in front of the terminal', () => readmeTab()?.isActive === true,
+      () => `tabs=${tabsText()}`);
+    console.log(`[e2e] 4g active terminal with README in front: ${vscode.window.activeTerminal?.name}`);
+    // The frame is debounced, so a wrong re-frame lands ~200 ms after the tab change: the editor frame must HOLD past that.
+    let heldSince = 0;
+    await poll('4g hidden editor terminal still frames the editor', () => {
+      const c = customizations();
+      const ok = c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
+        && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+      if (!ok) { heldSince = 0; return false; }
+      if (!heldSince) heldSince = Date.now();
+      return Date.now() - heldSince >= 1000;
+    }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`, 5000);
+  } finally {
+    const t = readmeTab();
+    if (t) await vscode.window.tabGroups.close(t);
+  }
+  await poll('4g e2e-agent tab active again', () => vscode.window.tabGroups.all.some((g) => g.activeTab?.input instanceof vscode.TabInputTerminal && g.activeTab.label === 'e2e-agent'),
+    () => `tabs=${tabsText()}`);
+  await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+  await poll('4g terminal back in panel frames the panel', () => {
+    const c = customizations();
+    return frameIs(COLOR.waiting) && !('editor.border' in c) && !('tab.activeBorderTop' in c);
+  }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+  terminal.show();
+  await poll('4g e2e-agent active in the panel', () => vscode.window.activeTerminal?.name === 'e2e-agent',
+    () => `active=${vscode.window.activeTerminal?.name}`);
+}
+
+async function stepTerminalFrame({ stub, api, terminal, tty, cfg }) {
+  let plain;
+  try {
+    terminal.show();
+    await poll('4g e2e-agent active', () => vscode.window.activeTerminal?.name === 'e2e-agent',
+      () => `active=${vscode.window.activeTerminal?.name}`);
+    const pushedAt = Date.now();
+    stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 5 });
+    await poll('4g working frame', () => frameIs(COLOR.working),
+      () => `workspace colorCustomizations=${show()} pairings=${JSON.stringify(api.getPairings())}`);
+    const latency = Date.now() - pushedAt;
+    if (latency > 2000) throw new Error(`e2e step "4g" frame took ${latency} ms after the push (limit 2000 ms)`);
+    console.log(`[e2e] 4g frame latency ${latency} ms`);
+    const v = customizations();
+    if (v['statusBar.background'] !== '#654321') throw new Error(`4g statusBar.background changed: ${show()}`);
+    if (!deepEqual(v['[Default Dark Modern]'], SEED['[Default Dark Modern]'])) throw new Error(`4g theme block changed: ${show()}`);
+    if ('activityBar.background' in v) throw new Error(`4g user-scope key leaked into the workspace: ${show()}`);
+
+    stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'waiting', tty), seq: 6 });
+    await poll('4g waiting frame', () => frameIs(COLOR.waiting), () => `workspace colorCustomizations=${show()}`);
+
+    plain = vscode.window.createTerminal({ name: 'e2e-plain' });
+    plain.show();
+    await poll('4g plain terminal restores user values', () => {
+      const c = customizations();
+      return c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+    }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+
+    terminal.show();
+    await poll('4g e2e-agent again waiting frame', () => frameIs(COLOR.waiting),
+      () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+
+    await frameInEditor({ terminal });
+    await cfg.update('terminalFrame', 'off', vscode.ConfigurationTarget.Global);
+    await poll('4g setting off restores user values', () => {
+      const c = customizations();
+      return c['panel.border'] === '#123456' && !('modernPanel.border' in c);
+    }, () => `workspace colorCustomizations=${show()}`);
+
+    await cfg.update('terminalFrame', 'border-and-tint', vscode.ConfigurationTarget.Global);
+    await poll('4g border-and-tint tints', () => {
+      const c = customizations();
+      return c['terminal.background'] !== undefined && c['terminal.background'] === c['panel.background']
+        && c['terminal.background'] !== COLOR.waiting && c['panel.border'] === COLOR.waiting;
+    }, () => `workspace colorCustomizations=${show()}`);
+
+    await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global);
+    await poll('4g default setting removes tint', () => {
+      const c = customizations();
+      return !('terminal.background' in c) && !('panel.background' in c) && frameIs(COLOR.waiting);
+    }, () => `workspace colorCustomizations=${show()}`);
+  } finally {
+    try { if (plain) plain.dispose(); } catch { /* ignore */ }
+    try { await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global); } catch { /* ignore */ }
+  }
+}
+
 async function run() {
   assertSeed();
   const stub = new StubDaemon();
@@ -192,105 +302,7 @@ async function run() {
 
     // g. terminal frame: the active agent terminal's state colour is written into the workspace settings
     s = Date.now();
-    const COLOR = { working: '#8B5CF6', waiting: '#FF9500', ready: '#34C759' };
-    const customizations = () => workspaceColors() ?? {};
-    const frameIs = (c) => { const v = customizations(); return v['modernPanel.border'] === c && v['panel.border'] === c; };
-    let plain;
-    try {
-      terminal.show();
-      await poll('4g e2e-agent active', () => vscode.window.activeTerminal?.name === 'e2e-agent',
-        () => `active=${vscode.window.activeTerminal?.name}`);
-      const pushedAt = Date.now();
-      stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 5 });
-      await poll('4g working frame', () => frameIs(COLOR.working),
-        () => `workspace colorCustomizations=${show()} pairings=${JSON.stringify(api.getPairings())}`);
-      const latency = Date.now() - pushedAt;
-      if (latency > 2000) throw new Error(`e2e step "4g" frame took ${latency} ms after the push (limit 2000 ms)`);
-      console.log(`[e2e] 4g frame latency ${latency} ms`);
-      const v = customizations();
-      if (v['statusBar.background'] !== '#654321') throw new Error(`4g statusBar.background changed: ${show()}`);
-      if (!deepEqual(v['[Default Dark Modern]'], SEED['[Default Dark Modern]'])) throw new Error(`4g theme block changed: ${show()}`);
-      if ('activityBar.background' in v) throw new Error(`4g user-scope key leaked into the workspace: ${show()}`);
-
-      stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'waiting', tty), seq: 6 });
-      await poll('4g waiting frame', () => frameIs(COLOR.waiting), () => `workspace colorCustomizations=${show()}`);
-
-      plain = vscode.window.createTerminal({ name: 'e2e-plain' });
-      plain.show();
-      await poll('4g plain terminal restores user values', () => {
-        const c = customizations();
-        return c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
-      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
-
-      terminal.show();
-      await poll('4g e2e-agent again waiting frame', () => frameIs(COLOR.waiting),
-        () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
-
-      // Editor location: the frame moves to the editor keys and the panel keys go back to the user's values.
-      await vscode.commands.executeCommand('workbench.action.terminal.moveToEditor');
-      await poll('4g terminal in editor frames the editor', () => {
-        const c = customizations();
-        return c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
-          && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
-      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
-      // A tab opened in front of the terminal hides it but must not move the frame back to the panel.
-      const termGroup = vscode.window.tabGroups.all.find((g) => g.tabs.some((t) => t.input instanceof vscode.TabInputTerminal && t.label === 'e2e-agent'));
-      if (!termGroup) throw new Error(`4g terminal tab not found in any group: ${show()}`);
-      const readmeUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'README.md');
-      await vscode.window.showTextDocument(readmeUri, { preview: false, viewColumn: termGroup.viewColumn, preserveFocus: false });
-      const readmeTab = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs)
-        .find((t) => t.input instanceof vscode.TabInputText && t.input.uri.path.endsWith('/README.md'));
-      try {
-        await poll('4g README.md is the active tab in front of the terminal', () => readmeTab()?.isActive === true,
-          () => `tabs=${JSON.stringify(vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => `${t.label}${t.isActive ? '*' : ''}`)))}`);
-        console.log(`[e2e] 4g active terminal with README in front: ${vscode.window.activeTerminal?.name}`);
-        // The frame is debounced, so a wrong re-frame lands ~200 ms after the tab change: the editor frame must HOLD past that.
-        let heldSince = 0;
-        await poll('4g hidden editor terminal still frames the editor', () => {
-          const c = customizations();
-          const ok = c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
-            && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
-          if (!ok) { heldSince = 0; return false; }
-          if (!heldSince) heldSince = Date.now();
-          return Date.now() - heldSince >= 1000;
-        }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`, 5000);
-      } finally {
-        const t = readmeTab();
-        if (t) await vscode.window.tabGroups.close(t);
-      }
-      await poll('4g e2e-agent tab active again', () => vscode.window.tabGroups.all.some((g) => g.activeTab?.input instanceof vscode.TabInputTerminal && g.activeTab.label === 'e2e-agent'),
-        () => `tabs=${JSON.stringify(vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => `${t.label}${t.isActive ? '*' : ''}`)))}`);
-      await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
-      await poll('4g terminal back in panel frames the panel', () => {
-        const c = customizations();
-        return frameIs(COLOR.waiting) && !('editor.border' in c) && !('tab.activeBorderTop' in c);
-      }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
-      terminal.show();
-      await poll('4g e2e-agent active in the panel', () => vscode.window.activeTerminal?.name === 'e2e-agent',
-        () => `active=${vscode.window.activeTerminal?.name}`);
-
-      await cfg.update('terminalFrame', 'off', vscode.ConfigurationTarget.Global);
-      await poll('4g setting off restores user values', () => {
-        const c = customizations();
-        return c['panel.border'] === '#123456' && !('modernPanel.border' in c);
-      }, () => `workspace colorCustomizations=${show()}`);
-
-      await cfg.update('terminalFrame', 'border-and-tint', vscode.ConfigurationTarget.Global);
-      await poll('4g border-and-tint tints', () => {
-        const c = customizations();
-        return c['terminal.background'] !== undefined && c['terminal.background'] === c['panel.background']
-          && c['terminal.background'] !== COLOR.waiting && c['panel.border'] === COLOR.waiting;
-      }, () => `workspace colorCustomizations=${show()}`);
-
-      await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global);
-      await poll('4g default setting removes tint', () => {
-        const c = customizations();
-        return !('terminal.background' in c) && !('panel.background' in c) && frameIs(COLOR.waiting);
-      }, () => `workspace colorCustomizations=${show()}`);
-    } finally {
-      try { if (plain) plain.dispose(); } catch { /* ignore */ }
-      try { await cfg.update('terminalFrame', undefined, vscode.ConfigurationTarget.Global); } catch { /* ignore */ }
-    }
+    await stepTerminalFrame({ stub, api, terminal, tty, cfg });
     step('4g terminal frame', s);
 
     // e. daemon goes away and comes back
