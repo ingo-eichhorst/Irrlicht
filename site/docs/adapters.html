@@ -63,6 +63,7 @@
       <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html">API Reference</a>
+      <a href="worker-list.html">Worker List</a>
     </div>
 
     <div class="sidebar-section">
@@ -326,6 +327,15 @@
         <li><strong>State model:</strong> global agents, codebases, worktrees, workers, work units</li>
       </ul>
 
+      <h3>Worker List Orchestrator</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/orchestrators/workerlist/</code></li>
+        <li>Watches one JSON status file that any pool, scheduler or supervisor writes</li>
+        <li>One group per pool, a sub-group per team, a row per worker: busy or free, stale, failed, waiting</li>
+        <li><strong>Schema:</strong> <a href="worker-list.html">Worker List</a></li>
+      </ul>
+
       <h2 id="adapter-interfaces">Adapter Interfaces</h2>
 
       <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, shared-PID-owner, released-PID, process-name, argv-exclusion, session-host, launcher-PID, known-host, subagent-count, and metrics-reader maps the rest of the daemon consumes.</p>
@@ -557,7 +567,7 @@ type Watcher interface {
         <li><strong>Package:</strong> <code>core/adapters/outbound/websocket/</code></li>
         <li>Fan-out to all connected clients</li>
         <li>Non-blocking sends (drops slow subscribers)</li>
-        <li><strong>Message types:</strong> <code>session_created</code> / <code>session_updated</code> / <code>session_deleted</code>, <code>focus_requested</code>, <code>permissions_updated</code>, and the <code>history_*_v2</code> frames (full list: <a href="api-reference.html">API Reference</a> &rarr; <code>GET /api/v1/sessions/stream</code>)</li>
+        <li><strong>Message types:</strong> <code>session_created</code> / <code>session_updated</code> / <code>session_deleted</code>, <code>focus_requested</code>, <code>permissions_updated</code>, <code>orchestrator_updated</code>, and the <code>history_*_v2</code> frames (full list: <a href="api-reference.html">API Reference</a> &rarr; <code>GET /api/v1/sessions/stream</code>)</li>
       </ul>
 
       <h3>Git Resolver</h3>

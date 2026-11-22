@@ -69,6 +69,14 @@ type SessionMetrics struct {
 	ContextUtilization float64 `json:"context_utilization_percentage,omitempty"`
 	PressureLevel      string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
+	// PricingSource, UnpricedModels and TokensUnobserved say how
+	// EstimatedCostUSD and the Cum*Tokens totals were formed (#2061); they
+	// mirror the session.SessionMetrics fields of the same names, which
+	// document them.
+	PricingSource    string   `json:"pricing_source,omitempty"`
+	UnpricedModels   []string `json:"unpriced_models,omitempty"`
+	TokensUnobserved bool     `json:"tokens_unobserved,omitempty"`
+
 	// ContextWindowUnknown is true when no context window could be resolved
 	// for this model (no override, and no capacity entry — e.g. no LiteLLM
 	// pricing), leaving ContextWindow at zero rather than a known value.
@@ -394,6 +402,11 @@ type TranscriptTailer struct {
 	// Populated when adapters emit Contribution on ParsedEvent (Phase 2+).
 	cumByModel         map[string]*UsageBreakdown
 	cumProviderCostUSD float64 // sum of provider-reported per-turn costs (Pi)
+	// providerCostSeen is true once any turn carried a provider-reported cost.
+	// applyContribution takes that cost INSTEAD of the turn's tokens, so it is
+	// also the record that some tokens went uncounted (#2061). Not derivable
+	// from cumProviderCostUSD alone: aider reports "$0.00" for a free model.
+	providerCostSeen bool
 
 	// userTurns backs SessionMetrics.UserTurns.
 	userTurns int

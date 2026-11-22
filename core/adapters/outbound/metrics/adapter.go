@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,6 +39,7 @@ type Adapter struct {
 	parsers          map[string]agents.ParserFactory
 	subagents        map[string]agents.SubagentCounter
 	metricsProviders map[string]agents.MetricsProvider
+	usageCoverage    map[string]*session.UsageCoverage
 	fallbackName     string // adapter name to use when the requested name is unknown
 	// converter performs the tailer→domain conversion, including the one-line
 	// intent/question headline compaction (issue #759). Built once from the
@@ -53,6 +55,10 @@ type Registry struct {
 	Parsers          map[string]agents.ParserFactory
 	SubagentCounters map[string]agents.SubagentCounter
 	MetricsProviders map[string]agents.MetricsProvider
+	// UsageCoverage maps an adapter name to its usage declaration (#2061),
+	// stamped onto every session's metrics. An adapter absent here declares
+	// nothing. Nil is allowed and declares nothing for anyone.
+	UsageCoverage map[string]*session.UsageCoverage
 	// FallbackName is the adapter name whose parser handles unknown
 	// adapters (preserves the "default to Claude Code" behaviour). Looked
 	// up in Parsers at parse time — single source of truth for the
@@ -72,6 +78,7 @@ func New(r Registry) *Adapter {
 		parsers:          r.Parsers,
 		subagents:        r.SubagentCounters,
 		metricsProviders: r.MetricsProviders,
+		usageCoverage:    r.UsageCoverage,
 		fallbackName:     r.FallbackName,
 		converter:        replayengine.NewMetricsConverter(r.Compactor),
 	}
@@ -128,7 +135,9 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 
 	// Delegate to adapter-specific provider when registered.
 	if provider, ok := a.metricsProviders[adapter]; ok {
-		return provider(transcriptPath, "")
+		m, err := provider(transcriptPath, "")
+		a.stampUsageCoverage(m, adapter)
+		return m, err
 	}
 
 	a.mu.Lock()
@@ -175,6 +184,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		markerBase = tailerTaskEstimateToDomain(m.TaskEstimateBase)
 	}
 	enrichTaskForecast(result, markerEst, markerBase, time.Now())
+	a.stampUsageCoverage(result, adapter)
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}
@@ -182,6 +192,28 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		result.PressureLevel = "unknown"
 	}
 	return result, nil
+}
+
+// stampUsageCoverage attaches the adapter's usage declaration (#2061) to m,
+// keyed by the adapter name the session was registered under — the same name
+// every other per-adapter lookup here uses, never a fallback adapter's:
+// borrowing Claude Code's parser for an unknown name is not evidence that the
+// session's agent counts what Claude Code counts.
+//
+// A coverage the metrics path already set is kept: opencode's 2.x store path
+// declares its own (opencode/metrics_v2.go), because what it counts differs
+// from the same adapter's 1.x path.
+func (a *Adapter) stampUsageCoverage(m *session.SessionMetrics, adapter string) {
+	if m == nil || m.UsageCoverage != nil {
+		return
+	}
+	// A fresh copy per session, never the shared declaration: the session
+	// snapshot outlives this call and must not alias registry state.
+	if cov := a.usageCoverage[adapter]; cov != nil {
+		c := *cov
+		c.TokenTypes = slices.Clone(cov.TokenTypes)
+		m.UsageCoverage = &c
+	}
 }
 
 // ComputeMetricsTimeline returns cumulative SessionMetrics snapshots — one per

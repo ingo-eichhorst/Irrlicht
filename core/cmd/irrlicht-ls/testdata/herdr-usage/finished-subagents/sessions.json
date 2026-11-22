@@ -1,0 +1,185 @@
+{
+  "groups": [
+    {
+      "name": "demo",
+      "agents": [
+        {
+          "version": 1,
+          "session_id": "cc-parent-done",
+          "state": "ready",
+          "adapter": "claude-code",
+          "cwd": "/tmp/demo",
+          "project_name": "demo",
+          "first_seen": 1794990000,
+          "updated_at": 1795000000,
+          "confidence": "high",
+          "event_count": 30,
+          "last_event": "assistant",
+          "launcher": {
+            "term_program": "ghostty",
+            "herdr_pane_id": "w1:p1",
+            "herdr_socket_path": "/tmp/herdr-a/herdr.sock"
+          },
+          "metrics": {
+            "model_name": "claude-opus-4-6",
+            "elapsed_seconds": 300,
+            "cum_input_tokens": 1200,
+            "cum_output_tokens": 340,
+            "cum_cache_read_tokens": 50000,
+            "cum_cache_creation_tokens": 4000,
+            "estimated_cost_usd": 0.42,
+            "pricing_source": "litellm@2026-11-20",
+            "usage_coverage": {
+              "token_types": [
+                "input",
+                "output",
+                "cache_read",
+                "cache_write"
+              ],
+              "excludes_subagents": true
+            }
+          },
+          "children": [
+            {
+              "version": 1,
+              "session_id": "cc-child-live",
+              "state": "working",
+              "adapter": "claude-code",
+              "parent_session_id": "cc-parent-done",
+              "first_seen": 1794990200,
+              "updated_at": 1795000000,
+              "confidence": "high",
+              "event_count": 3,
+              "last_event": "assistant",
+              "metrics": {
+                "model_name": "claude-haiku-5-5",
+                "elapsed_seconds": 12,
+                "cum_input_tokens": 3,
+                "cum_output_tokens": 4,
+                "cum_cache_read_tokens": 500,
+                "cum_cache_creation_tokens": 60,
+                "estimated_cost_usd": 0.003,
+                "pricing_source": "litellm@2026-11-20",
+                "usage_coverage": {
+                  "token_types": [
+                    "input",
+                    "output",
+                    "cache_read",
+                    "cache_write"
+                  ],
+                  "excludes_subagents": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "finished_subagents": [
+    {
+      "session_id": "cc-child-gone",
+      "parent_session_id": "cc-parent-done",
+      "adapter": "claude-code",
+      "first_seen": 1794990100,
+      "finished_at": 1794999000,
+      "usage": {
+        "model_name": "claude-haiku-5-5",
+        "elapsed_seconds": 12,
+        "cum_input_tokens": 10,
+        "cum_output_tokens": 20,
+        "cum_cache_read_tokens": 300,
+        "cum_cache_creation_tokens": 40,
+        "estimated_cost_usd": 0.01,
+        "pricing_source": "litellm@2026-11-20",
+        "usage_coverage": {
+          "token_types": [
+            "input",
+            "output",
+            "cache_read",
+            "cache_write"
+          ],
+          "excludes_subagents": true
+        }
+      }
+    },
+    {
+      "session_id": "cc-child-live",
+      "parent_session_id": "cc-parent-done",
+      "adapter": "claude-code",
+      "first_seen": 1794990050,
+      "finished_at": 1794999500,
+      "usage": {
+        "model_name": "claude-haiku-5-5",
+        "elapsed_seconds": 12,
+        "cum_input_tokens": 999,
+        "cum_output_tokens": 999,
+        "cum_cache_read_tokens": 999,
+        "cum_cache_creation_tokens": 999,
+        "estimated_cost_usd": 9.99,
+        "pricing_source": "litellm@2026-11-20",
+        "usage_coverage": {
+          "token_types": [
+            "input",
+            "output",
+            "cache_read",
+            "cache_write"
+          ],
+          "excludes_subagents": true
+        }
+      }
+    },
+    {
+      "session_id": "cc-grandchild-gone",
+      "parent_session_id": "cc-child-gone",
+      "adapter": "claude-code",
+      "first_seen": 1794990150,
+      "finished_at": 1794998000,
+      "usage": {
+        "model_name": "claude-haiku-5-5",
+        "elapsed_seconds": 12,
+        "cum_input_tokens": 1,
+        "cum_output_tokens": 2,
+        "cum_cache_read_tokens": 30,
+        "cum_cache_creation_tokens": 4,
+        "estimated_cost_usd": 0.001,
+        "pricing_source": "litellm@2026-11-20",
+        "usage_coverage": {
+          "token_types": [
+            "input",
+            "output",
+            "cache_read",
+            "cache_write"
+          ],
+          "excludes_subagents": true
+        }
+      }
+    },
+    {
+      "session_id": "other-child",
+      "parent_session_id": "other-root",
+      "adapter": "claude-code",
+      "first_seen": 1794990000,
+      "finished_at": 1794998000,
+      "usage": {
+        "model_name": "claude-haiku-5-5",
+        "elapsed_seconds": 12,
+        "cum_input_tokens": 7,
+        "cum_output_tokens": 7,
+        "cum_cache_read_tokens": 7,
+        "cum_cache_creation_tokens": 7,
+        "estimated_cost_usd": 0.07,
+        "pricing_source": "litellm@2026-11-20",
+        "usage_coverage": {
+          "token_types": [
+            "input",
+            "output",
+            "cache_read",
+            "cache_write"
+          ],
+          "excludes_subagents": true
+        }
+      }
+    }
+  ]
+}

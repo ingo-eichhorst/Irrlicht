@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "pane_id": "w1:p1",
+  "sampled_at": "2026-11-21T12:00:00Z",
+  "sessions": [
+    {
+      "session_id": "on-server-a",
+      "adapter": "claude-code",
+      "model": "claude-opus-4-6",
+      "tokens": {
+        "input": 1200,
+        "output": 340,
+        "cache_read": 50000,
+        "cache_write": 4000
+      },
+      "cost": {
+        "usd": 0.42,
+        "pricing_source": "litellm@2026-11-20"
+      },
+      "elapsed_seconds": 180,
+      "active_seconds": null,
+      "subagents": [],
+      "rate_limit": null,
+      "unavailable": {
+        "active_seconds": "Irrlicht does not record per-session active time",
+        "rate_limit": "no rate-limit snapshot observed for this session"
+      }
+    }
+  ]
+}

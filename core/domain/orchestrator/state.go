@@ -77,6 +77,12 @@ type Worker struct {
 	// LastExit is the exit code of the worker's last completed run, nil when
 	// no run has completed (#2148). A non-zero value shows as failed.
 	LastExit *int `json:"last_exit,omitempty"`
+	// Waiting marks a worker whose agent waits for a person (#2145): the
+	// clients paint its row in the waiting colour and notify on its edge.
+	// Only an adapter whose source states it sets it (the worker list), so
+	// a state string another adapter passes through in State never becomes
+	// one.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 // workUnit represents a trackable unit of work with progress.

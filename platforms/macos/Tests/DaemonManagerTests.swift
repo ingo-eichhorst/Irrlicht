@@ -20,12 +20,15 @@ final class DaemonManagerTests: XCTestCase {
     // MARK: - Health Check Tests
 
     func testDaemonNotReachableWhenNothingListening() async {
-        // Port 7837 should not be reachable in CI / fresh test env
-        // (unless irrlichd happens to be running — skip gracefully).
+        // The probe goes through the process control. Before that seam this
+        // test sent a real GET to whatever daemon was listening on the default
+        // port — the developer's production daemon — and could not assert
+        // anything about the answer. The recorder answers false by default.
+        let control = RecordingDaemonProcessControl()
+        let manager = DaemonManager(publisher: RecordingRelayPublisher(), processControl: control)
         let reachable = await manager.isDaemonReachable()
-        // We can't assert false because irrlichd might actually be running.
-        // Instead just ensure the method completes without crashing.
-        _ = reachable
+        XCTAssertFalse(reachable)
+        XCTAssertEqual(control.calls, [.probe])
     }
 
     func testInitialState() {
@@ -66,33 +69,91 @@ final class DaemonManagerTests: XCTestCase {
         XCTAssertEqual(env["PATH"], "/usr/bin", "unrelated base vars must be preserved")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
-    func testPublishSettingsDidChangeDoesNotRelaunchDaemon() {
-        // The toggle now POSTs to the running daemon instead of relaunching it.
+    func testPublishSettingsDidChangeDoesNotRelaunchDaemon() async {
+        // The toggle now PUTs to the running daemon instead of relaunching it.
         // Under xctest there's no daemon binary and no app-owned process, so the
-        // call must be a safe fire-and-forget no-op — never spawn or crash.
+        // call must be a safe fire-and-forget — never spawn or crash. The
+        // publish itself goes to an injected recorder: before the publisher
+        // seam this test fired two real PUTs at whatever daemon was listening on
+        // the default port, i.e. the developer's production daemon.
+        let recorder = RecordingRelayPublisher()
+        let defaults = InMemoryDefaults()
+        defaults.set(true, forKey: "publishToRelay")
+        defaults.set("  wss://relay.example.test  ", forKey: "relayServerURL")
+        let keychain = KeychainSecrets(backend: InMemoryKeychainBackend())
+        keychain.set(" tok-123 ", account: "relayToken")
+        let manager = DaemonManager(publisher: recorder, defaults: defaults, keychain: keychain)
+        defer { manager.stop() }
+
         XCTAssertNil(manager.currentProcessForTesting, "precondition: no app-owned daemon")
         manager.publishSettingsDidChange()
         manager.publishSettingsDidChange()
         XCTAssertFalse(manager.daemonRunning, "publishSettingsDidChange must not launch a daemon")
         XCTAssertNil(manager.currentProcessForTesting, "publishSettingsDidChange must not spawn a process")
+
+        // The publish runs on a detached task: poll the recorder to a deadline
+        // rather than sleeping, and fail with the elapsed time.
+        let start = Date()
+        while recorder.published.count < 2, Date().timeIntervalSince(start) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        let expected = PublishClient.Config(enabled: true, url: "wss://relay.example.test", token: "tok-123")
+        XCTAssertEqual(recorder.published, [expected, expected],
+                       "two settings nudges must publish the trimmed current config twice "
+                       + "(observed \(recorder.published.count) after \(String(format: "%.2f", elapsed))s)")
     }
 
     // MARK: - Bundle Path Tests
 
-    func testBundledDaemonURLNilInTestHost() {
-        // When running under xctest the bundle doesn't contain irrlichd,
-        // so start() should handle the missing binary gracefully.
+    func testBundledDaemonURLNilInTestHost() async {
+        // start() on a missed probe kills stale daemons and spawns one. Live,
+        // that kill is `pkill -x irrlichd` — every irrlichd on the machine,
+        // production included — and the spawn launches core/bin/irrlichd when
+        // a dev build exists. So the test drives a recorder and asserts on what
+        // start() ASKED for, never on what happened to the machine.
+        let control = RecordingDaemonProcessControl(reachable: false)
+        let recorder = RecordingRelayPublisher()
+        let manager = DaemonManager(publisher: recorder, processControl: control)
+        defer { manager.stop() }
+
         manager.start()
 
-        // Give async task a moment to execute
-        let expectation = XCTestExpectation(description: "start completes without crash")
-        Task {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 s
-            expectation.fulfill()
+        // Poll to a deadline for the spawn request rather than sleeping.
+        let begin = Date()
+        while !control.calls.contains(where: { if case .run = $0 { return true } else { return false } }),
+              Date().timeIntervalSince(begin) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        wait(for: [expectation], timeout: 2)
+        let elapsed = String(format: "%.2f", Date().timeIntervalSince(begin))
 
-        // Should not crash — daemonRunning may be true if an external daemon is running,
-        // or false if nothing is listening and the binary isn't in the bundle.
+        XCTAssertEqual(Array(control.calls.prefix(3)),
+                       [.probe, .killStaleDaemons, .run(executable: RecordingDaemonProcessControl.placeholderExecutable)],
+                       "a missed probe must kill-then-spawn through the process control "
+                       + "(calls after \(elapsed)s: \(control.calls))")
+        let process = try? XCTUnwrap(manager.currentProcessForTesting)
+        XCTAssertEqual(process?.executableURL, RecordingDaemonProcessControl.placeholderExecutable)
+        XCTAssertEqual(process?.isRunning, false, "the recorder must never start the process it is handed")
+    }
+
+    func testStartAdoptsAReachableDaemonWithoutKillingOrSpawning() async {
+        let control = RecordingDaemonProcessControl(reachable: true)
+        let recorder = RecordingRelayPublisher()
+        let manager = DaemonManager(publisher: recorder, processControl: control)
+        defer { manager.stop() }
+
+        manager.start()
+
+        let begin = Date()
+        while recorder.published.isEmpty, Date().timeIntervalSince(begin) < 5 {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let elapsed = String(format: "%.2f", Date().timeIntervalSince(begin))
+
+        XCTAssertEqual(recorder.published.count, 1,
+                       "the adopt path publishes once (observed after \(elapsed)s)")
+        XCTAssertEqual(control.calls, [.probe], "adopting must neither kill nor spawn")
+        XCTAssertTrue(manager.daemonRunning)
+        XCTAssertNil(manager.currentProcessForTesting)
     }
 }

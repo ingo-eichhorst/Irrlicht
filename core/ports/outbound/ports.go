@@ -124,6 +124,14 @@ const (
 	// and show or dismiss the wizard accordingly — which is also how the
 	// surface that answered second dismisses live (issue #570).
 	PushTypePermissionsUpdated = "permissions_updated"
+
+	// PushTypeOrchestratorUpdated signals that an orchestrator's state
+	// changed in a way the dashboard shows (#2145), such as a worker that
+	// turned waiting. Like PushTypePermissionsUpdated it carries no payload:
+	// clients re-fetch GET /api/v1/sessions, the only surface orchestrator
+	// state rides. Host-local: the relay carries no orchestrator state, so
+	// its forwarder drops this type.
+	PushTypeOrchestratorUpdated = "orchestrator_updated"
 )
 
 // PermissionStore persists the user's per-agent consent answers for the
@@ -684,6 +692,24 @@ type AutonomySpanProvenance struct {
 // beginning of time", which is why every reader tests it for zero before
 // formatting a date.
 func (p AutonomySpanProvenance) LiveSince() int64 { return p.EraStarts[""] }
+
+// FinishedSubagentStore keeps the final usage of child sessions the daemon
+// has removed (#2061), so a usage answer can still list a subagent after its
+// session is gone. The store, not the parent's session state, owns these
+// records: nothing else writes them, so they cannot race the detector's own
+// saves of the parent.
+type FinishedSubagentStore interface {
+	// Retain records one removed child, replacing any earlier record for the
+	// same SessionID.
+	Retain(rec session.FinishedSubagent) error
+	// PruneOrphans drops the records of every root session that has been
+	// absent for the store's retention window. rootExists answers whether a
+	// root is still in the session list. A root that is present keeps its
+	// records however long it runs.
+	PruneOrphans(rootExists func(rootSessionID string) bool) error
+	// List returns a copy of every record held.
+	List() []session.FinishedSubagent
+}
 
 // AutonomySpanStore persists closed autonomy spans and reads them back over a
 // trailing window. Implementations must be safe for concurrent use.

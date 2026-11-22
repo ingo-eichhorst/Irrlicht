@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/orchestrator"
+	"irrlicht/core/ports/outbound"
 )
 
 // fakeOrchWatcher is an inbound.OrchestratorWatcher whose snapshots the test
@@ -221,5 +222,68 @@ func TestOrchestratorMonitor_AddWatcherSubscribesBeforeReturning(t *testing.T) {
 	w.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("AddWatcher returned with %d subscriptions, want 1: a snapshot the watcher broadcasts right away is lost", n)
+	}
+}
+
+// recordingPush is an outbound.PushBroadcaster that records what it is
+// asked to broadcast.
+type recordingPush struct {
+	mu   sync.Mutex
+	msgs []outbound.PushMessage
+}
+
+func (r *recordingPush) Broadcast(m outbound.PushMessage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.msgs = append(r.msgs, m)
+}
+func (r *recordingPush) Subscribe() chan outbound.PushMessage  { return nil }
+func (r *recordingPush) Unsubscribe(chan outbound.PushMessage) {}
+func (r *recordingPush) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.msgs)
+}
+
+// Issue #2145: a snapshot that changes what the dashboard shows is pushed as
+// orchestrator_updated, so clients re-fetch instead of polling for it. A
+// snapshot that differs only in UpdatedAt — which every adapter stamps on
+// every snapshot — pushes nothing. Red-first: no broadcast at all before.
+func TestOrchestratorMonitor_PushesOnlyShownChanges(t *testing.T) {
+	push := &recordingPush{}
+	m := NewOrchestratorMonitor(nil, push, &gateLogger{})
+	startOrchRun(t, m)
+	w := &fakeOrchWatcher{name: "workerlist"}
+	m.AddWatcher(context.Background(), w)
+	w.waitSubscribed(t)
+
+	t0 := time.Date(2026, 11, 21, 15, 40, 0, 0, time.UTC)
+	team := func(state string) []orchestrator.Codebase {
+		return []orchestrator.Codebase{{Name: "team-a", Worktrees: []orchestrator.Worktree{{Workers: []orchestrator.Worker{{Name: "s1", State: state}}}}}}
+	}
+	snap := func(at time.Time, state string) orchestrator.State {
+		return orchestrator.State{Adapter: "workerlist", Running: true, Codebases: team(state), UpdatedAt: at}
+	}
+	storedAt := func(at time.Time) func() bool {
+		return func() bool { st := m.State("workerlist"); return st != nil && st.UpdatedAt.Equal(at) }
+	}
+
+	w.emit(t, snap(t0, "busy"))
+	waitOrch(t, "first snapshot pushed", func() bool { return push.count() == 1 })
+
+	w.emit(t, snap(t0.Add(30*time.Second), "busy"))
+	waitOrch(t, "restamped snapshot stored", storedAt(t0.Add(30*time.Second)))
+	if n := push.count(); n != 1 {
+		t.Fatalf("a snapshot differing only in UpdatedAt pushed: %d broadcasts, want 1", n)
+	}
+
+	w.emit(t, snap(t0.Add(time.Minute), "waiting"))
+	waitOrch(t, "changed snapshot pushed", func() bool { return push.count() == 2 })
+	push.mu.Lock()
+	defer push.mu.Unlock()
+	for _, msg := range push.msgs {
+		if msg.Type != outbound.PushTypeOrchestratorUpdated {
+			t.Errorf("broadcast type %q, want %q", msg.Type, outbound.PushTypeOrchestratorUpdated)
+		}
 	}
 }

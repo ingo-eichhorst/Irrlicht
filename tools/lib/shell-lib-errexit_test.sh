@@ -609,7 +609,7 @@ row 'swift-suite.sh::_swift_suite_witness_domain_verdict' '_swift_suite_witness_
 # ACTIVE on this host, so an entry that stops naming a real function fails
 # rather than quietly doing nothing. tw_exempt_reason returns non-zero when the
 # function is drivable here, in which case its recipe runs normally.
-TW_EXEMPT_KEYS='swift-suite.sh::swift_suite_run mutation-assert.sh::assert_mutation_is_red'
+TW_EXEMPT_KEYS='swift-suite.sh::swift_suite_run mutation-assert.sh::assert_mutation_is_red swift-mutation-assert.sh::assert_swift_test_goes_red'
 tw_exempt_reason() {
   case "$1" in
     'swift-suite.sh::swift_suite_run')
@@ -619,6 +619,10 @@ tw_exempt_reason() {
       ;;
     'mutation-assert.sh::assert_mutation_is_red')
       echo "drives tools/mutate.sh against a REAL tracked file and requires a clean git worktree as mutate.sh's own precondition (exit 4 otherwise) — the fixture-dependency category this file's own header names as exempt-worthy (#1823), not something safe to blind-call from a generic per-function walk. Its two callers (preflight-groups-skill-mutations_test.sh, simplify-angle-guard-mutations_test.sh) already exercise it directly and run under CI; both run under 'set -uo pipefail', never '-e', so the errexit contract this tripwire checks is not live for it in production use either."
+      return 0
+      ;;
+    'swift-mutation-assert.sh::assert_swift_test_goes_red')
+      echo "drives tools/mutate.sh against a REAL tracked Swift file and a full 'swift test' build — the same fixture dependency as assert_mutation_is_red (#1823), and minutes per call. Its caller (workerlist-waiting-swift-mutations_test.sh) exercises it directly under CI's macOS job, under 'set -uo pipefail', never '-e', so the errexit contract this tripwire checks is not live for it in production use either."
       return 0
       ;;
   esac

@@ -79,6 +79,25 @@ func queryV2SessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetric
 	metrics.CumOutputTokens = totals.output
 	metrics.CumCacheReadTokens = totals.cacheRead
 	metrics.CumCacheCreationTokens = totals.cacheWrite
+	// The cost and the tokens are opencode's own session totals, replacing
+	// whatever the message fold accumulated, so their provenance is replaced
+	// with them (#2061). A cost opencode reported is provider-reported; tokens
+	// with a zero cost are unpriced, not free — the row cannot say whether the
+	// model costs nothing or opencode had no price for it.
+	metrics.PricingSource = ""
+	metrics.UnpricedModels = nil
+	metrics.TokensUnobserved = false
+	switch {
+	case totals.cost > 0:
+		metrics.PricingSource = session.PricingSourceProviderReported
+	case totals.input+totals.output+totals.cacheRead+totals.cacheWrite > 0:
+		model := metrics.ModelName
+		if model == "unknown" {
+			model = "" // SessionMetrics.UnpricedModels' word for "no model name"
+		}
+		metrics.UnpricedModels = []string{model}
+	}
+	metrics.UsageCoverage = v2UsageCoverage()
 	return metrics, nil
 }
 
@@ -112,4 +131,21 @@ func modelRefID(ref string) string {
 		return ""
 	}
 	return m.ID
+}
+
+// v2UsageCoverage declares what this 2.x path counts (#2061): all four token
+// columns of the session_v2 row (tokens_input, tokens_output,
+// tokens_cache_read, tokens_cache_write). It is declared here rather than on
+// opencode's Agent because it holds for this path only: the 1.x store fold
+// (metrics.go) never accumulates cache writes, and applyStepFinishTokens
+// (parser.go) builds no contribution for a "tool-calls" step, so a 1.x
+// session's counts omit every mid-turn step. Subagent exclusion is not
+// declared: whether opencode folds a child session's tokens into its parent's
+// session_v2 row is unverified.
+func v2UsageCoverage() *session.UsageCoverage {
+	return &session.UsageCoverage{
+		TokenTypes: []session.TokenType{
+			session.TokenInput, session.TokenOutput, session.TokenCacheRead, session.TokenCacheWrite,
+		},
+	}
 }

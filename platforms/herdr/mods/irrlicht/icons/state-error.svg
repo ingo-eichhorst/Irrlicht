@@ -1,0 +1,11 @@
+<!-- SessionStateIcon's error glyph (SF Symbol exclamationmark.circle.fill): a disc with the mark cut out. Tinted by gpui, which keeps only the alpha. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+      <rect width="16" height="16" fill="#fff"/>
+      <path d="M8 4.3v4.6" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round"/>
+      <circle cx="8" cy="11.5" r="1.05" fill="#000"/>
+    </mask>
+  </defs>
+  <circle cx="8" cy="8" r="7.5" fill="#fff" mask="url(#cut)"/>
+</svg>

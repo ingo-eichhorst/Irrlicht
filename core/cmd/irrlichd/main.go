@@ -561,6 +561,19 @@ func loadConfig(logger outbound.Logger) config.Config {
 	return cfg
 }
 
+// resolveGTPath resolves the gt binary path (GT_BIN env → common paths →
+// which gt) and logs what it found. gtbin.New resolves once and Path returns
+// that stored result, so the path is the one value for the daemon's life.
+func resolveGTPath(logger outbound.Logger) string {
+	p := gtbin.New().Path()
+	if p != "" {
+		logger.LogInfo("startup", "", fmt.Sprintf("gt binary: %s", p))
+	} else {
+		logger.LogError("startup", "", "gt binary not found (set GT_BIN or add gt to PATH)")
+	}
+	return p
+}
+
 // runDaemon brings up the full daemon: config, core services, HTTP routes,
 // the consent-gated detection and permission stack, then serves
 // until SIGTERM/SIGINT and shuts down gracefully. Each phase is wired by a
@@ -582,17 +595,12 @@ func runDaemon() {
 
 	go runCapacityRefreshLoop(context.Background(), logger, 30*time.Second, 256*time.Minute, 24*time.Hour)
 
-	// Resolve the gt binary path (GT_BIN env → common paths → which gt).
-	gtResolver := gtbin.New()
-	if p := gtResolver.Path(); p != "" {
-		logger.LogInfo("startup", "", fmt.Sprintf("gt binary: %s", p))
-	} else {
-		logger.LogError("startup", "", "gt binary not found (set GT_BIN or add gt to PATH)")
-	}
+	gtPath := resolveGTPath(logger)
 
 	fsRepo, cachedRepo := initSessionStorage(logger, cfg)
 	costTracker := initCostTracker(logger, fsRepo)
 	autonomySpans := initAutonomySpanStore(logger)
+	finishedSubagents := initFinishedSubagentStore(logger)
 	historyTracker, historyCancel := startHistoryTracker(logger)
 	defer historyCancel()
 
@@ -733,25 +741,26 @@ func runDaemon() {
 		StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop,
 		StartZaiAccountAPI: zaiAPI.Start, StopZaiAccountAPI: zaiAPI.Stop,
 	}
-	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
+	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtPath, cachedRepo, logger)
 	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
 	// is resolved once, at startup.
 	effects.StartWorkerlist, effects.StopWorkerlist = workerlistEffects(orchCtx, orchMonitor,
 		workerlist.ResolvePath(dataDir(home)), logger)
 	detector, permService := setupDetectorAndPermissions(mux, buildDetectorDeps{
-		DemoMode:         demoMode,
-		PWPort:           pwPort,
-		CachedRepo:       cachedRepo,
-		Logger:           logger,
-		GitResolver:      gitResolver,
-		MetricsCollector: metricsCollector,
-		Push:             push,
-		Version:          Version,
-		Cfg:              cfg,
-		AllAgents:        allAgents,
-		CostTracker:      costTracker,
-		AutonomySpans:    autonomySpans,
-		HistoryTracker:   historyTracker,
+		DemoMode:          demoMode,
+		PWPort:            pwPort,
+		CachedRepo:        cachedRepo,
+		Logger:            logger,
+		GitResolver:       gitResolver,
+		MetricsCollector:  metricsCollector,
+		Push:              push,
+		Version:           Version,
+		Cfg:               cfg,
+		AllAgents:         allAgents,
+		CostTracker:       costTracker,
+		AutonomySpans:     autonomySpans,
+		FinishedSubagents: finishedSubagents,
+		HistoryTracker:    historyTracker,
 	}, setupPermissionServiceDeps{
 		Push:      push,
 		Logger:    logger,
@@ -764,14 +773,15 @@ func runDaemon() {
 
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
-		CachedRepo:    cachedRepo,
-		OrchMonitor:   orchMonitor,
-		CostTracker:   costTracker,
-		AutonomySpans: autonomySpans,
-		SockPath:      sockPath,
-		Push:          push,
-		Logger:        logger,
-		GitResolver:   gitResolver,
+		CachedRepo:        cachedRepo,
+		OrchMonitor:       orchMonitor,
+		CostTracker:       costTracker,
+		AutonomySpans:     autonomySpans,
+		FinishedSubagents: finishedSubagents,
+		SockPath:          sockPath,
+		Push:              push,
+		Logger:            logger,
+		GitResolver:       gitResolver,
 		// Same live snapshot registerCoreRoutes hands the diagnostics bundle
 		// (#1801) — one source, two outlets, so the banner and hooks.json can
 		// never disagree about whether hooks are healthy.
