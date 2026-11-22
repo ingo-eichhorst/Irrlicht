@@ -173,7 +173,7 @@ final class QuotaChipClockTests: XCTestCase {
     func testQuotaChipDataDrivesItsStalenessFromTheNowItIsGiven() {
         let sessions = [session(id: "1", rateLimit: flipping)]
         for (now, wantStale) in [(early, false), (late, true)] {
-            let chips = SessionListView.quotaChipData(sessions: sessions, now: now)
+            let chips = SessionListView.quotaChipData(sessions: sessions, hiddenAccounts: [], now: now)
             guard let chip = chips.first else {
                 return XCTFail("the derivation produced no chip at \(now) — this check cannot have run")
             }

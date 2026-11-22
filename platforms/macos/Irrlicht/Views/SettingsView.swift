@@ -55,6 +55,12 @@ struct SettingsView: View {
     // [String] is not an @AppStorage type — see MenuBarQuotaProviders.
     @AppStorage(MenuBarQuotaProviders.storageKey) private var menuBarQuotaProviders: String = ""
     @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
+    // The quota accounts the user hid (#2163), as a JSON object in one String
+    // for the same reason — see HiddenQuotaAccounts.
+    @AppStorage(HiddenQuotaAccounts.storageKey) private var hiddenQuotaAccountsRaw: String = ""
+    // The clock the account rows' bucketing judges staleness against, so this
+    // view reads no wall clock of its own (#1675's seam).
+    @Environment(\.formatNow) private var formatNow
     // Master gate (issue #940): collapses the whole Notifications section
     // when off, instead of showing three always-visible event rows to users
     // who don't want any of it. A brand-new key defaults to false, but
@@ -279,6 +285,32 @@ struct SettingsView: View {
                                 .labelsHidden()
                                 .frame(maxWidth: 140)
                                 .tint(IrrColors.working)
+                            }
+                        }
+                    }
+
+                    // Which accounts' quota is shown (#2163). Its own block
+                    // rather than inside the `showsQuotaBars` branch above:
+                    // it filters the popover chips too, which a Lights-style
+                    // user still sees whenever Show Quota Forecast is on.
+                    if showQuotaForecast || menuBarAppearance.showsQuotaBars {
+                        let accountRows = quotaAccountRows
+                        if !accountRows.isEmpty {
+                            VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+                                HStack(spacing: 6) {
+                                    Text("Quota accounts")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                    InfoIcon(text: "Turn an account off to hide its quota chip and keep it out of the menu bar. Irrlicht still monitors its sessions. A hidden account stays listed after it stops reporting, so you can turn it back on.")
+                                    Spacer()
+                                }
+                                ForEach(accountRows, id: \.key) { row in
+                                    LeadingToggle(
+                                        isOn: quotaAccountVisibility(row),
+                                        label: row.label
+                                    )
+                                }
                             }
                         }
                     }
@@ -806,10 +838,91 @@ struct SettingsView: View {
     /// marked, because `MenuBarImageBuilder.quotaImage` skips its slot without
     /// a trace — the row is the only place the user can see why a slot is
     /// missing (#2030).
+    /// What a row with no live snapshot carries after its label: a selected
+    /// provider slot here, a hidden quota account in `QuotaAccountRow.label`.
+    static let noDataMarker = " — no data"
+
     static func quotaProviderRowLabel(_ key: String, slot: Int?, hasLiveData: Bool) -> String {
         guard let slot else { return quotaProviderLabel(key) }
-        let noData = hasLiveData ? "" : " — no data"
+        let noData = hasLiveData ? "" : noDataMarker
         return "\(slot + 1). \(quotaProviderLabel(key))\(noData)"
+    }
+
+    /// One row of the "Quota accounts" list (#2163).
+    struct QuotaAccountRow {
+        /// The account bucket key (`RateLimitInfo.accountBucketKey`).
+        let key: String
+        /// What hiding the account stores, so its row keeps a label after
+        /// the account stops reporting. "" when the account has no tier.
+        let tierLabel: String
+        let hasLiveData: Bool
+        let isHidden: Bool
+
+        /// "<tier> · Account …abcd", the tier label the chip's tooltip leads
+        /// with, followed by the account line under it. The account line stays
+        /// because two seats on one plan share a tier label. A row with no tier
+        /// falls back to the provider's name, and a row with no live snapshot
+        /// is marked the way `quotaProviderRowLabel` marks a slot with no data.
+        var label: String {
+            let parts = RateLimitInfo.bucketKeyParts(key)
+            let name = tierLabel.isEmpty ? SettingsView.quotaProviderLabel(parts.providerKey) : tierLabel
+            let noData = hasLiveData ? "" : SettingsView.noDataMarker
+            return "\(name) · \(RateLimitInfo.accountLine(ref: parts.accountRef))\(noData)"
+        }
+    }
+
+    /// The account rows: every account the popover would draw a chip for
+    /// right now, plus every hidden account, sorted by bucket key so one
+    /// provider's accounts sit together.
+    ///
+    /// A hidden account stays listed after it stops reporting, labelled from
+    /// what was stored when it was hidden. Without that, the row that shows
+    /// it again would disappear with its sessions, the same reason
+    /// `quotaProviderRows` keeps a selected provider listed. The chips are
+    /// derived with nothing hidden, so a hidden account that still reports is
+    /// labelled from its live snapshot.
+    private var quotaAccountRows: [QuotaAccountRow] {
+        Self.quotaAccountRows(
+            live: SessionListView.quotaChipData(sessions: sessionManager.sessions,
+                                                hiddenAccounts: [], now: formatNow()),
+            hidden: HiddenQuotaAccounts.decode(hiddenQuotaAccountsRaw)
+        )
+    }
+
+    static func quotaAccountRows(live: [SessionListView.QuotaWidgetData],
+                                 hidden: [String: String]) -> [QuotaAccountRow] {
+        var rows: [String: QuotaAccountRow] = [:]
+        for chip in live {
+            rows[chip.id] = QuotaAccountRow(key: chip.id, tierLabel: chip.snapshot.tierLabel ?? "",
+                                            hasLiveData: true, isHidden: hidden[chip.id] != nil)
+        }
+        for (key, storedTier) in hidden where rows[key] == nil {
+            rows[key] = QuotaAccountRow(key: key, tierLabel: storedTier, hasLiveData: false, isHidden: true)
+        }
+        return rows.values.sorted { $0.key < $1.key }
+    }
+
+    /// A row's toggle is ON while the account is shown. Turning it off stores
+    /// the row's tier label with the key. The write happens only here, in the
+    /// binding's `set`, so rendering Settings persists nothing.
+    private func quotaAccountVisibility(_ row: QuotaAccountRow) -> Binding<Bool> {
+        Binding(
+            get: { !row.isHidden },
+            set: { shown in
+                hiddenQuotaAccountsRaw = Self.settingQuotaAccount(row, shown: shown, in: hiddenQuotaAccountsRaw)
+            }
+        )
+    }
+
+    /// The stored value after one toggle, as a pure function of the old one.
+    static func settingQuotaAccount(_ row: QuotaAccountRow, shown: Bool, in raw: String) -> String {
+        var hidden = HiddenQuotaAccounts.decode(raw)
+        if shown {
+            hidden.removeValue(forKey: row.key)
+        } else {
+            hidden[row.key] = row.tierLabel
+        }
+        return HiddenQuotaAccounts.encode(hidden)
     }
 
     /// Provider keys with a rate_limit-carrying session right now, for the

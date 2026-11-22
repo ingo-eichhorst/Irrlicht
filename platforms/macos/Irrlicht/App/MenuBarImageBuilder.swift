@@ -159,10 +159,15 @@ enum MenuBarImageBuilder {
     /// selected provider with no renderable snapshot contributes no slot
     /// rather than a blank one, so the icon does not carry a gap waiting for
     /// data that may never arrive.
+    ///
+    /// `hiddenAccounts` (#2163) is handed to every slot's pick rather than
+    /// applied to `sessions`, because `iconImage` passes the same `sessions`
+    /// to the dot half, and hiding an account hides no session.
     static func quotaImage(
         appearance: MenuBarAppearance,
         sessions: [SessionState],
         providerKeys: [String],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
         guard appearance.showsQuotaBars else { return nil }
@@ -171,6 +176,7 @@ enum MenuBarImageBuilder {
                 sessions: sessions,
                 providerKey: nil,
                 compact: appearance.usesNarrowQuotaBars,
+                hiddenAccounts: hiddenAccounts,
                 now: now
             )
         }
@@ -180,6 +186,7 @@ enum MenuBarImageBuilder {
                 sessions: sessions,
                 providerKey: key,
                 compact: appearance.usesNarrowQuotaBars,
+                hiddenAccounts: hiddenAccounts,
                 now: now
             )
             guard let slot else { continue }
@@ -217,6 +224,7 @@ enum MenuBarImageBuilder {
         projectGroupOrder: [String],
         daemonLabels: [String: String],
         providerKeys: [String],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
         // Computed once regardless of appearance so the .usage fallback below
@@ -245,6 +253,7 @@ enum MenuBarImageBuilder {
             appearance: appearance,
             sessions: sessions,
             providerKeys: providerKeys,
+            hiddenAccounts: hiddenAccounts,
             now: now
         )
         // .usage style hides the dots by default, and brings them back only
@@ -320,6 +329,9 @@ enum MenuBarImageBuilder {
             // so the explicit spelling keeps the site countable by the rule
             // that governs it rather than merely uncovered by it.
             providerKeys: MenuBarQuotaProviders.current(in: UserDefaults.standard),
+            // The accounts hidden in Settings (#2163), read the same way and
+            // for the same reason as the line above.
+            hiddenAccounts: Set(HiddenQuotaAccounts.current(in: UserDefaults.standard).keys),
             // `now:` is the menu-bar icon's one wall-clock read (#1675). The
             // icon is rasterised into an `NSStatusItem`, not rendered by
             // SwiftUI, so `\.formatNow` cannot reach it — the clock has to be

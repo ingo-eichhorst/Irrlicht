@@ -150,7 +150,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         ]
         let usage = appearance(.usage)
         let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
+            appearance: usage, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
         ), "the fixture must have a renderable quota, or this test proves nothing")
         let composed = try XCTUnwrap(icon(usage, sessions: sessions))
         XCTAssertEqual(composed.size.width, quota.size.width, accuracy: 0.01,
@@ -186,7 +186,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         for grouping in MenuBarGrouping.selectableCases {
             let usage = appearance(.usage, grouping: grouping)
             let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-                appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
+                appearance: usage, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
             ), "\(grouping): the fixture must render a quota, or this proves nothing")
             let composed = try XCTUnwrap(icon(usage, sessions: sessions))
             XCTAssertEqual(
@@ -218,7 +218,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         let usage = appearance(.usage)
         XCTAssertNil(
             MenuBarImageBuilder.quotaImage(
-                appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
+                appearance: usage, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
             ),
             "this fixture must render NO quota, or the fallback under test never runs"
         )
@@ -295,7 +295,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         MenuBarImageBuilder.iconImage(
             appearance: appearance, sessions: sessions, projectGroupOrder: [],
             daemonLabels: [:],
-            providerKeys: [], now: fixedNow
+            providerKeys: [], hiddenAccounts: [], now: fixedNow
         )
     }
 
@@ -395,7 +395,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         for grouping in MenuBarGrouping.selectableCases {
             let subject = appearance(.usage, grouping: grouping)
             let quota = MenuBarImageBuilder.quotaImage(
-                appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
+                appearance: subject, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
             )
             XCTAssertNil(quota, "the fixture must have no renderable quota, "
                              + "or this test proves nothing about the fallback")
@@ -430,7 +430,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
             appearance: subject, sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
         ))
         let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
+            appearance: subject, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
         ))
         let gap = MenuBarStatusRenderer.groupGap
         let dotsFirst = try XCTUnwrap(MenuBarImageBuilder.composeSideBySide(dots, quota, gap: gap))
@@ -475,7 +475,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
                        "the dot half must name its buckets before anything composes it")
         let quota = try XCTUnwrap(
             MenuBarImageBuilder.quotaImage(
-                appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
+                appearance: subject, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: fixedNow
             ),
             "this fixture must render a quota half, or the composition never runs"
         )
@@ -486,7 +486,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         let composed = try XCTUnwrap(
             MenuBarImageBuilder.iconImage(
                 appearance: subject, sessions: sessions, projectGroupOrder: [],
-                daemonLabels: labels, providerKeys: [], now: fixedNow
+                daemonLabels: labels, providerKeys: [], hiddenAccounts: [], now: fixedNow
             )
         )
         XCTAssertGreaterThan(composed.size.width, dots.size.width,

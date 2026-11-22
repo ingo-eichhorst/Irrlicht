@@ -535,6 +535,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             projectGroupOrder: manager.projectGroupOrder,
             daemonLabels: manager.daemonLabels,
             providerKeys: [],
+            hiddenAccounts: [],
             now: MenuBarFixtures.now
         )
     }
@@ -614,7 +615,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         let located = try XCTUnwrap(MenuBarImageBuilder.iconImage(
             appearance: appearance(.lights, .location),
             sessions: sut.sessions, projectGroupOrder: sut.projectGroupOrder,
-            daemonLabels: sut.daemonLabels, providerKeys: [], now: now
+            daemonLabels: sut.daemonLabels, providerKeys: [], hiddenAccounts: [], now: now
         ))
         MenuBarController.applyIcon(located, to: button)
         XCTAssertEqual(button.accessibilityLabel(),
@@ -632,7 +633,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         let perProject = try XCTUnwrap(MenuBarImageBuilder.iconImage(
             appearance: appearance(.lights, .project),
             sessions: sut.sessions, projectGroupOrder: sut.projectGroupOrder,
-            daemonLabels: sut.daemonLabels, providerKeys: [], now: now
+            daemonLabels: sut.daemonLabels, providerKeys: [], hiddenAccounts: [], now: now
         ))
         XCTAssertNil(perProject.accessibilityDescription,
                      "this arm is only meaningful while the per-project icon describes nothing")
@@ -776,7 +777,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             for grouping in MenuBarGrouping.selectableCases {
                 let appearance = appearance(style, grouping)
                 let image = MenuBarImageBuilder.quotaImage(
-                    appearance: appearance, sessions: sessions, providerKeys: [], now: now
+                    appearance: appearance, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: now
                 )
                 guard appearance.showsQuotaBars else {
                     XCTAssertNil(image, "\(style)/\(grouping) carries no quota bars")
@@ -836,7 +837,7 @@ final class MenuBarAppearanceTests: XCTestCase {
                 dots ?? -1, accuracy: 0.01, "\(style) dots"
             )
             let quotaImage = MenuBarImageBuilder.quotaImage(
-                appearance: subject, sessions: sessions, providerKeys: [], now: now
+                appearance: subject, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: now
             )
             if let quota {
                 XCTAssertEqual(quotaImage?.size.width ?? -1, quota, accuracy: 0.01, "\(style) quota")
@@ -893,7 +894,7 @@ final class MenuBarAppearanceTests: XCTestCase {
                     MenuBarImageBuilder.iconImage(
                         appearance: column.1, sessions: sessions,
                         projectGroupOrder: [], daemonLabels: [:],
-                        providerKeys: [], now: now
+                        providerKeys: [], hiddenAccounts: [], now: now
                     ),
                     "\(column.0) at \(projects) projects rendered no icon"
                 )
@@ -1473,7 +1474,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             )
             XCTAssertNil(
                 MenuBarImageBuilder.quotaImage(
-                    appearance: migrated, sessions: sessions, providerKeys: [], now: now
+                    appearance: migrated, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: now
                 ),
                 "\(sessionCount) sessions: the migrated appearance must draw no quota half"
             )
@@ -1481,7 +1482,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             XCTAssertEqual(
                 MenuBarImageBuilder.iconImage(
                     appearance: migrated, sessions: sessions,
-                    projectGroupOrder: [], daemonLabels: [:], providerKeys: [], now: now
+                    projectGroupOrder: [], daemonLabels: [:], providerKeys: [], hiddenAccounts: [], now: now
                 )?.size.width ?? -1,
                 aggregate.width, accuracy: 0.01,
                 "\(sessionCount) sessions: the migrated icon must be the aggregate dot alone"
@@ -1603,7 +1604,7 @@ final class MenuBarAppearanceTests: XCTestCase {
 
         let confirmedSession = MenuBarFixtures.sessionWithQuota()
         let selected = QuotaMenuBarRenderer.selectedSnapshot(
-            sessions: [confirmedSession], providerKey: migratedKey, now: now
+            sessions: [confirmedSession], providerKey: migratedKey, hiddenAccounts: [], now: now
         )
         XCTAssertEqual(selected?.windows.first?.usedPercent,
                        confirmedSession.metrics?.rateLimit?.windows.first?.usedPercent,
@@ -1647,7 +1648,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             adapter: "claude-code"
         )
         XCTAssertNil(
-            QuotaMenuBarRenderer.selectedSnapshot(sessions: [unconfirmedSession], providerKey: migratedKey, now: now),
+            QuotaMenuBarRenderer.selectedSnapshot(sessions: [unconfirmedSession], providerKey: migratedKey, hiddenAccounts: [], now: now),
             "a session with an unconfirmed provider must not be selected as though it were confirmed"
         )
     }
@@ -1677,7 +1678,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         let key = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
 
         let codex = MenuBarFixtures.sessionWithQuota(adapter: "codex")
-        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key, now: now),
+        XCTAssertNotNil(QuotaMenuBarRenderer.selectedSnapshot(sessions: [codex], providerKey: key, hiddenAccounts: [], now: now),
                         "the migrated slot \"\(key)\" selects no confirmed Codex snapshot")
     }
 
@@ -1818,11 +1819,11 @@ final class MenuBarAppearanceTests: XCTestCase {
                           "the fixture must carry two DIFFERENT providers")
 
         let one = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: usage, sessions: sessions, providerKeys: [anthropicKey], now: now
+            appearance: usage, sessions: sessions, providerKeys: [anthropicKey], hiddenAccounts: [], now: now
         ))
         let two = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
             appearance: usage, sessions: sessions,
-            providerKeys: [anthropicKey, openaiKey], now: now
+            providerKeys: [anthropicKey, openaiKey], hiddenAccounts: [], now: now
         ))
         XCTAssertEqual(two.size.width,
                        one.size.width * 2 + MenuBarStatusRenderer.groupGap, accuracy: 0.01,
@@ -1832,7 +1833,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         // pixels, because width is commutative and cannot see it.
         let reversed = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
             appearance: usage, sessions: sessions,
-            providerKeys: [openaiKey, anthropicKey], now: now
+            providerKeys: [openaiKey, anthropicKey], hiddenAccounts: [], now: now
         ))
         XCTAssertEqual(reversed.size.width, two.size.width, accuracy: 0.01)
         XCTAssertNotEqual(two.tiffRepresentation, reversed.tiffRepresentation,
@@ -1840,7 +1841,7 @@ final class MenuBarAppearanceTests: XCTestCase {
 
         // An empty list is #909's behaviour: one slot, freshest wins.
         let auto = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: usage, sessions: sessions, providerKeys: [], now: now
+            appearance: usage, sessions: sessions, providerKeys: [], hiddenAccounts: [], now: now
         ))
         XCTAssertEqual(auto.size.width, one.size.width, accuracy: 0.01,
                        "an empty list must keep #909's single-slot Auto layout")
@@ -1849,7 +1850,7 @@ final class MenuBarAppearanceTests: XCTestCase {
         // rather than a blank one the icon then carries forever.
         let missing = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
             appearance: usage, sessions: sessions,
-            providerKeys: [anthropicKey, "no-such-provider"], now: now
+            providerKeys: [anthropicKey, "no-such-provider"], hiddenAccounts: [], now: now
         ))
         XCTAssertEqual(missing.size.width, one.size.width, accuracy: 0.01,
                        "an unrenderable provider must not reserve a slot")
@@ -1862,13 +1863,13 @@ final class MenuBarAppearanceTests: XCTestCase {
         XCTAssertNil(
             MenuBarImageBuilder.quotaImage(
                 appearance: usage, sessions: sessions,
-                providerKeys: ["no-such-provider", "nor-this-one"], now: now
+                providerKeys: ["no-such-provider", "nor-this-one"], hiddenAccounts: [], now: now
             ),
             "an all-unrenderable selection must answer nil so the dots come back"
         )
         let fellBack = try XCTUnwrap(MenuBarImageBuilder.iconImage(
             appearance: usage, sessions: sessions, projectGroupOrder: [], daemonLabels: [:],
-            providerKeys: ["no-such-provider"], now: now
+            providerKeys: ["no-such-provider"], hiddenAccounts: [], now: now
         ))
         let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
             appearance: usage, sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
@@ -1896,6 +1897,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             (MenuBarMaxProjects.storageKey, MenuBarMaxProjects.maximum),
             (MenuBarQuotaProviders.storageKey, "anthropic"),
             (QuotaVisualStyle.storageKey, QuotaVisualStyle.circle.rawValue),
+            (HiddenQuotaAccounts.storageKey, HiddenQuotaAccounts.encode(["anthropic|acct-A": ""])),
         ]
         var found: [String] = []
         for (key, value) in writes {
@@ -1933,7 +1935,8 @@ final class MenuBarAppearanceTests: XCTestCase {
             grouping: MenuBarGrouping? = nil,
             maxProjects: Int? = nil,
             quotaProviders: String? = nil,
-            quotaVisual: String? = nil
+            quotaVisual: String? = nil,
+            hiddenQuotaAccounts: String? = nil
         ) -> MenuBarIconSettings {
             let real = MenuBarIconSettings.current(in: defaults)
             return MenuBarIconSettings(
@@ -1943,7 +1946,8 @@ final class MenuBarAppearanceTests: XCTestCase {
                     maxProjects: maxProjects ?? real.appearance.maxProjects
                 ),
                 quotaProviders: quotaProviders ?? real.quotaProviders,
-                quotaVisual: quotaVisual ?? real.quotaVisual
+                quotaVisual: quotaVisual ?? real.quotaVisual,
+                hiddenQuotaAccounts: hiddenQuotaAccounts ?? real.hiddenQuotaAccounts
             )
         }
         let mutants: [(String, (UserDefaults) -> MenuBarIconSettings)] = [
@@ -1952,6 +1956,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             ("slot budget pinned", { rebuilt($0, maxProjects: MenuBarMaxProjects.defaultValue) }),
             ("provider list pinned", { rebuilt($0, quotaProviders: "") }),
             ("quota visual pinned", { rebuilt($0, quotaVisual: "") }),
+            ("hidden accounts pinned", { rebuilt($0, hiddenQuotaAccounts: "") }),
             ("always different", { _ in
                 MenuBarIconSettings(
                     appearance: MenuBarAppearance(
@@ -1959,7 +1964,8 @@ final class MenuBarAppearanceTests: XCTestCase {
                         maxProjects: Int.random(in: 1...MenuBarMaxProjects.maximum)
                     ),
                     quotaProviders: UUID().uuidString,
-                    quotaVisual: UUID().uuidString
+                    quotaVisual: UUID().uuidString,
+                    hiddenQuotaAccounts: UUID().uuidString
                 )
             }),
         ]
@@ -2167,6 +2173,13 @@ final class MenuBarAppearanceTests: XCTestCase {
         XCTAssertTrue(
             code.contains("providerKeys: MenuBarQuotaProviders.current(in: UserDefaults.standard)"),
             "combinedImage must read the ordered provider list once, from one place (#1955)"
+        )
+        // #2163: every hop below this takes the hidden accounts as a required
+        // argument, so what is pinned here is where they come from: handing
+        // iconImage `[]` instead would compile and show hidden accounts again.
+        XCTAssertTrue(
+            code.contains("hiddenAccounts: Set(HiddenQuotaAccounts.current(in: UserDefaults.standard).keys)"),
+            "combinedImage must hand the accounts hidden in Settings to iconImage (#2163)"
         )
         // The slot budget travels ON the appearance rather than as a second
         // argument nobody threads — pinned because a `maxGroups:` that fell
