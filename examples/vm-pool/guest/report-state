@@ -1,0 +1,17 @@
+#!/bin/sh
+# report-state — the one thing a task tells the host: a single word.
+#
+#   report-state busy | waiting | done
+#
+# Writes the word to $IRRLICHT_STATE_DIR/state (default /irrlicht-state/state,
+# the directory pool.sh mounts) by write-then-rename, so the supervisor never
+# reads half a word. It reads nothing — a hook's JSON on stdin is ignored —
+# so no prompt, transcript or output can leave the VM through it.
+set -eu
+dir=${IRRLICHT_STATE_DIR:-/irrlicht-state}
+case "${1:-}" in
+  busy | waiting | done) ;;
+  *) echo "usage: report-state busy|waiting|done" >&2; exit 2 ;;
+esac
+printf '%s\n' "$1" > "$dir/.state.tmp"
+mv "$dir/.state.tmp" "$dir/state"
