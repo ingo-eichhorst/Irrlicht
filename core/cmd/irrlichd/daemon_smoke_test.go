@@ -425,14 +425,15 @@ func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) 
 	if snap.Mode != "ask" {
 		t.Fatalf("permission mode = %q, want ask", snap.Mode)
 	}
-	// Every agent adapter with declared permissions, plus the eight daemon-
+	// Every agent adapter with declared permissions, plus the nine daemon-
 	// wide entries consentCatalog appends outside agents.All(): the Gas Town
 	// orchestrator, launcher-identity capture, the kitty config patch,
 	// endpoint-route observation (#2002), Muse's account-quota
 	// permission (issue #2007), Claude Code's account-identity read
-	// (issue #2095), the worker-list orchestrator (issue #2148), and Z.ai's
-	// coding-plan quota (issue #2010).
-	if want := 8 + countAgentsWithDeclaredPermissions(); len(snap.Agents) != want {
+	// (issue #2095), the worker-list orchestrator (issue #2148), Z.ai's
+	// coding-plan quota (issue #2010), and Mistral Vibe's browser-session
+	// permission (issue #2012).
+	if want := 9 + countAgentsWithDeclaredPermissions(); len(snap.Agents) != want {
 		t.Fatalf("GET %s returned %d agents, want %d", url, len(snap.Agents), want)
 	}
 	assertAllPermissionsPending(t, snap.Agents)

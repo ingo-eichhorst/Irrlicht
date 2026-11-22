@@ -399,22 +399,25 @@ func (s *PermissionService) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.parent = ctx
 	if s.mode == config.PermissionModeGrantAll {
-		granted, scopedOut := 0, 0
+		granted, scopedOut, explicit := 0, 0, 0
 		for _, a := range s.agents {
 			for _, p := range a.Permissions {
 				if s.scopedOutByRecordAdapters(a.Identity.Name, p) {
 					scopedOut++
 					continue
 				}
+				// A permission that requires an explicit grant keeps the
+				// state the store loaded: pending on a fresh home, granted
+				// only if a person granted it (agent.Permission's doc).
+				if p.RequiresExplicitGrant {
+					explicit++
+					continue
+				}
 				s.set.Put(a.Identity.Name, p.Key, permission.StateGranted)
 				granted++
 			}
 		}
-		msg := "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed"
-		if scopedOut > 0 {
-			msg = fmt.Sprintf("IRRLICHT_PERMISSION_MODE=grant-all — %d permission(s) granted, %d scoped out by IRRLICHT_RECORD_ADAPTERS (not this run's adapter), wizard suppressed", granted, scopedOut)
-		}
-		s.log.LogInfo("permissions", "", msg)
+		s.log.LogInfo("permissions", "", grantAllSummary(granted, scopedOut, explicit))
 	}
 	var effects []pendingEffect
 	for _, a := range s.agents {
@@ -432,6 +435,16 @@ func (s *PermissionService) Start(ctx context.Context) {
 	if runPoller {
 		go s.runDetectionLoop(ctx)
 	}
+}
+
+// grantAllSummary is the log line Start writes after grant-all: the plain
+// one when every permission was granted, the counts when some were scoped out
+// or left for an explicit grant.
+func grantAllSummary(granted, scopedOut, explicit int) string {
+	if scopedOut == 0 && explicit == 0 {
+		return "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed"
+	}
+	return fmt.Sprintf("IRRLICHT_PERMISSION_MODE=grant-all — %d permission(s) granted, %d scoped out by IRRLICHT_RECORD_ADAPTERS (not this run's adapter), %d left for an explicit grant, wizard suppressed", granted, scopedOut, explicit)
 }
 
 // scopedOutByRecordAdapters reports whether p, declared by agentName, must be

@@ -46,12 +46,36 @@ import "context"
 // today.
 type Credential struct {
 	secret string
+
+	// companion is a SECOND secret value that travels with this credential
+	// (issue #2012). A browser session is two headers, not one: the Cookie
+	// header, and an X-CSRFToken header echoing one of those cookies; the
+	// CodexBar Mistral fetcher (b6e65a8, MistralUsageFetcher.swift:80-81)
+	// sends both. The header it goes under is not part of the credential: it
+	// is AuthMethod.CompanionHeader, reviewed with the destination. Empty for
+	// every credential built by NewCredential.
+	companion string
 }
 
 // NewCredential wraps a resolved secret. Callers should hold the result, not
 // the raw string, for as long as possible before the one Reveal() call that
 // attaches it to a request.
 func NewCredential(secret string) Credential { return Credential{secret: secret} }
+
+// NewCredentialWithCompanion wraps a credential that is sent as two request
+// headers: secret under AuthMethod.Header, exactly as NewCredential's is, and
+// companion under AuthMethod.CompanionHeader. Issue #2012 builds one for a
+// browser session: the Cookie header plus X-CSRFToken.
+func NewCredentialWithCompanion(secret, companion string) Credential {
+	return Credential{secret: secret, companion: companion}
+}
+
+// RevealCompanion returns the companion's raw value, "" when there is none.
+// Like Reveal, its one intended caller is the accountquota transport,
+// immediately before it sets request headers.
+// TestCredential_RevealCompanionHasOneCallSite in that package greps for
+// this.
+func (c Credential) RevealCompanion() string { return c.companion }
 
 // Reveal returns the raw secret. Callers outside the transport that calls
 // this immediately before injecting it into a request header are a leak by
@@ -77,8 +101,9 @@ func (c Credential) GoString() string { return "[redacted credential]" }
 // it is stored. #2003 ships two locations — a file
 // (core/adapters/outbound/accountquota.FileCredentialResolver) and the OS
 // keychain (KeychainCredentialResolver, darwin-only; classified-unsupported
-// elsewhere). A browser-profile resolver is the separate prov(browser)
-// permission's concern (epic #1977), not this port's.
+// elsewhere). The browser-profile resolver (issue #2012,
+// mistralvibe.Session over core/adapters/outbound/chromecookies) implements
+// this same interface under its own browser-session permission.
 type CredentialResolver interface {
 	Resolve(ctx context.Context) (Credential, error)
 }
@@ -98,6 +123,12 @@ type AuthMethod struct {
 	// Prefix is prepended to the revealed secret before it is set as the
 	// header value, e.g. "Bearer " — "" for a raw header value.
 	Prefix string
+	// CompanionHeader names the header a credential's companion value is
+	// sent under (issue #2012: "X-CSRFToken" beside a browser session's
+	// Cookie header). "" for every one-header method. The transport sends a
+	// companion only when both this and the credential's companion are set,
+	// and refuses a request where exactly one of them is.
+	CompanionHeader string
 }
 
 // FixedDestination names one reviewed outbound endpoint. A transport is
