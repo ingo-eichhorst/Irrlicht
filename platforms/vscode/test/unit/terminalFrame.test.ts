@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { STATES } from '../../src/states';
 import {
   EDITOR_BORDER_KEYS, FRAME_DEBOUNCE_MS, FrameSync, OWNED_KEYS, PANEL_BORDER_KEYS, STATE_COLORS, TINT_AMOUNT, TINT_BASE,
-  blend, desiredFrame, frameColors, parseFrameMode, planFrame, resolveStateColor, themeKindOf,
+  blend, desiredFrame, frameColors, normalizeMemo, parseFrameMode, planFrame, resolveStateColor, themeKindOf,
 } from '../../src/terminalFrame';
 import type { FrameIO, FrameMemo, FramePlan, FrameTimers } from '../../src/terminalFrame';
 
@@ -194,6 +194,35 @@ describe('desiredFrame', () => {
         for (const k of Object.keys(desiredFrame({ ...base, mode, location }))) expect(OWNED_KEYS).toContain(k);
       }
     }
+  });
+});
+
+describe('normalizeMemo', () => {
+  const good: FrameMemo = { prev: { 'panel.border': '#123456' }, written: { 'panel.border': '#8B5CF6' }, hadObject: false };
+  it('returns a valid memo unchanged', () => {
+    expect(normalizeMemo(good)).toEqual(good);
+    const withPending = { ...good, pending: { 'panel.border': '#FF9500' } };
+    expect(normalizeMemo(withPending)).toEqual(withPending);
+  });
+  it('migrates the old shape by using applied as written', () => {
+    const old = { prev: good.prev, applied: good.written, hadObject: false };
+    expect(normalizeMemo(old)).toEqual(good);
+  });
+  it('drops a pending that is not an object of strings, but keeps the memo', () => {
+    expect(normalizeMemo({ ...good, pending: 'x' })).toEqual(good);
+    expect(normalizeMemo({ ...good, pending: { a: 1 } })).toEqual(good);
+    expect(normalizeMemo({ ...good, pending: [] })).toEqual(good);
+  });
+  it('returns undefined for junk', () => {
+    const junk: unknown[] = [
+      undefined, null, 'x', 7, true, [], [good],
+      {}, { prev: {}, hadObject: true }, { written: {}, hadObject: true }, { prev: {}, written: {} },
+      { ...good, prev: 'x' }, { ...good, prev: [] }, { ...good, prev: null },
+      { ...good, written: 'x' }, { ...good, written: [] }, { ...good, written: { a: 1 } }, { ...good, written: { a: null } },
+      { ...good, hadObject: 'yes' }, { ...good, hadObject: 1 },
+      { prev: {}, applied: { a: 1 }, hadObject: true },
+    ];
+    for (const j of junk) expect(normalizeMemo(j), JSON.stringify(j)).toBeUndefined();
   });
 });
 
@@ -715,6 +744,47 @@ describe('FrameSync', () => {
     io.failWrites = 1;
     await sync.restore();
     expect(io.memo).toEqual(before);
+    await sync.restore();
+    expect(io.current).toEqual({ 'panel.border': '#123456' });
+    expect(io.memo).toBeUndefined();
+  });
+
+  it('an old-shape memo (applied instead of written) is migrated: restore brings the user values back', async () => {
+    const old = { prev: { 'panel.border': '#123456' }, applied: A, hadObject: true } as unknown as FrameMemo;
+    const io = new FakeIO({ ...A }, old);
+    const { sync } = make(io);
+    await sync.restore();
+    expect(io.current).toEqual({ 'panel.border': '#123456' });
+    expect(io.memo).toBeUndefined();
+    expect(io.logs).toEqual([]);
+  });
+
+  it('an unreadable memo is ignored with one log line, never throws, and is dropped', async () => {
+    const io = new FakeIO({ 'statusBar.background': '#222222' }, 'junk' as unknown as FrameMemo);
+    const { sync } = make(io);
+    sync.request(A);
+    await sync.settle();
+    await sync.restore();
+    expect(io.logs).toEqual(['terminal frame: ignoring an unreadable memo']);
+    expect(io.current).toEqual({ 'statusBar.background': '#222222' });
+    expect(io.memo).toBeUndefined();
+  });
+
+  it('an unreadable memo is cleared even when there is nothing to restore', async () => {
+    const io = new FakeIO({ 'statusBar.background': '#222222' }, [1] as unknown as FrameMemo);
+    const { sync } = make(io);
+    await sync.restore();
+    expect(io.memo).toBeUndefined();
+    expect(io.writes).toHaveLength(0);
+  });
+
+  it('a landed but unconfirmed write followed by a refused one still leaves the frame recognisable', async () => {
+    const memo: FrameMemo = { prev: { 'panel.border': '#123456' }, written: A, pending: B, hadObject: true };
+    const io = new FakeIO({ ...B }, memo);
+    const { sync } = make(io);
+    io.failWrites = 1;
+    sync.request(panelDesired('#34C759'));
+    await sync.settle();
     await sync.restore();
     expect(io.current).toEqual({ 'panel.border': '#123456' });
     expect(io.memo).toBeUndefined();

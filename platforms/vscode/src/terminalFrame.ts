@@ -164,6 +164,25 @@ export interface FrameMemo {
   hadObject: boolean;
 }
 
+function isStringRecord(v: unknown): v is Record<string, string> {
+  return isPlainObject(v) && Object.values(v).every((x) => typeof x === 'string');
+}
+
+/**
+ * Reads a memo from persisted storage, which may hold anything: an older shape, a partial write,
+ * junk. Returns a valid memo, or undefined when it cannot be read with confidence. An earlier,
+ * unreleased commit of this feature (fa19cd64a) stored `applied` where `written` is now; it is migrated. A malformed `pending` is
+ * dropped, since losing it only loses the "may have landed" hint.
+ */
+export function normalizeMemo(raw: unknown): FrameMemo | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const written = has(raw, 'written') ? raw.written : raw.applied;
+  if (!isPlainObject(raw.prev) || !isStringRecord(written) || typeof raw.hadObject !== 'boolean') return undefined;
+  const memo: FrameMemo = { prev: raw.prev, written, hadObject: raw.hadObject };
+  if (isStringRecord(raw.pending)) memo.pending = raw.pending;
+  return memo;
+}
+
 export interface FramePlan {
   /** The workspace-scope value to write; undefined removes the setting. */
   next: unknown;
@@ -187,6 +206,16 @@ function ownedOnly(desired: Record<string, string>): Record<string, string> {
 function isOurs(memo: FrameMemo, key: string, value: unknown): boolean {
   if (has(memo.written, key) && deepEqual(value, memo.written[key])) return true;
   return memo.pending !== undefined && has(memo.pending, key) && deepEqual(value, memo.pending[key]);
+}
+
+/** The owned keys whose value on disk is known to be ours, with that value. */
+function confirmedOnDisk(cur: Obj, memo: FrameMemo | undefined): Record<string, string> {
+  const confirmed: Record<string, string> = {};
+  if (memo === undefined) return confirmed;
+  for (const k of OWNED_KEYS) {
+    if (has(cur, k) && isOurs(memo, k, cur[k])) confirmed[k] = cur[k] as string;
+  }
+  return confirmed;
 }
 
 /**
@@ -355,36 +384,41 @@ export class FrameSync {
   }
 
   /**
-   * Memo and write ordering. Before a write that may change the disk, the memo is saved with the
-   * colours currently confirmed as `written` and the incoming ones as `pending`, so a refused or
-   * interrupted write leaves a memo that still recognises whichever frame is on disk. The
-   * after-success memo is saved only once the write resolved. A refused restoring write keeps the
-   * loaded memo, which still describes the disk.
+   * Memo and write ordering. Before a write that may change the disk, the memo is saved with, as
+   * `written`, the owned values on disk that are known to be ours, and the incoming colours as
+   * `pending`. A refused or interrupted write therefore leaves a memo that still recognises
+   * whichever frame is on disk, even one that landed without being confirmed. The after-success
+   * memo is saved only once the write resolved. A refused restoring write keeps the stored memo,
+   * which still describes the disk. `stored` is whether anything, readable or not, sits in storage.
    */
-  private async apply(plan: FramePlan, loaded: FrameMemo | undefined): Promise<void> {
+  private async apply(plan: FramePlan, current: unknown, loaded: FrameMemo | undefined, stored: boolean): Promise<void> {
     if (plan.memo === undefined) {
       if (plan.changed) await this.io.write(plan.next);
-      if (loaded !== undefined) await this.io.saveMemo(undefined);
+      if (stored) await this.io.saveMemo(undefined);
       return;
     }
     if (!plan.changed) {
       if (!deepEqual(plan.memo, loaded)) await this.io.saveMemo(plan.memo);
       return;
     }
-    await this.io.saveMemo({ ...plan.memo, written: loaded?.written ?? {}, pending: plan.memo.written });
+    const written = confirmedOnDisk(isPlainObject(current) ? current : {}, loaded);
+    await this.io.saveMemo({ ...plan.memo, written, pending: plan.memo.written });
     await this.io.write(plan.next);
     await this.io.saveMemo(plan.memo);
   }
 
   private async pass(desired: Record<string, string>): Promise<void> {
     try {
-      const memo = this.io.loadMemo();
-      const plan = planFrame(this.io.read(), memo, desired);
+      const stored: unknown = this.io.loadMemo();
+      const memo = normalizeMemo(stored);
+      if (stored !== undefined && memo === undefined) this.logOnce('terminal frame: ignoring an unreadable memo');
+      const current = this.io.read();
+      const plan = planFrame(current, memo, desired);
       if (plan.invalid) {
         this.logOnce(INVALID_MESSAGE);
         return;
       }
-      await this.apply(plan, memo);
+      await this.apply(plan, current, memo, stored !== undefined);
     } catch (error) {
       this.logOnce('terminal frame: ' + (error instanceof Error ? error.message : String(error)));
     }
