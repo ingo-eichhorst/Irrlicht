@@ -202,7 +202,7 @@ describe('planFrame', () => {
   const desiredB = panelDesired('#FF9500');
 
   it('rule 1: a defined non-object current is invalid and nothing is written', () => {
-    const memo: FrameMemo = { prev: {}, applied: desiredA, hadObject: true };
+    const memo: FrameMemo = { prev: {}, written: desiredA, hadObject: true };
     for (const bad of ['text', 5, [1, 2], null, true]) {
       const p = planFrame(bad, memo, desiredB);
       expect(p).toEqual({ invalid: true, changed: false, next: bad, memo });
@@ -212,7 +212,7 @@ describe('planFrame', () => {
   it('rule 2: desired keys outside OWNED_KEYS are ignored', () => {
     const p = planFrame({ a: 1 }, undefined, { 'statusBar.background': '#FFFFFF', 'panel.border': '#111111' });
     expect(p.next).toEqual({ a: 1, 'panel.border': '#111111' });
-    expect(p.memo?.applied).toEqual({ 'panel.border': '#111111' });
+    expect(p.memo?.written).toEqual({ 'panel.border': '#111111' });
     const none = planFrame({ a: 1 }, undefined, { 'statusBar.background': '#FFFFFF' });
     expect(none).toEqual({ invalid: false, changed: false, next: { a: 1 }, memo: undefined });
   });
@@ -256,7 +256,7 @@ describe('planFrame', () => {
   });
 
   it('rule 3: stale memo with our colours present and desired {} gives the user originals back and clears the memo', () => {
-    const memo: FrameMemo = { prev: { 'panel.border': '#123456' }, applied: desiredA, hadObject: true };
+    const memo: FrameMemo = { prev: { 'panel.border': '#123456' }, written: desiredA, hadObject: true };
     const crashed = { 'statusBar.background': '#222222', ...desiredA };
     const p = planFrame(crashed, memo, {});
     expect(p.next).toEqual({ 'statusBar.background': '#222222', 'panel.border': '#123456' });
@@ -268,15 +268,38 @@ describe('planFrame', () => {
     checkNoReSnapshot(planFrame);
   });
 
+  it('a key equal to the pending colour is ours, equal to the written colour is ours, anything else is the user value', () => {
+    const memo: FrameMemo = {
+      prev: { 'panel.border': '#123456', 'terminal.border': '#654321' },
+      written: { 'panel.border': '#8B5CF6', 'terminal.border': '#8B5CF6', 'panelTitle.activeBorder': '#8B5CF6' },
+      pending: { 'panel.border': '#FF9500', 'modernPanel.border': '#FF9500' },
+      hadObject: true,
+    };
+    const disk = {
+      'panel.border': '#FF9500',
+      'terminal.border': '#8B5CF6',
+      'modernPanel.border': '#FF9500',
+      'panelTitle.activeBorder': '#00FF00',
+      'terminal.tab.activeBorder': '#8B5CF6',
+    };
+    const p = planFrame(disk, memo, {});
+    expect(p.next).toEqual({
+      'panel.border': '#123456',
+      'terminal.border': '#654321',
+      'panelTitle.activeBorder': '#00FF00',
+      'terminal.tab.activeBorder': '#8B5CF6',
+    });
+  });
+
   it('rule 4: restore puts owned keys back', () => {
     checkRestoresOwnedKeys(planFrame);
   });
 
-  it('rule 5: the memo records prev, applied and hadObject (hadObject sticks across passes)', () => {
+  it('rule 5: the memo records prev, written and hadObject (hadObject sticks across passes)', () => {
     const first = planFrame(undefined, undefined, desiredA);
-    expect(first.memo).toEqual({ prev: {}, applied: desiredA, hadObject: false });
+    expect(first.memo).toEqual({ prev: {}, written: desiredA, hadObject: false });
     const second = planFrame(first.next, first.memo, desiredB);
-    expect(second.memo).toEqual({ prev: {}, applied: desiredB, hadObject: false });
+    expect(second.memo).toEqual({ prev: {}, written: desiredB, hadObject: false });
     const withObj = planFrame({ x: 1 }, undefined, desiredA);
     expect(withObj.memo?.hadObject).toBe(true);
   });
@@ -316,7 +339,7 @@ describe('planFrame', () => {
   });
 
   it('rule 7: undefined and {} are different values', () => {
-    const memo: FrameMemo = { prev: {}, applied: desiredA, hadObject: true };
+    const memo: FrameMemo = { prev: {}, written: desiredA, hadObject: true };
     const p = planFrame(desiredA, memo, {});
     expect(p.next).toEqual({});
     expect(p.changed).toBe(true);
@@ -412,6 +435,18 @@ class FakeIO implements FrameIO {
   }
 }
 
+/** Applies A, then asks for `failures` different colours whose writes are all rejected. */
+async function applyThenFailRecolours(sync: FrameSync, io: FakeIO, failures: number): Promise<void> {
+  sync.request(panelDesired('#8B5CF6'));
+  await sync.settle();
+  io.failWrites = failures;
+  const colours = ['#FF9500', '#34C759', '#FF3B30'];
+  for (let i = 0; i < failures; i++) {
+    sync.request(panelDesired(colours[i]));
+    await sync.settle();
+  }
+}
+
 describe('FrameSync', () => {
   const A = panelDesired('#8B5CF6');
   const B = panelDesired('#FF9500');
@@ -462,7 +497,11 @@ describe('FrameSync', () => {
     const { sync } = make(io);
     sync.request(A);
     await sync.settle();
-    expect(io.events).toEqual(['saveMemo:set', 'write', 'write:done']);
+    expect(io.events).toEqual(['saveMemo:set', 'write', 'write:done', 'saveMemo:set']);
+    expect(io.saves[0]?.pending).toEqual(A);
+    expect(io.saves[0]?.written).toEqual({});
+    expect(io.saves[1]?.pending).toBeUndefined();
+    expect(io.saves[1]?.written).toEqual(A);
     io.events.length = 0;
     io.manual = true;
     sync.request({});
@@ -556,7 +595,7 @@ describe('FrameSync', () => {
   });
 
   it('restore also finishes a leftover from a previous run (stale memo)', async () => {
-    const memo: FrameMemo = { prev: {}, applied: A, hadObject: false };
+    const memo: FrameMemo = { prev: {}, written: A, hadObject: false };
     const io = new FakeIO({ ...A }, memo);
     const { sync } = make(io);
     await sync.restore();
@@ -633,6 +672,54 @@ describe('FrameSync', () => {
     expect(io.events).toEqual([]);
   });
 
+  it('a rejected recolour write leaves the old frame recognisable: restore brings the user values back', async () => {
+    const io = new FakeIO({ 'panel.border': '#123456' });
+    const { sync } = make(io);
+    await applyThenFailRecolours(sync, io, 1);
+    await sync.restore();
+    expect(io.current).toEqual({ 'panel.border': '#123456' });
+    expect(io.memo).toBeUndefined();
+  });
+
+  it('a chain of rejected recolour writes still recognises the last confirmed frame as ours', async () => {
+    const io = new FakeIO({ 'panel.border': '#123456' });
+    const { sync } = make(io);
+    await applyThenFailRecolours(sync, io, 2);
+    await sync.restore();
+    expect(io.current).toEqual({ 'panel.border': '#123456' });
+    expect(io.memo).toBeUndefined();
+  });
+
+  it('a crash between the pre-write memo save and a recolour write is repaired by the next run', async () => {
+    const first = new FakeIO({ 'panel.border': '#123456' });
+    const { sync } = make(first);
+    sync.request(A);
+    await sync.settle();
+    first.manual = true;
+    sync.request(editorDesired('#FF9500'));
+    void sync.settle();
+    await flush();
+    expect(first.pendingWrites).toHaveLength(1);
+    const reborn = new FakeIO(first.current, first.memo);
+    await make(reborn).sync.restore();
+    expect(reborn.current).toEqual({ 'panel.border': '#123456' });
+    expect(reborn.memo).toBeUndefined();
+  });
+
+  it('a rejected restoring write leaves the loaded memo intact', async () => {
+    const io = new FakeIO({ 'panel.border': '#123456' });
+    const { sync } = make(io);
+    sync.request(A);
+    await sync.settle();
+    const before = io.memo;
+    io.failWrites = 1;
+    await sync.restore();
+    expect(io.memo).toEqual(before);
+    await sync.restore();
+    expect(io.current).toEqual({ 'panel.border': '#123456' });
+    expect(io.memo).toBeUndefined();
+  });
+
   it('writes nothing when nothing changed', async () => {
     const io = new FakeIO();
     const { sync } = make(io);
@@ -704,5 +791,60 @@ describe('committed mutants', () => {
   it('a planner that skips the restore is caught', () => {
     expect(() => checkRestoresOwnedKeys(skipsRestore)).toThrow();
     expect(() => checkNoReSnapshot(skipsRestore)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FrameSync-level mutant: persists the after-success memo BEFORE the write (the original
+// ordering). A refused recolour then leaves a memo claiming colours the disk does not hold.
+// ---------------------------------------------------------------------------
+interface Syncer {
+  request(desired: Record<string, string>): void;
+  settle(): Promise<void>;
+  restore(): Promise<void>;
+}
+type SyncerFactory = (io: FakeIO) => Syncer;
+
+class SavesMemoBeforeWrite implements Syncer {
+  private latest: Record<string, string> = {};
+  constructor(private readonly io: FakeIO) {}
+  request(desired: Record<string, string>): void { this.latest = desired; }
+  async settle(): Promise<void> {
+    const loaded = this.io.loadMemo();
+    const plan = planFrame(this.io.read(), loaded, this.latest);
+    try {
+      if (plan.memo !== undefined) await this.io.saveMemo(plan.memo);
+      if (plan.changed) await this.io.write(plan.next);
+      if (plan.memo === undefined && loaded !== undefined) await this.io.saveMemo(undefined);
+    } catch {
+      // swallowed, as FrameSync does
+    }
+  }
+  async restore(): Promise<void> {
+    this.request({});
+    await this.settle();
+  }
+}
+
+/** Apply A, fail the recolour to B, restore: the user's value must be back and no frame key may remain. */
+async function checkRefusedRecolourRestores(factory: SyncerFactory): Promise<void> {
+  const io = new FakeIO({ 'panel.border': '#123456' });
+  const sync = factory(io);
+  sync.request(panelDesired('#8B5CF6'));
+  await sync.settle();
+  io.failWrites = 1;
+  sync.request(panelDesired('#FF9500'));
+  await sync.settle();
+  await sync.restore();
+  expect(io.current).toEqual({ 'panel.border': '#123456' });
+  expect(io.memo).toBeUndefined();
+}
+
+describe('committed FrameSync mutant', () => {
+  it('the real FrameSync passes the refused-recolour checker', async () => {
+    await checkRefusedRecolourRestores((io) => new FrameSync(io, new FakeTimers()));
+  });
+  it('a sync that saves the after-success memo before the write is caught', async () => {
+    await expect(checkRefusedRecolourRestores((io) => new SavesMemoBeforeWrite(io))).rejects.toThrow();
   });
 });

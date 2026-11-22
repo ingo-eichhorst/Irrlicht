@@ -97,10 +97,9 @@ export class TerminalFrameController implements vscode.Disposable {
   }
 }
 
+// The terminal is in the editor area iff any tab in any group is it; a tab in front of it hides it but does not move it.
 function locationOf(t: vscode.Terminal): FrameLocation {
-  for (const group of vscode.window.tabGroups.all) {
-    const tab = group.activeTab;
-    if (tab && tab.input instanceof vscode.TabInputTerminal && tab.label === t.name) return 'editor';
-  }
-  return 'panel';
+  const inEditor = vscode.window.tabGroups.all.some((g) =>
+    g.tabs.some((tab) => tab.input instanceof vscode.TabInputTerminal && tab.label === t.name));
+  return inEditor ? 'editor' : 'panel';
 }

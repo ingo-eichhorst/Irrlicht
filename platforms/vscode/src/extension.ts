@@ -73,7 +73,11 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefi
   };
 }
 
-// Best effort: puts the user's colour customizations back; the memo lets the next activation finish it.
+// Asks for the user's colour customizations back. In VS Code 1.147 this write cannot land: terminate() in
+// extensionHostProcess.js disposes the host's RPC protocol before _deactivateAll(), the only caller of an
+// extension's deactivate(), so update() is cancelled (QA and review both saw the frame stay on disk after
+// a close). Kept for hosts that deactivate with the channel open; the memo in workspaceState makes the next
+// activation in that folder restore instead.
 export function deactivate(): Promise<void> | undefined {
   return frameController?.restore();
 }

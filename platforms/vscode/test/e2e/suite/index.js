@@ -233,6 +233,33 @@ async function run() {
         return c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
           && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
       }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`);
+      // A tab opened in front of the terminal hides it but must not move the frame back to the panel.
+      const termGroup = vscode.window.tabGroups.all.find((g) => g.tabs.some((t) => t.input instanceof vscode.TabInputTerminal && t.label === 'e2e-agent'));
+      if (!termGroup) throw new Error(`4g terminal tab not found in any group: ${show()}`);
+      const readmeUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'README.md');
+      await vscode.window.showTextDocument(readmeUri, { preview: false, viewColumn: termGroup.viewColumn, preserveFocus: false });
+      const readmeTab = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs)
+        .find((t) => t.input instanceof vscode.TabInputText && t.input.uri.path.endsWith('/README.md'));
+      try {
+        await poll('4g README.md is the active tab in front of the terminal', () => readmeTab()?.isActive === true,
+          () => `tabs=${JSON.stringify(vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => `${t.label}${t.isActive ? '*' : ''}`)))}`);
+        console.log(`[e2e] 4g active terminal with README in front: ${vscode.window.activeTerminal?.name}`);
+        // The frame is debounced, so a wrong re-frame lands ~200 ms after the tab change: the editor frame must HOLD past that.
+        let heldSince = 0;
+        await poll('4g hidden editor terminal still frames the editor', () => {
+          const c = customizations();
+          const ok = c['editor.border'] === COLOR.waiting && c['tab.activeBorderTop'] === COLOR.waiting
+            && c['panel.border'] === '#123456' && !('modernPanel.border' in c) && !('terminal.border' in c);
+          if (!ok) { heldSince = 0; return false; }
+          if (!heldSince) heldSince = Date.now();
+          return Date.now() - heldSince >= 1000;
+        }, () => `active=${vscode.window.activeTerminal?.name} workspace colorCustomizations=${show()}`, 5000);
+      } finally {
+        const t = readmeTab();
+        if (t) await vscode.window.tabGroups.close(t);
+      }
+      await poll('4g e2e-agent tab active again', () => vscode.window.tabGroups.all.some((g) => g.activeTab?.input instanceof vscode.TabInputTerminal && g.activeTab.label === 'e2e-agent'),
+        () => `tabs=${JSON.stringify(vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => `${t.label}${t.isActive ? '*' : ''}`)))}`);
       await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
       await poll('4g terminal back in panel frames the panel', () => {
         const c = customizations();

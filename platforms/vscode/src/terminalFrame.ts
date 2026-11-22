@@ -36,7 +36,8 @@ export const STATE_COLORS: Readonly<Record<StateName, Readonly<Record<ThemeKind,
 
 /**
  * The background the tint is blended over. The extension API cannot read the active theme's
- * real colours, so this assumes Default Dark Modern / Default Light Modern. The blend must be
+ * real colours, so this assumes Dark Modern / Light Modern's panel background (VS Code 1.147's default
+ * 2026 themes use #191A1B / #FAFAFD, a few shades off). The blend must be
  * opaque: an alpha terminal.background breaks xterm's cell rendering (spike, VS Code 1.147).
  */
 export const TINT_BASE: Readonly<Record<ThemeKind, string>> = { dark: '#181818', light: '#F8F8F8' };
@@ -144,12 +145,21 @@ export function desiredFrame(input: FrameInput): Record<string, string> {
   return frameColors(color, input.kind, input.location, input.mode);
 }
 
-/** Persisted in workspaceState while a frame is applied. */
+/**
+ * Persisted in workspaceState while a frame is applied. It must describe what is on disk, not
+ * what we intend: a write can be refused or the process can die before it lands, and a memo
+ * that claimed colours the disk does not hold would make the old frame look like the user's own.
+ */
 export interface FrameMemo {
   /** The user's own value for each owned key; an absent key means the user had none. */
   prev: Record<string, unknown>;
-  /** What this extension last wrote for each owned key. */
-  applied: Record<string, string>;
+  /** The colours a successful write has confirmed on disk, per owned key. */
+  written: Record<string, string>;
+  /**
+   * The colours of a write that started but is not confirmed (it may or may not have landed).
+   * Present only between the pre-write save and the post-write save.
+   */
+  pending?: Record<string, string>;
   /** Whether the workspace had a workbench.colorCustomizations object before the first write. */
   hadObject: boolean;
 }
@@ -173,6 +183,12 @@ function ownedOnly(desired: Record<string, string>): Record<string, string> {
   return kept;
 }
 
+/** True when `value` is exactly a colour this extension wrote, or may have written, for `key`. */
+function isOurs(memo: FrameMemo, key: string, value: unknown): boolean {
+  if (has(memo.written, key) && deepEqual(value, memo.written[key])) return true;
+  return memo.pending !== undefined && has(memo.pending, key) && deepEqual(value, memo.pending[key]);
+}
+
 /**
  * The user's own value for each owned key they have one for. A key still holding exactly what
  * we wrote is ours, so the memo's snapshot stands in for it; any other value (a user edit made
@@ -181,7 +197,7 @@ function ownedOnly(desired: Record<string, string>): Record<string, string> {
 function userValuesOf(cur: Obj, memo: FrameMemo | undefined): Obj {
   const values: Obj = {};
   for (const k of OWNED_KEYS) {
-    const stillOurs = memo !== undefined && has(memo.applied, k) && deepEqual(cur[k], memo.applied[k]);
+    const stillOurs = memo !== undefined && isOurs(memo, k, cur[k]);
     const source = stillOurs ? memo.prev : cur;
     if (has(source, k)) values[k] = source[k];
   }
@@ -201,6 +217,7 @@ function mergeOwned(cur: Obj, desired: Record<string, string>, userValues: Obj):
 
 /**
  * Merges `desired` into `current` (the WORKSPACE-scope value, never the effective one).
+ * The returned memo is the one to persist AFTER the write succeeded (no `pending`).
  * See the restore rule in the module's tests.
  */
 export function planFrame(current: unknown, memo: FrameMemo | undefined, desiredIn: Record<string, string>): FramePlan {
@@ -217,7 +234,7 @@ export function planFrame(current: unknown, memo: FrameMemo | undefined, desired
   const hadObject = memo ? memo.hadObject : current !== undefined;
   if (restoring && Object.keys(next as Obj).length === 0 && !hadObject) next = undefined;
 
-  const planMemo = restoring ? undefined : { prev: userValues, applied: desired, hadObject };
+  const planMemo = restoring ? undefined : { prev: userValues, written: desired, hadObject };
   return { invalid: false, changed: !deepEqual(next, current), next, memo: planMemo };
 }
 
@@ -289,7 +306,7 @@ export class FrameSync {
   /**
    * Cancels a pending timer and drops the request it was waiting for; later requests are ignored.
    * A pass already asked for through settle() or restore() is NOT discarded: VS Code disposes
-   * subscriptions right after deactivate() without awaiting it, and the restore must still land.
+   * subscriptions right after deactivate() without awaiting it, and a restore that can still land must.
    * Does not restore by itself.
    */
   dispose(): void {
@@ -337,6 +354,28 @@ export class FrameSync {
     }
   }
 
+  /**
+   * Memo and write ordering. Before a write that may change the disk, the memo is saved with the
+   * colours currently confirmed as `written` and the incoming ones as `pending`, so a refused or
+   * interrupted write leaves a memo that still recognises whichever frame is on disk. The
+   * after-success memo is saved only once the write resolved. A refused restoring write keeps the
+   * loaded memo, which still describes the disk.
+   */
+  private async apply(plan: FramePlan, loaded: FrameMemo | undefined): Promise<void> {
+    if (plan.memo === undefined) {
+      if (plan.changed) await this.io.write(plan.next);
+      if (loaded !== undefined) await this.io.saveMemo(undefined);
+      return;
+    }
+    if (!plan.changed) {
+      if (!deepEqual(plan.memo, loaded)) await this.io.saveMemo(plan.memo);
+      return;
+    }
+    await this.io.saveMemo({ ...plan.memo, written: loaded?.written ?? {}, pending: plan.memo.written });
+    await this.io.write(plan.next);
+    await this.io.saveMemo(plan.memo);
+  }
+
   private async pass(desired: Record<string, string>): Promise<void> {
     try {
       const memo = this.io.loadMemo();
@@ -345,9 +384,7 @@ export class FrameSync {
         this.logOnce(INVALID_MESSAGE);
         return;
       }
-      if (plan.memo !== undefined && !deepEqual(plan.memo, memo)) await this.io.saveMemo(plan.memo);
-      if (plan.changed) await this.io.write(plan.next);
-      if (plan.memo === undefined && memo !== undefined) await this.io.saveMemo(undefined);
+      await this.apply(plan, memo);
     } catch (error) {
       this.logOnce('terminal frame: ' + (error instanceof Error ? error.message : String(error)));
     }
