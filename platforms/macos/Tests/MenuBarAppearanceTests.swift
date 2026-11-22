@@ -1896,6 +1896,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             (MenuBarMaxProjects.storageKey, MenuBarMaxProjects.maximum),
             (MenuBarQuotaProviders.storageKey, "anthropic"),
             (QuotaVisualStyle.storageKey, QuotaVisualStyle.circle.rawValue),
+            (HiddenQuotaAccounts.storageKey, HiddenQuotaAccounts.encode(["anthropic|acct-A": ""])),
         ]
         var found: [String] = []
         for (key, value) in writes {
@@ -1933,7 +1934,8 @@ final class MenuBarAppearanceTests: XCTestCase {
             grouping: MenuBarGrouping? = nil,
             maxProjects: Int? = nil,
             quotaProviders: String? = nil,
-            quotaVisual: String? = nil
+            quotaVisual: String? = nil,
+            hiddenQuotaAccounts: String? = nil
         ) -> MenuBarIconSettings {
             let real = MenuBarIconSettings.current(in: defaults)
             return MenuBarIconSettings(
@@ -1943,7 +1945,8 @@ final class MenuBarAppearanceTests: XCTestCase {
                     maxProjects: maxProjects ?? real.appearance.maxProjects
                 ),
                 quotaProviders: quotaProviders ?? real.quotaProviders,
-                quotaVisual: quotaVisual ?? real.quotaVisual
+                quotaVisual: quotaVisual ?? real.quotaVisual,
+                hiddenQuotaAccounts: hiddenQuotaAccounts ?? real.hiddenQuotaAccounts
             )
         }
         let mutants: [(String, (UserDefaults) -> MenuBarIconSettings)] = [
@@ -1952,6 +1955,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             ("slot budget pinned", { rebuilt($0, maxProjects: MenuBarMaxProjects.defaultValue) }),
             ("provider list pinned", { rebuilt($0, quotaProviders: "") }),
             ("quota visual pinned", { rebuilt($0, quotaVisual: "") }),
+            ("hidden accounts pinned", { rebuilt($0, hiddenQuotaAccounts: "") }),
             ("always different", { _ in
                 MenuBarIconSettings(
                     appearance: MenuBarAppearance(
@@ -1959,7 +1963,8 @@ final class MenuBarAppearanceTests: XCTestCase {
                         maxProjects: Int.random(in: 1...MenuBarMaxProjects.maximum)
                     ),
                     quotaProviders: UUID().uuidString,
-                    quotaVisual: UUID().uuidString
+                    quotaVisual: UUID().uuidString,
+                    hiddenQuotaAccounts: UUID().uuidString
                 )
             }),
         ]

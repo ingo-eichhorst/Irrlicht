@@ -254,8 +254,12 @@ struct SessionListView: View {
     // Shared timeframe for all provider usage chips; clicking any chip cycles
     // it. Independent of the project-cost timeframe (`projectCostTimeframe`).
     @AppStorage("usageCostTimeframe") private var usageCostTimeframeRaw: String = CostTimeframe.day.rawValue
+    // The quota accounts hidden in Settings (#2163). An `@AppStorage`, so
+    // toggling a row there re-renders the chip strip with no other signal.
+    @AppStorage(HiddenQuotaAccounts.storageKey) private var hiddenQuotaAccountsRaw: String = ""
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
+    private var hiddenQuotaAccounts: Set<String> { Set(HiddenQuotaAccounts.decode(hiddenQuotaAccountsRaw).keys) }
     private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
     private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
@@ -502,7 +506,11 @@ struct SessionListView: View {
                 // The clock is an argument here only because the derivation
                 // takes one; emptiness is decided by whether any session
                 // carries a snapshot at all, which no instant can change.
-                if Self.quotaChipData(sessions: sessionManager.sessions, now: formatNow()).isEmpty
+                // Hidden accounts (#2163) count as absent, so hiding every
+                // account brings the glyphs back.
+                if Self.quotaChipData(sessions: sessionManager.sessions,
+                                      hiddenAccounts: hiddenQuotaAccounts,
+                                      now: formatNow()).isEmpty
                     || !showQuotaForecast {
                     Text("—")
                         .foregroundColor(.secondary)
@@ -588,7 +596,9 @@ struct SessionListView: View {
     @ViewBuilder
     private var headerTitleView: some View {
         if showQuotaForecast {
-            let chips = Self.quotaChipData(sessions: sessionManager.sessions, now: formatNow())
+            let chips = Self.quotaChipData(sessions: sessionManager.sessions,
+                                           hiddenAccounts: hiddenQuotaAccounts,
+                                           now: formatNow())
             if !chips.isEmpty {
                 let layout = QuotaChipLayout.forChipCount(chips.count)
                 let visible = Array(chips.prefix(layout.visibleCount))
@@ -687,14 +697,23 @@ struct SessionListView: View {
     /// `error: missing argument for parameter 'now' in call` — #1659's shape,
     /// which is what #1663 adopted for `QuotaResetFormat` and what this
     /// extends.
-    static func quotaChipData(sessions: [SessionState], now: Date) -> [QuotaWidgetData] {
+    ///
+    /// `hiddenAccounts` holds the account bucket keys the user hid in Settings
+    /// (#2163). Their chips are dropped after bucketing, so a hidden account
+    /// never changes which snapshot represents another bucket. The default is
+    /// "nothing hidden", which is today's output. The Settings account rows
+    /// rely on that default, because they must list hidden accounts too.
+    static func quotaChipData(sessions: [SessionState],
+                              hiddenAccounts: Set<String> = [],
+                              now: Date) -> [QuotaWidgetData] {
         var byProvider: [String: ChipBucket] = [:]
         for session in sessions {
             mergeIntoBuckets(session: session, into: &byProvider, now: now)
         }
-        return byProvider
+        let chips = byProvider
             .map { id, b in b.toWidgetData(id: id) }
             .sorted { $0.id < $1.id }
+        return HiddenQuotaAccounts.visible(chips, hidden: hiddenAccounts) { $0.id }
     }
 
     /// True when any of `snap`'s windows has already reset at `now` — the

@@ -1795,6 +1795,13 @@
       color: var(--muted);
       padding: 4px 4px 0;
     }
+    /* Per-account show/hide toggles (#2163), below the provider rows. The
+       rows are plain settings <label>s, so they take the switch styling. */
+    .settings-modal .provider-accounts-heading {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 8px 4px 2px;
+    }
 
     /* --- History tab (issue #369) ---
        A top-level view toggled by #history-tab-toggle. Mutually exclusive with

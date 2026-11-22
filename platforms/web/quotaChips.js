@@ -129,6 +129,96 @@ function setProviderModePreference(providerKey, mode) {
   }
 }
 
+// --- Hidden quota accounts (#2163) ---
+// Which account buckets the user hid in Settings: their chips are dropped
+// from the strip. Only the display is filtered; their sessions keep their
+// state and cost. Mirrors HiddenQuotaAccounts in
+// platforms/macos/Irrlicht/Models/HiddenQuotaAccounts.swift: the same key
+// name and the same JSON shape, `{"<bucket key>": "<tier label when hidden>"}`.
+// What is stored is what is HIDDEN, so nothing stored means everything is
+// shown. The stores are not shared, so hiding an account here does not hide
+// it in the macOS app.
+//
+// A function rather than a top-level const, so it is callable however the
+// module graph is entered: irrlicht.js and this module import each other,
+// and entered from this module (as a test can be), irrlicht.js renders
+// before this module's consts are initialised (quota.parity.test.js
+// describes that case).
+function hiddenAccountsStorageKey() { return 'hiddenQuotaAccounts'; }
+
+// Bucket key → stored tier label. Missing, unreadable, or not a JSON object
+// reads as "nothing hidden". Read-only: nothing on the read path writes
+// back, and quota.parity.test.js, which loads the dashboard and so runs this
+// read, requires localStorage to stay empty.
+// Exported for quotaChips.test.js.
+export function hiddenQuotaAccounts() {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(localStorage.getItem(hiddenAccountsStorageKey()) || 'null');
+  } catch (e) {
+    console.debug('quotaChips: unreadable hidden quota accounts', e);
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const hidden = {};
+  for (const [key, label] of Object.entries(parsed)) {
+    if (key) hidden[key] = typeof label === 'string' ? label : '';
+  }
+  return hidden;
+}
+function setHiddenQuotaAccounts(hidden) {
+  try {
+    if (Object.keys(hidden).length === 0) localStorage.removeItem(hiddenAccountsStorageKey());
+    else localStorage.setItem(hiddenAccountsStorageKey(), JSON.stringify(hidden));
+  } catch (e) {
+    console.debug('quotaChips: failed to persist hidden quota accounts', e);
+  }
+}
+
+// The one filter the chip strip applies, AFTER bucketChips. bucketChips
+// itself stays the full bucket list: the Settings rows need hidden accounts
+// too, and quota.parity.test.js compares it with the Claude Code panel's
+// bucketing. Exported for quotaChips.test.js.
+export function visibleChips(chips, hidden) {
+  return chips.filter((c) => !Object.prototype.hasOwnProperty.call(hidden, c.key));
+}
+
+// One Settings row per account: every bucket reporting now, plus every
+// hidden account, so a hidden account stays listed (and can be shown again)
+// after it stops reporting. Sorted by bucket key so one provider's accounts
+// sit together. `chips` must be the unfiltered bucketChips output.
+// Exported for quotaChips.test.js.
+export function accountRows(chips, hidden) {
+  const rows = new Map();
+  for (const c of chips) {
+    rows.set(c.key, {
+      key: c.key,
+      label: chipTierLabel(c, true) + ' · ' + accountSuffix(c),
+      tierLabel: chipTierLabel(c, false) || '',
+      live: true,
+      hidden: Object.prototype.hasOwnProperty.call(hidden, c.key),
+    });
+  }
+  for (const [key, stored] of Object.entries(hidden)) {
+    if (rows.has(key)) continue;
+    // Split at the FIRST '|': the provider half is a provider name or
+    // `unknown:<adapter>`, the ref half is provider-issued (mirrors
+    // HiddenQuotaAccounts.parts(ofBucketKey:) in Swift).
+    const bar = key.indexOf('|');
+    const providerKey = bar < 0 ? key : key.slice(0, bar);
+    const ref = bar < 0 ? '' : key.slice(bar + 1);
+    const name = stored || (providerKey.charAt(0).toUpperCase() + providerKey.slice(1));
+    rows.set(key, {
+      key,
+      label: name + ' · ' + accountSuffix({ accountRef: ref === 'unconfirmed' ? '' : ref }) + ' — no data',
+      tierLabel: stored,
+      live: false,
+      hidden: true,
+    });
+  }
+  return Array.from(rows.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
 function chipModeFor(snap, providerKey) {
   const pref = providerModePreference(providerKey);
   if (pref === 'subscription') return 'subscription';
@@ -605,7 +695,9 @@ export function renderHeaderTitle() {
       return;
     }
     const nowMs = Date.now();
-    const chips = bucketChips(collectFlatSessions(), nowMs);
+    // Filtered before the layout, so a hidden account takes no slot and
+    // does not count toward the density tier or the overflow pill.
+    const chips = visibleChips(bucketChips(collectFlatSessions(), nowMs), hiddenQuotaAccounts());
     if (chips.length === 0) {
       header.classList.remove('has-quota-chips');
       return;
@@ -647,7 +739,6 @@ export function refreshProviderSettings() {
     empty.className = 'provider-empty';
     empty.textContent = 'No provider quota data observed yet.';
     host.appendChild(empty);
-    return;
   }
   for (const c of providerRowChips(chips)) {
     const row = document.createElement('div');
@@ -678,5 +769,45 @@ export function refreshProviderSettings() {
     });
     row.appendChild(sel);
     host.appendChild(row);
+  }
+  // Rendered even with no live chip: a hidden account that stopped
+  // reporting must stay listed, or it could never be shown again.
+  appendAccountRows(host, accountRows(chips, hiddenQuotaAccounts()));
+}
+
+// The per-account show/hide toggles (#2163), below the provider rows. A
+// `<label>` around the checkbox so the settings modal's switch styling
+// applies. A toggle persists, then re-renders the chip strip and these rows,
+// so the change shows without a reload.
+function appendAccountRows(host, rows) {
+  if (rows.length === 0) return;
+  const heading = document.createElement('div');
+  heading.className = 'provider-accounts-heading';
+  heading.textContent = 'Quota accounts — turn one off to hide its chip; its sessions are still monitored.';
+  host.appendChild(heading);
+  for (const r of rows) {
+    const label = document.createElement('label');
+    label.className = 'provider-account-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !r.hidden;
+    box.dataset.quotaAccount = r.key;
+    const text = document.createElement('span');
+    text.className = 'settings-label-text';
+    const title = document.createElement('span');
+    title.className = 'settings-title';
+    title.textContent = r.label;
+    text.appendChild(title);
+    label.appendChild(box);
+    label.appendChild(text);
+    box.addEventListener('change', function() {
+      const hidden = hiddenQuotaAccounts();
+      if (this.checked) delete hidden[r.key];
+      else hidden[r.key] = r.tierLabel;
+      setHiddenQuotaAccounts(hidden);
+      renderHeaderTitle();
+      refreshProviderSettings();
+    });
+    host.appendChild(label);
   }
 }

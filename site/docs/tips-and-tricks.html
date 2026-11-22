@@ -134,6 +134,8 @@
 
       <p>What is worth changing is the <strong>Provider</strong> group underneath it, where you set the mode per provider (Anthropic and OpenAI on macOS; on the web, every provider that has reported quota data): pin the one that is a subscription rather than leaving them all on Auto, and the forecast stops guessing. On the web dashboard the toggle is called <strong>"Show quota forecast in header"</strong>, under <strong>Provider quota</strong>.</p>
 
+      <p><strong>Several accounts on one provider?</strong> Each confirmed account gets a chip of its own, plus one chip per provider for sessions whose account is not confirmed yet. To see only some of them, use <strong>Settings &rarr; Quota accounts</strong> on macOS, or the account toggles under <strong>Provider quota</strong> on the web dashboard. Turn an account off to hide its chip and to keep it out of the menu bar's quota slot. Irrlicht still monitors its sessions, and the session list does not change. A hidden account stays listed after it stops reporting, so you can turn it back on. The setting is per client: hiding an account on the Mac does not hide it on the web dashboard.</p>
+
       <div class="callout callout-tip">
         <strong>Also worth knowing</strong>
         On macOS the History panel has a <em>Quota</em> tab showing the same per-provider rate-limit forecast in full, and it is always available &mdash; it is <em>not</em> gated by this toggle, which only controls the compact header readout. The web dashboard has no equivalent view.

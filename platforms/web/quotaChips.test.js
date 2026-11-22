@@ -3,6 +3,7 @@ import {
   quotaWindowLabel, providerKeyFor, usageCreditsLine, providerIconHTML,
   quotaChipLayout, buildQuotaRowDOM, buildOverflowChipDOM, applyStripDensity,
   bucketChips, productLabel, quotaTooltip, providerRowChips,
+  hiddenQuotaAccounts, visibleChips, accountRows, refreshProviderSettings,
 } from './quotaChips.js';
 
 describe('quotaWindowLabel', () => {
@@ -366,5 +367,118 @@ describe('bucketChips unconfirmed bucket per provider (#2136)', () => {
     expect(chips[0].key).toBe('meta|unconfirmed');
     expect(chips[0].providerKey).toBe('meta');
     expect(chips[0].mode).toBe('subscription');
+  });
+});
+
+// Issue #2163: the user picks which quota accounts are shown. A hidden
+// account's chip is dropped after bucketing (bucketChips stays the full list:
+// the Settings rows and quota.parity.test.js both need it), and a hidden
+// account stays listed in Settings after it stops reporting.
+describe('hidden quota accounts (#2163)', () => {
+  const nowMs = Date.UTC(2026, 0, 1);
+  const future = nowMs / 1000 + 3600;
+  const KEY = 'hiddenQuotaAccounts';
+  const mk = ({ id, ref, planType, pct }) => ({
+    session_id: id, adapter: 'claude-code',
+    metrics: { rate_limit: {
+      attribution_quality: 'confirmed', provider: 'anthropic', confirmed_account_ref: ref,
+      plan_type: planType, sampled_at: 1,
+      windows: [{ used_percent: pct, window_minutes: 300, resets_at: future }],
+    } },
+  });
+  const twoAccounts = [
+    mk({ id: 's1', ref: 'acct-AAAA', planType: 'max', pct: 20 }),
+    mk({ id: 's2', ref: 'acct-BBBB', planType: 'team', pct: 80 }),
+  ];
+  // The chip strip's own derivation (renderHeaderTitle), fed fixture sessions.
+  const strip = (sessions) => visibleChips(bucketChips(sessions, nowMs), hiddenQuotaAccounts()).map((c) => c.key);
+  const accountBoxes = () => Array.from(document.querySelectorAll('#settings-providers input[data-quota-account]'));
+  const cleanup = () => {
+    localStorage.removeItem(KEY);
+    document.getElementById('settings-providers').innerHTML = '';
+  };
+
+  test('red-first: the chip strip drops a hidden account, and showing it again brings the chip back without a reload', () => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ 'anthropic|acct-BBBB': 'Team' }));
+      expect(strip(twoAccounts)).toEqual(['anthropic|acct-AAAA']);
+      // Show it again through the Settings toggle. No session reports, so
+      // the row is the stored-label one.
+      refreshProviderSettings();
+      const [box] = accountBoxes();
+      expect(box.dataset.quotaAccount).toBe('anthropic|acct-BBBB');
+      expect(box.checked).toBe(false);
+      box.checked = true;
+      box.dispatchEvent(new Event('change'));
+      expect(localStorage.getItem(KEY)).toBeNull();
+      expect(strip(twoAccounts)).toEqual(['anthropic|acct-AAAA', 'anthropic|acct-BBBB']);
+    } finally { cleanup(); }
+  });
+
+  test('red-first: hiding every account of a provider leaves no chip for it; the unconfirmed bucket hides on its own', () => {
+    const sessions = [...twoAccounts, mk({ id: 's3', ref: undefined, pct: 50 })];
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ 'anthropic|unconfirmed': '' }));
+      expect(strip(sessions)).toEqual(['anthropic|acct-AAAA', 'anthropic|acct-BBBB']);
+      localStorage.setItem(KEY, JSON.stringify({
+        'anthropic|acct-AAAA': '', 'anthropic|acct-BBBB': '', 'anthropic|unconfirmed': '',
+      }));
+      expect(strip(sessions)).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  test('red-first: a hidden account no session reports stays listed with its stored label', () => {
+    const rows = accountRows(bucketChips([twoAccounts[0]], nowMs), {
+      'anthropic|acct-BBBB': 'Team', 'anthropic|unconfirmed': '',
+    });
+    expect(rows.map((r) => r.key)).toEqual(['anthropic|acct-AAAA', 'anthropic|acct-BBBB', 'anthropic|unconfirmed']);
+    expect(rows.map((r) => r.label)).toEqual([
+      'Claude Max · Account …AAAA',
+      'Team · Account …BBBB — no data',
+      'Anthropic · Account unconfirmed — no data',
+    ]);
+    expect(rows.map((r) => r.hidden)).toEqual([false, true, true]);
+  });
+
+  test('a hidden account that still reports is labelled from its live snapshot', () => {
+    const rows = accountRows(bucketChips(twoAccounts, nowMs), { 'anthropic|acct-BBBB': 'stale label' });
+    expect(rows.map((r) => r.label)).toEqual(['Claude Max · Account …AAAA', 'Team · Account …BBBB']);
+    expect(rows.map((r) => r.hidden)).toEqual([false, true]);
+  });
+
+  test('turning a row off stores its tier label under the bucket key', () => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ 'anthropic|acct-BBBB': 'Team' }));
+      refreshProviderSettings();
+      const [box] = accountBoxes();
+      box.checked = true;
+      box.dispatchEvent(new Event('change'));
+      expect(localStorage.getItem(KEY)).toBeNull();
+      // The same row's handler, turned off again.
+      box.checked = false;
+      box.dispatchEvent(new Event('change'));
+      expect(JSON.parse(localStorage.getItem(KEY))).toEqual({ 'anthropic|acct-BBBB': 'Team' });
+    } finally { cleanup(); }
+  });
+
+  test('lock: nothing stored means nothing hidden, and an unreadable value hides nothing', () => {
+    try {
+      expect(hiddenQuotaAccounts()).toEqual({});
+      expect(strip(twoAccounts)).toEqual(['anthropic|acct-AAAA', 'anthropic|acct-BBBB']);
+      for (const raw of ['not json', '["anthropic|acct-AAAA"]', '42', '{"": "x"}']) {
+        localStorage.setItem(KEY, raw);
+        expect(hiddenQuotaAccounts()).toEqual({});
+      }
+      localStorage.setItem(KEY, '{"anthropic|acct-AAAA": 7}');
+      expect(hiddenQuotaAccounts()).toEqual({ 'anthropic|acct-AAAA': '' });
+    } finally { cleanup(); }
+  });
+
+  test('lock: with nothing hidden and nothing reporting, Settings renders no account rows', () => {
+    try {
+      refreshProviderSettings();
+      expect(accountBoxes()).toHaveLength(0);
+      expect(document.querySelector('#settings-providers .provider-empty')).not.toBeNull();
+    } finally { cleanup(); }
   });
 });
