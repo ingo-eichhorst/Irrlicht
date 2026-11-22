@@ -51,12 +51,16 @@ const show = () => JSON.stringify(workspaceColors());
 function assertSeed() {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!folder) throw new Error('e2e: no workspace folder is open; the terminal frame cannot be tested');
+  assertOutsideExtension(folder);
+  if (!deepEqual(workspaceColors(), SEED)) {
+    throw new Error(`e2e: workspace colorCustomizations is not the seed; saw ${show()}`);
+  }
+}
+
+function assertOutsideExtension(folder) {
   const extRoot = path.resolve(__dirname, '..', '..', '..');
   if (isInside(extRoot, folder)) {
     throw new Error(`e2e: workspace folder ${folder} is inside the extension root ${extRoot}; refusing to write into the repository`);
-  }
-  if (!deepEqual(workspaceColors(), SEED)) {
-    throw new Error(`e2e: workspace colorCustomizations is not the seed; saw ${show()}`);
   }
 }
 
@@ -162,13 +166,15 @@ const isReadmeTab = (t) => t.input instanceof vscode.TabInputText && t.input.uri
 const readmeTab = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find(isReadmeTab);
 const agentTabActive = () => vscode.window.tabGroups.all.some((g) => g.activeTab !== undefined && isAgentTerminalTab(g.activeTab));
 
-// Like poll, but `fn` must stay true for `holdMs` in a row.
-async function pollHeld(name, fn, observed, holdMs, timeoutMs) {
+const HOLD_MS = 1000;
+
+// Like poll, but `fn` must stay true for HOLD_MS in a row.
+async function pollHeld(name, fn, observed, timeoutMs) {
   let heldSince = 0;
   await poll(name, () => {
     if (!fn()) { heldSince = 0; return false; }
     if (!heldSince) heldSince = Date.now();
-    return Date.now() - heldSince >= holdMs;
+    return Date.now() - heldSince >= HOLD_MS;
   }, observed, timeoutMs);
 }
 
@@ -184,7 +190,7 @@ async function editorFrameHoldsBehindTab() {
     console.log(`[e2e] 4g active terminal with README in front: ${activeName()}`);
     // The frame is debounced, so a wrong re-frame lands ~200 ms after the tab change: the editor frame must HOLD past that.
     await pollHeld('4g hidden editor terminal still frames the editor', () => editorFramed(customizations(), COLOR.waiting),
-      showActive, 1000, 5000);
+      showActive, 5000);
   } finally {
     const t = readmeTab();
     if (t) await vscode.window.tabGroups.close(t);

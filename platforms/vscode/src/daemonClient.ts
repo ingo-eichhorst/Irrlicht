@@ -163,7 +163,8 @@ export class DaemonClient {
 
   /** Records a stamped frame's seq; a jump past lastSeq + 1 is a gap and rehydrates. */
   private advanceSeq(gen: number, seq: unknown): void {
-    if (typeof seq !== 'number' || !(seq > 0)) return;
+    // JSON.parse never yields NaN, so `seq <= 0` rejects exactly what `!(seq > 0)` would.
+    if (typeof seq !== 'number' || seq <= 0) return;
     const gap = this.lastSeq > 0 && seq > this.lastSeq + 1;
     this.lastSeq = seq;
     if (gap) void this.hydrate(gen);
