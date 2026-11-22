@@ -29,13 +29,15 @@ import (
 // nor broadcasts, and the stored SampledAt stays the first observation's.
 //
 // The load-mutate-save runs under PIDManager.WithSessionStateLock, the lock
-// processActivityLocked saves under. That does NOT make it race-free against
-// a transcript pass: processActivity loads its copy BEFORE taking the lock
-// (session_detector_activity.go, processActivity), so a pass that loaded
-// before this write can save its older copy over it. The caller is expected
-// to re-apply every tick (MuseAccountSweeper does) so a lost write returns on
-// the next one. UpdatedAt is deliberately not touched: a quota reading is not
-// session activity.
+// processActivity now loads AND saves under (#2161 QA: it used to load
+// before taking it, and a pass that loaded before a revoke's clear saved the
+// reading back over it). That closes the transcript-pass race, not every
+// one: the stale-session refresh still saves the copy it listed when it
+// flushes an expired autonomy span or backfills an idle session's project
+// (session_detector_activity.go, refreshStaleSessions), without this lock.
+// The caller is expected to re-apply every tick (both account sweeps do) so
+// a write lost to one of those returns on the next tick. UpdatedAt is
+// deliberately not touched: a quota reading is not session activity.
 func (d *SessionDetector) SetProviderRateLimit(sessionID, provider string, snap *session.RateLimitSnapshot) bool {
 	if snap != nil && snap.Provider != provider {
 		return false
@@ -78,6 +80,15 @@ func (d *SessionDetector) SetProviderRateLimit(sessionID, provider string, snap 
 	}
 	d.broadcast(outbound.PushTypeUpdated, saved)
 	return true
+}
+
+// listedProviderSnapshot returns st's rate-limit snapshot when it is
+// provider's — what a provider sweep compares a new reading against.
+func listedProviderSnapshot(st *session.SessionState, provider string) *session.RateLimitSnapshot {
+	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != provider {
+		return nil
+	}
+	return st.Metrics.RateLimit
 }
 
 // sameRateLimitReading reports whether a and b carry the same reading,

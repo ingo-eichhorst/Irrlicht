@@ -80,6 +80,10 @@ func identityPathFor(transcriptPath string) string {
 	return identity
 }
 
+// Provider implements outbound.SessionAccountReader: ~/.claude.json's
+// oauthAccount is an Anthropic login.
+func (r *AccountReader) Provider() string { return session.ProviderAnthropic }
+
 // ReadHomeAccount implements outbound.SessionAccountReader.
 func (r *AccountReader) ReadHomeAccount(s *session.SessionState) (outbound.HomeAccountObservation, bool) {
 	if !r.allowed() || s == nil {

@@ -48,10 +48,21 @@ type RouteObservation struct {
 	// as such and is never called an "origin".
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Source names which environment variable produced Endpoint (e.g.
-	// "env:ANTHROPIC_BASE_URL"), populated for RouteObserved and
-	// RouteMalformed (the key was found; only its value failed to parse).
+	// Source names where Endpoint came from: an environment variable
+	// ("env:ANTHROPIC_BASE_URL") or a Claude Code settings layer
+	// ("settings:managed", "settings:local", "settings:project",
+	// "settings:user"; issue #2010). Populated for RouteObserved and
+	// RouteMalformed (the key was found; only its value failed to parse),
+	// for an explicitly empty settings value (RouteAbsent), and for a
+	// RouteUnreadable caused by one settings layer, which it then names —
+	// including "settings:cli" for a --settings flag this package cannot
+	// reconstruct.
 	Source string `json:"source,omitempty"`
+
+	// SettingsFile is the settings file Source names, when Source is a
+	// settings layer backed by a file (issue #2010). Phase 3 reads the
+	// Z.ai credential from this exact file, never from another layer.
+	SettingsFile string `json:"settings_file,omitempty"`
 
 	// Local reports that Endpoint's host is a loopback or private-network
 	// address. It proves ONLY that: not local inference, and not a zero

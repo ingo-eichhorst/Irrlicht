@@ -712,9 +712,32 @@ func (d *SessionDetector) processActivityWithoutIdentity(ev agent.Event) {
 // window). For the no-identity entry points, call
 // processActivityWithoutIdentity instead.
 func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
-	// Load session state.
-	state, err := d.repo.Load(ev.SessionID)
-	if err != nil || state == nil {
+	// Load an existing session and run its load-modify-save under ONE hold of
+	// the PIDManager's state lock. processActivity spawns a PID-discovery
+	// goroutine (state.PID == 0 branch) whose assignPIDLocked writes state.PID
+	// on the same *SessionState pointer this loop mutates, so the two must be
+	// mutually exclusive (issue #606). The Load is inside the lock too: when it
+	// ran before the lock, a writer that takes the lock between them —
+	// SetProviderRateLimit clearing a revoked account-API reading — was
+	// overwritten by this pass's older copy, so a revoked Z.ai reading
+	// survived the sweep tick that cleared it (#2161 QA, 2 of 3 live trials).
+	// Why so often is inferred, not measured: the stale-session refresh ticker
+	// (5s, re-running this function for working sessions) divides the sweep
+	// interval (60s), so the phase between a sweep tick and the nearest
+	// refresh tick is fixed for the daemon's life, and when it is small every
+	// clear races a refresh pass.
+	// TestProcessActivity_NeverResurrectsAClearedProviderSnapshot was seen red
+	// with the Load outside the lock.
+	found := false
+	d.pidMgr.WithSessionStateLock(func() {
+		state, err := d.repo.Load(ev.SessionID)
+		if err != nil || state == nil {
+			return
+		}
+		found = true
+		d.processActivityLocked(id, state, ev)
+	})
+	if !found {
 		// If the session was explicitly deleted (process exit, /clear cleanup),
 		// don't re-create it from a late-arriving transcript write. However,
 		// if activity arrives well after deletion (>10s) with a fresh
@@ -779,17 +802,7 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		// processes the next transcript event for this session (see the
 		// existing-session branch in onNewSession).
 		d.onNewSession(id, ev)
-		return
 	}
-
-	// Run the load-modify-save of this existing session under the PIDManager's
-	// state lock. processActivity spawns a PID-discovery goroutine below
-	// (state.PID == 0 branch); that goroutine's assignPIDLocked writes state.PID
-	// on the same *SessionState pointer this loop mutates. Sharing assignMu makes
-	// the two mutually exclusive (issue #606).
-	d.pidMgr.WithSessionStateLock(func() {
-		d.processActivityLocked(id, state, ev)
-	})
 }
 
 // processActivityLocked performs the content-based classification and
