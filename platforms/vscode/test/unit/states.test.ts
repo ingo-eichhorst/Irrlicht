@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DAEMON_URL } from '../../src/config';
-import { STATES, isStateName, stateColorId } from '../../src/states';
+import { STATES, isStateName, stateColorId, stateIcon } from '../../src/states';
 
 const REPO = join(import.meta.dirname, '../../../..');
 const read = (...p: string[]): string => readFileSync(join(REPO, ...p), 'utf8');
@@ -55,6 +55,16 @@ describe('states', () => {
 
   it('stateColorId derives the theme colour id', () => {
     expect(stateColorId('waiting')).toBe('irrlicht.state.waiting');
+  });
+
+  it('stateIcon draws the macOS app glyphs (SessionStateIcon.swift) in the state colour', () => {
+    const ids = Object.fromEntries(STATES.map((s) => [s, stateIcon(s).id]));
+    expect(ids).toEqual({ working: 'circle-large-filled', waiting: 'debug-pause', ready: 'pass-filled', error: 'error' });
+    for (const s of STATES) expect(stateIcon(s).colorId, s).toBe(stateColorId(s));
+  });
+
+  it('stateIcon gives an unrecognised state the neutral question glyph, never a state colour', () => {
+    for (const v of ['cancelled', '', undefined]) expect(stateIcon(v)).toEqual({ id: 'question' });
   });
 
   it('manifest colours are exactly the STATES colour ids', () => {

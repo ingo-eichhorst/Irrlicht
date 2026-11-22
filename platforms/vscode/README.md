@@ -7,7 +7,7 @@ Shows what your coding agents are doing without leaving the editor.
 - **Dashboard in a panel.** Run **Irrlicht: Open Panel** from the Command Palette, or open the Irrlicht view in the activity bar. Both host the Irrlicht dashboard.
 - **Status bar counts.** One count per session state: working, waiting, ready and error. The error count only shows when it is non-zero. Click it to open the panel. When the daemon is not running, the status bar says so and the extension reconnects automatically.
 - **Terminal frame.** The frame around the terminal area takes the state colour of the agent in the active terminal: purple for working, orange for waiting, green for ready, red for error. Switch to another agent terminal and the frame follows it; switch to a plain terminal and your own colours come back. See [Terminal frame](#terminal-frame).
-- **Agent Terminals view.** Lists every integrated terminal that hosts an agent session, with its state and project. Click a row to show that terminal. The view badge counts the terminals that are waiting for you.
+- **Agent Terminals view.** Lists every integrated terminal that hosts an agent session, with its state and project. Each row carries the macOS app's state glyph in the state colour: a solid dot while working, pause bars while waiting, a check circle when ready (error shows VS Code's circled error mark). Click a row to show that terminal. The view badge counts the terminals that are waiting for you.
 - **Click to focus.** Click a row in the dashboard to bring that session's terminal to the front.
 
 ## Requirements

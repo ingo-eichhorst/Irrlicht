@@ -11,7 +11,7 @@ import { DashboardPanel, DashboardViewProvider } from './webview';
 export interface IrrlichtTestApi {
   getStatusText(): string;
   getConnectionState(): ConnectionState;
-  getPairings(): Array<{ terminalName: string; sessionId: string; state: string }>;
+  getPairings(): Array<{ terminalName: string; sessionId: string; state: string; icon: string }>;
 }
 
 let frameController: TerminalFrameController | undefined;
@@ -69,7 +69,13 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefi
     getStatusText: () => statusBar.text(),
     getConnectionState: () => client.state,
     getPairings: () =>
-      pairing.pairings().map((p) => ({ terminalName: p.terminal.name, sessionId: p.session.session_id, state: String(p.session.state) })),
+      pairing.pairings().map((p) => ({
+        terminalName: p.terminal.name,
+        sessionId: p.session.session_id,
+        state: String(p.session.state),
+        // The codicon the Agent Terminals row actually renders, read back from its tree item.
+        icon: (terminalsView.getTreeItem(p).iconPath as vscode.ThemeIcon | undefined)?.id ?? '',
+      })),
   };
 }
 

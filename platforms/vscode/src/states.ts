@@ -9,3 +9,18 @@ export function isStateName(v: unknown): v is StateName {
 export function stateColorId(s: StateName): string {
   return 'irrlicht.state.' + s;
 }
+
+// Codicon per state, matching the macOS app's SessionStateIcon.swift: a solid dot the size of the
+// ready check, two pause bars, a filled circle with a check. Codicons have no filled
+// circle-with-exclamation (the app's error glyph), so error uses VS Code's own circled error mark.
+const STATE_ICONS: Record<StateName, string> = {
+  working: 'circle-large-filled',
+  waiting: 'debug-pause',
+  ready: 'pass-filled',
+  error: 'error',
+};
+
+/** The codicon id and theme colour id for a state. An unrecognised state gets an uncoloured question mark, never a state colour. */
+export function stateIcon(state: unknown): { id: string; colorId?: string } {
+  return isStateName(state) ? { id: STATE_ICONS[state], colorId: stateColorId(state) } : { id: 'question' };
+}

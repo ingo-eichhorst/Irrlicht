@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import type { SessionRecord, SessionStore } from './sessionStore';
-import { isStateName, stateColorId } from './states';
+import { stateIcon } from './states';
 import { applyPsRows, isPsError, isUnresolved, nextRetryDelay, normalizeTty, pairTerminals, parsePsTtyOutput, resolvePsPath } from './tty';
 import type { TermState } from './tty';
 
@@ -186,9 +186,8 @@ export class AgentTerminalsView implements vscode.Disposable, vscode.TreeDataPro
     item.description = session.project_name ? `${state} · ${session.project_name}` : state;
     const detail = [session.adapter, session.model].filter(Boolean).join(' / ');
     item.tooltip = `State: ${state}` + (detail ? `\n${detail}` : '');
-    item.iconPath = isStateName(session.state)
-      ? new vscode.ThemeIcon('primitive-square', new vscode.ThemeColor(stateColorId(session.state)))
-      : new vscode.ThemeIcon('primitive-square');
+    const icon = stateIcon(session.state);
+    item.iconPath = new vscode.ThemeIcon(icon.id, icon.colorId ? new vscode.ThemeColor(icon.colorId) : undefined);
     item.command = { command: 'irrlicht.agentTerminals.show', title: 'Show Terminal', arguments: [terminal] };
     return item;
   }

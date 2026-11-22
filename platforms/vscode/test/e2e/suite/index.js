@@ -278,10 +278,10 @@ async function run() {
     const tty = await ttyOf(pid);
     stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 2 });
     const pairing = () => api.getPairings().find((p) => p.terminalName === 'e2e-agent');
-    await poll('4d pairing e2e-agent working', () => pairing()?.state === 'working',
+    await poll('4d pairing e2e-agent working', () => pairing()?.state === 'working' && pairing()?.icon === 'circle-large-filled',
       () => `tty=${tty} pairings=${JSON.stringify(api.getPairings())}`);
     stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', tty), seq: 3 });
-    await poll('4d pairing e2e-agent ready', () => pairing()?.state === 'ready',
+    await poll('4d pairing e2e-agent ready', () => pairing()?.state === 'ready' && pairing()?.icon === 'pass-filled',
       () => `tty=${tty} pairings=${JSON.stringify(api.getPairings())}`);
     step('4d terminal pairing follows state', s);
 
