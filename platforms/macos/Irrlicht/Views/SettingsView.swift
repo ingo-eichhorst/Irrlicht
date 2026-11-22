@@ -22,6 +22,10 @@ struct SettingsView: View {
     /// SessionManager here (it was an @EnvironmentObject) made this static form
     /// re-render on every session/history push — the ~2fps storm in issue #729.
     let sessionManager: SessionManager
+    /// Where the relay token field reads and writes. `KeychainStore.shared` in
+    /// the app; a test passes a store over a counting backend to assert how
+    /// many writes opening Settings performs.
+    var keychain: KeychainSecrets = KeychainStore.shared
     @EnvironmentObject var daemonManager: DaemonManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     /// Gates the History Activity tab (#1075); also read by HistoryView.
@@ -584,7 +588,7 @@ struct SettingsView: View {
                                         .font(.system(.caption, design: .monospaced))
                                         .autocorrectionDisabled(true)
                                         .onChange(of: relayTokenDraft) { newValue in
-                                            KeychainStore.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), account: "relayToken")
+                                            guard Self.commitRelayToken(newValue, to: keychain) else { return }
                                             // Keychain writes don't fire UserDefaults.didChangeNotification,
                                             // so nudge both directions to pick up the new token: the
                                             // subscribe link reconnects, and we POST the new token to the
@@ -619,7 +623,7 @@ struct SettingsView: View {
                             }
                             .onAppear {
                                 relayURLDraft = relayServerURL
-                                relayTokenDraft = KeychainStore.get(account: "relayToken")
+                                relayTokenDraft = keychain.get(account: "relayToken")
                                 if publishToRelay { publishStatus.start() }
                             }
                             .onDisappear {
@@ -857,6 +861,24 @@ struct SettingsView: View {
         }
     }
 
+    /// Stores an edited relay-token draft. Returns whether the stored token
+    /// changed, i.e. whether the relay links need the nudge.
+    ///
+    /// A draft that trims to the token already stored is not written and
+    /// reports no change. That is what keeps OPENING Settings from writing:
+    /// `.onAppear` loads the stored token into the draft, and `.onChange(of:)`
+    /// fires for that assignment exactly as for a keystroke — so before this
+    /// check every open re-saved the token it had just read and reconnected
+    /// the relay and re-PUT the daemon config as if the user had edited it
+    /// (`SettingsRelayTokenWriteTests`). The comparison reads the store's
+    /// per-process cache, which `.onAppear` has already filled.
+    static func commitRelayToken(_ draft: String, to store: KeychainSecrets) -> Bool {
+        let token = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token != store.get(account: "relayToken") else { return false }
+        store.set(token, account: "relayToken")
+        return true
+    }
+
     private func commitRelayURL() {
         relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -874,7 +896,7 @@ struct SettingsView: View {
     /// runs first so a refused Keychain write changes nothing; the drafts are
     /// then updated so the manual fields show what was stored.
     private func applyRelayEnrollment(origin: URL, token: String) throws {
-        try RelayEnrollmentClient.apply(token: token, origin: origin)
+        try RelayEnrollmentClient.apply(token: token, origin: origin) { keychain.set($0, account: KeychainAccount($1)) }
         relayURLDraft = origin.absoluteString
         relayTokenDraft = token
         sessionManager.relayTokenDidChange()

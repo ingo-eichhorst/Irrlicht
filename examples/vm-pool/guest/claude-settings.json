@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/opt/irrlicht-guest/report-state waiting" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [{ "type": "command", "command": "/opt/irrlicht-guest/report-state waiting" }] }
+    ],
+    "Notification": [
+      { "matcher": "permission_prompt|elicitation_dialog|elicitation_url_dialog", "hooks": [{ "type": "command", "command": "/opt/irrlicht-guest/report-state waiting" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/opt/irrlicht-guest/report-state busy" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "/opt/irrlicht-guest/report-state busy" }] }
+    ]
+  }
+}

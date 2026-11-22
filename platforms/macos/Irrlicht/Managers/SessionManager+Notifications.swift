@@ -146,6 +146,59 @@ extension SessionManager {
         )
     }
 
+    // MARK: - Waiting orchestrator workers (#2145)
+
+    /// An orchestrator worker that turned waiting between two installs of the
+    /// local groups: `pool` is its top-level group, `team` the group listing
+    /// it.
+    struct WaitingWorkerEdge: Hashable {
+        let pool: String
+        let team: String
+        let worker: String
+
+        var notificationIdentifier: String { "irrlicht-worker-\(pool)-\(team)-\(worker)" }
+        var body: String { "\(team) \u{00B7} \(worker)" }
+    }
+
+    /// The unattached workers waiting in `new` that were listed, not
+    /// waiting, in `old`. A worker absent from `old` — the first hydrate
+    /// after launch, a pool or slot that just appeared — is a first sighting
+    /// and stays silent, as a session's is.
+    static func waitingWorkerEdges(from old: [AgentGroup], to new: [AgentGroup]) -> [WaitingWorkerEdge] {
+        var before: [WaitingWorkerEdge: Bool] = [:]
+        forEachUnattachedWorker(in: old) { edge, worker in before[edge] = worker.isWaiting }
+        var edges: [WaitingWorkerEdge] = []
+        forEachUnattachedWorker(in: new) { edge, worker in
+            if worker.isWaiting, before[edge] == false { edges.append(edge) }
+        }
+        return edges
+    }
+
+    /// Visits every unattached worker at any depth, with its top-level group
+    /// as `pool` and the group listing it as `team`.
+    private static func forEachUnattachedWorker(in groups: [AgentGroup],
+                                                _ visit: (WaitingWorkerEdge, UnattachedWorker) -> Void) {
+        func walk(_ group: AgentGroup, pool: String) {
+            for worker in group.unattachedWorkers ?? [] {
+                visit(WaitingWorkerEdge(pool: pool, team: group.name, worker: worker.workerName), worker)
+            }
+            group.groups?.forEach { walk($0, pool: pool) }
+        }
+        groups.forEach { walk($0, pool: $0.name) }
+    }
+
+    /// Posts "Worker waiting for input" for each edge, gated like a waiting
+    /// session: the `notifyOnWaiting` toggle here, the master switch in
+    /// `sendNotification`. No session id, so a tap focuses nothing
+    /// (`handleNotificationTap` finds no session for "").
+    func notifyWaitingWorkers(_ edges: [WaitingWorkerEdge]) {
+        guard !edges.isEmpty, defaults.bool(forKey: NotificationEvent.waiting.enabledKey) else { return }
+        for edge in edges {
+            sendNotification(identifier: edge.notificationIdentifier, title: "Worker waiting for input",
+                             body: edge.body, sessionID: "", event: .waiting)
+        }
+    }
+
     func sendNotification(
         identifier: String,
         title: String,

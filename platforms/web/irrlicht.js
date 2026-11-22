@@ -210,6 +210,41 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         console.debug('irrlicht: failed to show notification', e);
       }
     }
+    // waitingWorkerEdges returns the unattached workers (#2145) that are
+    // waiting in fresh and were listed, not waiting, in prev. A worker absent
+    // from prev — the first load, a pool or slot that just appeared — is a
+    // first sighting and stays silent, as a session's is. Waiting is the
+    // daemon's `waiting` flag, which only the worker list sets; a state
+    // string another orchestrator passes through never counts.
+    function waitingWorkerEdges(prev, fresh) {
+      const before = unattachedWorkerWaiting(prev);
+      const edges = [];
+      for (const [key, w] of unattachedWorkerWaiting(fresh)) {
+        if (w.waiting && before.get(key)?.waiting === false) edges.push(w);
+      }
+      return edges;
+    }
+    // unattachedWorkerWaiting maps each unattached worker at any depth, keyed
+    // by its group path and name, to its group's name, its name and whether
+    // it is waiting.
+    function unattachedWorkerWaiting(groups) {
+      const out = new Map();
+      (function walk(gs, path) {
+        for (const g of (gs || [])) {
+          const key = path ? path + '/' + g.name : g.name;
+          for (const w of (g.unattached_workers || [])) {
+            out.set(key + '/' + w.worker_name, { team: g.name, worker: w.worker_name, waiting: w.waiting === true });
+          }
+          walk(g.groups, key);
+        }
+      })(groups, '');
+      return out;
+    }
+    function notifyWaitingWorkers(prev, fresh) {
+      for (const e of waitingWorkerEdges(prev, fresh)) {
+        tryNotify('notifyOnWaiting', 'Worker waiting for input', e.team + ' \u00B7 ' + e.worker);
+      }
+    }
     function rowLabel(s) {
       // Best-effort "project · branch" label that matches what the row shows.
       const proj = s?.project_name || '';
@@ -1415,12 +1450,14 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // consumer (theme repaint, history repaint, the Elfdans selection) assumes
     // a session behind the row. The leading hollow circle is a placeholder in
     // the state-icon column, not a session state; the worker's own state is
-    // neutral text at the end.
+    // neutral text at the end — except a worker whose agent waits for a
+    // person (`waiting`, #2145), whose dot fills and takes the waiting colour
+    // (updateWorkerRow).
     function createWorkerRow(worker, depth) {
       const el = document.createElement('div');
       el.className = 'worker-row';
       el.innerHTML =
-        '<span class="worker-row-glyph" title="No session">\u25CB</span>' +
+        '<span class="worker-row-glyph"></span>' +
         '<span class="worker-row-icon" style="display:none"></span>' +
         '<span class="row-worker-name" style="display:none"></span>' +
         '<span class="row-worker-id" style="display:none"></span>' +
@@ -1442,6 +1479,11 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       setWorkerChip(el.querySelector('.row-worker-name'), name, role ? role + ' ' + name : name);
       setWorkerChip(el.querySelector('.row-worker-id'), workItemShort(wid), wid);
       setWorkerChip(el.querySelector('.worker-row-state'), worker.worker_state, '');
+      const waiting = worker.waiting === true;
+      el.classList.toggle('waiting', waiting);
+      const glyph = el.querySelector('.worker-row-glyph');
+      setIfChanged(glyph, 'textContent', waiting ? '\u25CF' : '\u25CB');
+      setIfChanged(glyph, 'title', waiting ? 'Waiting for input' : 'No session');
       setWorkerIndications(el, worker);
     }
 
@@ -1857,6 +1899,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     ]).then(([entries, resp]) => {
       ingestAgentRegistry(entries);
       ingestInitialSessions(resp);
+      rearmRehydratePollAfterLoad();
       render();
       repaintHistory();
     }).catch(err => console.error('irrlicht: initial load failed', err));
@@ -2001,12 +2044,18 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     //
     // Normalized first: the daemon omits an empty `agents` (omitempty), so a
     // same-named orchestrator group would otherwise have nothing to push onto.
+    //
+    // A worker-list slot's edge into waiting (#2145) is diffed against the new
+    // tree as displayed: a worker joined by a relayed session (#2149) shows
+    // that session, which notifies for itself, so it raises no second one.
     function adoptLocalTree(fresh) {
+      const prev = dashboardGroups;
       const carried = remoteRootSessions(dashboardGroups);
       dashboardGroups = fresh;
       normalizeGroupAgents(dashboardGroups);
       for (const a of carried) findOrCreateGroup(a.project_name || 'unknown').agents.push(a);
       rebuildIndex();
+      notifyWaitingWorkers(prev, joinRelayWorkers(dashboardGroups, connectedDaemonLabel));
     }
     // structureSignature captures the daemon-computed shape of the group tree:
     // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
@@ -2037,12 +2086,12 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       return parts.join('|');
     }
     // One structureSignature part per unattached worker of g (#2140), with
-    // its stale and last-run indications (#2148): either can change with
-    // nothing else about the worker changing.
+    // its stale and last-run indications (#2148) and its waiting flag
+    // (#2145): each can change with nothing else about the worker changing.
     function unattachedWorkerSignatures(g) {
       return (g.unattached_workers || []).map(w =>
         'w:' + (w.worker_name || '') + ':' + (w.worker_id || '') + ':' + (w.worker_state || '') +
-        ':' + (w.stale ? 's' : '') + ':' + (w.last_exit ?? ''));
+        ':' + (w.stale ? 's' : '') + ':' + (w.last_exit ?? '') + ':' + (w.waiting ? 'w' : ''));
     }
     // Periodic re-hydration. Two jobs, one fetch:
     //   1. STRUCTURE — if the daemon's group tree / role metadata changed
@@ -2134,11 +2183,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // reflect it promptly. With no orchestrator the structure is WS-driven and
     // only `costs` go stale, so fall back to 30s. Recursive setTimeout (not
     // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
+    let rehydrateTimer = null;
     function scheduleRehydratePoll() {
       // Any typed group is an orchestrator's (Gas Town, a worker list, #2148).
       const hasOrchestrator = dashboardGroups.some(g =>
         g && (g.type || g.groups?.length));
-      setTimeout(() => {
+      rehydrateTimer = setTimeout(() => {
+        rehydrateTimer = null;
         // .catch last, so a throw from scheduleRehydratePoll is logged too
         // (checked in node: with .catch first it surfaced unhandled) (#2147).
         rehydratePoll()
@@ -2147,6 +2198,16 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       }, hasOrchestrator ? 2500 : 30000);
     }
     scheduleRehydratePoll();
+    // The first poll is scheduled above, before the initial fetch lands, so it
+    // waits the idle 30 s even when that fetch lists an orchestrator — long
+    // enough to miss a worker's edge into waiting (#2145). Once the tree is
+    // in, a poll still pending is re-armed at the cadence the tree asks for;
+    // one already running reschedules itself when it finishes.
+    function rearmRehydratePollAfterLoad() {
+      if (rehydrateTimer === null) return;
+      clearTimeout(rehydrateTimer);
+      scheduleRehydratePoll();
+    }
 
     // --- Sources & connections (multi-source) ---
     // The dashboard connects to one or more sources at once: the local source

@@ -1,0 +1,22 @@
+#!/bin/sh
+# stub-agent — stands in for a coding agent, so the pool runs without any
+# credentials: it works, asks a person, waits for the answer, works again
+# and exits.
+#
+#   STUB_WORK_SECONDS  seconds of "work" before and after the question (15)
+#   STUB_EXIT          exit code to end with (0)
+#
+# The answer is the file `answer` in the state directory, which
+# `pool.sh answer <team> <task>` creates.
+set -u
+dir=${IRRLICHT_STATE_DIR:-/irrlicht-state}
+here=$(dirname "$0")
+work=${STUB_WORK_SECONDS:-15}
+
+sleep "$work"
+"$here/report-state" waiting
+while [ ! -e "$dir/answer" ]; do sleep 1; done
+rm -f "$dir/answer"
+"$here/report-state" busy
+sleep "$work"
+exit "${STUB_EXIT:-0}"

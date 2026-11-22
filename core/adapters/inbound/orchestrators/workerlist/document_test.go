@@ -77,6 +77,38 @@ func TestBuildState_FreeSlotNeverStale(t *testing.T) {
 	}
 }
 
+// A busy slot with `"state": "waiting"` is a waiting worker on the wire
+// (#2145), and it keeps a busy slot's staleness rule: a waiting slot whose
+// heartbeat stopped is still stale.
+func TestBuildState_WaitingSlot(t *testing.T) {
+	waiting := func(heartbeat time.Time) string {
+		return strings.Replace(oneSlot(t0, rfc(heartbeat)), `"busy": true`, `"busy": true, "state": "waiting"`, 1)
+	}
+	cases := []struct {
+		name      string
+		doc       string
+		wantStale bool
+	}{
+		{"fresh heartbeat", waiting(t0), false},
+		{"heartbeat older than 3 intervals", waiting(t0.Add(-181 * time.Second)), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := decodeDocument([]byte(tc.doc))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			w := buildState(doc, t0).Codebases[0].Worktrees[0].Workers[0]
+			if w.State != "waiting" || !w.Waiting {
+				t.Errorf("worker state = %q waiting = %v, want waiting/true", w.State, w.Waiting)
+			}
+			if w.Stale != tc.wantStale {
+				t.Errorf("worker stale = %v, want %v", w.Stale, tc.wantStale)
+			}
+		})
+	}
+}
+
 // Every way a document can be invalid is refused with a reason naming it.
 func TestDecodeDocument_RefusesInvalid(t *testing.T) {
 	team := func(fields string) string {
@@ -100,6 +132,12 @@ func TestDecodeDocument_RefusesInvalid(t *testing.T) {
 		                           {"name": "s", "busy": false}, {"name": "s", "busy": true}]}`), "workers[1]: duplicate worker name"},
 		"duplicate team": {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": []},
 		                         {"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": []}`), "duplicate team name"},
+		// #2145: `state` has one legal value, and a waiting slot still holds
+		// its slot, so it must be busy.
+		"worker with an unknown state": {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": [
+		                                       {"name": "s", "busy": true, "state": "queued"}]}`), `workers[0]: unsupported state "queued"`},
+		"waiting worker that is free": {team(`{"name": "a", "updated": "2026-11-11T15:40:00Z", "workers": [
+		                                      {"name": "s", "busy": false, "state": "waiting"}]}`), "workers[0]: state waiting requires busy"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

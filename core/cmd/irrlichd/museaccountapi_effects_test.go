@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/outbound/museaccountapi"
+	"irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -17,7 +18,7 @@ import (
 // reach startBackgroundLoops' `go ...Run` line; that start is covered only by
 // the live check named in the PR.
 func TestMuseAccountAPI_SweeperIsBuiltWhenTheTransportIs(t *testing.T) {
-	api := museAccountAPIEffects(e2eLog{})
+	api := museAccountAPIEffects(e2eLog{}, services.NewAccountPoller())
 	if api.transport == nil {
 		t.Fatal("museAccountAPIEffects built no transport for the fixed Muse destination")
 	}
@@ -69,7 +70,7 @@ func waitForReads(t *testing.T, c *countingCredentials, want int) {
 // the next grant reads it again.
 func TestMuseAccountAPI_ReadsCredentialOncePerGrant(t *testing.T) {
 	creds := &countingCredentials{}
-	api := newMuseAccountAPI(e2eLog{}, creds)
+	api := newMuseAccountAPI(e2eLog{}, services.NewAccountPoller(), creds)
 	mustRun(t, api.Start)
 	waitForReads(t, creds, 1)
 	for i := 0; i < 5; i++ {
@@ -107,7 +108,7 @@ func mustResolve(t *testing.T, api museAccountAPI) {
 // and granted again.
 func TestMuseAccountAPI_FailedReadIsStickyUntilRegrant(t *testing.T) {
 	creds := &countingCredentials{err: fmt.Errorf("%w: lookup: security did not answer", museaccountapi.ErrKeychainRead)}
-	api := newMuseAccountAPI(e2eLog{}, creds)
+	api := newMuseAccountAPI(e2eLog{}, services.NewAccountPoller(), creds)
 	if err := api.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestMuseAccountAPI_FailedReadIsStickyUntilRegrant(t *testing.T) {
 // so a later `muse login` is picked up without a revoke and re-grant.
 func TestMuseAccountAPI_FailureWithoutADialogIsRetried(t *testing.T) {
 	creds := &countingCredentials{err: errors.New("museaccountapi: reading auth.json: no such file")}
-	api := newMuseAccountAPI(e2eLog{}, creds)
+	api := newMuseAccountAPI(e2eLog{}, services.NewAccountPoller(), creds)
 	if err := api.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestMuseAccountAPI_FailureWithoutADialogIsRetried(t *testing.T) {
 // tools/lib/muse-account-sweep-mutations_test.sh removes Stop's reset.
 func TestMuseAccountAPI_RevokeDropsTheCredential(t *testing.T) {
 	creds := &countingCredentials{}
-	api := newMuseAccountAPI(e2eLog{}, creds)
+	api := newMuseAccountAPI(e2eLog{}, services.NewAccountPoller(), creds)
 	if err := api.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestMuseAccountAPI_RevokeDropsTheCredential(t *testing.T) {
 // tools/lib/muse-account-sweep-mutations_test.sh removes Start's reset.
 func TestMuseAccountAPI_ApplyRereadsTheCredential(t *testing.T) {
 	creds := &countingCredentials{}
-	api := newMuseAccountAPI(e2eLog{}, creds)
+	api := newMuseAccountAPI(e2eLog{}, services.NewAccountPoller(), creds)
 	if err := api.Start(); err != nil {
 		t.Fatal(err)
 	}

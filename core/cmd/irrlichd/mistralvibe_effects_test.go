@@ -72,11 +72,11 @@ func testVibeAPI(chromeDir string, kc *keychainStandIn) mistralVibeAPI {
 		UserDataDir: func() (string, error) { return chromeDir, nil },
 		Key:         keys.Key,
 	}
-	return newMistralVibeAPI(e2eLog{}, browser, keys)
+	return newMistralVibeAPI(e2eLog{}, services.NewAccountPoller(), browser, keys)
 }
 
 func TestMistralVibeAPI_SweeperIsBuiltWhenTheTransportIs(t *testing.T) {
-	api := mistralVibeEffects(e2eLog{})
+	api := mistralVibeEffects(e2eLog{}, services.NewAccountPoller())
 	if api.transport == nil {
 		t.Fatal("mistralVibeEffects built no transport for the fixed destination")
 	}
@@ -102,7 +102,7 @@ func countingVibeAPI(t *testing.T) (mistralVibeAPI, *atomic.Int64, *keychainStan
 		UserDataDir: func() (string, error) { profileReads.Add(1); return chrome, nil },
 		Key:         keys.Key,
 	}
-	api := newMistralVibeAPI(e2eLog{}, browser, keys)
+	api := newMistralVibeAPI(e2eLog{}, services.NewAccountPoller(), browser, keys)
 	api.transport = vibeOKTransport{}
 	return api, &profileReads, kc
 }

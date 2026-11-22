@@ -50,6 +50,9 @@ type UnattachedWorker struct {
 	// (omitted when none completed; a non-zero value shows as failed).
 	Stale    bool `json:"stale,omitempty"`
 	LastExit *int `json:"last_exit,omitempty"`
+	// Waiting copies orchestrator.Worker.Waiting (#2145): the one worker
+	// indication the clients paint in the waiting colour and notify on.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 // Agent is a session with optional orchestrator role and nested children.
@@ -361,6 +364,7 @@ func rigUnattachedWorkers(cb orchestrator.Codebase, attached map[rigWorkerKey]bo
 				WorkerState: ownWorkerState(w),
 				Stale:       w.Stale,
 				LastExit:    w.LastExit,
+				Waiting:     w.Waiting,
 			})
 		}
 	}

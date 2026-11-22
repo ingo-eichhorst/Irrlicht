@@ -16,6 +16,7 @@ Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code, Open
 - [Tips & Tricks](https://irrlicht.io/docs/tips-and-tricks.html): Easy-to-miss settings — menu bar styles, quota forecasts, spoken alerts, click-to-jump, usage exports
 - [CLI Tools](https://irrlicht.io/docs/cli-tools.html): The irrlichd daemon and irrlicht-ls tool
 - [API Reference](https://irrlicht.io/docs/api-reference.html): HTTP and WebSocket API
+- [Worker List](https://irrlicht.io/docs/worker-list.html): Show any pool of agents by writing one JSON status file
 - [Architecture](https://irrlicht.io/docs/architecture.html): Hexagonal architecture with ports and adapters
 
 ## Links

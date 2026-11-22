@@ -8,6 +8,14 @@
 # time, so every rebuild invalidates granted TCC permissions. A persistent
 # self-signed cert keeps the identity stable.
 #
+# This is the FALLBACK identity. /ir:test-mac signs with, in order:
+# $IRRLICHT_DEV_SIGN_IDENTITY, a "Developer ID Application:" identity, this
+# "Irrlicht Dev" identity, ad-hoc. A Developer ID identity is preferred because
+# only it satisfies the relay-token keychain item's requirement (and matches the
+# release's designated requirement); a build signed with this identity still
+# raises a keychain prompt on every relay-token read. Run this on a machine
+# without a Developer ID identity.
+#
 # Idempotent: re-running after the identity already exists is a no-op.
 # Reversible: `security delete-certificate -c "Irrlicht Dev"` to undo.
 

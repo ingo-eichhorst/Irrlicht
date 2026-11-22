@@ -43,10 +43,9 @@ type MuseAccountSweeperDeps struct {
 // It is level-triggered rather than edge-triggered: each tick writes the
 // current reading while the permission is granted and clears any meta
 // snapshot while it is not. SetProviderRateLimit's own doc comment names the
-// race that makes this necessary — a transcript pass that loaded its copy
-// before a write can save over it — and re-applying every tick is what brings
-// a lost write (or a resurrected snapshot after a revoke) back within one
-// Interval. A tick costs no extra account-API call while the poller's cached
+// writers that can still save an older copy over a write — and re-applying
+// every tick is what brings a lost write (or a resurrected snapshot after a
+// revoke) back within one Interval. A tick costs no extra account-API call while the poller's cached
 // reading is fresh (AccountPoller.pollFreshWindow), and an unchanged reading
 // is not re-saved or re-broadcast.
 //
@@ -110,7 +109,7 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 		// The listed copy is at most the repo cache's TTL old, well inside
 		// one Interval, so it is enough to skip a write that would change
 		// nothing; SetProviderRateLimit re-checks against the stored row.
-		listed := listedMetaSnapshot(st)
+		listed := listedProviderSnapshot(st, session.ProviderMeta)
 		if !granted {
 			if listed != nil {
 				s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderMeta, nil)
@@ -139,14 +138,6 @@ func (s *MuseAccountSweeper) sweep(ctx context.Context) {
 			delete(s.failing, id)
 		}
 	}
-}
-
-// listedMetaSnapshot returns st's rate-limit snapshot when it is a meta one.
-func listedMetaSnapshot(st *session.SessionState) *session.RateLimitSnapshot {
-	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != session.ProviderMeta {
-		return nil
-	}
-	return st.Metrics.RateLimit
 }
 
 func (s *MuseAccountSweeper) logFailure(sessionID string, err error) {

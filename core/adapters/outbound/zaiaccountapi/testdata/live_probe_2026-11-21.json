@@ -1,0 +1,131 @@
+{
+  "_comment": "Issue #2010's Z.ai live probe, 2026-11-21: three responses from the GLM Coding Plan quota endpoint, each passed through RedactQuotaResponse (the parser's own allowlist) before this file was written. The raw bodies carried no account data; the allowlist dropped only `msg` (\"Operation successful\"). raw_top_level_keys lists the raw body's top-level key NAMES for the record. No key, header or token was ever written here.",
+  "captures": [
+    {
+      "at": "2026-11-21T13:12:58Z",
+      "after": "nothing used yet on the plan",
+      "status_code": 200,
+      "raw_bytes": 335,
+      "raw_top_level_keys": [
+        "code",
+        "data",
+        "msg",
+        "success"
+      ],
+      "redacted_body": {
+        "code": 200,
+        "success": true,
+        "data": {
+          "limits": [
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 3,
+              "number": 5,
+              "usage": 2000,
+              "currentValue": 0,
+              "remaining": 2000,
+              "percentage": 0
+            },
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 6,
+              "number": 1,
+              "usage": 10000,
+              "currentValue": 0,
+              "remaining": 10000,
+              "percentage": 0,
+              "nextResetTime": 1795871277998
+            }
+          ],
+          "level": "lite"
+        }
+      }
+    },
+    {
+      "at": "2026-11-21T13:16:20Z",
+      "after": "one 2-turn headless Claude Code run routed to Z.ai",
+      "status_code": 200,
+      "raw_bytes": 364,
+      "raw_top_level_keys": [
+        "code",
+        "data",
+        "msg",
+        "success"
+      ],
+      "redacted_body": {
+        "code": 200,
+        "success": true,
+        "data": {
+          "limits": [
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 3,
+              "number": 5,
+              "usage": 2000,
+              "currentValue": 2,
+              "remaining": 1997,
+              "percentage": 1,
+              "nextResetTime": 1795284966038
+            },
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 6,
+              "number": 1,
+              "usage": 10000,
+              "currentValue": 2,
+              "remaining": 9997,
+              "percentage": 1,
+              "nextResetTime": 1795871277984
+            }
+          ],
+          "level": "lite"
+        }
+      }
+    },
+    {
+      "at": "2026-11-21T13:20:20Z",
+      "after": "two more Claude Code runs (probe rows A and B)",
+      "status_code": 200,
+      "raw_bytes": 366,
+      "raw_top_level_keys": [
+        "code",
+        "data",
+        "msg",
+        "success"
+      ],
+      "redacted_body": {
+        "code": 200,
+        "success": true,
+        "data": {
+          "limits": [
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 3,
+              "number": 5,
+              "usage": 2000,
+              "currentValue": 11,
+              "remaining": 1988,
+              "percentage": 1,
+              "nextResetTime": 1795284966038
+            },
+            {
+              "type": "CREDIT_LIMIT",
+              "unit": 6,
+              "number": 1,
+              "usage": 10000,
+              "currentValue": 11,
+              "remaining": 9988,
+              "percentage": 1,
+              "nextResetTime": 1795871277984
+            }
+          ],
+          "level": "lite"
+        }
+      }
+    }
+  ],
+  "claude_code_version": "2.1.330 (Claude Code)",
+  "plan": "GLM Coding Lite-V3 (monthly), key created on the coding-plan page",
+  "probe": "https://github.com/ingo-eichhorst/Irrlicht/issues/2010#issuecomment-7063374830",
+  "request": "GET https://api.z.ai/api/monitor/usage/quota/limit with Authorization: Bearer <coding-plan key>; redirects refused, 15 s timeout, 1 MiB cap"
+}

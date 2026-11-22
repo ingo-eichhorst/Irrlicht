@@ -725,17 +725,24 @@ func runDaemon() {
 	orchMonitor, orchCtx, orchCancel := setupOrchestratorMonitor(push, logger)
 	defer orchCancel()
 
-	// Muse's account-quota poller (issue #2007) is constructed once inside
-	// museAccountAPIEffects, daemon-wide, matching accountpoller.go's own
-	// "exactly one AccountPoller per daemon" design. Its grant/revoke effects
-	// wire into the permission catalog below; its per-session sweep (#2057)
+	// The daemon's one AccountPoller (accountpoller.go: "exactly one
+	// AccountPoller per daemon"), shared by every account-quota provider:
+	// Muse (issue #2007), Z.ai's coding plan (issue #2010) and Mistral Vibe
+	// (issue #2012). Revoke and
+	// Forget act only on a provider's own keys, so the providers cannot
+	// disturb each other's cached readings. Each provider's grant/revoke
+	// effects wire into the permission catalog below; its per-session sweep
 	// is started with the other background loops once the detector exists.
-	museAPI := museAccountAPIEffects(logger)
-	// Mistral Vibe's browser-session route (issue #2012), built the same way.
-	vibeAPI := mistralVibeEffects(logger)
+	accountPoller := services.NewAccountPoller()
+	museAPI := museAccountAPIEffects(logger, accountPoller)
+	zaiAPI := zaiAccountAPIEffects(logger, accountPoller)
+	vibeAPI := mistralVibeEffects(logger, accountPoller)
 
 	home, _ := os.UserHomeDir()
-	effects := consentEffects{StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop}
+	effects := consentEffects{
+		StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop,
+		StartZaiAccountAPI: zaiAPI.Start, StopZaiAccountAPI: zaiAPI.Stop,
+	}
 	effects.StartMistralVibe, effects.StopMistralVibe = vibeAPI.Start, vibeAPI.Stop
 	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtPath, cachedRepo, logger)
 	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
@@ -839,6 +846,7 @@ func runDaemon() {
 		Logger:             logger,
 		MuseAccountSweeper: museAPI.sweeper(detector, cachedRepo, permService, logger),
 		MistralVibeSweeper: vibeAPI.sweeper(detector, cachedRepo, permService, logger),
+		ZaiAccountSweeper:  zaiAPI.sweeper(detector, cachedRepo, permService, logger),
 	})()
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))

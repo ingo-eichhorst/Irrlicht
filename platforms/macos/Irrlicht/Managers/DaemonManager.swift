@@ -20,6 +20,59 @@ final class DaemonManager: ObservableObject {
 
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "DaemonManager")
 
+    /// Where `pushPublishConfig()` sends the publish config. In the app this is
+    /// `LiveRelayPublisher` — the daemon's loopback `PUT /api/v1/relay/publish`.
+    /// In a test process it defaults to a `RecordingRelayPublisher`, because the
+    /// live one has no way to tell the production daemon on :7837 from a test
+    /// fixture: before this seam, `DaemonManagerTests` sent the xctest
+    /// domain's publish settings (and a token read from the real keychain) to
+    /// whatever daemon was listening. `DaemonManagerPublisherGuardTests` is the
+    /// guard.
+    let publisher: RelayPublishing
+
+    /// Where the publish flags are read. `.standard` in the app; a test injects
+    /// a store it controls so the recorded config is deterministic.
+    private let defaults: UserDefaults
+
+    /// Where the relay token is read. `KeychainStore.shared` in the app.
+    private let keychain: KeychainSecrets
+
+    /// The reachability probe, the stale-daemon kill and the spawn. Live in the
+    /// app; a `RecordingDaemonProcessControl` in a test process, because the
+    /// live one's `pkill -x irrlichd` cannot tell the developer's production
+    /// daemon from a stale one (see `DaemonProcessControl`).
+    /// `DaemonManagerProcessControlGuardTests` is the guard.
+    let processControl: DaemonProcessControl
+
+    /// - Parameters:
+    ///   - publisher: defaults to `defaultPublisher(underXCTest:)` evaluated
+    ///     against `AppHome.isRunningTests`, i.e. live in the app and a
+    ///     recorder in a test process.
+    ///   - processControl: likewise, `defaultProcessControl(underXCTest:)`.
+    init(publisher: RelayPublishing = DaemonManager.defaultPublisher(underXCTest: AppHome.isRunningTests),
+         defaults: UserDefaults = .standard,
+         keychain: KeychainSecrets = KeychainStore.shared,
+         processControl: DaemonProcessControl = DaemonManager.defaultProcessControl(underXCTest: AppHome.isRunningTests)) {
+        self.publisher = publisher
+        self.defaults = defaults
+        self.keychain = keychain
+        self.processControl = processControl
+    }
+
+    /// The process control a default-constructed manager uses. A pure function
+    /// so the rule can be asserted without constructing — let alone calling —
+    /// the live one.
+    nonisolated static func defaultProcessControl(underXCTest: Bool) -> DaemonProcessControl {
+        underXCTest ? RecordingDaemonProcessControl() : LiveDaemonProcessControl()
+    }
+
+    /// The publisher a default-constructed manager uses. A pure function so
+    /// the rule can be asserted without constructing — let alone calling — the
+    /// live publisher.
+    nonisolated static func defaultPublisher(underXCTest: Bool) -> RelayPublishing {
+        underXCTest ? RecordingRelayPublisher() : LiveRelayPublisher()
+    }
+
     /// Test-only view of the app-owned daemon process (nil when none), so tests
     /// can assert the POST-based publish reconfigure never spawns or relaunches
     /// a daemon (issue #722). Internal: visible only via `@testable import`.
@@ -30,9 +83,9 @@ final class DaemonManager: ObservableObject {
     /// Relay-publish settings (issue #718). URL + enabled flag live in
     /// UserDefaults (shared with the relay *subscribe* direction); the token
     /// lives in the Keychain — same store the subscribe path uses.
-    private var publishEnabled: Bool { UserDefaults.standard.bool(forKey: "publishToRelay") }
+    private var publishEnabled: Bool { defaults.bool(forKey: "publishToRelay") }
     private var relayURL: String {
-        (UserDefaults.standard.string(forKey: "relayServerURL") ?? "")
+        (defaults.string(forKey: "relayServerURL") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -80,11 +133,14 @@ final class DaemonManager: ObservableObject {
     private func pushPublishConfig() {
         let enabled = publishEnabled
         let url = relayURL
+        let publisher = publisher
+        let keychain = keychain
         Task.detached {
-            let token = KeychainStore.get(account: "relayToken")
+            let token = keychain.get(account: "relayToken")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let config = PublishClient.Config(enabled: enabled, url: url, token: token)
             for attempt in 0..<3 {
-                if await PublishClient.apply(enabled: enabled, url: url, token: token) {
+                if await publisher.publish(config) {
                     return
                 }
                 if attempt < 2 { try? await Task.sleep(nanoseconds: 300_000_000) }
@@ -124,7 +180,7 @@ final class DaemonManager: ObservableObject {
                 self.pushPublishConfig()
                 return
             }
-            self.killStaleDaemons()
+            self.processControl.killStaleDaemons()
             self.spawnDaemon()
         }
     }
@@ -137,68 +193,17 @@ final class DaemonManager: ObservableObject {
         terminateProcess()
     }
 
-    // MARK: - Stale process cleanup
-
-    /// Kill any `irrlichd` processes left over from a previous app launch,
-    /// LaunchAgent, or manual invocation so we start with a clean slate.
-    private func killStaleDaemons() {
-        // On a custom port we're a dev instance coexisting with the production
-        // daemon (port 7837). pkill matches by process name and can't target a
-        // port, so a global kill here would take production down too — skip it.
-        if DaemonEndpoint.isCustomPort {
-            logger.info("Custom daemon port \(DaemonEndpoint.port) — skipping global pkill to leave production running")
-            return
-        }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
-        task.arguments = ["-x", "irrlichd"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-
-        if task.terminationStatus == 0 {
-            logger.info("Killed stale irrlichd process(es)")
-            // Give the port a moment to free up
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-    }
-
     // MARK: - Health check
 
-    /// Returns true if an irrlichd instance is already listening on the expected port.
+    /// Returns true if an irrlichd instance is already listening on the
+    /// expected port — asked of `processControl`, so a test process never
+    /// opens a socket to it.
     func isDaemonReachable() async -> Bool {
-        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/state") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
-    }
-
-    // MARK: - Embedded daemon
-
-    /// Path to the `irrlichd` binary inside the app bundle, with a dev-mode fallback.
-    private var bundledDaemonURL: URL? {
-        if let url = Bundle.main.url(forAuxiliaryExecutable: "irrlichd") {
-            return url
-        }
-        // Dev fallback: look relative to the Swift source tree (core/bin/irrlichd)
-        let devURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Managers/
-            .deletingLastPathComponent() // Irrlicht/
-            .deletingLastPathComponent() // macos/
-            .deletingLastPathComponent() // platforms/
-            .deletingLastPathComponent() // repo root
-            .appendingPathComponent("core/bin/irrlichd")
-        return FileManager.default.fileExists(atPath: devURL.path) ? devURL : nil
+        await processControl.isDaemonReachable()
     }
 
     private func spawnDaemon() {
-        guard let daemonURL = bundledDaemonURL else {
+        guard let daemonURL = processControl.daemonExecutableURL else {
             logger.error("irrlichd binary not found in app bundle")
             return
         }
@@ -236,7 +241,7 @@ final class DaemonManager: ObservableObject {
         }
 
         do {
-            try proc.run()
+            try processControl.run(proc)
             process = proc
             daemonRunning = true
             restartCount = 0

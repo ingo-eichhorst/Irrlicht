@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "id": "zai",
+  "display_name": "Z.ai — GLM Coding Plan",
+  "_comment": [
+    "Issue #2010, epic #1977 work package F: the coding-plan shape, first",
+    "provider. The billing provider is 'zai'; no coding-agent adapter has",
+    "that name. Z.ai is reached through Claude Code with ANTHROPIC_BASE_URL,",
+    "and the transcript then still names the requested Claude model, so the",
+    "quota binds to a session only by an observed route to api.z.ai — never",
+    "by adapter or model. The pseudo-adapter holding the consent row is",
+    "'zai-account-api'.",
+    "",
+    "The coding plan is a separate product from Z.ai's general API",
+    "(/api/paas/v4, prepaid bundles). Nothing here reads that product. China",
+    "region (open.bigmodel.cn) and team scope are not covered."
+  ],
+  "products": [
+    {
+      "id": "glm-coding-plan",
+      "name": "GLM Coding Plan",
+      "quota_scope": "account"
+    }
+  ],
+  "observation": {
+    "strategy": "account-api",
+    "destination_keys": ["zai-account-api"],
+    "implementation": {
+      "kind": "code-backed",
+      "package": "core/adapters/outbound/zaiaccountapi",
+      "permission_name": "zai-account-api",
+      "permission_key": "account-api",
+      "tests": [
+        "core/adapters/outbound/zaiaccountapi/parser_test.go",
+        "core/adapters/outbound/zaiaccountapi/redact_test.go",
+        "core/adapters/outbound/zaiaccountapi/credential_test.go",
+        "core/adapters/outbound/zaiaccountapi/destination_test.go",
+        "core/application/services/zaiaccountsweep_test.go",
+        "core/cmd/irrlichd/zaiaccountapi_effects_test.go",
+        "core/adapters/inbound/agents/processlifecycle/endpoint_route_claudecode_test.go",
+        "core/domain/session/rate_limit_provider_test.go"
+      ],
+      "mutation_fixtures": [
+        "tools/lib/zai-coding-plan-mutations_test.sh"
+      ]
+    }
+  },
+  "authentication": {
+    "method": "api-key",
+    "header": "Authorization",
+    "prefix": "Bearer "
+  },
+  "credential_resolvers": [
+    {
+      "kind": "file",
+      "location": "the Claude Code settings file that set the session's observed api.z.ai route: env.ANTHROPIC_AUTH_TOKEN, else env.ANTHROPIC_API_KEY, read only while that file still names api.z.ai",
+      "format": "json"
+    }
+  ],
+  "platforms": ["darwin", "linux"],
+  "redaction": {
+    "allowed_fields": ["code", "success", "data"],
+    "note": "The raw body carries code, msg, success and data; msg (\"Operation successful\") is dropped. Inside data only level and each limit's type, unit, number, usage, currentValue, remaining, percentage and nextResetTime are kept. The probe's bodies carried no account data."
+  },
+  "fixtures": [
+    {
+      "name": "quota-limit-nothing-used",
+      "kind": "response",
+      "path": "fixtures/quota-limit-nothing-used.redacted.json",
+      "note": "13:12:58Z, before any use: the five-hour window has no nextResetTime."
+    },
+    {
+      "name": "quota-limit-after-run",
+      "kind": "response",
+      "path": "fixtures/quota-limit-after-run.redacted.json",
+      "note": "13:16:20Z, after one 2-turn Claude Code run: 2 used of 2000, remaining 1997."
+    },
+    {
+      "name": "quota-limit-after-routes",
+      "kind": "response",
+      "path": "fixtures/quota-limit-after-routes.redacted.json",
+      "note": "13:20:20Z, after probe rows A and B: 11 used of 2000, remaining 1988."
+    }
+  ],
+  "capabilities": {
+    "billing_mode": {
+      "claim": "live-verified",
+      "evidence": ["zai-live-probe-2026-11-21", "zai-quota-response-fixtures"],
+      "note": "data.level (\"lite\") names the coding-plan tier, the only product identifier in the response; the key was created on the coding-plan page. A response with no level is not presented as the plan."
+    },
+    "quota_windows": {
+      "claim": "live-verified",
+      "evidence": ["zai-live-probe-2026-11-21", "zai-quota-response-fixtures"],
+      "note": "Two CREDIT_LIMIT windows, measured in credits: unit 3 number 5 (five hours, reset five hours after first use, absent before it) and unit 6 number 1 (one week, reset seven days after the subscription began). usage is the limit and currentValue the amount used; remaining is not usage minus currentValue and is taken as reported; percentage is an integer that rounds up."
+    },
+    "balance": {
+      "claim": "unassessed",
+      "note": "Z.ai's general API prepaid bundles (/api/paas/v4) were not probed; the coding-plan key was not used against it."
+    },
+    "account_identity": {
+      "claim": "source-specific-unavailable",
+      "evidence": ["zai-live-probe-2026-11-21", "zai-parser-source"],
+      "note": "The response carries no account identifier, so BuildSnapshot leaves ConfirmedAccountRef empty. The poll is keyed by a salted, in-memory fingerprint of the key: #1977 §3.2's credential identity, not an account identity. Two sessions on one key share a reading; two keys never do, even on one account."
+    }
+  },
+  "evidence": [
+    {
+      "id": "zai-live-probe-2026-11-21",
+      "kind": "live-probe",
+      "date": "2026-11-21",
+      "ref": "core/adapters/outbound/zaiaccountapi/testdata/live_probe_2026-11-21.json",
+      "note": "Three responses from GET https://api.z.ai/api/monitor/usage/quota/limit on the GLM Coding Lite-V3 plan, redacted before they were written; recorded on issue #2010 (comment 7063374830)."
+    },
+    {
+      "id": "zai-quota-response-fixtures",
+      "kind": "fixture",
+      "date": "2026-11-21",
+      "ref": "replaydata/providers/zai/fixtures/quota-limit-after-run.redacted.json"
+    },
+    {
+      "id": "zai-parser-source",
+      "kind": "source",
+      "date": "2026-11-21",
+      "ref": "core/adapters/outbound/zaiaccountapi/parser.go",
+      "note": "The allowlist decode, and BuildSnapshot leaving ConfirmedAccountRef empty."
+    }
+  ]
+}

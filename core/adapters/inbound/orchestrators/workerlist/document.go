@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/orchestrator"
+	"irrlicht/core/domain/session"
 )
 
 // Schema v1 of the status file (#2148 triage). Unknown fields are ignored; a
@@ -24,6 +25,7 @@ import (
 //	    "workers": [{                       required
 //	      "name": "team-a-m1-1",            required, unique in its team: <team>-<machine id>-<slot>
 //	      "busy": true,                     required
+//	      "state": "waiting",               optional; only "waiting", which needs busy
 //	      "work_item": "proj-a1b2",         optional
 //	      "last_heartbeat": "<RFC 3339>",   optional
 //	      "last_run": {"end": "<RFC 3339>", "exit": 0}   optional; exit may be null
@@ -51,6 +53,7 @@ type team struct {
 type worker struct {
 	Name          string     `json:"name"`
 	Busy          *bool      `json:"busy"`
+	State         string     `json:"state"`
 	WorkItem      string     `json:"work_item"`
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 	LastRun       *lastRun   `json:"last_run"`
@@ -73,11 +76,13 @@ const (
 	workerIcon        = "\U0001F527" // 🔧
 	workerDescription = "Pool worker slot"
 
-	// Worker and team status tokens. Deliberately none of the four session
-	// state names: a slot is not a session, and clients paint those names in
-	// session colours.
+	// Worker and team status tokens. busy and idle are no session state
+	// names: a slot is not a session. A waiting slot (#2145) borrows the
+	// session's word for its State text and sets Worker.Waiting, which the
+	// clients paint in the session waiting colour and notify on.
 	workerBusy        = "busy"
 	workerIdle        = "idle"
+	workerWaiting     = string(session.StateWaiting)
 	statusOperational = "operational"
 	statusStale       = "stale"
 	statusUnreadable  = "unreadable"
@@ -132,17 +137,32 @@ func (t team) validate() error {
 	}
 	seen := make(map[string]bool, len(*t.Workers))
 	for i, w := range *t.Workers {
-		switch {
-		case w.Name == "":
-			return fmt.Errorf("workers[%d]: missing name", i)
-		case w.Busy == nil:
-			return fmt.Errorf("workers[%d]: missing busy", i)
-		case seen[w.Name]:
+		if err := w.validate(); err != nil {
+			return fmt.Errorf("workers[%d]: %w", i, err)
+		}
+		if seen[w.Name] {
 			// The dashboard lists a name once per team, so a repeated
 			// slot would vanish without a word.
 			return fmt.Errorf("workers[%d]: duplicate worker name %q", i, w.Name)
 		}
 		seen[w.Name] = true
+	}
+	return nil
+}
+
+// validate checks one slot on its own; team.validate adds that its name is
+// unique in the team.
+func (w worker) validate() error {
+	switch {
+	case w.Name == "":
+		return errors.New("missing name")
+	case w.Busy == nil:
+		return errors.New("missing busy")
+	case w.State != "" && w.State != workerWaiting:
+		return fmt.Errorf("unsupported state %q (want %q or none)", w.State, workerWaiting)
+	case w.State == workerWaiting && !*w.Busy:
+		// A waiting agent still holds its slot.
+		return errors.New("state waiting requires busy")
 	}
 	return nil
 }
@@ -195,10 +215,11 @@ func buildTeam(t team, now time.Time, threshold time.Duration) orchestrator.Code
 	return cb
 }
 
-// buildWorker maps one slot. A busy slot is stale when its team is stale or
-// its last heartbeat — the team's `updated` when it has none, as at the start
-// of a tick — is older than threshold; a free slot never is. LastExit is set
-// once a run has ended with an exit code.
+// buildWorker maps one slot. A busy slot is "waiting" when its `state` says
+// so, else "busy". A busy slot, waiting or not, is stale when its team is
+// stale or its last heartbeat — the team's `updated` when it has none, as at
+// the start of a tick — is older than threshold; a free slot never is.
+// LastExit is set once a run has ended with an exit code.
 func buildWorker(w worker, teamUpdated time.Time, teamStale bool, now time.Time, threshold time.Duration) orchestrator.Worker {
 	out := orchestrator.Worker{
 		Role:        workerRole,
@@ -210,6 +231,10 @@ func buildWorker(w worker, teamUpdated time.Time, teamStale bool, now time.Time,
 	}
 	if *w.Busy {
 		out.State = workerBusy
+		if w.State == workerWaiting {
+			out.State = workerWaiting
+			out.Waiting = true
+		}
 		ref := teamUpdated
 		if w.LastHeartbeat != nil {
 			ref = *w.LastHeartbeat

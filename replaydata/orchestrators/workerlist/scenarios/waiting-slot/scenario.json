@@ -1,0 +1,21 @@
+{
+  "description": "A slot whose agent waits for a person (#2145): busy with \"state\": \"waiting\" and a fresh heartbeat, beside a busy slot and a free slot. The waiting slot shows waiting, keeps its work item and is not stale; the other two are unchanged.",
+  "ticks": [
+    {
+      "now": "2026-11-11T15:40:00Z"
+    }
+  ],
+  "verify": {
+    "worker_states": [
+      "waiting",
+      "busy",
+      "idle"
+    ],
+    "worker_ids": [
+      "proj-a1b2",
+      "proj-c3d4",
+      ""
+    ],
+    "stale_workers": []
+  }
+}

@@ -8,11 +8,12 @@ import (
 	"irrlicht/core/adapters/inbound/orchestrators/workerlist"
 	"irrlicht/core/adapters/outbound/mistralvibe"
 	"irrlicht/core/adapters/outbound/museaccountapi"
+	"irrlicht/core/adapters/outbound/zaiaccountapi"
 	"irrlicht/core/domain/agent"
 )
 
 // consentCatalog returns every declaration the permission wizard offers: the
-// agent adapters in agents.All() plus eight daemon-wide entries with no
+// agent adapters in agents.All() plus the daemon-wide entries with no
 // Source/Process axes — the Gas Town orchestrator (reads ~/gt), launcher-identity
 // capture (reads whitelisted env vars from agent processes for click-to-focus),
 // the kitty remote-control config patch (writes kitty.conf for tab-precise
@@ -23,8 +24,10 @@ import (
 // Claude Code's account-identity read (issue #2095 — a pseudo-adapter, not a
 // second permission on claude-code, whose revoke would stop transcript watching),
 // and the worker-list orchestrator (issue #2148 — reads one status file),
-// and Mistral Vibe's browser-session permission (issue #2012 — the Chrome
-// cookie and Keychain read plus the console.mistral.ai egress).
+// Z.ai's coding-plan quota (issue #2010 — the key from the settings file
+// that routed a session to api.z.ai, plus the api.z.ai egress), and Mistral
+// Vibe's browser-session permission (issue #2012 — the Chrome cookie and
+// Keychain read plus the console.mistral.ai egress).
 //
 // It exists so the composition lives in ONE place (#1383). This list is what
 // IRRLICHT_PERMISSION_MODE=grant-all grants, so it is also the set whose Apply
@@ -50,6 +53,7 @@ func consentCatalog(all []agent.Agent, fx consentEffects) []agent.Agent {
 		museaccountapi.PermissionDeclaration(fx.StartMuseAccountAPI, fx.StopMuseAccountAPI),
 		claudecode.AccountPermissionDeclaration(),
 		workerlist.PermissionDeclaration(fx.StartWorkerlist, fx.StopWorkerlist),
+		zaiaccountapi.PermissionDeclaration(fx.StartZaiAccountAPI, fx.StopZaiAccountAPI),
 		mistralvibe.PermissionDeclaration(fx.StartMistralVibe, fx.StopMistralVibe))
 }
 
@@ -58,11 +62,12 @@ func consentCatalog(all []agent.Agent, fx consentEffects) []agent.Agent {
 // (startup.go's gastownEffects/workerlistEffects — the session repository and
 // the orchestrator monitor) and Muse's account-quota permission
 // (museaccountapi_effects.go's museAccountAPIEffects — the daemon-wide
-// AccountPoller).
+// AccountPoller), and Z.ai's (zaiaccountapi_effects.go — its poller).
 type consentEffects struct {
 	StartGastown, StopGastown               func() error
 	StartMuseAccountAPI, StopMuseAccountAPI func() error
 	StartWorkerlist, StopWorkerlist         func() error
+	StartZaiAccountAPI, StopZaiAccountAPI   func() error
 	// Mistral Vibe's browser-session permission (mistralvibe_effects.go).
 	StartMistralVibe, StopMistralVibe func() error
 }
@@ -79,6 +84,7 @@ func declaredConsentCatalog() []agent.Agent {
 		StartGastown: noop, StopGastown: noop,
 		StartMuseAccountAPI: noop, StopMuseAccountAPI: noop,
 		StartWorkerlist: noop, StopWorkerlist: noop,
+		StartZaiAccountAPI: noop, StopZaiAccountAPI: noop,
 		StartMistralVibe: noop, StopMistralVibe: noop,
 	})
 }

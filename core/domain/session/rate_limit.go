@@ -32,6 +32,13 @@ const (
 	// stamps Product with the Vibe plan, never Mistral's API usage or
 	// prepaid credits.
 	ProviderMistral = "mistral"
+	// ProviderZai is Z.ai's GLM Coding Plan (issue #2010, epic #1977 §10
+	// work package F) — a billing product, attributed to a session only by
+	// an observed route to api.z.ai. No adapter is named "zai": Z.ai is
+	// reached through Claude Code with ANTHROPIC_BASE_URL, and the
+	// transcript then still names the requested Claude model (#2010 probe
+	// §2), so neither the adapter nor the model is evidence for it.
+	ProviderZai = "zai"
 )
 
 // AttributionQualityConfirmed is the only AttributionQuality value that
@@ -216,6 +223,13 @@ type RateLimitWindow struct {
 
 	// ResetsAt is the wall-clock time (Unix seconds) at which the window
 	// rolls over and UsedPercent returns to zero.
+	//
+	// Both clients treat ResetsAt <= now — including 0 — as a stale
+	// snapshot (platforms/web/quotaChips.js bucketChips; the macOS app's
+	// SessionListView.snapshotIsStale), so 0 does not read as "not
+	// reported". zaiaccountapi.BuildSnapshot therefore omits a window whose
+	// provider reports no reset (issue #2010); museaccountapi still
+	// publishes 0 for an absent resets_at.
 	ResetsAt int64 `json:"resets_at"`
 
 	// Measure names the explicit unit this window's usage is counted in
@@ -411,6 +425,20 @@ func ForecastCap(history []RateLimitSnapshot, now time.Time) *time.Time {
 	// duration and reset time alone, and a throughput ceiling sharing a
 	// reset instant with an allowance would otherwise pair with it and
 	// contribute its slope to a plan-cap forecast.
+	//
+	// And the two samples must be the same provider's (#2010 §1.3, "Equal-
+	// duration windows are not the same quota"): Z.ai's GLM Coding Plan and
+	// Anthropic both sell a five-hour window, and a history spanning both
+	// would otherwise pair them whenever their reset instants coincide.
+	// Reachability, stated rather than implied: today's caller
+	// (metrics.Adapter.ComputeMetrics) builds the history from the
+	// transcript tailer only, which never holds a Z.ai snapshot — the Z.ai
+	// reading arrives through the account-API sweep instead. This is the
+	// domain rule the forecast keeps if that ever changes. A row written
+	// before #1994 has Provider "" and pairs only with another such row.
+	if earliest.Provider != latest.Provider { // #2010: a quota needs its provider, not only its duration
+		return nil
+	}
 	var prev *RateLimitWindow
 	for i := range earliest.Windows {
 		w := &earliest.Windows[i]

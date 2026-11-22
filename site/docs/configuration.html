@@ -63,6 +63,7 @@
       <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html">API Reference</a>
+      <a href="worker-list.html">Worker List</a>
     </div>
 
     <div class="sidebar-section">
@@ -330,7 +331,7 @@
             <td><code>IRRLICHT_WORKERLIST_FILE</code></td>
             <td>Path</td>
             <td><code>workerlist.json</code> in the data directory (<code>~/.local/share/irrlicht</code>, or <code>$IRRLICHT_HOME</code>)</td>
-            <td>Override the worker-pool status file the worker-list orchestrator reads once its permission is granted. Only an override: a daemon started by Irrlicht.app inherits only the app's environment, and an app launched from Finder or at login normally does not see variables set in your shell profile &mdash; writing the file to the default path is the route that needs no setup</td>
+            <td>Override the worker-pool status file the worker-list orchestrator reads once its permission is granted (schema: <a href="worker-list.html">Worker List</a>). Only an override: a daemon started by Irrlicht.app inherits only the app's environment, and an app launched from Finder or at login normally does not see variables set in your shell profile &mdash; writing the file to the default path is the route that needs no setup</td>
           </tr>
           <tr>
             <td id="daemon-port"><code>IRRLICHT_DAEMON_PORT</code></td>

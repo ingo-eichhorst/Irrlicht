@@ -29,9 +29,49 @@ PROD_APP="${IRRLICHT_TESTMAC_PROD_APP:-/Applications/Irrlicht.app}"
 MAIN_REPO="${IRRLICHT_TESTMAC_MAIN_REPO:-/Users/ingo/projects/irrlicht}"
 PROD_BACKUP="$MAIN_REPO/.build/irrlicht-prod-backup/Irrlicht.app"
 PORT="${IRRLICHT_TESTMAC_PORT:-7837}"
+PLISTBUDDY="${IRRLICHT_TESTMAC_PLISTBUDDY:-/usr/libexec/PlistBuddy}"
 
 APP_PATTERN="Irrlicht\.app/Contents/MacOS/Irrlicht"
 NL=$'\n'   # line-start anchor for the in-shell codesign match below
+# test-mac.sh stamps this as CFBundleShortVersionString into every dev install
+# (its DEV_VERSION_MARKER). Same literal, two scripts: test-mac-script_test.sh's
+# restore-after-dev-run case runs that script and then this one to prove they
+# still agree.
+DEV_VERSION_MARKER="dev"
+
+# is_untouched_release — true only for a bundle that is Developer-ID-signed AND
+# carries a readable CFBundleShortVersionString other than the dev marker.
+# The signature alone stopped being enough when test-mac.sh began signing dev
+# builds with the Developer ID identity (so they pass the relay-token keychain
+# item's requirement): a dev build would then read as "already production" and
+# be relaunched as if restored. An unreadable version is NOT a release — fail
+# closed. PlistBuddy prints its error to STDOUT with rc 1 (measured, on a
+# missing file), so the status decides, never the captured text.
+#
+# NO PIPE in the signature match. `codesign … | grep -q` looks right and is
+# wrong under this file's own `set -o pipefail`: grep -q exits at its first
+# match, codesign is still writing, dies of SIGPIPE (141), and pipefail makes
+# 141 the pipeline's status — so the check fails EXACTLY WHEN THE APP IS
+# GENUINELY SIGNED (measured 5/5 against a real Developer-ID bundle). This
+# script would then fall through to the refusal below and tell someone with a
+# correctly installed production app to reinstall it, after having already
+# killed their app and daemon. Capturing and THEN piping into grep -q is the
+# same bug with more headroom; matching in-shell has no second process and no
+# race (#1855 review F1, found in test-mac.sh — the same line was here).
+PROD_VERSION=""
+PROD_DEVID="no"
+is_untouched_release() {
+  local codesign_info
+  if ! PROD_VERSION="$("$PLISTBUDDY" -c "Print :CFBundleShortVersionString" "$PROD_APP/Contents/Info.plist" 2>/dev/null)"; then
+    PROD_VERSION=""   # unreadable ⇒ not a confirmed release
+  fi
+  codesign_info="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
+  if [[ "$NL$codesign_info" == *"${NL}Authority=Developer ID Application"* ]]; then
+    PROD_DEVID="yes"
+  fi
+  [[ "$PROD_DEVID" == "yes" ]] \
+    && [[ -n "$PROD_VERSION" && "$PROD_VERSION" != "$DEV_VERSION_MARKER" ]]
+}
 
 echo "Stopping dev app + daemon…"
 pkill -f "$APP_PATTERN" 2>/dev/null || true   # the app (production or dev-overwritten)
@@ -76,21 +116,12 @@ elif [[ ! -d "$PROD_APP" ]]; then
   echo "ERROR: $PROD_APP is not installed and no backup exists at $PROD_BACKUP." >&2
   echo "       Run the DMG/PKG installer first, then re-run this script." >&2
   exit 1
-elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
-       [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; }; then
-  # NO PIPE IN THIS CONDITION. `codesign … | grep -q` looks right and is wrong
-  # under this file's own `set -o pipefail`: grep -q exits at its first match,
-  # codesign is still writing, dies of SIGPIPE (141), and pipefail makes 141 the
-  # pipeline's status — so the arm is skipped EXACTLY WHEN THE APP IS GENUINELY
-  # SIGNED (measured 5/5 against a real Developer-ID bundle). This script would
-  # then fall through to the refusal below and tell someone with a correctly
-  # installed production app to reinstall it, after having already killed their
-  # app and daemon. Capturing and THEN piping into grep -q is the same bug with
-  # more headroom; matching in-shell has no second process and no race
-  # (#1855 review F1, found in test-mac.sh — the same line was here).
-  echo "No backup at $PROD_BACKUP — $PROD_APP is already genuinely production-signed; nothing to restore."
+elif is_untouched_release; then
+  echo "No backup at $PROD_BACKUP — $PROD_APP is already an untouched release ($PROD_VERSION, Developer-ID-signed); nothing to restore."
 else
-  echo "ERROR: $PROD_APP is not Developer-ID-signed (looks like a leftover dev build) and no backup exists at $PROD_BACKUP." >&2
+  echo "ERROR: $PROD_APP is not an untouched release, which needs a Developer ID signature AND a version other than" >&2
+  echo "       '$DEV_VERSION_MARKER' (Developer ID: $PROD_DEVID; version read: '${PROD_VERSION:-<unreadable>}')" >&2
+  echo "       — it looks like a leftover dev build — and no backup exists at $PROD_BACKUP." >&2
   echo "       Cannot confirm production is intact — reinstall via the DMG/PKG installer." >&2
   exit 1
 fi

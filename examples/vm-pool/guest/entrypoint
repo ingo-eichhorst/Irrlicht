@@ -1,0 +1,36 @@
+#!/bin/sh
+# entrypoint — wraps a task's command inside the VM or container.
+#
+#   entrypoint <command> [args...]
+#
+# Before the command: reports busy and starts a heartbeat that writes the
+# current UTC time to $IRRLICHT_STATE_DIR/heartbeat every
+# $IRRLICHT_HEARTBEAT_SECONDS (default 20). After it: writes the end time to
+# `ended`, the exit code to `exit`, and reports done. Every file is one line,
+# written by write-then-rename.
+set -u
+dir=${IRRLICHT_STATE_DIR:-/irrlicht-state}
+here=$(dirname "$0")
+interval=${IRRLICHT_HEARTBEAT_SECONDS:-20}
+
+stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+put() { printf '%s\n' "$2" > "$dir/.$1.tmp" && mv "$dir/.$1.tmp" "$dir/$1"; }
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: entrypoint <command> [args...]" >&2
+  exit 2
+fi
+
+"$here/report-state" busy
+put heartbeat "$(stamp)"
+(while sleep "$interval"; do put heartbeat "$(stamp)"; done) &
+beat=$!
+
+"$@"
+rc=$?
+
+kill "$beat" 2>/dev/null
+put ended "$(stamp)"
+put exit "$rc"
+"$here/report-state" "done"
+exit "$rc"

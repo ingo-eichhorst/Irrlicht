@@ -14,19 +14,23 @@ import (
 )
 
 // mistralVibeEffects builds issue #2012's browser-session route once per
-// daemon: the poller, the once-per-grant Keychain key cache, the Chrome
+// daemon over the daemon's shared AccountPoller (runDaemon builds the one
+// poller, issue #2010): the once-per-grant Keychain key cache, the Chrome
 // reader and the transport to the one reviewed destination, plus the
 // Apply/Remove closures mistralvibe.PermissionDeclaration needs and the
-// sweep that polls through them. It is museAccountAPIEffects' shape, kept
-// separate from it so the two providers' grants never share state.
-func mistralVibeEffects(logger outbound.Logger) mistralVibeAPI {
+// sweep that polls through them. It is museAccountAPIEffects' shape. The
+// providers share only the poller, whose Revoke and Forget act on one
+// provider's keys (Stop revokes session.ProviderMistral; the sweep forgets
+// only MistralVibeQuotaKey keys), so neither grant disturbs the other's
+// readings.
+func mistralVibeEffects(logger outbound.Logger, poller *services.AccountPoller) mistralVibeAPI {
 	keys := chromecookies.NewKeyCache(chromecookies.SafeStorageKey)
 	browser := mistralvibe.Browser{UserDataDir: chromecookies.UserDataDir, Key: keys.Key}
-	return newMistralVibeAPI(logger, browser, keys)
+	return newMistralVibeAPI(logger, poller, browser, keys)
 }
 
-// newMistralVibeAPI is mistralVibeEffects over a given browser reader and
-// key cache, so a test can drive it against a fake Chrome.
+// newMistralVibeAPI is mistralVibeEffects over a given poller, browser
+// reader and key cache, so a test can drive it against a fake Chrome.
 //
 // Start only resets the key cache. It reads nothing: unlike Muse's Apply it
 // does not warm a read, because the daemon re-applies every persisted grant
@@ -41,9 +45,7 @@ func mistralVibeEffects(logger outbound.Logger) mistralVibeAPI {
 // reading) and resets the key cache, so nothing further is read or sent once
 // it returns. The sweep clears the reading from each vibe session on its
 // next tick.
-func newMistralVibeAPI(logger outbound.Logger, browser mistralvibe.Browser, keys *chromecookies.KeyCache) mistralVibeAPI {
-	poller := services.NewAccountPoller()
-
+func newMistralVibeAPI(logger outbound.Logger, poller *services.AccountPoller, browser mistralvibe.Browser, keys *chromecookies.KeyCache) mistralVibeAPI {
 	// Destination() is a fixed, reviewed literal; an error here is a coding
 	// mistake, logged once, and leaves no transport, so sweeper returns nil.
 	var transport outbound.AccountQuotaTransport
