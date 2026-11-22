@@ -42,7 +42,7 @@ enum QuotaMenuBarRenderer {
         sessions: [SessionState],
         providerKey: String?,
         compact: Bool = false,
-        hiddenAccounts: Set<String> = [],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
         guard let info = selectedSnapshot(
@@ -83,7 +83,7 @@ enum QuotaMenuBarRenderer {
     static func selectedSnapshot(
         sessions: [SessionState],
         providerKey: String?,
-        hiddenAccounts: Set<String> = [],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> RateLimitInfo? {
         struct Candidate {

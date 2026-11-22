@@ -21,6 +21,8 @@ import {
 // are not), but so the same documentation, screenshots, and mental
 // model apply to both surfaces.
 const QUOTA_FORECAST_KEY = 'showQuotaForecast';
+// Hidden quota accounts (#2163); see hiddenQuotaAccounts below.
+const HIDDEN_ACCOUNTS_KEY = 'hiddenQuotaAccounts';
 
 export function showQuotaForecast() {
   // Default ON, mirroring macOS @AppStorage("showQuotaForecast") default.
@@ -104,7 +106,11 @@ export function productLabel(product) {
 function chipTierLabel(chip, fallback) {
   return planTypeLabel(chip.snapshot.plan_type)
       || productLabel(chip.snapshot.product)
-      || (fallback ? chip.providerKey.charAt(0).toUpperCase() + chip.providerKey.slice(1) : null);
+      || (fallback ? providerFallbackLabel(chip.providerKey) : null);
+}
+// The capitalised provider key, for a chip or row with no tier label.
+function providerFallbackLabel(providerKey) {
+  return providerKey.charAt(0).toUpperCase() + providerKey.slice(1);
 }
 // "Account …<last 4 of ref>", or "Account unconfirmed" (#2095 D2).
 function accountSuffix(chip) {
@@ -138,13 +144,6 @@ function setProviderModePreference(providerKey, mode) {
 // What is stored is what is HIDDEN, so nothing stored means everything is
 // shown. The stores are not shared, so hiding an account here does not hide
 // it in the macOS app.
-//
-// A function rather than a top-level const, so it is callable however the
-// module graph is entered: irrlicht.js and this module import each other,
-// and entered from this module (as a test can be), irrlicht.js renders
-// before this module's consts are initialised (quota.parity.test.js
-// describes that case).
-function hiddenAccountsStorageKey() { return 'hiddenQuotaAccounts'; }
 
 // Bucket key → stored tier label. Missing, unreadable, or not a JSON object
 // reads as "nothing hidden". Read-only: nothing on the read path writes
@@ -154,7 +153,7 @@ function hiddenAccountsStorageKey() { return 'hiddenQuotaAccounts'; }
 export function hiddenQuotaAccounts() {
   let parsed = null;
   try {
-    parsed = JSON.parse(localStorage.getItem(hiddenAccountsStorageKey()) || 'null');
+    parsed = JSON.parse(localStorage.getItem(HIDDEN_ACCOUNTS_KEY) || 'null');
   } catch (e) {
     console.debug('quotaChips: unreadable hidden quota accounts', e);
     return {};
@@ -169,8 +168,8 @@ export function hiddenQuotaAccounts() {
 }
 function setHiddenQuotaAccounts(hidden) {
   try {
-    if (Object.keys(hidden).length === 0) localStorage.removeItem(hiddenAccountsStorageKey());
-    else localStorage.setItem(hiddenAccountsStorageKey(), JSON.stringify(hidden));
+    if (Object.keys(hidden).length === 0) localStorage.removeItem(HIDDEN_ACCOUNTS_KEY);
+    else localStorage.setItem(HIDDEN_ACCOUNTS_KEY, JSON.stringify(hidden));
   } catch (e) {
     console.debug('quotaChips: failed to persist hidden quota accounts', e);
   }
@@ -203,21 +202,18 @@ function liveAccountRow(chip, hidden) {
     key: chip.key,
     label: chipTierLabel(chip, true) + ' · ' + accountSuffix(chip),
     tierLabel: chipTierLabel(chip, false) || '',
-    live: true,
     hidden: Object.prototype.hasOwnProperty.call(hidden, chip.key),
   };
 }
 
 // A hidden account with no live chip, labelled from the tier stored when it
-// was hidden, else the capitalised provider key (chipTierLabel's fallback).
+// was hidden, else chipTierLabel's provider fallback.
 function idleHiddenAccountRow(key, stored) {
   const parts = bucketKeyParts(key);
-  const name = stored || (parts.providerKey.charAt(0).toUpperCase() + parts.providerKey.slice(1));
   return {
     key,
-    label: name + ' · ' + accountSuffix(parts) + ' — no data',
+    label: (stored || providerFallbackLabel(parts.providerKey)) + ' · ' + accountSuffix(parts) + ' — no data',
     tierLabel: stored,
-    live: false,
     hidden: true,
   };
 }
@@ -801,7 +797,6 @@ function appendAccountRows(host, rows) {
   host.appendChild(heading);
   for (const r of rows) {
     const label = document.createElement('label');
-    label.className = 'provider-account-row';
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = !r.hidden;

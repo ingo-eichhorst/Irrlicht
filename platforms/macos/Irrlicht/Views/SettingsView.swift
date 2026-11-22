@@ -838,31 +838,35 @@ struct SettingsView: View {
     /// marked, because `MenuBarImageBuilder.quotaImage` skips its slot without
     /// a trace — the row is the only place the user can see why a slot is
     /// missing (#2030).
+    /// What a row with no live snapshot carries after its label: a selected
+    /// provider slot here, a hidden quota account in `QuotaAccountRow.label`.
+    static let noDataMarker = " — no data"
+
     static func quotaProviderRowLabel(_ key: String, slot: Int?, hasLiveData: Bool) -> String {
         guard let slot else { return quotaProviderLabel(key) }
-        let noData = hasLiveData ? "" : " — no data"
+        let noData = hasLiveData ? "" : noDataMarker
         return "\(slot + 1). \(quotaProviderLabel(key))\(noData)"
     }
 
     /// One row of the "Quota accounts" list (#2163).
-    struct QuotaAccountRow: Equatable {
+    struct QuotaAccountRow {
         /// The account bucket key (`RateLimitInfo.accountBucketKey`).
         let key: String
         /// What hiding the account stores, so its row keeps a label after
         /// the account stops reporting. "" when the account has no tier.
         let tierLabel: String
         let hasLiveData: Bool
+        let isHidden: Bool
 
         /// "<tier> · Account …abcd", the tier label the chip's tooltip leads
         /// with, followed by the account line under it. The account line stays
         /// because two seats on one plan share a tier label. A row with no tier
         /// falls back to the provider's name, and a row with no live snapshot
         /// is marked the way `quotaProviderRowLabel` marks a slot with no data.
-        /// Both halves are read back off `key`, which is built from them.
         var label: String {
-            let parts = HiddenQuotaAccounts.parts(ofBucketKey: key)
+            let parts = RateLimitInfo.bucketKeyParts(key)
             let name = tierLabel.isEmpty ? SettingsView.quotaProviderLabel(parts.providerKey) : tierLabel
-            let noData = hasLiveData ? "" : " — no data"
+            let noData = hasLiveData ? "" : SettingsView.noDataMarker
             return "\(name) · \(RateLimitInfo.accountLine(ref: parts.accountRef))\(noData)"
         }
     }
@@ -874,25 +878,26 @@ struct SettingsView: View {
     /// A hidden account stays listed after it stops reporting, labelled from
     /// what was stored when it was hidden. Without that, the row that shows
     /// it again would disappear with its sessions, the same reason
-    /// `quotaProviderRows` keeps a selected provider listed.
+    /// `quotaProviderRows` keeps a selected provider listed. The chips are
+    /// derived with nothing hidden, so a hidden account that still reports is
+    /// labelled from its live snapshot.
     private var quotaAccountRows: [QuotaAccountRow] {
         Self.quotaAccountRows(
-            live: SessionListView.quotaChipData(sessions: sessionManager.sessions, now: formatNow()),
+            live: SessionListView.quotaChipData(sessions: sessionManager.sessions,
+                                                hiddenAccounts: [], now: formatNow()),
             hidden: HiddenQuotaAccounts.decode(hiddenQuotaAccountsRaw)
         )
     }
 
-    /// `live` must be the UNFILTERED chips (`quotaChipData` with no hidden
-    /// set), or a hidden account that is still reporting would be listed
-    /// only from its stored label and marked as having no data.
     static func quotaAccountRows(live: [SessionListView.QuotaWidgetData],
                                  hidden: [String: String]) -> [QuotaAccountRow] {
         var rows: [String: QuotaAccountRow] = [:]
         for chip in live {
-            rows[chip.id] = QuotaAccountRow(key: chip.id, tierLabel: chip.snapshot.tierLabel ?? "", hasLiveData: true)
+            rows[chip.id] = QuotaAccountRow(key: chip.id, tierLabel: chip.snapshot.tierLabel ?? "",
+                                            hasLiveData: true, isHidden: hidden[chip.id] != nil)
         }
         for (key, storedTier) in hidden where rows[key] == nil {
-            rows[key] = QuotaAccountRow(key: key, tierLabel: storedTier, hasLiveData: false)
+            rows[key] = QuotaAccountRow(key: key, tierLabel: storedTier, hasLiveData: false, isHidden: true)
         }
         return rows.values.sorted { $0.key < $1.key }
     }
@@ -902,7 +907,7 @@ struct SettingsView: View {
     /// binding's `set`, so rendering Settings persists nothing.
     private func quotaAccountVisibility(_ row: QuotaAccountRow) -> Binding<Bool> {
         Binding(
-            get: { HiddenQuotaAccounts.decode(hiddenQuotaAccountsRaw)[row.key] == nil },
+            get: { !row.isHidden },
             set: { shown in
                 hiddenQuotaAccountsRaw = Self.settingQuotaAccount(row, shown: shown, in: hiddenQuotaAccountsRaw)
             }

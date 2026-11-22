@@ -700,11 +700,11 @@ struct SessionListView: View {
     ///
     /// `hiddenAccounts` holds the account bucket keys the user hid in Settings
     /// (#2163). Their chips are dropped after bucketing, so a hidden account
-    /// never changes which snapshot represents another bucket. The default is
-    /// "nothing hidden", which is today's output. The Settings account rows
-    /// rely on that default, because they must list hidden accounts too.
+    /// never changes which snapshot represents another bucket. It is required,
+    /// like `now`: the Settings account rows pass `[]` because they must list
+    /// hidden accounts too, and the popover passes the stored set.
     static func quotaChipData(sessions: [SessionState],
-                              hiddenAccounts: Set<String> = [],
+                              hiddenAccounts: Set<String>,
                               now: Date) -> [QuotaWidgetData] {
         var byProvider: [String: ChipBucket] = [:]
         for session in sessions {

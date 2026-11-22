@@ -167,7 +167,7 @@ enum MenuBarImageBuilder {
         appearance: MenuBarAppearance,
         sessions: [SessionState],
         providerKeys: [String],
-        hiddenAccounts: Set<String> = [],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
         guard appearance.showsQuotaBars else { return nil }
@@ -224,7 +224,7 @@ enum MenuBarImageBuilder {
         projectGroupOrder: [String],
         daemonLabels: [String: String],
         providerKeys: [String],
-        hiddenAccounts: Set<String> = [],
+        hiddenAccounts: Set<String>,
         now: Date
     ) -> NSImage? {
         // Computed once regardless of appearance so the .usage fallback below

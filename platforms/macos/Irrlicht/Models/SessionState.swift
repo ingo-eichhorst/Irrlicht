@@ -401,7 +401,20 @@ struct RateLimitInfo: Codable, Hashable {
     func accountBucketKey(adapter: String?) -> String {
         let key = bucketProviderKey(adapter: adapter)
         let ref = accountRef
-        return ref.isEmpty ? "\(key)|unconfirmed" : "\(key)|\(ref)"
+        return "\(key)|\(ref.isEmpty ? Self.unconfirmedBucketRef : ref)"
+    }
+
+    /// The ref half of a provider's unconfirmed bucket key.
+    static let unconfirmedBucketRef = "unconfirmed"
+
+    /// The inverse of `accountBucketKey`, for a key with no live snapshot to
+    /// read the parts off (a hidden account that stopped reporting, #2163).
+    /// It splits at the FIRST `|`, because the provider half is a provider name
+    /// or `unknown:<adapter>`, while the ref half is provider-issued.
+    static func bucketKeyParts(_ key: String) -> (providerKey: String, accountRef: String) {
+        guard let bar = key.firstIndex(of: "|") else { return (key, "") }
+        let ref = String(key[key.index(after: bar)...])
+        return (String(key[..<bar]), ref == unconfirmedBucketRef ? "" : ref)
     }
 
     /// Friendly label for `product`, mirroring the web's `productLabel`.

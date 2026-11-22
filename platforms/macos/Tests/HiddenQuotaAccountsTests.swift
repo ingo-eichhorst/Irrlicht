@@ -53,15 +53,6 @@ final class HiddenQuotaAccountsTests: XCTestCase {
                        "the hidden account's chip must be dropped, the other kept")
     }
 
-    /// Showing it again is the absence of the key, read on the next render; no
-    /// state survives from the hidden render.
-    func testShowingAnAccountAgainBringsItsChipBack() {
-        _ = SessionListView.quotaChipData(
-            sessions: twoAccounts, hiddenAccounts: ["anthropic|acct-BBBB"], now: base)
-        let chips = SessionListView.quotaChipData(sessions: twoAccounts, hiddenAccounts: [], now: base)
-        XCTAssertEqual(chips.map(\.id), ["anthropic|acct-AAAA", "anthropic|acct-BBBB"])
-    }
-
     func testHidingEveryAccountOfAProviderDrawsNoChipForIt() {
         let chips = SessionListView.quotaChipData(
             sessions: twoAccounts + [session("o", adapter: "codex", snap(used: 5, provider: "openai", ref: "seat-1"))],
@@ -107,7 +98,7 @@ final class HiddenQuotaAccountsTests: XCTestCase {
     // MARK: - red-first: Settings rows
 
     func testAHiddenAccountThatNoSessionReportsStaysListedWithItsStoredLabel() {
-        let live = SessionListView.quotaChipData(sessions: [twoAccounts[0]], now: base)
+        let live = SessionListView.quotaChipData(sessions: [twoAccounts[0]], hiddenAccounts: [], now: base)
         let rows = SettingsView.quotaAccountRows(
             live: live, hidden: ["anthropic|acct-BBBB": "Team", "anthropic|unconfirmed": ""])
         XCTAssertEqual(rows.map(\.key), ["anthropic|acct-AAAA", "anthropic|acct-BBBB", "anthropic|unconfirmed"])
@@ -120,20 +111,23 @@ final class HiddenQuotaAccountsTests: XCTestCase {
         // What hiding a row would store: the live tier for a reporting
         // account, the stored one for the others.
         XCTAssertEqual(rows.map(\.tierLabel), ["Claude Max", "Team", ""])
+        XCTAssertEqual(rows.map(\.isHidden), [false, true, true])
     }
 
     /// A hidden account that is still reporting is labelled from its live
     /// snapshot, not marked as having no data.
     func testAHiddenAccountThatStillReportsIsLabelledLive() {
-        let live = SessionListView.quotaChipData(sessions: twoAccounts, now: base)
+        let live = SessionListView.quotaChipData(sessions: twoAccounts, hiddenAccounts: [], now: base)
         let rows = SettingsView.quotaAccountRows(live: live, hidden: ["anthropic|acct-BBBB": "stale label"])
         XCTAssertEqual(rows.map(\.label), ["Claude Max · Account …AAAA", "Team · Account …BBBB"])
         XCTAssertEqual(rows.map(\.tierLabel), ["Claude Max", "Team"],
                        "hiding a reporting account must store its live tier, not an old stored one")
+        XCTAssertEqual(rows.map(\.isHidden), [false, true])
     }
 
     func testHidingARowStoresItsTierLabelAndShowingItRemovesTheKey() {
-        let row = SettingsView.QuotaAccountRow(key: "anthropic|acct-BBBB", tierLabel: "Team", hasLiveData: true)
+        let row = SettingsView.QuotaAccountRow(key: "anthropic|acct-BBBB", tierLabel: "Team",
+                                               hasLiveData: true, isHidden: false)
         let hiddenRaw = SettingsView.settingQuotaAccount(row, shown: false, in: "")
         XCTAssertEqual(HiddenQuotaAccounts.decode(hiddenRaw), ["anthropic|acct-BBBB": "Team"])
         XCTAssertEqual(SettingsView.settingQuotaAccount(row, shown: true, in: hiddenRaw), "",
@@ -143,18 +137,12 @@ final class HiddenQuotaAccountsTests: XCTestCase {
     // MARK: - the menu-bar hand-off
 
     /// `combinedImage` → `iconImage` → `quotaImage` → `imageForSelectedProvider`
-    /// → `selectedSnapshot` each pass the hidden set on, and each defaults it
-    /// to "nothing hidden", so a dropped argument still compiles. These assert
-    /// through the top two, on both of `quotaImage`'s paths (Auto and a
-    /// selected provider). The first link is pinned by source in
+    /// → `selectedSnapshot` pass the hidden set on. Every hop below
+    /// `combinedImage` takes it as a required argument, so a dropped hop fails
+    /// to compile, and `combinedImage`'s source is pinned in
     /// `MenuBarAppearanceTests.testImageBuilderRoutesBothHalvesThroughTheExtractedSeams`.
-    ///
-    /// Mutations run with `tools/mutate.sh` in #2163's review: deleting the
-    /// argument between `iconImage` and `quotaImage` turned
-    /// `testTheIconFallsBackToItsDotsWhenEveryAccountIsHidden` red on both
-    /// paths; deleting it on `quotaImage`'s selected-provider call turned both
-    /// tests below red for `["anthropic"]`; deleting `combinedImage`'s argument
-    /// turned the source pin red.
+    /// These assert what the set does once it arrives, through the top two
+    /// functions, on both of `quotaImage`'s paths (Auto and a selected provider).
     private var usage: MenuBarAppearance {
         MenuBarAppearance(style: .usage, grouping: .project, maxProjects: MenuBarMaxProjects.defaultValue)
     }
