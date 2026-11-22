@@ -417,11 +417,7 @@ func (s *PermissionService) Start(ctx context.Context) {
 				granted++
 			}
 		}
-		msg := "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed"
-		if scopedOut > 0 || explicit > 0 {
-			msg = fmt.Sprintf("IRRLICHT_PERMISSION_MODE=grant-all — %d permission(s) granted, %d scoped out by IRRLICHT_RECORD_ADAPTERS (not this run's adapter), %d left for an explicit grant, wizard suppressed", granted, scopedOut, explicit)
-		}
-		s.log.LogInfo("permissions", "", msg)
+		s.log.LogInfo("permissions", "", grantAllSummary(granted, scopedOut, explicit))
 	}
 	var effects []pendingEffect
 	for _, a := range s.agents {
@@ -439,6 +435,16 @@ func (s *PermissionService) Start(ctx context.Context) {
 	if runPoller {
 		go s.runDetectionLoop(ctx)
 	}
+}
+
+// grantAllSummary is the log line Start writes after grant-all: the plain
+// one when every permission was granted, the counts when some were scoped out
+// or left for an explicit grant.
+func grantAllSummary(granted, scopedOut, explicit int) string {
+	if scopedOut == 0 && explicit == 0 {
+		return "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed"
+	}
+	return fmt.Sprintf("IRRLICHT_PERMISSION_MODE=grant-all — %d permission(s) granted, %d scoped out by IRRLICHT_RECORD_ADAPTERS (not this run's adapter), %d left for an explicit grant, wizard suppressed", granted, scopedOut, explicit)
 }
 
 // scopedOutByRecordAdapters reports whether p, declared by agentName, must be

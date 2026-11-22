@@ -78,22 +78,10 @@ func (s *MistralVibeSweeper) Run(ctx context.Context) {
 func (s *MistralVibeSweeper) RunOnce(ctx context.Context) { s.sweep(ctx) }
 
 func (s *MistralVibeSweeper) sweep(ctx context.Context) {
-	sessions, err := s.deps.Sessions.ListAll()
-	if err != nil {
-		if !s.listFailing {
-			s.listFailing = true
-			s.deps.Log.LogError(logComponentMistralVibeSweep, "", "listing sessions: "+err.Error())
-		}
+	vibe, ok := s.listVibe()
+	if !ok {
 		return
 	}
-	s.listFailing = false
-	var vibe []*session.SessionState
-	for _, st := range sessions {
-		if st != nil && st.Adapter == s.deps.Adapter && st.ParentSessionID == "" {
-			vibe = append(vibe, st)
-		}
-	}
-
 	if !s.deps.Granted() {
 		// Not granted: unbind. Nothing is read from the browser and nothing
 		// is sent.
@@ -105,7 +93,34 @@ func (s *MistralVibeSweeper) sweep(ctx context.Context) {
 		s.forgetAll()
 		return
 	}
+	s.bind(ctx, vibe)
+}
 
+// listVibe lists every live top-level vibe session. ok is false when the
+// sessions could not be listed; that failure is logged once per streak.
+func (s *MistralVibeSweeper) listVibe() (vibe []*session.SessionState, ok bool) {
+	sessions, err := s.deps.Sessions.ListAll()
+	if err != nil {
+		s.logListFailure(err)
+		return nil, false
+	}
+	s.listFailing = false
+	for _, st := range sessions {
+		if s.isTopLevelVibe(st) {
+			vibe = append(vibe, st)
+		}
+	}
+	return vibe, true
+}
+
+// isTopLevelVibe reports whether st is a vibe session that is not a subagent.
+func (s *MistralVibeSweeper) isTopLevelVibe(st *session.SessionState) bool {
+	return st != nil && st.Adapter == s.deps.Adapter && st.ParentSessionID == ""
+}
+
+// bind shows the current Chrome profile's reading on every vibe session, or,
+// with no reading to show for that profile, clears the one they carry.
+func (s *MistralVibeSweeper) bind(ctx context.Context, vibe []*session.SessionState) {
 	browser, err := s.deps.Browser()
 	if err != nil {
 		// No profile to confirm a listed reading against: clear it.
@@ -118,7 +133,10 @@ func (s *MistralVibeSweeper) sweep(ctx context.Context) {
 	// On a failure after an earlier success the poller still serves that
 	// reading, stamped with RetrievalFailure (MistralVibeRefresh); with no
 	// reading to serve, snap is nil.
-	snap, err := MistralVibeRefresh(ctx, s.deps.Poller, browser, s.deps.Transport, s.deps.Granted, vibe[0].SessionID)
+	snap, err := MistralVibeRefresh(ctx, MistralVibeRefreshRequest{
+		Poller: s.deps.Poller, Browser: browser, Transport: s.deps.Transport,
+		Granted: s.deps.Granted, SessionID: vibe[0].SessionID,
+	})
 	if err != nil {
 		s.logFailure("no current Mistral Vibe reading: " + err.Error())
 	} else {
@@ -134,9 +152,15 @@ func (s *MistralVibeSweeper) sweep(ctx context.Context) {
 		s.unbind(vibe)
 		return
 	}
-	if revoked := !s.deps.Granted(); revoked {
+	// A revoke that landed during the refresh writes nothing.
+	if !s.deps.Granted() {
 		return
 	}
+	s.write(vibe, snap)
+}
+
+// write puts snap on every vibe session that does not already show it.
+func (s *MistralVibeSweeper) write(vibe []*session.SessionState, snap *session.RateLimitSnapshot) {
 	for _, st := range vibe {
 		if listed := listedMistralSnapshot(st); listed == nil || !sameRateLimitReading(listed, snap) {
 			s.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderMistral, snap)
@@ -166,10 +190,13 @@ func (s *MistralVibeSweeper) forgetAll() {
 // listedMistralSnapshot returns st's rate-limit snapshot when it is a
 // Mistral one.
 func listedMistralSnapshot(st *session.SessionState) *session.RateLimitSnapshot {
-	if st.Metrics == nil || st.Metrics.RateLimit == nil || st.Metrics.RateLimit.Provider != session.ProviderMistral {
+	if st.Metrics == nil {
 		return nil
 	}
-	return st.Metrics.RateLimit
+	if rl := st.Metrics.RateLimit; rl != nil && rl.Provider == session.ProviderMistral {
+		return rl
+	}
+	return nil
 }
 
 func (s *MistralVibeSweeper) logFailure(msg string) {
@@ -178,6 +205,14 @@ func (s *MistralVibeSweeper) logFailure(msg string) {
 	}
 	s.failing = true
 	s.deps.Log.LogInfo(logComponentMistralVibeSweep, "", msg)
+}
+
+func (s *MistralVibeSweeper) logListFailure(err error) {
+	if s.listFailing {
+		return
+	}
+	s.listFailing = true
+	s.deps.Log.LogError(logComponentMistralVibeSweep, "", "listing sessions: "+err.Error())
 }
 
 const logComponentMistralVibeSweep = "mistralvibesweep"

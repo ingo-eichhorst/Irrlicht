@@ -87,7 +87,7 @@ func ParseUsage(body []byte) (Usage, error) {
 		return Usage{}, ErrNoUsage
 	}
 	pct := *u.UsagePercentage
-	if math.IsNaN(pct) || pct < 0 || pct > 100 {
+	if !isPercentage(pct) {
 		return Usage{}, fmt.Errorf("%w: %v", ErrOutOfRange, pct)
 	}
 	out := Usage{UsedPercent: pct}
@@ -101,6 +101,11 @@ func ParseUsage(body []byte) (Usage, error) {
 	return out, nil
 }
 
+// isPercentage reports whether p is a percentage from 0 to 100. NaN is not.
+func isPercentage(p float64) bool {
+	return !math.IsNaN(p) && p >= 0 && p <= 100
+}
+
 // decodeAllowlisted unwraps the one batch element down to its allowlisted
 // json object.
 func decodeAllowlisted(body []byte) (*usageJSON, error) {
@@ -108,10 +113,22 @@ func decodeAllowlisted(body []byte) (*usageJSON, error) {
 	if err := json.Unmarshal(body, &batch); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnexpectedShape, err)
 	}
-	if len(batch) != 1 || batch[0].Result == nil || batch[0].Result.Data == nil || batch[0].Result.Data.JSON == nil {
+	if len(batch) != 1 {
 		return nil, ErrUnexpectedShape
 	}
-	return batch[0].Result.Data.JSON, nil
+	if u := batch[0].usage(); u != nil {
+		return u, nil
+	}
+	return nil, ErrUnexpectedShape
+}
+
+// usage is the element's result.data.json object, or nil when any level of
+// it is absent.
+func (e batchElement) usage() *usageJSON {
+	if e.Result == nil || e.Result.Data == nil {
+		return nil
+	}
+	return e.Result.Data.JSON
 }
 
 // BuildSnapshot parses body into the snapshot written onto vibe sessions:

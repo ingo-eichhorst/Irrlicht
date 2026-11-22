@@ -50,42 +50,57 @@ func DeriveKey(password string) (Key, error) {
 	return Key{b: b}, nil
 }
 
-// decryptValue returns one cookie's plaintext value. hostKey and dbVersion
-// decide whether a SHA-256(host_key) prefix must be present. Every check is
-// a refusal, never a best guess: a value this cannot prove it decrypted
-// correctly (bad padding, a host hash that does not match) is
+// decryptValue returns one cookie's plaintext value. r's host_key and
+// dbVersion decide whether a SHA-256(host_key) prefix must be present. Every
+// check is a refusal, never a best guess: a value this cannot prove it
+// decrypted correctly (bad padding, a host hash that does not match) is
 // ErrUnknownEncryption, not a string of garbage that would later be sent.
 //
 // A cookie stored in the plaintext `value` column with an empty
 // encrypted_value is returned as is; Chromium loads such a row the same way
 // (sqlite_persistent_cookie_store.cc decrypts only a non-empty
 // encrypted_value) and refuses a row that has both, as this does.
-func decryptValue(key Key, hostKey, plaintext string, encrypted []byte, dbVersion int) (string, error) {
+func decryptValue(key Key, r row, dbVersion int) (string, error) {
 	switch {
-	case len(encrypted) == 0:
-		return plaintext, nil
-	case plaintext != "":
+	case len(r.encrypted) == 0:
+		return r.plaintext, nil
+	case r.plaintext != "":
 		return "", fmt.Errorf("%w: value stored both encrypted and in plaintext", ErrUnknownEncryption)
-	case !bytes.HasPrefix(encrypted, []byte(encryptionPrefix)):
+	case !bytes.HasPrefix(r.encrypted, []byte(encryptionPrefix)):
 		return "", fmt.Errorf("%w: no %q prefix", ErrUnknownEncryption, encryptionPrefix)
 	}
-	if key.IsZero() {
-		return "", fmt.Errorf("%w: no key", ErrKeychain)
+	out, err := decryptV10(key, r.encrypted[len(encryptionPrefix):])
+	if err != nil {
+		return "", err
 	}
-	ct := encrypted[len(encryptionPrefix):]
+	return stripHostHash(out, r.hostKey, dbVersion)
+}
+
+// decryptV10 decrypts the ciphertext after a "v10" prefix with key and
+// strips its padding.
+func decryptV10(key Key, ct []byte) ([]byte, error) {
+	if key.IsZero() {
+		return nil, fmt.Errorf("%w: no key", ErrKeychain)
+	}
 	if len(ct) == 0 || len(ct)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("%w: ciphertext is not whole AES blocks", ErrUnknownEncryption)
+		return nil, fmt.Errorf("%w: ciphertext is not whole AES blocks", ErrUnknownEncryption)
 	}
 	block, err := aes.NewCipher(key.b)
 	if err != nil {
-		return "", fmt.Errorf("%w: bad key", ErrUnknownEncryption)
+		return nil, fmt.Errorf("%w: bad key", ErrUnknownEncryption)
 	}
 	out := make([]byte, len(ct))
 	cipher.NewCBCDecrypter(block, cbcIV).CryptBlocks(out, ct) // #nosec G407 -- Chrome's fixed IV; decrypting its format, never encrypting.
 	out, ok := unpad(out)
 	if !ok {
-		return "", fmt.Errorf("%w: bad padding (wrong key?)", ErrUnknownEncryption)
+		return nil, fmt.Errorf("%w: bad padding (wrong key?)", ErrUnknownEncryption)
 	}
+	return out, nil
+}
+
+// stripHostHash removes the SHA-256(hostKey) prefix a dbVersion 24 or later
+// plaintext starts with, refusing a plaintext whose prefix does not match.
+func stripHostHash(out []byte, hostKey string, dbVersion int) (string, error) {
 	if dbVersion >= hostHashVersion {
 		sum := sha256.Sum256([]byte(hostKey))
 		if !bytes.HasPrefix(out, sum[:]) {
@@ -103,7 +118,7 @@ func unpad(b []byte) ([]byte, bool) {
 		return nil, false
 	}
 	n := int(b[len(b)-1])
-	if n == 0 || n > aes.BlockSize || n > len(b) {
+	if n == 0 || n > min(aes.BlockSize, len(b)) {
 		return nil, false
 	}
 	for _, c := range b[len(b)-n:] {

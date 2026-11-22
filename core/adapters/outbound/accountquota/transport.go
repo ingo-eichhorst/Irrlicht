@@ -210,19 +210,7 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) && errors.Is(urlErr.Err, errRedirectRefused) {
-			return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureRedirectRefused, Detail: "destination answered a redirect"}
-		}
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &urlErr) && urlErr.Timeout()) {
-			return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureTimeout, Detail: "request did not complete in time"}
-		}
-		// Deliberately not %v/%w on err below the QuotaError boundary: a
-		// net/url.Error's Error() string embeds the request URL (which is
-		// fine — that's OUR destination, not attacker-controlled) but some
-		// transport errors can embed proxy/auth text. Only a fixed, safe
-		// description crosses out of this function.
-		return outbound.AccountQuotaResponse{}, &outbound.QuotaError{Reason: outbound.QuotaFailureNetwork, Detail: "request failed"}
+		return outbound.AccountQuotaResponse{}, classifyDoError(err)
 	}
 	defer resp.Body.Close()
 
@@ -256,6 +244,25 @@ func (t *HTTPTransport) Fetch(ctx context.Context, req outbound.AccountQuotaRequ
 	}
 
 	return outbound.AccountQuotaResponse{StatusCode: resp.StatusCode, Body: body}, nil
+}
+
+// classifyDoError classifies a failed client.Do: a refused redirect, a
+// timeout, or any other network failure.
+func classifyDoError(err error) *outbound.QuotaError {
+	var urlErr *url.Error
+	isURLErr := errors.As(err, &urlErr)
+	switch {
+	case isURLErr && errors.Is(urlErr.Err, errRedirectRefused):
+		return &outbound.QuotaError{Reason: outbound.QuotaFailureRedirectRefused, Detail: "destination answered a redirect"}
+	case errors.Is(err, context.DeadlineExceeded), isURLErr && urlErr.Timeout():
+		return &outbound.QuotaError{Reason: outbound.QuotaFailureTimeout, Detail: "request did not complete in time"}
+	}
+	// Deliberately not %v/%w on err below the QuotaError boundary: a
+	// net/url.Error's Error() string embeds the request URL (which is
+	// fine — that's OUR destination, not attacker-controlled) but some
+	// transport errors can embed proxy/auth text. Only a fixed, safe
+	// description crosses out of Fetch.
+	return &outbound.QuotaError{Reason: outbound.QuotaFailureNetwork, Detail: "request failed"}
 }
 
 // drainIgnoringErrors reads (and discards) up to responseSizeCeiling bytes of

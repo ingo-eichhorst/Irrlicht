@@ -896,6 +896,16 @@ func herdrPaneRecorder(permService *services.PermissionService) services.HerdrPa
 	}
 }
 
+// setAdapterLiveProbes registers the detection probes of the pseudo-adapters
+// whose rows are offered while their agent runs: Claude Code's
+// account-identity read, and Mistral Vibe's browser-session read (#2012),
+// offered while a vibe process runs and never keyed on Chrome's directory,
+// which would be a read before consent.
+func setAdapterLiveProbes(permService *services.PermissionService, allAgents []agent.Agent) {
+	permService.SetDetectionProbe(claudecode.AccountName, adapterLiveProbe(allAgents, claudecode.AdapterName))
+	permService.SetDetectionProbe(mistralvibe.Name, adapterLiveProbe(allAgents, vibe.AdapterName))
+}
+
 // adapterLiveProbe is the detection probe for a pseudo-adapter whose
 // permission is relevant exactly when the named agent adapter is running
 // (Claude Code's account-identity read, Mistral Vibe's browser-session read),
@@ -992,10 +1002,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// kitty is a host integration, not an agent: detected by a live kitty
 	// process or an existing kitty config directory.
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
-	permService.SetDetectionProbe(claudecode.AccountName, adapterLiveProbe(allAgents, claudecode.AdapterName))
-	// The browser-session row (#2012) is offered while a vibe process runs —
-	// never keyed on Chrome's directory, which would be a read before consent.
-	permService.SetDetectionProbe(mistralvibe.Name, adapterLiveProbe(allAgents, vibe.AdapterName))
+	setAdapterLiveProbes(permService, allAgents)
 
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.

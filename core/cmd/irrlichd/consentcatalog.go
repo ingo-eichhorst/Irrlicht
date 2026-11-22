@@ -72,6 +72,18 @@ type consentEffects struct {
 	StartMistralVibe, StopMistralVibe func() error
 }
 
+// accountQuotaConsentEffects is the consentEffects of the account-quota
+// providers runDaemon builds over its one AccountPoller: Muse's account API,
+// Z.ai's coding plan and Mistral Vibe's browser session. runDaemon adds the
+// orchestrator watchers' effects to it.
+func accountQuotaConsentEffects(muse museAccountAPI, zai zaiAccountAPI, vibe mistralVibeAPI) consentEffects {
+	return consentEffects{
+		StartMuseAccountAPI: muse.Start, StopMuseAccountAPI: muse.Stop,
+		StartZaiAccountAPI: zai.Start, StopZaiAccountAPI: zai.Stop,
+		StartMistralVibe: vibe.Start, StopMistralVibe: vibe.Stop,
+	}
+}
+
 // declaredConsentCatalog is consentCatalog for the flag paths, which read the
 // DECLARATIONS — paths, keys, uninstallers — and never exercise the
 // consentEffects. Those closures need daemon-only state, none of which

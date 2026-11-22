@@ -739,11 +739,7 @@ func runDaemon() {
 	vibeAPI := mistralVibeEffects(logger, accountPoller)
 
 	home, _ := os.UserHomeDir()
-	effects := consentEffects{
-		StartMuseAccountAPI: museAPI.Start, StopMuseAccountAPI: museAPI.Stop,
-		StartZaiAccountAPI: zaiAPI.Start, StopZaiAccountAPI: zaiAPI.Stop,
-	}
-	effects.StartMistralVibe, effects.StopMistralVibe = vibeAPI.Start, vibeAPI.Stop
+	effects := accountQuotaConsentEffects(museAPI, zaiAPI, vibeAPI)
 	effects.StartGastown, effects.StopGastown = gastownEffects(orchCtx, orchMonitor, gtPath, cachedRepo, logger)
 	// The worker-list watcher (#2148), consent-gated like Gas Town; its path
 	// is resolved once, at startup.

@@ -39,7 +39,10 @@ MUTATE_SH="$REPO_ROOT/tools/mutate.sh"
 # A missing tool is a hard failure, not a skip: exiting 0 here would read as
 # a PASS to preflight's shell_lib_tests, so the gate would go green having
 # asserted nothing.
-need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: mistralvibe-mutations — $1 not found" >&2; exit 1; }; }
+need() {
+  local tool="$1"
+  command -v "$tool" >/dev/null 2>&1 || { echo "FAIL: mistralvibe-mutations — $tool not found" >&2; exit 1; }
+}
 need go
 need git
 
@@ -65,6 +68,13 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
 fi
 
 fails=0
+
+# The Go packages and the one source file the mutations below name most.
+PKG_CHROMECOOKIES="./core/adapters/outbound/chromecookies/"
+PKG_MISTRALVIBE="./core/adapters/outbound/mistralvibe/"
+PKG_SERVICES="./core/application/services/"
+PKG_IRRLICHD="./core/cmd/irrlichd/"
+SWEEP_GO="core/application/services/mistralvibesweep.go"
 
 # assert_go_test_goes_red <label> <file> <anchor> <replacement> <pkg> <run-regex> <want-in-output>
 #
@@ -120,7 +130,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/store.go" \
   '` WHERE host_key IN (` + strings.Join(hosts, ", ") + `)` +' \
   '` WHERE 1 = 1 OR host_key IN (` + strings.Join(hosts, ", ") + `)` +' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestSession_ResolveSendsOnlyTheSelectedCookies' \
   "a cookie outside the selection would leave the machine"
 
@@ -132,7 +142,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/crypto.go" \
   $'\t\tif !bytes.HasPrefix(out, sum[:]) {\n\t\t\treturn "", fmt.Errorf("%w: host hash does not match %q", ErrUnknownEncryption, hostKey)\n\t\t}\n\t\tout = out[len(sum):]' \
   $'\t\tif len(out) >= len(sum) {\n\t\t\tout = out[len(sum):]\n\t\t}' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestRead_RefusesAMissingHostHash' \
   "want ErrUnknownEncryption naming the host hash"
 
@@ -145,7 +155,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/store.go" \
   $'\tif missing := sel.firstMissing(matched); missing != "" {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrCookieAbsent, missing)' \
   $'\tif _, kerr := key(ctx); kerr == nil && sel.firstMissing(matched) != "" {\n\t\treturn nil, fmt.Errorf("%w: %s", ErrCookieAbsent, sel.firstMissing(matched))' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestRead_NeverReadsTheKeychainBeforeItHasTo' \
   "before every required cookie was known present"
 
@@ -155,7 +165,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/cookies.go" \
   'if !isToken(c.Name) || !isCookieValue(c.Value()) {' \
   'if !isToken(c.Name) {' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestBuildCredential_RefusesValuesThatCouldAddACookieOrHeader' \
   "want ErrInvalidCookie"
 
@@ -203,7 +213,7 @@ assert_go_test_goes_red \
   "core/application/services/mistralvibepoll.go" \
   $'\tif !obs.HasValue {\n\t\tif obs.FailureReason != "" {\n\t\t\treturn nil, fmt.Errorf("services: Mistral Vibe usage not available: %s", obs.FailureReason)\n\t\t}\n\t\treturn nil, errors.New("services: Mistral Vibe usage not available yet")\n\t}' \
   $'\tif !obs.HasValue {\n\t\tzero := session.RateLimitSnapshot{Provider: session.ProviderMistral}\n\t\t_ = errors.New\n\t\treturn &zero, nil\n\t}' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeRefresh_NeverPublishesZeroOnAuthFailure' \
   "a reading was published after a 401"
 
@@ -214,7 +224,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/parser.go" \
   'out := Usage{UsedPercent: pct}' \
   'out := Usage{UsedPercent: pct * 100}' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestBuildSnapshot_ReadsUsagePercentageAsAPercentage' \
   "read as a fraction and rescaled"
 
@@ -222,9 +232,9 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "accepting a usage_percentage outside [0, 100]" \
   "core/adapters/outbound/mistralvibe/parser.go" \
-  'if math.IsNaN(pct) || pct < 0 || pct > 100 {' \
-  'if math.IsNaN(pct) {' \
-  "./core/adapters/outbound/mistralvibe/" \
+  'return !math.IsNaN(p) && p >= 0 && p <= 100' \
+  'return !math.IsNaN(p)' \
+  "$PKG_MISTRALVIBE" \
   'TestParseUsage_RefusesWhatItCannotTrust' \
   "want mistralvibe: usage_percentage is outside [0, 100]"
 
@@ -234,7 +244,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/parser.go" \
   $'\tif u.UsagePercentage == nil {\n\t\treturn Usage{}, ErrNoUsage\n\t}' \
   $'\tif u.UsagePercentage == nil {\n\t\tzero := 0.0\n\t\tu.UsagePercentage = &zero\n\t}' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestParseUsage_RefusesWhatItCannotTrust' \
   "want mistralvibe: response carries no usage_percentage"
 
@@ -243,13 +253,16 @@ assert_go_test_goes_red \
 # ── C1. §7.3: the sweep keeps going after the permission is revoked ──────────
 # As run: the not-granted branch is skipped. AccountPoller's admission check
 # still refuses the fetch, so no request is sent; what goes red is the read
-# of the Chrome profile the sweep now makes on every revoked tick.
+# of the Chrome profile the sweep now makes on every revoked tick. The anchor
+# carries the comment line under the check, because bind's pre-write re-check
+# (E6) opens with the same `if !s.deps.Granted() {` and mutate.sh refuses an
+# anchor that is not unique.
 assert_go_test_goes_red \
   "§7.3 the sweep reading the browser after the permission is revoked" \
-  "core/application/services/mistralvibesweep.go" \
-  $'\tif !s.deps.Granted() {' \
-  $'\tif !s.deps.Granted() && false {' \
-  "./core/application/services/" \
+  "$SWEEP_GO" \
+  $'\tif !s.deps.Granted() {\n\t\t// Not granted: unbind.' \
+  $'\tif !s.deps.Granted() && false {\n\t\t// Not granted: unbind.' \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_RevokedReadsAndSendsNothing' \
   "time(s) after the permission was revoked"
 
@@ -261,7 +274,7 @@ assert_go_test_goes_red \
   "core/cmd/irrlichd/mistralvibe_effects.go" \
   $'\t\tpoller.Revoke(session.ProviderMistral)\n' \
   $'\t\t_ = session.ProviderMistral\n' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibeAPI_RevokeCancelsTheFetchInFlight' \
   "the revoke left the request in flight running"
 
@@ -270,10 +283,10 @@ assert_go_test_goes_red \
 # vibe session's reading in place.
 assert_go_test_goes_red \
   "§7.4 binding a vibe session while the user-asserted permission is not granted" \
-  "core/application/services/mistralvibesweep.go" \
+  "$SWEEP_GO" \
   $'\t\t\ts.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderMistral, nil)\n' \
   $'\t\t\t_ = st\n' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_NotGrantedUnbindsEverySession' \
   "a vibe session stayed bound to the Mistral reading while the permission was not granted"
 
@@ -286,7 +299,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/resolver.go" \
   $'\treturn "chrome-profile:" + s.profile.Dir\n' \
   $'\tcookies, err := chromecookies.Read(context.Background(), s.profile.CookiesPath(), CookieSelector, s.now(), s.browser.Key)\n\tif err != nil || len(cookies) == 0 {\n\t\treturn "chrome-profile:" + s.profile.Dir\n\t}\n\treturn "cookie:" + cookies[len(cookies)-1].Value()\n' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestSession_AccountIsTheProfileNeverACookie' \
   "account context changed when only a cookie value changed"
 
@@ -298,9 +311,9 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "§7.3 the poller polling and publishing past a revoke" \
   "core/application/services/mistralvibepoll.go" \
-  $'\t\tGranted:        granted,' \
+  $'\t\tGranted:        req.Granted,' \
   $'\t\tGranted:        func() bool { return true },' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeRefresh_PassesTheGrantToThePoller' \
   "a revoked refresh read the cookies"
 
@@ -313,7 +326,7 @@ assert_go_test_goes_red \
   "core/cmd/irrlichd/mistralvibe_effects.go" \
   $'\tstart := func() error {\n\t\tkeys.Reset()\n' \
   $'\tstart := func() error {\n' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibeAPI_GrantRetriesAFailedKeychainRead' \
   "granting again did not retry the failed read"
 
@@ -323,7 +336,7 @@ assert_go_test_goes_red \
   "core/cmd/irrlichd/mistralvibe_effects.go" \
   $'\t\tpoller.Revoke(session.ProviderMistral)\n\t\tkeys.Reset()\n' \
   $'\t\tpoller.Revoke(session.ProviderMistral)\n' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibeAPI_RevokeDropsTheKey' \
   "the revoke kept the derived key cached"
 
@@ -337,7 +350,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/destination.go" \
   'const CSRFHeader = "X-CSRFToken"' \
   $'const CSRFHeader = "X-CSRFToken"\n\nvar _ = "NewHTTPTransport("' \
-  "./core/adapters/outbound/mistralvibe/" \
+  "$PKG_MISTRALVIBE" \
   'TestPackage_NeverBuildsATransport' \
   "nothing in this package may build a transport or dial"
 
@@ -347,7 +360,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/store.go" \
   $'\treturn time.UnixMicro(r.expiresUTC - windowsEpochOffset).Before(now)' \
   $'\treturn false && time.UnixMicro(r.expiresUTC - windowsEpochOffset).Before(now)' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestRead_SelectsOnlyTheSelectedCookies' \
   "want exactly"
 
@@ -359,7 +372,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/keycache.go" \
   $'\t\t\tr.key, r.err = c.source(ctx)\n\t\t}()\n\t\treturn r.key, r.err' \
   $'\t\t\tr.key, r.err = c.source(ctx)\n\t\t}()\n\t\tif r.err != nil {\n\t\t\tc.Reset()\n\t\t}\n\t\treturn r.key, r.err' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestKeyCache_OneReadPerResetAndFailureIsKept' \
   "a failed Keychain read was retried"
 
@@ -369,7 +382,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/keycache.go" \
   $'\tif r == nil {' \
   $'\tif true {' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestKeyCache_ConcurrentCallersShareOneRead' \
   "concurrent callers made"
 
@@ -379,17 +392,17 @@ assert_go_test_goes_red \
   "core/adapters/outbound/chromecookies/store.go" \
   'func (c Cookie) String() string   { return c.Name + "=[redacted]" }' \
   'func (c Cookie) String() string   { return c.Name + "=" + c.value }' \
-  "./core/adapters/outbound/chromecookies/" \
+  "$PKG_CHROMECOOKIES" \
   'TestCookieAndKey_FormatRedacted' \
   "formatting leaked a cookie value"
 
 # ── D6. The reading is bound to every session, not only top-level vibe ones ─
 assert_go_test_goes_red \
   "the sweep binding non-vibe sessions and subagents" \
-  "core/application/services/mistralvibesweep.go" \
-  'if st != nil && st.Adapter == s.deps.Adapter && st.ParentSessionID == "" {' \
-  'if st != nil {' \
-  "./core/application/services/" \
+  "$SWEEP_GO" \
+  'return st != nil && st.Adapter == s.deps.Adapter && st.ParentSessionID == ""' \
+  'return st != nil' \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_OnePollBindsEveryVibeSession' \
   "want exactly v1, v2, v3"
 
@@ -409,9 +422,9 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "a traversal-shaped profile name being followed" \
   "core/adapters/outbound/chromecookies/profile.go" \
-  $'\tif name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {' \
-  $'\tif strings.ContainsAny(name, "") {' \
-  "./core/adapters/outbound/chromecookies/" \
+  $'\tif slices.Contains([]string{".", ".."}, name) || strings.ContainsAny(name, `/\\`) {' \
+  $'\tif false && (slices.Contains([]string{".", ".."}, name) || strings.ContainsAny(name, `/\\`)) {' \
+  "$PKG_CHROMECOOKIES" \
   'TestLastUsedProfile' \
   "want chromecookies: Chrome profile not found"
 
@@ -419,10 +432,10 @@ assert_go_test_goes_red \
 # As run: unbind no longer clears, so the reading outlives a revoke.
 assert_go_test_goes_red \
   "the browser-session permission's contract: a revoke leaving the reading" \
-  "core/application/services/mistralvibesweep.go" \
+  "$SWEEP_GO" \
   $'\t\t\ts.deps.Writer.SetProviderRateLimit(st.SessionID, session.ProviderMistral, nil)\n' \
   $'\t\t\t_ = st\n' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibePermission_GateContract' \
   "effect still observed after revoking a previously granted permission"
 
@@ -434,7 +447,7 @@ assert_go_test_goes_red \
   "core/application/services/permission_service.go" \
   $'\t\t\t\tif p.RequiresExplicitGrant {' \
   $'\t\t\t\tif false {' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestGrantAll_LeavesAnExplicitGrantPermissionUnanswered' \
   "grant-all auto-granted a permission that requires an explicit grant"
 
@@ -444,7 +457,7 @@ assert_go_test_goes_red \
   "core/adapters/outbound/mistralvibe/permission.go" \
   $'\t\t\tRequiresExplicitGrant: true,' \
   $'\t\t\tRequiresExplicitGrant: false,' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestConsentCatalog_ExplicitGrantPermissionsSurviveGrantAll' \
   "permissions requiring an explicit grant ="
 
@@ -454,7 +467,7 @@ assert_go_test_goes_red \
   "core/application/services/permission_service.go" \
   $'\t\t\t\tif p.RequiresExplicitGrant {' \
   $'\t\t\t\tif false {' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibeAPI_GrantAllBootReadsNothing' \
   "a grant-all boot granted the browser-session permission"
 
@@ -464,7 +477,7 @@ assert_go_test_goes_red \
   "core/cmd/irrlichd/mistralvibe_effects.go" \
   $'\t\t\treturn perms.Granted(mistralvibe.Name, mistralvibe.PermissionKey)' \
   $'\t\t\treturn true' \
-  "./core/cmd/irrlichd/" \
+  "$PKG_IRRLICHD" \
   'TestMistralVibeAPI_SweeperIsGatedOnTheDaemonsGrant' \
   "pending: the sweep read the Chrome profile"
 
@@ -472,19 +485,19 @@ assert_go_test_goes_red \
 assert_go_test_goes_red \
   "MistralVibeRefresh not re-checking the grant after the poll" \
   "core/application/services/mistralvibepoll.go" \
-  $'\tif !granted() {\n\t\treturn nil, errors.New("services: Mistral Vibe usage: the browser-session permission is not granted")\n\t}' \
+  $'\tif !req.Granted() {\n\t\treturn nil, errors.New("services: Mistral Vibe usage: the browser-session permission is not granted")\n\t}' \
   $'\t// post-poll grant re-check removed' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeRefresh_PassesTheGrantToThePoller' \
   "a refresh revoked mid-fetch returned the held stale reading"
 
 # ── E6. The sweep writes after a revoke that landed during the refresh ──────
 assert_go_test_goes_red \
   "the sweep not re-checking the grant just before it writes" \
-  "core/application/services/mistralvibesweep.go" \
-  $'\tif revoked := !s.deps.Granted(); revoked {\n\t\treturn\n\t}' \
+  "$SWEEP_GO" \
+  $'\tif !s.deps.Granted() {\n\t\treturn\n\t}' \
   $'\t// pre-write grant re-check removed' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_RevokeBeforeTheWriteWritesNothing' \
   "a reading was written after the permission was revoked mid-tick"
 
@@ -494,10 +507,10 @@ assert_go_test_goes_red \
 # one Chrome uses.
 assert_go_test_goes_red \
   "the no-reading tick leaving another profile's persisted reading" \
-  "core/application/services/mistralvibesweep.go" \
+  "$SWEEP_GO" \
   $'\t\t// one a writer saved over an earlier clear) would only look current.\n\t\ts.unbind(vibe)\n\t\treturn' \
   $'\t\t// one a writer saved over an earlier clear) would only look current.\n\t\treturn' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_RestartNeverShowsAnotherProfilesReading' \
   "still shown for profile B"
 
@@ -508,20 +521,20 @@ assert_go_test_goes_red \
 # that clear leaves it on the session for good.
 assert_go_test_goes_red \
   "a clear saved over by an older copy not being cleared again" \
-  "core/application/services/mistralvibesweep.go" \
+  "$SWEEP_GO" \
   $'\t\t// one a writer saved over an earlier clear) would only look current.\n\t\ts.unbind(vibe)\n\t\treturn' \
   $'\t\t// one a writer saved over an earlier clear) would only look current.\n\t\tif !s.seen["cleared:"+browser.Account()] {\n\t\t\ts.seen["cleared:"+browser.Account()] = true\n\t\t\ts.unbind(vibe)\n\t\t}\n\t\treturn' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_LostClearIsClearedAgain' \
   "a resurrected profile-A reading survived the next tick under profile B"
 
 # ── E9. No Chrome profile to resolve, and the listed reading stays ──────────
 assert_go_test_goes_red \
   "an unresolvable Chrome profile leaving the listed reading" \
-  "core/application/services/mistralvibesweep.go" \
+  "$SWEEP_GO" \
   $'\t\ts.logFailure("no Chrome profile to read: " + err.Error())\n\t\ts.unbind(vibe)\n' \
   $'\t\ts.logFailure("no Chrome profile to read: " + err.Error())\n' \
-  "./core/application/services/" \
+  "$PKG_SERVICES" \
   'TestMistralVibeSweep_UnconfirmedReadingIsCleared' \
   "an unconfirmed reading was left looking current"
 

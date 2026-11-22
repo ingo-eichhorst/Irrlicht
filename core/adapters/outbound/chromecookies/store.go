@@ -2,6 +2,7 @@ package chromecookies
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -75,29 +76,58 @@ func Read(ctx context.Context, storePath string, sel Selector, now time.Time, ke
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(storePath); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrStoreMissing, err)
-	}
-	db, err := sqlitero.Open(storePath)
+	db, version, err := openStore(ctx, storePath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: opening: %w", ErrStoreUnreadable, err)
+		return nil, err
 	}
 	defer db.Close()
-
-	var versionText string
-	if err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'version'`).Scan(&versionText); err != nil {
-		return nil, classifyQueryError("reading meta.version", err)
-	}
-	version, err := strconv.Atoi(versionText)
-	if err != nil {
-		return nil, fmt.Errorf("%w: meta.version %q is not a number", ErrStoreUnreadable, versionText)
-	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, classifyQueryError("selecting cookies", err)
 	}
 	defer rows.Close()
+	matched, err := unexpiredRows(rows, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if missing := sel.firstMissing(matched); missing != "" {
+		return nil, fmt.Errorf("%w: %s", ErrCookieAbsent, missing)
+	}
+
+	k, err := key(ctx)
+	if err != nil {
+		return nil, keychainError(err)
+	}
+	return decryptAll(k, matched, version)
+}
+
+// openStore opens the cookie database at storePath read-only and reads its
+// meta version. The caller closes the database.
+func openStore(ctx context.Context, storePath string) (*sql.DB, int, error) {
+	if _, err := os.Stat(storePath); err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", ErrStoreMissing, err)
+	}
+	db, err := sqlitero.Open(storePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: opening: %w", ErrStoreUnreadable, err)
+	}
+	var versionText string
+	if err := db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'version'`).Scan(&versionText); err != nil {
+		_ = db.Close()
+		return nil, 0, classifyQueryError("reading meta.version", err)
+	}
+	version, err := strconv.Atoi(versionText)
+	if err != nil {
+		_ = db.Close()
+		return nil, 0, fmt.Errorf("%w: meta.version %q is not a number", ErrStoreUnreadable, versionText)
+	}
+	return db, version, nil
+}
+
+// unexpiredRows scans every selected row and keeps the ones unexpired at now.
+func unexpiredRows(rows *sql.Rows, now time.Time) ([]row, error) {
 	var matched []row
 	for rows.Next() {
 		var r row
@@ -111,21 +141,25 @@ func Read(ctx context.Context, storePath string, sel Selector, now time.Time, ke
 	if err := rows.Err(); err != nil {
 		return nil, classifyQueryError("iterating cookies", err)
 	}
+	return matched, nil
+}
 
-	if missing := sel.firstMissing(matched); missing != "" {
-		return nil, fmt.Errorf("%w: %s", ErrCookieAbsent, missing)
+// keychainError classifies a failed key read: one already classified as
+// ErrKeychain or ErrNotImplemented is returned as is, anything else is
+// wrapped as ErrKeychain.
+func keychainError(err error) error {
+	if errors.Is(err, ErrKeychain) || errors.Is(err, ErrNotImplemented) {
+		return err
 	}
+	return fmt.Errorf("%w: %w", ErrKeychain, err)
+}
 
-	k, err := key(ctx)
-	if err != nil {
-		if errors.Is(err, ErrKeychain) || errors.Is(err, ErrNotImplemented) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %w", ErrKeychain, err)
-	}
+// decryptAll decrypts every matched row with k, failing on the first value
+// that does not decrypt.
+func decryptAll(k Key, matched []row, version int) ([]Cookie, error) {
 	out := make([]Cookie, 0, len(matched))
 	for _, r := range matched {
-		v, err := decryptValue(k, r.hostKey, r.plaintext, r.encrypted, version)
+		v, err := decryptValue(k, r, version)
 		if err != nil {
 			return nil, fmt.Errorf("cookie %q on %q: %w", r.name, r.hostKey, err)
 		}
@@ -179,17 +213,24 @@ func (sel Selector) query() (string, []any, error) {
 // firstMissing names the first Names entry or NamePrefixes prefix that no
 // row in matched satisfies, or "" when all are present.
 func (sel Selector) firstMissing(matched []row) string {
-	for _, n := range sel.Names {
-		if !slices.ContainsFunc(matched, func(r row) bool { return r.name == n }) {
-			return n
-		}
+	if n, ok := firstUnmatched(sel.Names, matched, func(r row, n string) bool { return r.name == n }); ok {
+		return n
 	}
-	for _, p := range sel.NamePrefixes {
-		if !slices.ContainsFunc(matched, func(r row) bool { return strings.HasPrefix(r.name, p) }) {
-			return p + "*"
-		}
+	if p, ok := firstUnmatched(sel.NamePrefixes, matched, func(r row, p string) bool { return strings.HasPrefix(r.name, p) }); ok {
+		return p + "*"
 	}
 	return ""
+}
+
+// firstUnmatched returns the first entry of want that match pairs with no
+// row in matched.
+func firstUnmatched(want []string, matched []row, match func(row, string) bool) (string, bool) {
+	for _, w := range want {
+		if !slices.ContainsFunc(matched, func(r row) bool { return match(r, w) }) {
+			return w, true
+		}
+	}
+	return "", false
 }
 
 // classifyQueryError maps a SQLite failure to ErrStoreLocked when another

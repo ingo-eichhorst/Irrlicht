@@ -224,7 +224,9 @@ func TestMistralVibeAPI_RevokeCancelsTheFetchInFlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = services.MistralVibeRefresh(context.Background(), api.poller, browser, transport, granted.Load, "v1")
+		_, _ = services.MistralVibeRefresh(context.Background(), services.MistralVibeRefreshRequest{
+			Poller: api.poller, Browser: browser, Transport: transport, Granted: granted.Load, SessionID: "v1",
+		})
 	}()
 	select {
 	case <-transport.entered:

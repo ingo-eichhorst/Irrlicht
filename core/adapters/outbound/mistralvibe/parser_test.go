@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,12 +41,7 @@ func readProbe(t *testing.T, path string) []byte {
 // record calls a SHAPE must say so rather than pass for a capture.
 func TestLiveProbe_BodiesAreTheMeasuredBytes(t *testing.T) {
 	var record struct {
-		Captures []struct {
-			Status        int    `json:"status"`
-			MeasuredBytes int    `json:"measured_bytes"`
-			File          string `json:"file"`
-			Fidelity      string `json:"fidelity"`
-		} `json:"captures"`
+		Captures []probeCapture `json:"captures"`
 	}
 	if err := json.Unmarshal(readProbe(t, "testdata/live_probe_2026-11-21.record.json"), &record); err != nil {
 		t.Fatalf("record: %v", err)
@@ -55,19 +51,8 @@ func TestLiveProbe_BodiesAreTheMeasuredBytes(t *testing.T) {
 	}
 	exact := 0
 	for _, c := range record.Captures {
-		got := len(readProbe(t, "testdata/"+c.File))
-		switch {
-		case strings.HasPrefix(c.Fidelity, "byte-exact"):
+		if checkCapture(t, c) {
 			exact++
-			if got != c.MeasuredBytes {
-				t.Errorf("%s is %d bytes, but the probe measured %d", c.File, got, c.MeasuredBytes)
-			}
-		case strings.HasPrefix(c.Fidelity, "SHAPE"):
-			if c.Status != 401 || !strings.Contains(c.File, ".shape.") {
-				t.Errorf("%s: only the 401 body is a shape, and its file name must say so", c.File)
-			}
-		default:
-			t.Errorf("%s: fidelity %q is neither byte-exact nor SHAPE", c.File, c.Fidelity)
 		}
 	}
 	if exact != 2 {
@@ -75,27 +60,59 @@ func TestLiveProbe_BodiesAreTheMeasuredBytes(t *testing.T) {
 	}
 }
 
+// probeCapture is one capture in the probe's provenance record.
+type probeCapture struct {
+	Status        int    `json:"status"`
+	MeasuredBytes int    `json:"measured_bytes"`
+	File          string `json:"file"`
+	Fidelity      string `json:"fidelity"`
+}
+
+// checkCapture holds one capture's body to the record and reports whether
+// the record calls it byte-exact.
+func checkCapture(t *testing.T, c probeCapture) bool {
+	t.Helper()
+	got := len(readProbe(t, "testdata/"+c.File))
+	switch {
+	case strings.HasPrefix(c.Fidelity, "byte-exact"):
+		if got != c.MeasuredBytes {
+			t.Errorf("%s is %d bytes, but the probe measured %d", c.File, got, c.MeasuredBytes)
+		}
+		return true
+	case strings.HasPrefix(c.Fidelity, "SHAPE"):
+		if c.Status != 401 || !strings.Contains(c.File, ".shape.") {
+			t.Errorf("%s: only the 401 body is a shape, and its file name must say so", c.File)
+		}
+	default:
+		t.Errorf("%s: fidelity %q is neither byte-exact nor SHAPE", c.File, c.Fidelity)
+	}
+	return false
+}
+
 // TestBuildSnapshot_ReadsUsagePercentageAsAPercentage is the target of
 // mutation 5 (#2012 testing strategy): 0.081567 is 0.08 %, and a parser that
 // read it as a fraction would publish 8 %.
 func TestBuildSnapshot_ReadsUsagePercentageAsAPercentage(t *testing.T) {
-	snap, err := BuildSnapshot(readProbe(t, probeAfter), probeFetchedAt)
+	if got := probeUsedPercent(t, probeAfter); got != 0.081567 {
+		t.Fatalf("UsedPercent = %v, want 0.081567 — usage_percentage was read as a fraction and rescaled", got)
+	}
+	if got := probeUsedPercent(t, probeBefore); got != 0 {
+		t.Fatalf("UsedPercent(before) = %v, want 0", got)
+	}
+}
+
+// probeUsedPercent is the used percentage of the one window BuildSnapshot
+// makes of the probe body at path.
+func probeUsedPercent(t *testing.T, path string) float64 {
+	t.Helper()
+	snap, err := BuildSnapshot(readProbe(t, path), probeFetchedAt)
 	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
+		t.Fatalf("BuildSnapshot(%s): %v", path, err)
 	}
 	if len(snap.Windows) != 1 {
 		t.Fatalf("windows = %+v, want exactly one", snap.Windows)
 	}
-	if got := snap.Windows[0].UsedPercent; got != 0.081567 {
-		t.Fatalf("UsedPercent = %v, want 0.081567 — usage_percentage was read as a fraction and rescaled", got)
-	}
-	before, err := BuildSnapshot(readProbe(t, probeBefore), probeFetchedAt)
-	if err != nil {
-		t.Fatalf("BuildSnapshot(before): %v", err)
-	}
-	if got := before.Windows[0].UsedPercent; got != 0 {
-		t.Fatalf("UsedPercent(before) = %v, want 0", got)
-	}
+	return snap.Windows[0].UsedPercent
 }
 
 // TestBuildSnapshot_IsOneMonthlyAllowanceWindow: the reading is a monthly
@@ -105,7 +122,14 @@ func TestBuildSnapshot_IsOneMonthlyAllowanceWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSnapshot: %v", err)
 	}
-	w := snap.Windows[0]
+	checkMonthlyAllowanceWindow(t, snap.Windows[0])
+	checkVibeStamps(t, snap)
+}
+
+// checkMonthlyAllowanceWindow: the probe's window is an allowance with no
+// unit, ending at the probe's reset_at, as long as November 2026.
+func checkMonthlyAllowanceWindow(t *testing.T, w session.RateLimitWindow) {
+	t.Helper()
 	reset := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
 	if w.ResetsAt != reset.Unix() {
 		t.Errorf("ResetsAt = %d, want %d (2026-12-01T00:00:00Z)", w.ResetsAt, reset.Unix())
@@ -119,12 +143,21 @@ func TestBuildSnapshot_IsOneMonthlyAllowanceWindow(t *testing.T) {
 	if w.Measure != "" {
 		t.Errorf("Measure = %q, want empty: the response names no unit", w.Measure)
 	}
+}
+
+// checkVibeStamps: the snapshot carries the stamps #2012's design names, no
+// account, and the fetch time.
+func checkVibeStamps(t *testing.T, snap session.RateLimitSnapshot) {
+	t.Helper()
 	want := session.RateLimitSnapshot{
 		Provider: session.ProviderMistral, Product: "mistral-vibe", AttributionEvidence: "user-asserted",
 		ObservationSource: "browser_backed_api", AttributionQuality: session.AttributionQualityConfirmed,
 	}
-	if snap.Provider != want.Provider || snap.Product != want.Product || snap.AttributionEvidence != want.AttributionEvidence ||
-		snap.ObservationSource != want.ObservationSource || snap.AttributionQuality != want.AttributionQuality {
+	got := session.RateLimitSnapshot{
+		Provider: snap.Provider, Product: snap.Product, AttributionEvidence: snap.AttributionEvidence,
+		ObservationSource: snap.ObservationSource, AttributionQuality: snap.AttributionQuality,
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("stamps = %+v, want %+v", snap, want)
 	}
 	if snap.ConfirmedAccountRef != "" || snap.QuotaID != "" {

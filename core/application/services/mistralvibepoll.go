@@ -36,11 +36,21 @@ func MistralVibeQuotaKey(account string) AccountQuotaKey {
 	}
 }
 
+// MistralVibeRefreshRequest is one MistralVibeRefresh call: the poller and
+// transport the poll runs through, the browser profile it reads, the grant it
+// is gated on, and the session it is made for (carried for attribution only).
+type MistralVibeRefreshRequest struct {
+	Poller    *AccountPoller
+	Browser   MistralBrowserSession
+	Transport outbound.AccountQuotaTransport
+	Granted   func() bool
+	SessionID string
+}
+
 // MistralVibeRefresh polls (or serves the cached reading of) the Vibe usage
-// endpoint for browser's profile and parses it into a snapshot. sessionID is
-// carried for attribution only. The snapshot's SampledAt and LastSuccessAt
-// are the observation's own FetchedAt, so a cached reading keeps the time it
-// was fetched.
+// endpoint for req.Browser's profile and parses it into a snapshot. The
+// snapshot's SampledAt and LastSuccessAt are the observation's own FetchedAt,
+// so a cached reading keeps the time it was fetched.
 //
 // With no reading to serve (a first poll that failed, an observation with
 // no value yet, or a body the parser refuses) it returns (nil, err) and
@@ -53,30 +63,24 @@ func MistralVibeQuotaKey(account string) AccountQuotaKey {
 // reading, marked stale; it is returned stamped with RetrievalFailure
 // alongside a non-nil error, so it keeps its original time and cannot pass
 // for current.
-func MistralVibeRefresh(
-	ctx context.Context,
-	poller *AccountPoller,
-	browser MistralBrowserSession,
-	transport outbound.AccountQuotaTransport,
-	granted func() bool,
-	sessionID string,
-) (*session.RateLimitSnapshot, error) {
-	obs, err := poller.Poll(ctx, PollRequest{
-		Key:            MistralVibeQuotaKey(browser.Account()),
-		SessionID:      sessionID,
-		Granted:        granted,
-		Resolver:       browser,
-		Transport:      transport,
+func MistralVibeRefresh(ctx context.Context, req MistralVibeRefreshRequest) (*session.RateLimitSnapshot, error) {
+	obs, err := req.Poller.Poll(ctx, PollRequest{
+		Key:            MistralVibeQuotaKey(req.Browser.Account()),
+		SessionID:      req.SessionID,
+		Granted:        req.Granted,
+		Resolver:       req.Browser,
+		Transport:      req.Transport,
 		DestinationKey: mistralvibe.DestinationKey,
 		Auth:           mistralvibe.Auth(),
 	})
 	// A revoke landing while a fetch is in flight makes the poller hand back
 	// the reading it already holds (AccountPoller.notPublished), stale or not,
 	// beside errRevokedBeforePublish. A revoked refresh returns nothing.
-	if !granted() {
+	if !req.Granted() {
 		return nil, errors.New("services: Mistral Vibe usage: the browser-session permission is not granted")
 	}
-	if err != nil && !(obs.HasValue && obs.Stale) {
+	servesStale := obs.HasValue && obs.Stale
+	if err != nil && !servesStale {
 		return nil, fmt.Errorf("services: polling Mistral Vibe usage: %w", err)
 	}
 	if !obs.HasValue {
@@ -85,6 +89,14 @@ func MistralVibeRefresh(
 		}
 		return nil, errors.New("services: Mistral Vibe usage not available yet")
 	}
+	return mistralVibeSnapshot(obs, err)
+}
+
+// mistralVibeSnapshot parses the reading obs holds. err is the poll's own
+// error, which reaches here only beside a stale reading the poller still
+// serves: a stale reading is returned stamped with RetrievalFailure and with a
+// non-nil error.
+func mistralVibeSnapshot(obs Observation, err error) (*session.RateLimitSnapshot, error) {
 	snap, perr := mistralvibe.BuildSnapshot(obs.Body, obs.FetchedAt)
 	if perr != nil {
 		return nil, fmt.Errorf("services: parsing Mistral Vibe usage: %w", perr)
@@ -92,14 +104,12 @@ func MistralVibeRefresh(
 	if !obs.LastAttempt.IsZero() {
 		snap.LastAttemptAt = obs.LastAttempt.Unix()
 	}
-	if obs.Stale {
-		snap.RetrievalFailure = obs.FailureReason
-		if err == nil {
-			err = fmt.Errorf("services: Mistral Vibe usage is stale: %s", obs.FailureReason)
-		} else {
-			err = fmt.Errorf("services: polling Mistral Vibe usage (serving the last reading): %w", err)
-		}
-		return &snap, err
+	if !obs.Stale {
+		return &snap, nil
 	}
-	return &snap, nil
+	snap.RetrievalFailure = obs.FailureReason
+	if err == nil {
+		return &snap, fmt.Errorf("services: Mistral Vibe usage is stale: %s", obs.FailureReason)
+	}
+	return &snap, fmt.Errorf("services: polling Mistral Vibe usage (serving the last reading): %w", err)
 }

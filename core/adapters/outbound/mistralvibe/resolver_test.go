@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,21 +38,17 @@ func fakeChrome(t *testing.T, profile, store string) string {
 	if err := os.WriteFile(filepath.Join(root, "Local State"), []byte(`{"profile":{"last_used":"`+profile+`"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if store != "" {
-		copyFile(t, store, filepath.Join(dir, "Cookies"))
+	if store == "" {
+		return root
 	}
-	return root
-}
-
-func copyFile(t *testing.T, src, dst string) {
-	t.Helper()
-	b, err := os.ReadFile(src)
+	b, err := os.ReadFile(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dst, b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Cookies"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return root
 }
 
 // testBrowser is a Browser over root whose key is the fixture key, counting
@@ -121,10 +118,8 @@ func TestSession_AccountIsTheProfileNeverACookie(t *testing.T) {
 	if first != second {
 		t.Fatalf("account context changed when only a cookie value changed: %q -> %q", first, second)
 	}
-	for _, v := range []string{"csrf-A", "session-A", "csrf-B", "session-B"} {
-		if strings.Contains(first, v) {
-			t.Fatalf("account context %q carries a cookie value", first)
-		}
+	if slices.ContainsFunc([]string{"csrf-A", "session-A", "csrf-B", "session-B"}, func(v string) bool { return strings.Contains(first, v) }) {
+		t.Fatalf("account context %q carries a cookie value", first)
 	}
 	if want := "chrome-profile:" + filepath.Join(root, "Profile 1"); first != want {
 		t.Fatalf("Account() = %q, want %q", first, want)
@@ -159,9 +154,7 @@ func TestSession_NoChromeNeverReadsTheKeychain(t *testing.T) {
 	if _, err := b.Session(); !errors.Is(err, chromecookies.ErrProfileMissing) {
 		t.Fatalf("Session with no Chrome: err = %v, want ErrProfileMissing", err)
 	}
-	signedOut := fakeChrome(t, "Default", "")
-	writePlainStore(t, filepath.Join(signedOut, "Default", "Cookies"), map[string]string{"csrftoken": "c"})
-	b, keyReads2 := testBrowser(t, signedOut)
+	b, keyReads2 := testBrowser(t, signedOutChrome(t))
 	s, err := b.Session()
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +165,15 @@ func TestSession_NoChromeNeverReadsTheKeychain(t *testing.T) {
 	if keyReads.Load()+keyReads2.Load() != 0 {
 		t.Fatal("the Keychain-backed key was read with no Chrome session to decrypt")
 	}
+}
+
+// signedOutChrome lays out a Chrome user data dir whose Default profile has
+// a csrftoken cookie and no session cookie: a browser signed out of Mistral.
+func signedOutChrome(t *testing.T) string {
+	t.Helper()
+	root := fakeChrome(t, "Default", "")
+	writePlainStore(t, filepath.Join(root, "Default", "Cookies"), map[string]string{"csrftoken": "c"})
+	return root
 }
 
 // writePlainStore writes a Chrome-schema store of session cookies on

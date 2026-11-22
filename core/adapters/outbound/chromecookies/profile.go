@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -116,19 +117,11 @@ type localState struct {
 // A name that is not a single directory entry is refused, so a tampered
 // Local State cannot point this package outside userDataDir.
 func LastUsedProfile(userDataDir string) (Profile, error) {
-	data, err := os.ReadFile(filepath.Join(userDataDir, localStateFile))
+	name, err := lastUsedName(userDataDir)
 	if err != nil {
-		return Profile{}, fmt.Errorf("%w: reading Local State: %w", ErrProfileMissing, err)
+		return Profile{}, err
 	}
-	var ls localState
-	if err := json.Unmarshal(data, &ls); err != nil {
-		return Profile{}, fmt.Errorf("%w: Local State is not valid JSON", ErrProfileMissing)
-	}
-	name := ls.Profile.LastUsed
-	if name == "" || name == systemProfile {
-		name = initialProfile
-	}
-	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+	if slices.Contains([]string{".", ".."}, name) || strings.ContainsAny(name, `/\`) {
 		return Profile{}, fmt.Errorf("%w: Local State names %q, which is not a profile directory", ErrProfileMissing, name)
 	}
 	dir := filepath.Join(userDataDir, name)
@@ -136,4 +129,23 @@ func LastUsedProfile(userDataDir string) (Profile, error) {
 		return Profile{}, fmt.Errorf("%w: profile directory %q", ErrProfileMissing, name)
 	}
 	return Profile{Name: name, Dir: dir}, nil
+}
+
+// lastUsedName reads Local State's profile.last_used under userDataDir, with
+// Chromium's fallback to "Default" for an empty name or the system profile.
+// The name is returned unchecked: LastUsedProfile refuses one that is not a
+// single directory entry before it touches the path.
+func lastUsedName(userDataDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(userDataDir, localStateFile))
+	if err != nil {
+		return "", fmt.Errorf("%w: reading Local State: %w", ErrProfileMissing, err)
+	}
+	var ls localState
+	if err := json.Unmarshal(data, &ls); err != nil {
+		return "", fmt.Errorf("%w: Local State is not valid JSON", ErrProfileMissing)
+	}
+	if name := ls.Profile.LastUsed; name != "" && name != systemProfile {
+		return name, nil
+	}
+	return initialProfile, nil
 }

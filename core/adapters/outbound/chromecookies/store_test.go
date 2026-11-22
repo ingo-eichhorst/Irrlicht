@@ -240,33 +240,18 @@ func TestCookieAndKey_FormatRedacted(t *testing.T) {
 }
 
 func TestDecryptValue_PlaintextRows(t *testing.T) {
-	if v, err := decryptValue(Key{}, ".mistral.ai", "plain", nil, 24); err != nil || v != "plain" {
+	if v, err := decryptValue(Key{}, row{hostKey: ".mistral.ai", plaintext: "plain"}, 24); err != nil || v != "plain" {
 		t.Errorf("plaintext row: %q, %v", v, err)
 	}
-	if _, err := decryptValue(Key{}, ".mistral.ai", "plain", []byte("v10xxxxxxxxxxxxxxxx"), 24); !errors.Is(err, ErrUnknownEncryption) {
+	if _, err := decryptValue(Key{}, row{hostKey: ".mistral.ai", plaintext: "plain", encrypted: []byte("v10xxxxxxxxxxxxxxxx")}, 24); !errors.Is(err, ErrUnknownEncryption) {
 		t.Errorf("both columns set: err = %v, want ErrUnknownEncryption", err)
 	}
-	if _, err := decryptValue(Key{b: make([]byte, 16)}, ".mistral.ai", "", []byte("v11xxxxxxxxxxxxxxxx"), 24); !errors.Is(err, ErrUnknownEncryption) {
+	if _, err := decryptValue(Key{b: make([]byte, 16)}, row{hostKey: ".mistral.ai", encrypted: []byte("v11xxxxxxxxxxxxxxxx")}, 24); !errors.Is(err, ErrUnknownEncryption) {
 		t.Errorf("v11 prefix: err = %v, want ErrUnknownEncryption", err)
 	}
 }
 
 func TestLastUsedProfile(t *testing.T) {
-	mk := func(t *testing.T, localState string, dirs ...string) string {
-		t.Helper()
-		root := t.TempDir()
-		for _, d := range dirs {
-			if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if localState != "" {
-			if err := os.WriteFile(filepath.Join(root, "Local State"), []byte(localState), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return root
-	}
 	cases := []struct {
 		name, localState string
 		dirs             []string
@@ -283,16 +268,40 @@ func TestLastUsedProfile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := mk(t, tc.localState, tc.dirs...)
+			root := fakeUserDataDir(t, tc.localState, tc.dirs...)
 			p, err := LastUsedProfile(root)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
-			if tc.wantErr == nil && (p.Name != tc.want || p.Dir != filepath.Join(root, tc.want) || p.CookiesPath() != filepath.Join(root, tc.want, "Cookies")) {
+			if tc.wantErr != nil {
+				return
+			}
+			want := Profile{Name: tc.want, Dir: filepath.Join(root, tc.want)}
+			if p != want || p.CookiesPath() != filepath.Join(root, tc.want, "Cookies") {
 				t.Fatalf("profile = %+v, want %q under %s", p, tc.want, root)
 			}
 		})
 	}
+}
+
+// fakeUserDataDir lays out a Chrome user data dir in a temp directory: the
+// given profile directories, and Local State holding localState unless it is
+// empty.
+func fakeUserDataDir(t *testing.T, localState string, dirs ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if localState == "" {
+		return root
+	}
+	if err := os.WriteFile(filepath.Join(root, "Local State"), []byte(localState), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func TestKeyCache_OneReadPerResetAndFailureIsKept(t *testing.T) {
