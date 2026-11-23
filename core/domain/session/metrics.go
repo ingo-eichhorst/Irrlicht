@@ -352,14 +352,15 @@ type SessionMetrics struct {
 
 	// IdlePromptPending is true when Claude Code's Notification/idle_prompt hook
 	// reported that the agent has finished its turn and is now sitting idle at
-	// the prompt waiting for the user (issue #1173) — the authoritative signal
-	// for the "turn ended with no trailing question or cue" case that
-	// PendingWaitingCue's prose heuristic (the agent_done rule) cannot reach. Transient and
-	// live-only: applied by the SignalIdlePrompt policy from a SignalHolds entry
-	// held only while the finished turn is still the last thing on the
-	// transcript, and never set under replay. ClassifyState reads it as an
-	// authoritative waiting tier above the turn-done → ready verdict, so a turn
-	// that ends on a plain statement still routes to waiting once the hook lands.
+	// the prompt (issue #1173). The hook fires ~60 s after EVERY turn end, so it
+	// does not mean the user is being asked anything (#2176): it is hook-tier
+	// provenance, not a state. Transient and live-only: applied by the
+	// SignalIdlePrompt policy from a SignalHolds entry held only while the
+	// finished turn is still the last thing on the transcript, and never set
+	// under replay. ClassifyState's idle_prompt rule reads it only together with
+	// IsWaitingForUserInput, so it attributes a turn that already reads waiting
+	// to the hook and never promotes a plain-statement turn from ready to
+	// waiting (#1173 did, until #2176 removed that).
 	IdlePromptPending bool `json:"-"`
 
 	// SawUserBlockingToolClosedThisPass reflects the last tailer pass: true

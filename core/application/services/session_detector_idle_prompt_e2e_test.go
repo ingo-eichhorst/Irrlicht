@@ -3,20 +3,23 @@ package services_test
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 )
 
 // TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting is the end-to-end
-// #1173 lifecycle. A turn that ended on a plain statement (no question/cue) sits
-// ready — waiting_cue can't reach it. When Claude Code's Notification/idle_prompt
-// hook fires (HandleIdlePromptHook), the detector must correct the session
-// ready→waiting in a single transition (no working blip), hold it there, then
-// release it back to working the moment the user replies — without leaking the
-// idle signal into the next turn.
+// #1173 lifecycle, narrowed by #2176. A turn that ended on a question
+// (the "idle" phase below) sits ready until Claude Code's Notification/idle_prompt hook fires (HandleIdlePromptHook);
+// the detector must then correct the session ready→waiting in a single transition
+// (no working blip), hold it there, then release it back to working the moment
+// the user replies — without leaking the idle signal into the next turn.
+// A plain-statement turn no longer takes this path: see
+// TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady.
 func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -25,7 +28,8 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	const path = "/home/.claude/projects/-Users-test/idle1.jsonl"
 
 	// phase drives what ComputeMetrics reports across the lifecycle:
-	//   "idle"    — turn finished on a plain statement (IsAgentDone true)
+	//   "idle"    — turn finished on a question (IsAgentDone true, waiting cue)
+	//   "done"    — a later turn finished on a plain statement
 	//   "replied" — user sent a new message (IsAgentDone false)
 	var mu sync.Mutex
 	phase := "idle"
@@ -35,11 +39,17 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 		if phase == "replied" {
 			return &session.SessionMetrics{LastEventType: "user"}, nil
 		}
-		// A plain completion: turn_done, no trailing question or cue, so
-		// IsWaitingForUserInput is false and the agent_done rule alone would say ready.
+		if phase == "done" {
+			return &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				LastAssistantText: "Done. All tests pass.",
+			}, nil
+		}
+		// A turn that ends on a question: turn_done plus a trailing question,
+		// so IsWaitingForUserInput is true and the hook rule applies (#2176).
 		return &session.SessionMetrics{
 			LastEventType:     "turn_done",
-			LastAssistantText: "Done. All tests pass.",
+			LastAssistantText: "Which option do you want?",
 		}, nil
 	}}
 	setPhase := func(p string) { mu.Lock(); phase = p; mu.Unlock() }
@@ -93,9 +103,9 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	tw.ch <- agent.Event{Type: agent.EventActivity, SessionID: "idle1", ProjectDir: "-Users-test", TranscriptPath: path}
 	waitForSessionState(repo, "idle1", session.StateWorking, 5*time.Second)
 
-	// The new turn completes (turn_done again). With the idle signal correctly
+	// The new turn completes on a plain statement. With the idle signal correctly
 	// cleared, this must route to ready — NOT re-pin waiting from a leaked signal.
-	setPhase("idle")
+	setPhase("done")
 	tw.ch <- agent.Event{Type: agent.EventActivity, SessionID: "idle1", ProjectDir: "-Users-test", TranscriptPath: path}
 	waitForSessionState(repo, "idle1", session.StateReady, 5*time.Second)
 
@@ -104,5 +114,74 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	repo.mu.Unlock()
 	if got != session.StateReady {
 		t.Errorf("next turn completed: state = %q, want ready (idle signal must not leak into the next turn)", got)
+	}
+}
+
+// TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady is the #2176
+// defect test. A turn that ended on a plain statement is ready, and Claude Code
+// fires Notification/idle_prompt about 60 s later whether or not anything is
+// asked of the user. The hook must not promote that ready session to waiting:
+// no transition at all is recorded after the Stop-driven ready, and the state
+// is still ready after the hook's synthetic pass has run.
+func TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const path = "/home/.claude/projects/-Users-test/idle2176.jsonl"
+
+	var passes atomic.Int32
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		passes.Add(1)
+		return &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			LastAssistantText: "Done. All tests pass.",
+		}, nil
+	}}
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	repo.states["idle2176"] = &session.SessionState{
+		SessionID:      "idle2176",
+		State:          session.StateReady,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		Metrics:        &session.SessionMetrics{LastEventType: "turn_done"},
+	}
+
+	done := make(chan error, 1)
+	defer func() { <-done }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond) // let seedFromDisk finish
+
+	base := passes.Load()
+	det.HandleIdlePromptHook("idle2176", path)
+	// Observe the subject: wait until the hook's synthetic pass has run the
+	// metrics computation, then a second activity pass behind it, so the first
+	// has fully finished (the detector processes events serially).
+	waitForCondition(func() bool { return passes.Load() > base }, 5*time.Second)
+	tw.ch <- agent.Event{Type: agent.EventActivity, SessionID: "idle2176", ProjectDir: "-Users-test", TranscriptPath: path}
+	waitForCondition(func() bool { return passes.Load() > base+1 }, 5*time.Second)
+	if passes.Load() <= base+1 {
+		t.Fatalf("hook's synthetic pass and the follow-up pass did not both run (passes %d -> %d)", base, passes.Load())
+	}
+
+	repo.mu.Lock()
+	got := repo.states["idle2176"].State
+	repo.mu.Unlock()
+	if got != session.StateReady {
+		t.Fatalf("after idle_prompt hook on a finished plain-statement turn: state = %q, want ready", got)
+	}
+	// No transition of any kind: neither ready→waiting nor a ready→working blip
+	// from the hook's synthetic activity.
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindStateTransition && ev.SessionID == "idle2176" {
+			t.Errorf("unexpected state transition %s → %s (%s) after idle_prompt hook", ev.PrevState, ev.NewState, ev.Reason)
+		}
 	}
 }

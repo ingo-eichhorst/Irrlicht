@@ -17,14 +17,15 @@ var holdT0 = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 // hook-tier signal and a transcript-tier signal disagree about the same pass,
 // the hook wins.
 //
-// The conflict is real and is the #1173 case: the transcript tail says the turn
-// ended (agent_done → ready) while the idle_prompt hook says the user is
-// actually sitting blocked at the prompt (→ waiting). Before hooks existed this
-// pass produced `ready` and the badge was wrong.
+// Since #2176 the idle_prompt hook no longer disagrees with the transcript
+// about the state (it fires only when the turn already reads waiting), so the
+// conflict this test pins is attribution: both the transcript waiting cue and
+// the hook say waiting, and the hook-tier rule must be the one that decides.
 func TestClassify_HookOutranksTranscript(t *testing.T) {
 	m := &session.SessionMetrics{
-		LastEventType:     "turn_done", // transcript tier: the turn is over → ready
-		IdlePromptPending: true,        // hook tier: the user is blocked → waiting
+		LastEventType:     "turn_done",
+		LastAssistantText: "Which option do you want?", // transcript tier: cue → waiting
+		IdlePromptPending: true,                        // hook tier: provenance for it
 	}
 
 	v := ClassifyStateTiered(session.StateWorking, m)
@@ -377,15 +378,13 @@ func TestClassifierInputs_CapturesHookSignals(t *testing.T) {
 
 // TestClassify_LateAuthoritativeSignalDoesNotFlap is AC5, and the reason
 // Phase 3 exists at all: the authoritative signal arrives *after* the
-// lower-tier guess has already been shown.
+// lower-tier verdict has already been shown.
 //
-// The measured live sequence (#1141): the turn ends on a plain statement with
-// no question or cue, so the transcript tier says ready and the badge shows
-// ready. ~6s later the idle_prompt hook lands saying the user is actually
-// blocked. The correction must be a single clean ready→waiting, and must then
-// hold across every subsequent reclassify — an fswatcher touch re-running the
-// classifier must not walk it back to ready, which is what an unheld signal
-// would do on the very next pass.
+// Rewritten by #2176. It used to pin the #1173 sequence in which the idle_prompt
+// hook landed ~60 s after a plain-statement turn and corrected ready → waiting.
+// That correction is gone: the hook now leaves a finished statement turn ready.
+// What this still pins is the no-flap property — the late hook must neither
+// change the state nor record a transition on any later reclassify.
 func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 	holds := session.NewSignalHolds()
 	const sid = "s"
@@ -402,35 +401,23 @@ func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 	}
 	state := v.State
 
-	// ~6s later: the idle_prompt hook lands and corrects the guess.
+	// ~60s later: the idle_prompt hook lands. It asks nothing of the user.
 	holds.Hold(sid, session.SignalIdlePrompt, session.SignalPayload{}, holdT0)
 
-	corrected := &session.SessionMetrics{LastEventType: "turn_done"}
-	holds.Overlay(sid, corrected, holdT0)
-	v = ClassifyStateTiered(state, corrected)
-	if v.State != session.StateWaiting {
-		t.Fatalf("the hook must correct ready→waiting, got %q", v.State)
-	}
-	if v.Tier != session.TierHook {
-		t.Errorf("the correction must be attributed to the hook tier, got %v", v.Tier)
-	}
-	state = v.State
-
-	// Every later reclassify while the user is still blocked must stay put —
-	// no oscillation back through ready.
+	// Every reclassify while the hold stands must stay ready and silent.
 	for pass := 1; pass <= 3; pass++ {
 		again := &session.SessionMetrics{LastEventType: "turn_done"}
 		holds.Overlay(sid, again, holdT0)
 		v = ClassifyStateTiered(state, again)
-		if v.State != session.StateWaiting {
-			t.Fatalf("pass %d: state flapped to %q; the held signal must keep it in waiting", pass, v.State)
+		if v.State != session.StateReady {
+			t.Fatalf("pass %d: state = %q; the idle_prompt hold must leave a finished statement turn ready", pass, v.State)
 		}
 		if v.Reason != "" {
 			t.Errorf("pass %d: a no-op re-classification must not emit a transition, got reason %q", pass, v.Reason)
 		}
 	}
 
-	// The user finally replies: the hold goes stale and the session moves on.
+	// The user replies: the hold goes stale and the session moves on.
 	replied := &session.SessionMetrics{LastEventType: "user"}
 	holds.Overlay(sid, replied, holdT0)
 	v = ClassifyStateTiered(state, replied)

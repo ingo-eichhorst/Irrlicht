@@ -1235,14 +1235,18 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 		return
 	}
 	// The Notification/idle_prompt hook (#1173) dispatches a synthetic activity
-	// on an already-ready session to correct it ready→waiting. Skip the bounce
-	// while that signal is pending: without this, the synthetic event would
-	// force ready→working here and then classify working→waiting, recording a
-	// spurious working blip between the two (the flap this reconcile must avoid).
-	// ClassifyState still routes correctly on its own — to waiting via the
-	// idle_prompt rule (idle case), or to working via transcript_activity should
-	// real activity have arrived in
-	// the same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
+	// on an already-ready session. Skip the bounce while that signal is
+	// pending: the intent is that the synthetic event must not force
+	// ready→working here (and then reclassify back), which would record a
+	// spurious working blip on a session the hook says nothing new about
+	// (#2176 changed the purpose from "correct ready→waiting"; the skip itself
+	// is unchanged). ClassifyState still routes on its own — to waiting via the
+	// idle_prompt rule when the turn reads waiting, to ready otherwise, or to
+	// working via transcript_activity should real activity have arrived in the
+	// same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
+	// Mutation run for #2176: deleting this skip turns
+	// TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady red
+	// (ready → working → ready recorded).
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}

@@ -453,21 +453,20 @@ func (d *SessionDetector) ReleasePermissionPromptHold(sessionID string) {
 }
 
 // HandleIdlePromptHook records Claude Code's Notification/idle_prompt hook
-// (issue #1173): the agent has finished its turn and is now idle at the prompt
-// waiting for the user. Holding SignalIdlePrompt makes every subsequent
-// classify pass overlay SessionMetrics.IdlePromptPending (the idle_prompt rule)
-// so the session shows waiting even when the turn ended on a plain statement
-// that PendingWaitingCue's prose heuristic can't detect. The hold is persistent
-// rather than consume-once (see session.signalPolicies) and lasts until the
-// next turn begins, when its staleness rule drops it as IsAgentDone flips
-// false — a lower-tier reclassify must not revert the corrected waiting back to
-// ready.
+// (issue #1173): the agent has finished its turn and is now idle at the prompt.
+// The hook fires ~60 s after EVERY turn end, so since #2176 it does not promote
+// a plain-statement turn from ready to waiting. Holding SignalIdlePrompt makes
+// every subsequent classify pass overlay SessionMetrics.IdlePromptPending; the
+// idle_prompt rule then reads it only when the turn already reads waiting
+// (IsWaitingForUserInput), attributing that verdict to the hook tier. The hold
+// is persistent rather than consume-once (see session.signalPolicies) and lasts
+// until the next turn begins, when its staleness rule drops it as IsAgentDone
+// flips false.
 //
-// The idle_prompt hook fires after the turn goes idle (the session is typically
-// already ready by then), so this is a reconcile-and-correct: the synthetic
-// activity below drives a ready→waiting transition without the intermediate
-// working blip forceReadyToWorkingIfActive would otherwise record (it skips the
-// bounce while this flag is pending).
+// The hook arrives after the turn went idle (the session is typically already
+// ready by then), so the synthetic activity below must leave a ready session
+// ready: forceReadyToWorkingIfActive skips its ready→working bounce while this
+// flag is pending.
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {

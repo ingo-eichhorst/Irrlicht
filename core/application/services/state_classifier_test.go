@@ -188,30 +188,41 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// the idle_prompt rule: IdlePromptPending (Notification/idle_prompt hook) → waiting.
+		// the idle_prompt rule: IdlePromptPending (Notification/idle_prompt hook)
+		// gives hook-tier provenance to a turn that already reads waiting, and
+		// never promotes a finished statement-ending turn (#2176; #1173 used to).
 		{
-			name:    "ready → waiting (idle prompt hook)",
+			// Flipped by #2176. Was: empty metrics + IdlePromptPending, ready → waiting.
+			// The hook alone no longer says waiting; the turn must read waiting too.
+			name:    "ready → waiting (idle prompt hook, turn ended on a question)",
 			current: session.StateReady,
 			metrics: &session.SessionMetrics{
 				IdlePromptPending: true,
+				LastEventType:     "turn_done",
+				LastAssistantText: "Which option do you want?",
 			},
 			wantState:  session.StateWaiting,
 			wantReason: true,
 		},
 		{
-			name:    "working → waiting (idle prompt hook)",
+			// Flipped by #2176. Was: working → waiting on the hook alone. The turn
+			// is not done, so the hook is inert and the transcript verdict stands.
+			name:    "working stays working (idle prompt hook, turn not done)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				IdlePromptPending: true,
 			},
-			wantState:  session.StateWaiting,
-			wantReason: true,
+			wantState: session.StateWorking,
 		},
 		{
+			// Flipped by #2176 (metrics only): the already-waiting turn now has to
+			// read waiting itself for the hook rule to hold it there.
 			name:    "waiting stays waiting (idle prompt hook, already waiting)",
 			current: session.StateWaiting,
 			metrics: &session.SessionMetrics{
 				IdlePromptPending: true,
+				LastEventType:     "turn_done",
+				LastAssistantText: "Which option do you want?",
 			},
 			wantState: session.StateWaiting,
 		},
@@ -233,18 +244,17 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 		{
-			// The core correction: a turn that ended on a plain statement (no
-			// question/cue) would route to ready via the agent_done rule, but the idle-prompt
-			// hook overrides it to waiting — the false-negative gap #1173 closes.
-			name:    "ready → waiting (idle prompt overrides turn-done ready verdict)",
+			// Flipped by #2176. Was "ready → waiting (idle prompt overrides turn-done
+			// ready verdict)": #1173 let the hook promote a plain-statement turn.
+			// It now stays ready — the 60 s idle notification asks nothing of the user.
+			name:    "ready stays ready (idle prompt does not override a statement-ending turn)",
 			current: session.StateReady,
 			metrics: &session.SessionMetrics{
 				IdlePromptPending: true,
 				LastEventType:     "turn_done",
 				LastAssistantText: "Done. All tests pass.",
 			},
-			wantState:  session.StateWaiting,
-			wantReason: true,
+			wantState: session.StateReady,
 		},
 		{
 			// Regression guard: with no idle-prompt signal, the same plain
