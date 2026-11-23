@@ -11,13 +11,7 @@ import (
 // to a turn that already reads waiting and never promotes a finished
 // statement-ending turn (#1173 used to).
 func TestClassifyState_IdlePromptRule(t *testing.T) {
-	tests := []struct {
-		name       string
-		current    string
-		metrics    *session.SessionMetrics
-		wantState  string
-		wantReason bool // true if a transition reason is expected
-	}{
+	tests := []classifyStateCase{
 		// the idle_prompt rule: IdlePromptPending (Notification/idle_prompt hook)
 		// gives hook-tier provenance to a turn that already reads waiting, and
 		// never promotes a finished statement-ending turn (#2176; #1173 used to).
@@ -88,6 +82,22 @@ func TestClassifyState_IdlePromptRule(t *testing.T) {
 		},
 	}
 
+	runClassifyStateCases(t, tests)
+}
+
+// classifyStateCase is one row of a ClassifyState table.
+type classifyStateCase struct {
+	name       string
+	current    string
+	metrics    *session.SessionMetrics
+	wantState  string
+	wantReason bool // true if a transition reason is expected
+}
+
+// runClassifyStateCases runs a ClassifyState table, shared by TestClassifyState
+// and TestClassifyState_IdlePromptRule.
+func runClassifyStateCases(t *testing.T, tests []classifyStateCase) {
+	t.Helper()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotState, gotReason := ClassifyState(tt.current, tt.metrics)

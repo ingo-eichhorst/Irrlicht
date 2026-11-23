@@ -7,13 +7,7 @@ import (
 )
 
 func TestClassifyState(t *testing.T) {
-	tests := []struct {
-		name       string
-		current    string
-		metrics    *session.SessionMetrics
-		wantState  string
-		wantReason bool // true if a transition reason is expected
-	}{
+	tests := []classifyStateCase{
 		// Nil metrics — no transition.
 		{
 			name:      "nil metrics, working stays working",
@@ -518,20 +512,7 @@ func TestClassifyState(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotState, gotReason := ClassifyState(tt.current, tt.metrics)
-			if gotState != tt.wantState {
-				t.Errorf("ClassifyState(%q) state = %q, want %q", tt.current, gotState, tt.wantState)
-			}
-			if tt.wantReason && gotReason == "" {
-				t.Error("expected a transition reason, got empty")
-			}
-			if !tt.wantReason && gotReason != "" {
-				t.Errorf("expected no transition reason, got %q", gotReason)
-			}
-		})
-	}
+	runClassifyStateCases(t, tests)
 }
 
 // TestShouldSynthesizeCollapsedWaiting covers issue #150: a user-blocking
