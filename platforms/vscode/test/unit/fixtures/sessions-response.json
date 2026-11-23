@@ -1,0 +1,73 @@
+{
+  "groups": [
+    {
+      "name": "irrlicht",
+      "agents": [
+        {
+          "session_id": "sess-a",
+          "state": "working",
+          "adapter": "claude-code",
+          "project_name": "irrlicht",
+          "model": "claude-sonnet-5-5",
+          "updated_at": 1790000100,
+          "launcher": { "tty": "/dev/ttys021", "term_program": "vscode", "vscode_pid": 4242 },
+          "children": [
+            {
+              "session_id": "sess-a-child",
+              "parent_session_id": "sess-a",
+              "state": "ready",
+              "adapter": "claude-code",
+              "project_name": "irrlicht",
+              "updated_at": 1790000090
+            }
+          ]
+        },
+        {
+          "session_id": "sess-b",
+          "state": "waiting",
+          "adapter": "codex",
+          "project_name": "irrlicht",
+          "updated_at": 1790000200,
+          "launcher": { "tty": "/dev/ttys042" }
+        }
+      ],
+      "groups": [
+        {
+          "name": "rig-a",
+          "type": "gastown",
+          "agents": [
+            {
+              "session_id": "sess-d",
+              "state": "error",
+              "adapter": "claude-code",
+              "project_name": "rig-a",
+              "updated_at": 1790000300
+            },
+            {
+              "session_id": "sess-orphan",
+              "parent_session_id": "sess-missing-parent",
+              "state": "working",
+              "adapter": "claude-code",
+              "project_name": "rig-a",
+              "updated_at": 1790000310
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "other-project",
+      "agents": [
+        {
+          "session_id": "sess-c",
+          "state": "ready",
+          "adapter": "opencode",
+          "project_name": "other-project",
+          "updated_at": 1790000400
+        }
+      ]
+    }
+  ],
+  "provider_costs": {},
+  "daemon_errors": []
+}

@@ -17,6 +17,7 @@ jobs:
           - tools/onboarding-factory/internal/viewer/web
           - platforms/claude-code
           - platforms/herdr
+          - platforms/vscode
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

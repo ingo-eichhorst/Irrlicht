@@ -19,6 +19,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 import { initElfdans } from './elfdans.js';
 import { createElfdansDashboard } from './elfdansDashboard.js';
 
+    // Embedded in the VS Code extension (#350): the page is framed cross-origin,
+    // so the extension cannot see row clicks; the dashboard asks the daemon to
+    // focus the session itself. Read once at module init.
+    const EMBED_VSCODE = new URLSearchParams(location.search).get('embed') === 'vscode';
+    if (EMBED_VSCODE) document.documentElement.classList.add('embed-vscode');
+
     // --- State ---
     let dashboardGroups = [];
     // The tree as last rendered: dashboardGroups with relayed sessions joined
@@ -786,6 +792,15 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       el._group = group;
     }
 
+    // Only the local daemon (this page's own origin) can focus a session; a
+    // relay-origin id is compound and does nothing.
+    function focusSessionRow(id) {
+      if (!id || sourceIdOf(id) !== '') return;
+      fetch('/api/v1/sessions/' + encodeURIComponent(id) + '/focus', { method: 'POST' })
+        .then((r) => { if (!r.ok) console.debug('irrlicht: focus request refused', r.status); })
+        .catch((e) => console.debug('irrlicht: focus request failed', e));
+    }
+
     function createSessionRow(agent, isChild) {
       const el = document.createElement('div');
       el.className = 'session-row' + (isChild ? ' child' : '');
@@ -825,6 +840,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         e.stopPropagation();
         cycleCostDisplayMode();
       });
+      if (EMBED_VSCODE) el.addEventListener('click', () => focusSessionRow(el.dataset.sessionId));
       updateSessionRow(el, agent, isChild);
       return el;
     }

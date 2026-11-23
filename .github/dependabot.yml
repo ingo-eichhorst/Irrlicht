@@ -34,6 +34,7 @@ updates:
       - /tools/onboarding-factory/internal/viewer/web
       - /platforms/claude-code
       - /platforms/herdr
+      - /platforms/vscode
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -42,6 +43,12 @@ updates:
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
+    # `vsce package` refuses an @types/vscode newer than engines.vscode, which
+    # aborts tools/build-release.sh. Only platforms/vscode depends on
+    # @types/vscode, so ignoring it on this shared npm entry affects no other
+    # tree. Raise engines.vscode and @types/vscode together by hand instead.
+    ignore:
+      - dependency-name: "@types/vscode"
     groups:
       npm-minor-patch:
         patterns:
