@@ -22,13 +22,8 @@ import (
 // hooksPermission returns the real declared hooks permission.
 func hooksPermission(t *testing.T) (apply, remove func() error) {
 	t.Helper()
-	for _, p := range Agent().Permissions {
-		if p.Key == PermissionKeyHooks {
-			return p.Apply, p.Remove
-		}
-	}
-	t.Fatal("no hooks permission declared")
-	return nil, nil
+	p := hooksDeclaration(t)
+	return p.Apply, p.Remove
 }
 
 // hooksAreLiveAndEnabled reports whether hooks.toml carries our entry AND
@@ -226,7 +221,9 @@ func TestUninstall_ClearsTheFlagOnlyWhenNoOtherHooksRemain(t *testing.T) {
 }
 
 // TestUninstall_ClearsTheFlagWhenNoHooksRemain is the vacuity guard for the
-// test above: when OUR entry was the only one, the flag IS cleared.
+// test above: when OUR entry was the only one, the flag IS cleared — since
+// #2171 by deleting its line (TestUninstall_RemovesTheFlagLineRatherThan
+// WritingFalse pins that form).
 func TestUninstall_ClearsTheFlagWhenNoHooksRemain(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(vibeHomeEnvVar, "")
@@ -300,33 +297,24 @@ func TestWrites_DeclaresBothFiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(vibeHomeEnvVar, "")
 
-	for _, p := range Agent().Permissions {
-		if p.Key != PermissionKeyHooks {
-			continue
-		}
-		if p.Writes == nil {
-			t.Fatal("hooks permission declares no Writes")
-		}
-		path, err := p.Writes.Path()
-		if err != nil {
-			t.Fatalf("Path(): %v", err)
-		}
-		if filepath.Base(path) != hooksFilename {
-			t.Errorf("Writes.Path() = %q, want basename %q", path, hooksFilename)
-		}
-		if len(p.Writes.Also) != 1 {
-			t.Fatalf("Writes.Also has %d entries, want 1", len(p.Writes.Also))
-		}
-		also, err := p.Writes.Also[0]()
-		if err != nil {
-			t.Fatalf("Also[0](): %v", err)
-		}
-		if filepath.Base(also) != configFilename {
-			t.Errorf("Writes.Also[0]() = %q, want basename %q", also, configFilename)
-		}
-		return
+	w := hooksDeclaration(t).Writes
+	path, err := w.Path()
+	if err != nil {
+		t.Fatalf("Path(): %v", err)
 	}
-	t.Fatal("no hooks permission declared")
+	if filepath.Base(path) != hooksFilename {
+		t.Errorf("Writes.Path() = %q, want basename %q", path, hooksFilename)
+	}
+	if len(w.Also) != 1 {
+		t.Fatalf("Writes.Also has %d entries, want 1", len(w.Also))
+	}
+	also, err := w.Also[0]()
+	if err != nil {
+		t.Fatalf("Also[0](): %v", err)
+	}
+	if filepath.Base(also) != configFilename {
+		t.Errorf("Writes.Also[0]() = %q, want basename %q", also, configFilename)
+	}
 }
 
 func containsAll(s string, subs ...string) bool {

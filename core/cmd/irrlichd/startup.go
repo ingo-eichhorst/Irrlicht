@@ -1127,7 +1127,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 // http hook — the detector satisfies geminicli.HookTarget's extra two methods
 // (HandlePermissionPromptHook, ReleasePermissionPromptHold) alongside the two
 // every other receiver already calls; plus Mistral Vibe's post_agent_turn
-// event (issue #1718), also beacon-delivered (`irrlichd hook-post
+// event (issue #1718), named post_agent from Vibe 2.21.0 (#2171), also beacon-delivered (`irrlichd hook-post
 // mistral-vibe`) — the detector satisfies vibe.HookTarget's single method,
 // HandleStopHook, which every other receiver already calls too; plus Kiro
 // CLI's postToolUse/stop events (issue #1716), also beacon-delivered

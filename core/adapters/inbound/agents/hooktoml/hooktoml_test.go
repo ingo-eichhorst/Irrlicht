@@ -360,38 +360,132 @@ func TestEnsureBoolTrue_DoesNotMatchTheKeyInsideATable(t *testing.T) {
 	}
 }
 
-func TestClearBoolIfPresent_LeavesAnAbsentKeyAbsent(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	seed := "active_model = \"x\"\n"
-	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
+// --- DeleteTopLevelKeyIfPresent (#2171) ---
 
-	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
-	if err != nil || modified {
-		t.Fatalf("ClearBoolIfPresent on an absent key: modified=%v err=%v, want false/nil", modified, err)
+func TestDeleteTopLevelKeyIfPresent(t *testing.T) {
+	const key = "enable_experimental_hooks"
+	cases := []struct {
+		name, seed, want string
+		modified         bool
+	}{
+		{name: "true, between two keys", seed: "a = 1\n" + key + " = true\nb = 2\n", want: "a = 1\nb = 2\n", modified: true},
+		{name: "false is deleted too", seed: key + " = false\n[t]\nx = 1\n", want: "[t]\nx = 1\n", modified: true},
+		{name: "a trailing comment goes with its line", seed: "a = 1\n" + key + " = true # ours\n", want: "a = 1\n", modified: true},
+		{name: "indented", seed: "  " + key + " = true\na = 1\n", want: "a = 1\n", modified: true},
+		{name: "last line, no newline", seed: "a = 1\n" + key + " = true", want: "a = 1\n", modified: true},
+		{name: "the only line", seed: key + " = true\n", want: "", modified: true},
+		{name: "CRLF line endings", seed: "a = 1\r\n" + key + " = true\r\nb = 2\r\n", want: "a = 1\r\nb = 2\r\n", modified: true},
+		{name: "a multi-line value is deleted whole", seed: "a = 1\n" + key + " = [\n  1,\n  2,\n]\nb = 2\n", want: "a = 1\nb = 2\n", modified: true},
+		{name: "every duplicate copy", seed: key + " = true\na = 1\n" + key + " = false\n", want: "a = 1\n", modified: true},
+		{name: "absent", seed: "a = 1\n", want: "a = 1\n"},
+		{name: "a commented-out line is not the key", seed: "# " + key + " = true\n", want: "# " + key + " = true\n"},
+		{name: "the same key inside a table is not top-level", seed: "[t]\n" + key + " = true\n", want: "[t]\n" + key + " = true\n"},
+		{name: "a key that only starts with it", seed: key + "_more = true\n", want: key + "_more = true\n"},
 	}
-	got, _ := os.ReadFile(path)
-	if string(got) != seed {
-		t.Errorf("file changed despite nothing to clear:\n%s", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			modified, err := DeleteTopLevelKeyIfPresent(path, key, atomicfile.WriteFile)
+			if err != nil || modified != tc.modified {
+				t.Fatalf("modified=%v err=%v, want %v/nil", modified, err, tc.modified)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestClearBoolIfPresent_SetsAnExistingKeyFalse(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile); err != nil {
+func TestDeleteTopLevelKeyIfPresent_AbsentFileIsNotCreated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	modified, err := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
+	if err != nil || modified {
+		t.Fatalf("modified=%v err=%v, want false/nil", modified, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a delete created the file: stat err = %v", err)
+	}
+}
+
+// TestDeleteTopLevelKeyIfPresent_AnUnscannableDocumentWithoutTheKeyIsLeftAlone
+// is a defect test from #2171's review: a document the scanner refuses (here a
+// triple-quoted string) that does not contain the key's text at all cannot
+// hold the key, so the delete has nothing to do and must not report a refusal
+// for an edit it never needed. Seen red before the fix: it returned ErrUnsafe.
+func TestDeleteTopLevelKeyIfPresent_AnUnscannableDocumentWithoutTheKeyIsLeftAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	seed := "active_model = \"local\"\nnote = \"\"\"\nmulti\n\"\"\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
-	if err != nil || !modified {
-		t.Fatalf("ClearBoolIfPresent: modified=%v err=%v, want true/nil", modified, err)
+	modified, err := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
+	if err != nil || modified {
+		t.Fatalf("modified=%v err=%v, want false/nil: the key is not in the file", modified, err)
 	}
-	value, found, err := TopLevelBool(path, "enable_experimental_hooks")
-	if err != nil || !found || value {
-		t.Errorf("value=%v found=%v err=%v, want false/true/nil", value, found, err)
+	if got, _ := os.ReadFile(path); string(got) != seed {
+		t.Errorf("the file changed:\n%s", got)
+	}
+}
+
+func TestDeleteTopLevelKeyIfPresent_RefusalNamesTheDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	seed := "enable_experimental_hooks = true\nnote = \"\"\"\nmulti\n\"\"\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	modified, err := DeleteTopLevelKeyIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
+	if !errors.Is(err, ErrUnsafe) || modified {
+		t.Fatalf("modified=%v err=%v, want a refusal wrapping ErrUnsafe and nothing written", modified, err)
+	}
+	if !strings.Contains(err.Error(), "deleting the top-level `enable_experimental_hooks` line") {
+		t.Errorf("refusal %q does not say which edit it wanted", err.Error())
+	}
+	if got, _ := os.ReadFile(path); string(got) != seed {
+		t.Errorf("a refused delete changed the file:\n%s", got)
+	}
+}
+
+func TestHasTopLevelKey(t *testing.T) {
+	const key = "enable_experimental_hooks"
+	cases := []struct {
+		name, seed string
+		want       bool
+		refuses    bool
+	}{
+		{name: "true", seed: key + " = true\n", want: true},
+		{name: "false counts too", seed: "a = 1\n" + key + " = false\n", want: true},
+		{name: "absent", seed: "a = 1\n"},
+		{name: "inside a table is not top-level", seed: "[t]\n" + key + " = true\n"},
+		{name: "unscannable without the key is no key", seed: "note = \"\"\"\nx\n\"\"\"\n"},
+		{name: "unscannable with the key is refused", seed: key + " = true\nnote = \"\"\"\nx\n\"\"\"\n", refuses: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := HasTopLevelKey(path, key)
+			if tc.refuses {
+				if !errors.Is(err, ErrUnsafe) {
+					t.Fatalf("err = %v, want ErrUnsafe", err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("HasTopLevelKey = %v, %v; want %v, nil", got, err, tc.want)
+			}
+		})
+	}
+	if got, err := HasTopLevelKey(filepath.Join(t.TempDir(), "absent.toml"), key); err != nil || got {
+		t.Errorf("absent file: %v, %v; want false, nil", got, err)
 	}
 }
 
@@ -618,6 +712,11 @@ func TestScannerRefusals_Corpus(t *testing.T) {
 			_, blocksErr := HookBlocks(path)
 			// Entry point 2: the top-level scalar scanner.
 			_, _, scalarErr := TopLevelBool(path, "enable_experimental_hooks")
+			// DeleteTopLevelKeyIfPresent (#2171) is deliberately not a third
+			// entry point here: it does not scan a document that lacks the
+			// key's text, and no corpus document carries it. Its refusal of a
+			// document that does is TestDeleteTopLevelKeyIfPresent_Refusal
+			// NamesTheDelete.
 
 			for label, err := range map[string]error{"HookBlocks": blocksErr, "TopLevelBool": scalarErr} {
 				if tc.refuseNaming == "" {

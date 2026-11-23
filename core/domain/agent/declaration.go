@@ -284,8 +284,10 @@ type ManagedUserFile struct {
 	// nil. It exists because mistral-vibe's hooks install is the first whose
 	// Apply genuinely spans two files: the hook entries themselves
 	// ($VIBE_HOME/hooks.toml) and a separate boolean gate
-	// (enable_experimental_hooks in $VIBE_HOME/config.toml) that must also be
-	// true or the entries are never read. Neither #1449's grant-all refusal nor
+	// (enable_experimental_hooks in $VIBE_HOME/config.toml) that Vibe
+	// 2.19.1–2.20.x require true or the entries are never read; from 2.21.0
+	// the install deletes that line instead (#2171), still a write to the
+	// second file. Neither #1449's grant-all refusal nor
 	// the recorder's full backup/restore sweep (agents.ManagedUserFiles) can see
 	// a write this field does not name — an undeclared secondary write is
 	// invisible to both, which is the exact shape of the incident #1449 exists

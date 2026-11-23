@@ -576,9 +576,10 @@ below.
   above)). Since #1731 it also carries `Also []func() (string, error)`, for
   the rare permission whose ONE `Apply` writes a SECOND shared file beyond
   `Path` — three adapters use it today: mistral-vibe's hooks install writes
-  `$VIBE_HOME/hooks.toml` (Path) plus the `enable_experimental_hooks` gate in
-  `$VIBE_HOME/config.toml` (Also), without which the CLI never reads the
-  hooks at all; kiro-cli's writes its hook entries (Path) plus
+  `$VIBE_HOME/hooks.toml` (Path) plus, for Vibe 2.19.1–2.20.x, the
+  `enable_experimental_hooks` gate in `$VIBE_HOME/config.toml` (Also),
+  without which those versions never read the hooks at all; from Vibe 2.21.0
+  the same Also entry is where that gate's line is deleted again (#2171); kiro-cli's writes its hook entries (Path) plus
   `chat.defaultAgent` in `settings/cli.json` (Also), so the entries are read
   by the agent kiro-cli actually dispatches to, along with two irrlicht state
   files beside it (`.irrlicht-prior-default.json`,
