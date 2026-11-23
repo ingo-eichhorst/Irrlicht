@@ -178,8 +178,9 @@ export interface FrameInput {
   kind: ThemeKind;
   /**
    * The paired sessions' states of the agent terminals in the panel. VS Code does not tell an extension
-   * which panel terminals are on screen (split panes) and which hide behind another panel tab, so this is
-   * every agent terminal in the panel.
+   * which panel terminals are on screen (split panes) and which hide behind another panel tab (no terminal
+   * group, split or visibility field in @types/vscode, nor among 1.147's terminal API proposals; #2175),
+   * so this is every agent terminal in the panel.
    */
   panel: readonly unknown[];
   editor: EditorView;

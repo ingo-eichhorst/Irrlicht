@@ -44,6 +44,7 @@ function deepEqual(a, b) {
   return ka.every((k) => Object.hasOwn(b, k) && deepEqual(a[k], b[k]));
 }
 
+let frameDebug = () => 'n/a';
 const workspaceColors = () => vscode.workspace.getConfiguration('workbench').inspect('colorCustomizations')?.workspaceValue;
 const show = () => JSON.stringify(workspaceColors());
 
@@ -121,6 +122,9 @@ class StubDaemon {
   }
 }
 
+// Seq numbers must stay consecutive: a gap makes the client rehydrate from the stub's empty session list.
+const nextSeq = (ctx) => ctx.seq++;
+
 function session(id, state, tty) {
   return { session_id: id, state, updated_at: Math.floor(Date.now() / 1000), project_name: 'e2e', launcher: tty ? { tty } : undefined };
 }
@@ -158,7 +162,7 @@ function tinted(c, color) {
 const activeName = () => vscode.window.activeTerminal?.name;
 const isActive = (name) => () => activeName() === name;
 const showActiveName = () => `active=${activeName()}`;
-const showActive = () => `active=${activeName()} workspace colorCustomizations=${show()}`;
+const showActive = () => `active=${activeName()} workspace colorCustomizations=${show()} tabs=${tabsText()} frame=${JSON.stringify(frameDebug())}`;
 const showColors = () => `workspace colorCustomizations=${show()}`;
 const tabsText = () => {
   const groups = vscode.window.tabGroups.all.map((g) => g.tabs.map((t) => t.label + (t.isActive ? '*' : '')));
@@ -223,11 +227,12 @@ function assertUserKeysKept() {
   if ('activityBar.background' in v) throw new Error(`4g user-scope key leaked into the workspace: ${show()}`);
 }
 
-async function frameFollowsState({ stub, api, terminal, tty }) {
+async function frameFollowsState(ctx) {
+  const { stub, api, terminal, tty } = ctx;
   terminal.show();
   await poll('4g e2e-agent active', isActive('e2e-agent'), showActiveName);
   const pushedAt = Date.now();
-  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 5 });
+  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: nextSeq(ctx) });
   await poll('4g working frame', () => frameIs(COLOR.working),
     () => `workspace colorCustomizations=${show()} pairings=${JSON.stringify(api.getPairings())}`);
   const latency = Date.now() - pushedAt;
@@ -235,7 +240,7 @@ async function frameFollowsState({ stub, api, terminal, tty }) {
   console.log(`[e2e] 4g frame latency ${latency} ms`);
   assertUserKeysKept();
 
-  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'waiting', tty), seq: 6 });
+  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'waiting', tty), seq: nextSeq(ctx) });
   await poll('4g waiting frame', () => frameIs(COLOR.waiting), showColors);
 }
 
@@ -264,16 +269,13 @@ async function frameSettingModes(cfg) {
     () => hasNone(customizations(), ['terminal.background', 'panel.background']) && frameIs(COLOR.waiting), showColors);
 }
 
-// Seq numbers must stay consecutive: a gap makes the client rehydrate from the stub's empty session list.
-const nextSeq = (ctx) => ctx.seq++;
-
 async function pairTerminal(ctx, terminal, sessionId, state) {
   const pid = await terminal.processId;
   if (!pid) throw new Error(`terminal for ${sessionId} has no processId`);
   const tty = await ttyOf(pid);
   ctx.stub.push({ type: 'session_updated', session: session(sessionId, state, tty), seq: nextSeq(ctx) });
   await poll(`4h pairing ${sessionId} ${state}`, () => ctx.api.getPairings().some((p) => p.sessionId === sessionId && p.state === state),
-    () => `tty=${tty} pairings=${JSON.stringify(ctx.api.getPairings())}`);
+    () => `pid=${pid} tty=${tty} pairings=${JSON.stringify(ctx.api.getPairings())} pairing state=${JSON.stringify(ctx.api.getPairingDebugState())}`);
   return tty;
 }
 
@@ -326,6 +328,21 @@ async function twoEditorGroups(ctx) {
   }
 }
 
+// h. moving the twin's editor to a new group gives it a new tab while the twin stays the active terminal, so
+// VS Code fires no active-terminal change: the binding can only settle when its window ends.
+async function twinMovedToNewGroup(ctx) {
+  ctx.twin.show();
+  await poll('4h twin active before the move', isTheActive(ctx.twin), showActiveName);
+  const groupsBefore = vscode.window.tabGroups.all.length;
+  await vscode.commands.executeCommand('workbench.action.moveEditorToRightGroup');
+  await poll('4h twin editor in a new group', () => vscode.window.tabGroups.all.length === groupsBefore + 1, () => `tabs=${tabsText()}`);
+  const both = () => {
+    const c = customizations();
+    return panelIs(c, COLOR.waiting) && hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && hasNone(c, ['editor.border']);
+  };
+  await pollHeld('4h moved twin: panel waiting AND its tab edge ready', both, showActive, 5000);
+}
+
 // h. observation 1: split panes in the panel with different states; the most urgent one wins even when the
 // less urgent pane is the active one.
 async function splitPanes(ctx, extra) {
@@ -362,6 +379,7 @@ async function stepTerminalFrame(ctx) {
   try {
     await twinInEditor(ctx, extra);
     await twoEditorGroups(ctx);
+    await twinMovedToNewGroup(ctx);
     await splitPanes(ctx, extra);
   } finally {
     for (const t of extra) { try { t.dispose(); } catch { /* ignore */ } }
@@ -374,6 +392,7 @@ async function activateAgainst(stub, cfg) {
   if (!ext) throw new Error('extension irrlicht.irrlicht-vscode not found');
   const api = await ext.activate();
   if (typeof api?.getConnectionState !== 'function') throw new Error('extension did not return the test API');
+  frameDebug = () => api.getFrameDebugState();
   return api;
 }
 
@@ -386,8 +405,9 @@ async function stepWebview(stub) {
 }
 
 // c. status bar counts
-async function stepStatusBar({ stub, api }) {
-  stub.push({ type: 'session_updated', session: session('e2e-wait', 'waiting'), seq: 1 });
+async function stepStatusBar(ctx) {
+  const { stub, api } = ctx;
+  stub.push({ type: 'session_updated', session: session('e2e-wait', 'waiting'), seq: nextSeq(ctx) });
   await poll('4c status text contains "$(bell) 1"', () => api.getStatusText().includes('$(bell) 1'),
     () => `status=${JSON.stringify(api.getStatusText())}`);
 }
@@ -405,19 +425,44 @@ async function stepPairing(ctx) {
     return p?.state === state && p.icon === ICON[state];
   };
   const observed = () => `tty=${tty} pairings=${JSON.stringify(api.getPairings())}`;
-  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: 2 });
+  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'working', tty), seq: nextSeq(ctx) });
   await poll('4d pairing e2e-agent working', () => pairedAs('working'), observed);
-  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', tty), seq: 3 });
+  stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', tty), seq: nextSeq(ctx) });
   await poll('4d pairing e2e-agent ready', () => pairedAs('ready'), observed);
 }
 
+// d. a terminal closed before VS Code reports its shell pid must not stall pairing for every later terminal
+// (seen while adding #2175's steps: the resolver waited forever on such a terminal's processId).
+async function stepPairingAfterBlip(ctx) {
+  for (let i = 0; i < 3; i++) {
+    const blip = vscode.window.createTerminal({ name: `e2e-blip-${i}` });
+    await new Promise((r) => setTimeout(r, 20 * i));
+    blip.dispose();
+  }
+  const after = vscode.window.createTerminal({ name: 'e2e-after-blip' });
+  try {
+    const pid = await after.processId;
+    if (!pid) throw new Error('e2e-after-blip has no processId');
+    const tty = await ttyOf(pid);
+    ctx.stub.push({ type: 'session_updated', session: session('e2e-after-blip-session', 'working', tty), seq: nextSeq(ctx) });
+    await poll('4d terminal opened after a closed one still pairs', () => ctx.api.getPairings().some((p) => p.sessionId === 'e2e-after-blip-session'),
+      () => `pid=${pid} tty=${tty} pairings=${JSON.stringify(ctx.api.getPairings())} pairing state=${JSON.stringify(ctx.api.getPairingDebugState())}`);
+  } finally {
+    after.dispose();
+    // A real daemon ends the session with its process. Without this, a later terminal that reuses the
+    // freed TTY would pair with the stale session.
+    ctx.stub.push({ type: 'session_deleted', session: session('e2e-after-blip-session', 'working'), seq: nextSeq(ctx) });
+  }
+}
+
 // f. click-to-focus: a focus_requested frame raises the paired terminal
-async function stepFocus({ stub, api, tty }) {
+async function stepFocus(ctx) {
+  const { stub, api, tty } = ctx;
   const other = vscode.window.createTerminal({ name: 'e2e-other' });
   try {
     other.show();
     await poll('4f other terminal active', isActive('e2e-other'), showActiveName);
-    stub.push({ type: 'focus_requested', session: session('e2e-agent-session', 'ready', tty), seq: 4 });
+    stub.push({ type: 'focus_requested', session: session('e2e-agent-session', 'ready', tty), seq: nextSeq(ctx) });
     await poll('4f focus_requested activates e2e-agent', isActive('e2e-agent'),
       () => `active=${activeName()} pairings=${JSON.stringify(api.getPairings())}`);
   } finally {
@@ -476,7 +521,7 @@ async function run() {
   assertSeed();
   const stub = new StubDaemon();
   await stub.start(seededStubPort());
-  const ctx = { stub, cfg: vscode.workspace.getConfiguration('irrlicht'), api: undefined, terminal: undefined, tty: undefined, seq: 7 };
+  const ctx = { stub, cfg: vscode.workspace.getConfiguration('irrlicht'), api: undefined, terminal: undefined, tty: undefined, seq: 1 };
   try {
     ctx.api = await timed('activate', () => activateAgainst(stub, ctx.cfg));
     await timed('4a connection online', () => poll('4a connection online', () => ctx.api.getConnectionState() === 'online',
@@ -484,6 +529,7 @@ async function run() {
     await timed('4b webview iframe reached daemon', () => stepWebview(stub));
     await timed('4c status bar shows waiting count', () => stepStatusBar(ctx));
     await timed('4d terminal pairing follows state', () => stepPairing(ctx));
+    await timed('4d pairing survives a terminal closed at once', () => stepPairingAfterBlip(ctx));
     await timed('4f focus_requested activates paired terminal', () => stepFocus(ctx));
     // g. terminal frame: the agent terminals' state colours are written into the workspace settings
     // h. (inside 4g) per-area frame, same-name terminals, two editor groups, split panes (#2175)

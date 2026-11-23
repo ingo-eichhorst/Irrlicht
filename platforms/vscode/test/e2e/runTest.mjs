@@ -33,8 +33,8 @@ fs.writeFileSync(path.join(workspaceDir, '.vscode', 'settings.json'), JSON.strin
     '[Default Dark Modern]': { 'terminal.border': '#ABCDEF' },
   },
 }, null, 2));
-// The extension activates on startup, before the suite can point it anywhere, and its default URL is the
-// real daemon's (127.0.0.1:7837). Seed the URL with a free loopback port that the suite's stub then binds,
+// The extension activates on startup (activationEvents: onStartupFinished), possibly before the suite points
+// it anywhere, and its default URL is the real daemon's (127.0.0.1:7837). Seed the URL with a free loopback port that the suite's stub then binds,
 // so no e2e run ever talks to a live daemon.
 async function freePort() {
   const srv = net.createServer();

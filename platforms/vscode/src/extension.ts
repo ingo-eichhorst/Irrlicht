@@ -12,6 +12,8 @@ export interface IrrlichtTestApi {
   getStatusText(): string;
   getConnectionState(): ConnectionState;
   getPairings(): Array<{ terminalName: string; sessionId: string; state: string; icon: string }>;
+  getPairingDebugState(): unknown;
+  getFrameDebugState(): unknown;
 }
 
 let frameController: TerminalFrameController | undefined;
@@ -76,6 +78,8 @@ export function activate(ctx: vscode.ExtensionContext): IrrlichtTestApi | undefi
         // The codicon the Agent Terminals row actually renders, read back from its tree item.
         icon: (terminalsView.getTreeItem(p).iconPath as vscode.ThemeIcon | undefined)?.id ?? '',
       })),
+    getPairingDebugState: () => pairing.debugState(),
+    getFrameDebugState: () => frameController?.debugState(),
   };
 }
 

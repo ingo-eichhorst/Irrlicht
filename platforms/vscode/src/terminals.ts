@@ -13,6 +13,10 @@ export class TerminalPairing implements vscode.Disposable {
   readonly onDidChange: vscode.Event<void> = this.emitter.event;
   // One entry per terminal once its shell pid has been awaited.
   private readonly terms = new Map<vscode.Terminal, TermState>();
+  // Terminals whose processId is still awaited. Awaited outside the pass: a terminal closed before VS Code
+  // reports its pid never settles that promise, and awaiting it inside the pass stalled pairing for every
+  // terminal opened afterwards (#2175's e2e step 4d "pairing survives a terminal closed at once").
+  private readonly awaitingPid = new Set<vscode.Terminal>();
   private current: Pairing[] = [];
   private signature = '';
   private psFailureLogged = false;
@@ -40,6 +44,15 @@ export class TerminalPairing implements vscode.Disposable {
   }
 
   pairings(): Pairing[] { return this.current; }
+
+  /** Each terminal's TTY lookup state and the resolver's own state; only for the e2e's failure messages. */
+  debugState(): { running: boolean; retryArmed: boolean; terminals: Array<{ name: string } & Partial<TermState>> } {
+    return {
+      running: this.running,
+      retryArmed: this.timer !== undefined,
+      terminals: vscode.window.terminals.map((t) => ({ name: t.name, ...this.terms.get(t) })),
+    };
+  }
 
   terminalForSession(s: SessionRecord): vscode.Terminal | undefined {
     const tty = normalizeTty(s.launcher?.tty);
@@ -70,24 +83,27 @@ export class TerminalPairing implements vscode.Disposable {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     const live = new Set(vscode.window.terminals);
     this.forgetClosed(live);
-    await this.resolvePids([...live].filter((t) => !this.terms.has(t)));
+    this.awaitPids([...live].filter((t) => !this.terms.has(t)));
     await this.resolveTtys(psPath, [...live].filter((t) => isUnresolved(this.terms.get(t))));
     this.recompute();
   }
 
   private forgetClosed(live: Set<vscode.Terminal>): void {
     for (const t of Array.from(this.terms.keys())) if (!live.has(t)) this.terms.delete(t);
+    for (const t of Array.from(this.awaitingPid)) if (!live.has(t)) this.awaitingPid.delete(t);
   }
 
-  private async resolvePids(terminals: vscode.Terminal[]): Promise<void> {
-    await Promise.all(terminals.map(async (t) => {
-      let pid: number | undefined;
-      try {
-        const p = await t.processId;
-        if (typeof p === 'number' && p > 0) pid = p;
-      } catch { /* unresolvable */ }
-      this.terms.set(t, { pid, attempts: 0 });
-    }));
+  // Records each terminal's pid when VS Code reports it, then runs another pass for its TTY.
+  private awaitPids(terminals: vscode.Terminal[]): void {
+    for (const t of terminals) {
+      if (this.awaitingPid.has(t)) continue;
+      this.awaitingPid.add(t);
+      void Promise.resolve(t.processId).then((p) => p, () => undefined).then((p) => {
+        if (!this.awaitingPid.delete(t) || this.disposed) return;
+        this.terms.set(t, { pid: typeof p === 'number' && p > 0 ? p : undefined, attempts: 0 });
+        void this.resolve();
+      });
+    }
   }
 
   private async resolveTtys(psPath: string, pending: vscode.Terminal[]): Promise<void> {

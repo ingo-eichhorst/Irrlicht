@@ -13,8 +13,11 @@ type VsLayout = Layout<vscode.Tab, vscode.Terminal>;
 export class TerminalFrameController implements vscode.Disposable {
   private sync: FrameSync | undefined;
   private noWorkspaceLogged = false;
-  private readonly locator = new TerminalLocator<vscode.Tab, vscode.Terminal>();
-  private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  // A pending binding re-frames once its window has passed, even if no other event arrives.
+  private readonly locator = new TerminalLocator<vscode.Tab, vscode.Terminal>(Date.now, BIND_WINDOW_MS, {
+    timers: { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) },
+    onDue: () => this.request(),
+  });
   private readonly disposables: Array<{ dispose(): void }> = [];
 
   constructor(
@@ -26,7 +29,7 @@ export class TerminalFrameController implements vscode.Disposable {
   start(): void {
     const again = (): void => this.request();
     const tabsChanged = (): void => {
-      this.guard(() => { if (this.locator.observeTabs(layout())) this.scheduleSettle(); });
+      this.guard(() => { this.locator.observeTabs(layout()); });
       this.request();
     };
     try {
@@ -61,21 +64,23 @@ export class TerminalFrameController implements vscode.Disposable {
   }
 
   dispose(): void {
-    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.locator.dispose();
     for (const d of this.disposables.splice(0)) {
       try { d.dispose(); } catch { /* ignore */ }
     }
     this.sync?.dispose();
   }
 
-  private guard(fn: () => void): void {
-    try { fn(); } catch (e) { this.log(`terminal frame: ${String(e)}`); }
+  /** The locator's state and the places it computes now; only for the e2e's failure messages. */
+  debugState(): unknown {
+    const current = layout();
+    const describe = (x: vscode.Tab | vscode.Terminal): string => ('input' in x ? `tab:${x.label}@${x.group.viewColumn}` : `term:${x.name}#${vscode.window.terminals.indexOf(x)}`);
+    const places = [...this.locator.locate(current)].map(([t, p]) => [describe(t), p]);
+    return { locator: this.locator.debugState(describe), places, active: current.activeTerminal && describe(current.activeTerminal) };
   }
 
-  /** A binding is pending: frame again once its window has passed, so it settles even if nothing else happens. */
-  private scheduleSettle(): void {
-    if (this.settleTimer) clearTimeout(this.settleTimer);
-    this.settleTimer = setTimeout(() => { this.settleTimer = undefined; this.request(); }, BIND_WINDOW_MS + 50);
+  private guard(fn: () => void): void {
+    try { fn(); } catch (e) { this.log(`terminal frame: ${String(e)}`); }
   }
 
   private hasWorkspace(): boolean {
