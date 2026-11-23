@@ -58,9 +58,9 @@ const waitingExitDwell = 6 * time.Second
 // so debouncing it buys nothing and costs real accuracy. Two existing
 // behaviours prove the cost is not hypothetical: ESC-cancelling a permission
 // prompt resolves waiting→ready (TestSessionDetector_Activity_Cancellation
-// FromWaiting_TransitionsToReady) and #1173's idle-prompt reconciliation
-// requires that a completed next turn reads ready rather than leaking the
-// stale waiting (TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting).
+// FromWaiting_TransitionsToReady) and #1173's idle-prompt lifecycle (since #2176
+// a lock, not a reconciliation) requires that a completed next turn reads ready
+// rather than leaking the stale waiting (TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting).
 // Both are a user action or an authoritative signal, not a flap, and both
 // failed against a version of this function that debounced every waiting exit.
 //
@@ -96,8 +96,9 @@ const waitingExitDwell = 6 * time.Second
 // if one is added at all.
 //
 // The residual, stated plainly rather than left to be discovered: the
-// working→ready→waiting sequence a late idle_prompt produces still reaches the
-// UI as two transitions. #1366 does not claim to remove it.
+// working→ready→waiting sequence a late idle_prompt used to produce (before
+// #2176 stopped it promoting a statement turn) reached the UI as two transitions;
+// a question-ending turn can still take that path. #1366 does not claim to remove it.
 func graceFor(current, candidate string) time.Duration {
 	if current == StateWaiting && candidate == StateWorking {
 		return waitingExitDwell

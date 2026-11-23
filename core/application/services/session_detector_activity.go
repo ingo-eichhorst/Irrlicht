@@ -1038,7 +1038,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// before applyBackgroundLiveness — see that call site.
 
 	// Overlay every held signal — the permission prompt (#108), the Stop hook's
-	// authoritative turn-done (#1161), the idle_prompt correction (#1173), the
+	// authoritative turn-done (#1161), the idle_prompt hold (#1173), the
 	// PreCompact force-working hold (#657) and the transcript-based
 	// stalled-edit-tool fallback (#488) — onto the metrics ClassifyState is
 	// about to read. Each signal's own lifecycle
