@@ -289,6 +289,16 @@ async function activatePanelTerminal(name, terminal) {
   await poll(name, isTheActive(terminal), showActiveName);
 }
 
+// The modern layout before VS Code 1.147 draws no editor tab edges, so with two or more editor groups the
+// frame falls back to the editor.border box there (terminalFrame.ts tabEdgesDrawn). The e2e runs 1.147 by
+// default; this keeps the two-group steps meaningful under VSCODE_TEST_VERSION=1.140.0 too.
+function tabEdgesDrawnHere() {
+  if (vscode.workspace.getConfiguration('workbench').get('experimental.modernUI') !== true) return true;
+  const [major, minor] = vscode.version.split('.').map(Number);
+  return major > 1 || minor >= 147;
+}
+// With two or more groups: no box where tab edges are drawn, else the box in `color`.
+const boxAcrossGroups = (c, color) => (tabEdgesDrawnHere() ? hasNone(c, ['editor.border']) : c['editor.border'] === color);
 const panelIs = (c, color) => hasAll(c, { 'modernPanel.border': color, 'panel.border': color, 'terminal.border': color });
 
 // h. observations 2 and 4 of #2175: a terminal with the SAME name as the panel agent, in the editor area, in
@@ -320,14 +330,15 @@ async function twoEditorGroups(ctx) {
       && vscode.window.tabGroups.activeTabGroup.tabs.includes(readmeTab()), () => `tabs=${tabsText()}`);
     const unfocused = () => {
       const c = customizations();
-      return hasAll(c, { 'tab.unfocusedActiveBorderTop': COLOR.ready }) && hasNone(c, ['editor.border', 'tab.activeBorderTop', 'editorGroup.border']);
+      return hasAll(c, { 'tab.unfocusedActiveBorderTop': COLOR.ready }) && hasNone(c, ['tab.activeBorderTop', 'editorGroup.border']) && boxAcrossGroups(c, COLOR.ready);
     };
+    console.log(`[e2e] 4h VS Code ${vscode.version}: tab edges drawn=${tabEdgesDrawnHere()}`);
     await pollHeld('4h agent group unfocused: only its tab edge, no box', unfocused, showActive, 5000);
     ctx.twin.show();
     await poll('4h twin active again', isTheActive(ctx.twin), showActiveName);
     const focused = () => {
       const c = customizations();
-      return hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && hasNone(c, ['editor.border', 'tab.unfocusedActiveBorderTop', 'editorGroup.border']);
+      return hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && hasNone(c, ['tab.unfocusedActiveBorderTop', 'editorGroup.border']) && boxAcrossGroups(c, COLOR.ready);
     };
     await pollHeld('4h agent group focused: only its tab edge, no box', focused, showActive, 5000);
   } finally {
@@ -346,7 +357,7 @@ async function twinMovedToNewGroup(ctx) {
   await poll('4h twin editor in a new group', () => vscode.window.tabGroups.all.length === groupsBefore + 1, () => `tabs=${tabsText()}`);
   const both = () => {
     const c = customizations();
-    return panelIs(c, COLOR.waiting) && hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && hasNone(c, ['editor.border']);
+    return panelIs(c, COLOR.waiting) && hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && boxAcrossGroups(c, COLOR.ready);
   };
   await pollHeld('4h moved twin: panel waiting AND its tab edge ready', both, showActive, 5000);
 }
