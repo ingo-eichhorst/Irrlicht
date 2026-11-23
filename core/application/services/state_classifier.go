@@ -185,8 +185,11 @@ var stateRules = []stateRule{
 		// only when the finished turn already reads waiting (#2176).
 		//
 		// The hook fires about 60 s after EVERY turn end, whether or not the
-		// agent asked anything (recording of 52 idle_prompt transitions: median
-		// delay 60.0 s after →ready). #1173 let it promote a statement-ending turn
+		// agent asked anything (measured in #2176 from the dev daemon recording
+		// ~/.local/share/irrlicht/recordings/2026-11-22T105124-063a37.jsonl with
+		// the Python counter in that issue's body: 52 idle_prompt transitions,
+		// median 60.0 s after →ready; one machine, one Claude Code version, so
+		// an observation rather than a guarantee). #1173 let it promote a statement-ending turn
 		// from ready to waiting, which made every idle session read waiting and
 		// erased the difference between "finished" and "blocked on you". The
 		// predicate now requires m.IsWaitingForUserInput() (question marker,

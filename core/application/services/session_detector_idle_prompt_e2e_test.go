@@ -13,12 +13,13 @@ import (
 )
 
 // TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting is the end-to-end
-// #1173 lifecycle, narrowed by #2176. A turn that ended on a question
-// (the "idle" phase below) sits ready until Claude Code's Notification/idle_prompt hook fires (HandleIdlePromptHook);
-// the detector must then correct the session ready→waiting in a single transition
-// (no working blip), hold it there, then release it back to working the moment
-// the user replies — without leaking the idle signal into the next turn.
-// A plain-statement turn no longer takes this path: see
+// #1173 lifecycle, narrowed by #2176 to a LOCK. The "idle" phase below ends on a
+// question, which the agent_done rule already routes to waiting without any hook,
+// so this test no longer proves the hook or its hold changes the state (it did,
+// for plain-statement turns, until #2176). What it still pins: with the hold in
+// place the session stays waiting across a re-evaluation, is released to working
+// when the user replies, and the idle signal does not leak into the next turn.
+// The defect test for the hook is
 // TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady.
 func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	tw := newMockAgentWatcher()

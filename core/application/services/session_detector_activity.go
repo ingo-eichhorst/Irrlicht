@@ -1244,9 +1244,9 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	// idle_prompt rule when the turn reads waiting, to ready otherwise, or to
 	// working via transcript_activity should real activity have arrived in the
 	// same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
-	// Mutation run for #2176: deleting this skip turns
-	// TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady red
-	// (ready → working → ready recorded).
+	// Run by hand while writing #2176 (not a committed fixture): deleting this
+	// skip turned TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady
+	// red, with ready → working → ready recorded.
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
