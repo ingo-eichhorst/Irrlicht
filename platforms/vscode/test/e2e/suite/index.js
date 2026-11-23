@@ -280,6 +280,15 @@ async function pairTerminal(ctx, terminal, sessionId, state) {
 }
 
 const isTheActive = (terminal) => () => vscode.window.activeTerminal === terminal;
+
+// Makes the panel terminal `terminal` the active one. With an editor-area terminal focused, Terminal.show()
+// alone was seen to change nothing for 20 s (no active-terminal event at all), so the panel is focused too.
+async function activatePanelTerminal(name, terminal) {
+  terminal.show();
+  await vscode.commands.executeCommand('workbench.action.focusPanel');
+  await poll(name, isTheActive(terminal), showActiveName);
+}
+
 const panelIs = (c, color) => hasAll(c, { 'modernPanel.border': color, 'panel.border': color, 'terminal.border': color });
 
 // h. observations 2 and 4 of #2175: a terminal with the SAME name as the panel agent, in the editor area, in
@@ -296,8 +305,7 @@ async function twinInEditor(ctx, extra) {
     return panelIs(c, COLOR.waiting) && hasAll(c, { 'editor.border': COLOR.ready, 'tab.activeBorderTop': COLOR.ready });
   };
   await poll('4h editor twin active: panel waiting AND editor ready at once', both, showActive);
-  ctx.terminal.show();
-  await poll('4h panel agent active', isTheActive(ctx.terminal), showActiveName);
+  await activatePanelTerminal('4h panel agent active', ctx.terminal);
   // The same-name case: a label match would put the panel agent in the editor area and paint it waiting.
   await pollHeld('4h panel agent active: panel waiting AND editor ready at once', both, showActive, 5000);
 }
@@ -347,8 +355,7 @@ async function twinMovedToNewGroup(ctx) {
 // less urgent pane is the active one.
 async function splitPanes(ctx, extra) {
   ctx.stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', ctx.tty), seq: nextSeq(ctx) });
-  ctx.terminal.show();
-  await poll('4h panel agent active for the split', isTheActive(ctx.terminal), showActiveName);
+  await activatePanelTerminal('4h panel agent active for the split', ctx.terminal);
   await poll('4h panel ready', () => panelIs(customizations(), COLOR.ready), showActive);
   const before = new Set(vscode.window.terminals);
   await vscode.commands.executeCommand('workbench.action.terminal.split');
@@ -357,8 +364,7 @@ async function splitPanes(ctx, extra) {
     () => `terminals=${vscode.window.terminals.map((t) => t.name)}`);
   extra.push(split);
   await pairTerminal(ctx, split, 'e2e-split-session', 'waiting');
-  ctx.terminal.show();
-  await poll('4h less urgent pane active', isTheActive(ctx.terminal), showActiveName);
+  await activatePanelTerminal('4h less urgent pane active', ctx.terminal);
   await pollHeld('4h split panes: the waiting pane wins over the active ready pane', () => panelIs(customizations(), COLOR.waiting),
     showActive, 5000);
 }
@@ -502,7 +508,8 @@ async function timed(name, fn) {
 
 async function cleanup({ stub, cfg, terminal }) {
   try { terminal?.dispose(); } catch { /* ignore */ }
-  try { await cfg.update('daemonUrl', undefined, GLOBAL); } catch { /* ignore */ }
+  // irrlicht.daemonUrl is left at the seeded stub port: clearing it would restart the client against the
+  // default URL, the real daemon on 7837, while the window is still open (review of #2175).
   try { if (stub.server?.listening) await stub.stop(); } catch { /* ignore */ }
 }
 

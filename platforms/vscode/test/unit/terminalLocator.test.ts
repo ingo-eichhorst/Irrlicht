@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BIND_WINDOW_MS, TerminalLocator } from '../../src/terminalLocator';
+import { BIND_WINDOW_MS, PAIR_GAP_MS, TerminalLocator } from '../../src/terminalLocator';
 import type { Layout, LocatorTimers, Place } from '../../src/terminalLocator';
 
 // Plain objects stand in for vscode.Tab and vscode.Terminal: the locator only uses their identity.
@@ -233,9 +233,11 @@ describe('TerminalLocator: learning from events', () => {
     // ... then the terminal appears and creation pairs it with X ...
     loc.observeTabs(layout([{ tabs: [x], front: x, active: true }], [p, e], p));
     clock.advance(20);
-    // ... and inside the window the user switches to the panel terminal with the same name.
+    // ... and inside the window the user switches to the panel terminal with the same name. The new terminal
+    // next to the new tab contradicts that candidate; creation decides once PAIR_GAP_MS has passed.
     const l = layout([{ tabs: [x], front: x, active: true }], [p, e], p);
     loc.observeActiveTerminal(l);
+    clock.advance(PAIR_GAP_MS);
     const places = loc.locate(l);
     expect(placeOf(places, e)).toEqual(editor(0));
     expect(placeOf(places, p)).toEqual(PANEL);
@@ -380,13 +382,141 @@ describe('TerminalLocator: learning from events', () => {
     loc.prime(layout([{ tabs: [x], front: undefined, active: true }], [p, e], e));
     const back = layout([{ tabs: [x], front: x, active: true }], [p, e], e);
     loc.observeTabs(back);
-    clock.advance(BIND_WINDOW_MS);
+    clock.advance(BIND_WINDOW_MS + 49);
     timers.run();
-    expect(due, 'not before the window has passed').toBe(0);
+    expect(due, 'not before the window and its margin have passed (review 2 F3: +1 ms raced Date.now)').toBe(0);
     clock.advance(1);
     timers.run();
     expect(due, 'exactly once after it').toBe(1);
     expect(placeOf(loc.locate(back), e)).toEqual(editor(0));
+  });
+
+  it('a due callback that leaves the binding undecided looks again, until CONFIRM_MAX_MS', () => {
+    const clock = new Clock();
+    const timers = new FakeTimers(clock);
+    let due = 0;
+    let loc: TerminalLocator<Tab, Term> | undefined;
+    const p = term('P', 'zsh');
+    const e = term('E', 'zsh');
+    const x = tab('X', '');
+    loc = new TerminalLocator<Tab, Term>(clock.now, BIND_WINDOW_MS, { timers, onDue: () => { due++; loc?.locate(l()); } });
+    // A restored tab whose title has not arrived: the candidate waits for it.
+    const l = (): Layout<Tab, Term> => layout([{ tabs: [x], front: x, active: true }], [p, e], e);
+    loc.prime(layout([{ tabs: [x], front: undefined, active: true }], [p, e], e));
+    loc.observeTabs(l());
+    for (let i = 0; i < 4; i++) { clock.advance(BIND_WINDOW_MS + 50); timers.run(); }
+    expect(due, 'it kept looking while the title was missing').toBe(4);
+    x.label = 'zsh';
+    clock.advance(BIND_WINDOW_MS + 50);
+    timers.run();
+    expect(placeOf(loc.locate(l()), e)).toEqual(editor(0));
+    clock.advance(10_000);
+    timers.run();
+    expect(timers.armed.size, 'decided: nothing left armed').toBe(0);
+  });
+
+  it('review 2 F1: a new panel terminal shortly before a terminal is moved to the editor is not paired with its tab', () => {
+    const clock = new Clock();
+    const loc = new TerminalLocator<Tab, Term>(clock.now);
+    const e = term('E', 'zsh');
+    loc.prime(layout([{ tabs: [], active: true }], [e], e));
+    // Ctrl+Shift+` opens N in the panel; it becomes active.
+    const n = term('N', 'zsh');
+    loc.observeTabs(layout([{ tabs: [], active: true }], [e, n], n));
+    loc.observeActiveTerminal(layout([{ tabs: [], active: true }], [e, n], n));
+    clock.advance(600);
+    // E moves to the editor: its tab opens, then E becomes active.
+    const x = tab('X', 'zsh');
+    loc.observeTabs(layout([{ tabs: [x], front: x, active: true }], [e, n], n));
+    clock.advance(30);
+    loc.observeActiveTerminal(layout([{ tabs: [x], front: x, active: true }], [e, n], e));
+    clock.advance(2000);
+    const places = loc.locate(layout([{ tabs: [x], front: x, active: true }], [e, n], e));
+    expect(placeOf(places, e)).toEqual(editor(0));
+    expect(placeOf(places, n)).toEqual(PANEL);
+  });
+
+  it('review 2 F1: two new terminals around a new tab make creation ambiguous; activation decides', () => {
+    const clock = new Clock();
+    const loc = new TerminalLocator<Tab, Term>(clock.now);
+    const p = term('P', 'zsh');
+    loc.prime(layout([{ tabs: [], active: true }], [p], p));
+    const n = term('N', 'zsh');
+    loc.observeTabs(layout([{ tabs: [], active: true }], [p, n], n));
+    clock.advance(690);
+    // "Create New Terminal in Editor Area": the tab is seen before its terminal.
+    const x = tab('X', 'zsh');
+    loc.observeTabs(layout([{ tabs: [x], front: x, active: true }], [p, n], n));
+    clock.advance(10);
+    const e = term('E', 'zsh');
+    loc.observeTabs(layout([{ tabs: [x], front: x, active: true }], [p, n, e], n));
+    clock.advance(20);
+    loc.observeActiveTerminal(layout([{ tabs: [x], front: x, active: true }], [p, n, e], e));
+    clock.advance(2000);
+    const places = loc.locate(layout([{ tabs: [x], front: x, active: true }], [p, n, e], e));
+    expect(placeOf(places, e)).toEqual(editor(0));
+    expect(placeOf(places, n)).toEqual(PANEL);
+  });
+
+  it('review 2 F2: activation never takes a terminal another live tab already shows', () => {
+    const s = sameNameScenario();
+    // A restored, unlearned tab Z in another group with the same title comes to the front; inside the window
+    // the user clicks into E (shown by X).
+    const z = tab('Z', '✳ Claude Code');
+    const f = term('F', '✳ Claude Code');
+    s.loc.prime(layout([{ tabs: [s.x], front: s.x, active: false }, { tabs: [z], front: undefined, active: true }], [s.p, s.e, f], s.p));
+    s.loc.observeTabs(layout([{ tabs: [s.x], front: s.x, active: false }, { tabs: [z], front: z, active: true }], [s.p, s.e, f], s.p));
+    s.clock.advance(50);
+    const l = layout([{ tabs: [s.x], front: s.x, active: false }, { tabs: [z], front: z, active: true }], [s.p, s.e, f], s.e);
+    s.loc.observeActiveTerminal(l);
+    s.clock.advance(2000);
+    const places = s.loc.locate(l);
+    expect(placeOf(places, s.e), 'E stays with X').toEqual(editor(0));
+  });
+
+  it('review 2 F4: a late change with no previous active terminal binds nothing', () => {
+    const clock = new Clock();
+    const loc = new TerminalLocator<Tab, Term>(clock.now);
+    const p = term('P', 'zsh');
+    const e = term('E', 'zsh');
+    const x = tab('X', 'zsh');
+    loc.prime(layout([{ tabs: [x], front: undefined, active: true }], [p, e], undefined));
+    loc.observeTabs(layout([{ tabs: [x], front: x, active: true }], [p, e], undefined));
+    clock.advance(BIND_WINDOW_MS + 100);
+    const l = layout([{ tabs: [x], front: x, active: true }], [p, e], p);
+    loc.observeActiveTerminal(l);
+    const places = loc.locate(l);
+    expect(placeOf(places, p)).toEqual(UNKNOWN);
+    expect(placeOf(places, e)).toEqual(UNKNOWN);
+  });
+
+  it('review 2 F5: a terminal released by moveToTerminalPanel is not handed to a tab opened 700 ms later', () => {
+    const s = sameNameScenario();
+    // E goes back to the panel: X closes.
+    const back = layout([{ tabs: [], active: true }], [s.p, s.e], s.e);
+    s.loc.observeTabs(back);
+    s.clock.advance(700);
+    // P is moved to the editor.
+    const y = tab('Y', '✳ Claude Code');
+    s.loc.observeTabs(layout([{ tabs: [y], front: y, active: true }], [s.p, s.e], s.e));
+    s.clock.advance(5);
+    const l = layout([{ tabs: [y], front: y, active: true }], [s.p, s.e], s.p);
+    s.loc.observeActiveTerminal(l);
+    s.clock.advance(2000);
+    const places = s.loc.locate(l);
+    expect(placeOf(places, s.p)).toEqual(editor(0));
+    expect(placeOf(places, s.e)).toEqual(PANEL);
+  });
+
+  it('review 2 F6: an orphaned tab is never paired with a new terminal', () => {
+    const s = sameNameScenario();
+    // E closes while its tab is still listed: X is orphaned. A new panel terminal opens right away.
+    const n = term('N', '✳ Claude Code');
+    s.loc.observeTabs(layout([{ tabs: [s.x], front: s.x, active: true }], [s.p], s.p));
+    s.loc.observeTabs(layout([{ tabs: [s.x], front: s.x, active: true }], [s.p, n], n));
+    s.clock.advance(2000);
+    const places = s.loc.locate(layout([{ tabs: [s.x], front: s.x, active: true }], [s.p, n], n));
+    expect(placeOf(places, n)).toEqual(PANEL);
   });
 
   it('a pending binding that is resolved or superseded does not leave a stale callback', () => {

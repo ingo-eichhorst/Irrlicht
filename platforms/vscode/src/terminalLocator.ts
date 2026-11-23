@@ -8,28 +8,37 @@
 // life (moving an editor to another group closes its tab and opens a new one), so a bound tab is never
 // learned again. Three kinds of evidence bind a tab, strongest first:
 //
-// 1. Creation: a terminal tab and a terminal that both appear within PAIR_WINDOW_MS of each other, each the
-//    only new one of its kind, are the same terminal (a terminal created in the editor area).
-// 2. Transfer: a tab that closes while its terminal lives on hands that terminal to the one new tab with the
-//    same label that appears within PAIR_WINDOW_MS (an editor moved to another group).
-// 3. Activation, seen in the spike with VS Code 1.147: when a terminal tab becomes the active tab of the
+// 1. Activation, seen in the spike with VS Code 1.147: when a terminal tab becomes the active tab of the
 //    active editor group, the terminal shown in it becomes vscode.window.activeTerminal a few milliseconds
 //    later, or already is (then no event fires: the 1.147 extension host drops an unchanged active terminal
 //    in $acceptActiveTerminalChanged). For a tab that has just opened only an active-terminal change inside
 //    BIND_WINDOW_MS counts (moveToEditor fires one, spike A11); for a tab that already existed and came back
-//    to the front, the terminal active when the window ends counts too (spike A8).
+//    to the front, the terminal active when the window ends counts too (spike A8). The terminal's name must
+//    equal the tab's label (an empty title has not arrived yet: it waits up to CONFIRM_MAX_MS), and a
+//    terminal another tab already shows is never taken.
+// 2. Creation, for when the activation arrives late (seen under load): a new terminal tab and a new terminal
+//    that appear within PAIR_GAP_MS of each other, with no other new terminal from PAIR_CONTEXT_MS before the
+//    tab to PAIR_GAP_MS after it and no other new tab near the terminal. Decided only once PAIR_GAP_MS has
+//    passed, so a later arrival can still make it ambiguous. Names must agree where both are known.
+// 3. Transfer: a tab that closes while its terminal lives on hands that terminal to the one new tab with the
+//    same label that appears within PAIR_GAP_MS (an editor moved to another group).
 //
-// Every binding needs the terminal's name to equal the tab's label once both are known (an empty title has
-// not arrived yet); a candidate whose names never agree within CONFIRM_MAX_MS is dropped, leaving the
-// terminals unknown rather than wrong. What activation cannot rule out: two terminals with the same name, a
-// tab back in front with no learned terminal, and either the user switching to the other terminal within
-// BIND_WINDOW_MS or the extension host delivering the active-terminal change later than that; the tab is
-// then bound to the wrong one of the two.
+// Anything else leaves the terminals unknown rather than wrong. What this cannot rule out: two terminals with
+// the same name and an editor tab coming to the front without a learned terminal, with either the user
+// switching to the other terminal within BIND_WINDOW_MS or the extension host delivering the active-terminal
+// change later than that (the tab is then bound to the wrong one of the two); and two editor moves or
+// creations of same-named terminals within PAIR_GAP_MS of each other.
 
 /** How long after a terminal tab comes to the front an active-terminal change still belongs to that tab. */
 export const BIND_WINDOW_MS = 300;
 /** How far apart a new tab and a new (or released) terminal may appear and still be paired. */
-export const PAIR_WINDOW_MS = 1000;
+export const PAIR_GAP_MS = 300;
+/** How long before a new tab another new terminal makes a creation pairing ambiguous. */
+export const PAIR_CONTEXT_MS = 1000;
+/** How long new tabs, new terminals and released terminals are remembered. */
+const REMEMBER_MS = PAIR_CONTEXT_MS + PAIR_GAP_MS + 500;
+/** How long after the window a due callback fires, so the wall clock has moved past it too. */
+const DUE_MARGIN_MS = 50;
 /** How long a candidate waits for the tab's label and the terminal's name to be known. */
 export const CONFIRM_MAX_MS = 3000;
 
@@ -75,11 +84,18 @@ export class TerminalLocator<Tab, Term> {
   private readonly bound = new Map<Tab, Term>();
   /** Tabs whose learned terminal has closed while the tab is still listed: never a candidate for another terminal. */
   private readonly orphaned = new Set<Tab>();
+  /**
+   * Unlearned tabs that may have shown a terminal that has since closed (VS Code can report the terminal
+   * closed before its tab): never placed by elimination, which assumes every tab shows a live terminal.
+   */
+  private readonly suspect = new Set<Tab>();
   private readonly labels = new Map<Tab, string>();
-  private readonly seenTerms = new Set<Term>();
+  private readonly names = new Map<Term, string>();
   private newTabs: Array<Seen<Tab>> = [];
   private newTerms: Array<Seen<Term>> = [];
   private released: Array<Released<Term>> = [];
+  /** Labels of terminal tabs that closed recently: their terminal may be the next one to become active. */
+  private closedTabs: Array<{ label: string; at: number }> = [];
   private lastFront: Tab | undefined;
   private lastActive: Term | undefined;
   private pending: Pending<Tab, Term> | undefined;
@@ -148,7 +164,7 @@ export class TerminalLocator<Tab, Term> {
     if (p === undefined || p.candidate !== undefined) return this.confirm(layout);
     if (this.now() - p.at <= this.windowMs) p.candidate = layout.activeTerminal;
     // Late, with no change inside the window: an existing tab's terminal was the one active until now.
-    else if (!p.isNew) p.candidate = previous;
+    else if (!p.isNew && previous !== undefined) p.candidate = previous;
     else this.pending = undefined;
     this.confirm(layout);
   }
@@ -170,8 +186,12 @@ export class TerminalLocator<Tab, Term> {
     for (const g of layout.groups) {
       for (const { tab, label } of g.terminalTabs) if (!tabTerm.has(tab) && !this.orphaned.has(tab)) unresolved.add(label);
     }
+    // A tab or terminal whose title has not arrived yet ('') could be any of the others.
+    const anyUntitled = unresolved.has('');
     for (const { terminal, name } of layout.terminals) {
-      if (!places.has(terminal)) places.set(terminal, unresolved.has(name) ? { area: 'unknown' } : { area: 'panel' });
+      if (places.has(terminal)) continue;
+      const maybeInATab = unresolved.has(name) || anyUntitled || (name === '' && unresolved.size > 0);
+      places.set(terminal, maybeInATab ? { area: 'unknown' } : { area: 'panel' });
     }
     return places;
   }
@@ -180,7 +200,12 @@ export class TerminalLocator<Tab, Term> {
     if (!this.due) return;
     this.disarm();
     const { timers, onDue } = this.due;
-    this.dueTimer = timers.set(() => { this.dueTimer = undefined; onDue(); }, this.windowMs + 1);
+    this.dueTimer = timers.set(() => {
+      this.dueTimer = undefined;
+      onDue();
+      // Still undecided (a title not arrived yet, a creation pairing not due yet): look again later.
+      if (this.pending !== undefined && this.now() - this.pending.at <= CONFIRM_MAX_MS) this.arm();
+    }, this.windowMs + DUE_MARGIN_MS);
   }
 
   private disarm(): void {
@@ -206,20 +231,34 @@ export class TerminalLocator<Tab, Term> {
     if (p.candidate === undefined) { if (expired) this.pending = undefined; return; }
     const label = this.labels.get(p.tab);
     const name = nameOf(layout, p.candidate);
-    if (label === undefined || name === undefined) { this.pending = undefined; return; }
+    const shownElsewhere = [...this.bound.values()].includes(p.candidate);
+    // A new tab with a new terminal next to it is that terminal's (creation decides); any other candidate is not.
+    const near = p.isNew ? this.nearNewTerms(this.newTabs.find((s) => s.item === p.tab)) : [];
+    const contradicted = near.length > 0 && !near.includes(p.candidate);
+    // An existing tab came to the front as a tab with this name closed (moveToTerminalPanel): the candidate
+    // may be the terminal that just left for the panel rather than this tab's. (For a new tab, a closing tab
+    // with its name is the same editor moving to another group, and the candidate is the right one.)
+    const justLeft = !p.isNew && name !== undefined && this.closedTabs.some((c) => c.label === name && c.at >= p.at - PAIR_GAP_MS);
+    if (label === undefined || name === undefined || shownElsewhere || contradicted || justLeft) { this.pending = undefined; return; }
     if (label === '' || name === '') { if (expired) this.pending = undefined; return; }
     if (label === name) this.bind(p.tab, p.candidate);
     this.pending = undefined;
   }
 
-  /** The learned bindings, plus any tab whose terminal follows by elimination: its label is carried by exactly one unclaimed terminal. */
+  /**
+   * The learned bindings, plus any tab whose terminal follows by elimination: its label is carried by exactly
+   * one unclaimed terminal. Elimination assumes every tab shows a listed, live terminal, so it skips orphaned
+   * and suspect tabs and tabs younger than PAIR_GAP_MS (a tab can be listed before its terminal).
+   */
   private resolveTabs(layout: Layout<Tab, Term>): Map<Tab, Term> {
     const tabTerm = new Map(this.bound);
     const claimed = new Set(this.bound.values());
     const byLabel = new Map<string, Tab[]>();
+    const now = this.now();
+    const young = new Set(this.newTabs.filter((s) => now - s.at < PAIR_GAP_MS).map((s) => s.item));
     for (const g of layout.groups) {
       for (const { tab, label } of g.terminalTabs) {
-        if (tabTerm.has(tab) || this.orphaned.has(tab)) continue;
+        if (tabTerm.has(tab) || this.orphaned.has(tab) || this.suspect.has(tab) || young.has(tab)) continue;
         byLabel.set(label, [...(byLabel.get(label) ?? []), tab]);
       }
     }
@@ -247,40 +286,60 @@ export class TerminalLocator<Tab, Term> {
       if (!this.labels.has(tab) && !initial) this.newTabs.push({ item: tab, at: now });
       this.labels.set(tab, label);
     }
-    for (const t of terminals) {
-      if (!this.seenTerms.has(t) && !initial) this.newTerms.push({ item: t, at: now });
-      this.seenTerms.add(t);
+    for (const { terminal: t, name } of layout.terminals) {
+      if (!this.names.has(t) && !initial) this.newTerms.push({ item: t, at: now });
+      this.names.set(t, name);
     }
     this.prune(tabs, terminals, now);
-    const fresh = <T>(s: Seen<T> | Released<Term>): boolean => now - s.at <= PAIR_WINDOW_MS;
+    const fresh = <T>(s: Seen<T> | Released<Term>): boolean => now - s.at <= REMEMBER_MS;
     this.newTabs = this.newTabs.filter((s) => fresh(s) && tabs.has(s.item) && !this.bound.has(s.item));
     this.newTerms = this.newTerms.filter((s) => fresh(s) && terminals.has(s.item));
     this.released = this.released.filter((r) => fresh(r) && terminals.has(r.terminal));
+    this.closedTabs = this.closedTabs.filter((c) => now - c.at <= REMEMBER_MS);
     this.pairTransfers(tabs);
-    this.pairCreation(layout);
+    this.pairCreation(layout, now);
   }
 
-  /** Transfer: a released terminal goes to the one new unbound tab with its label. */
+  /** Unclaimed new terminals that appeared within PAIR_GAP_MS of `tab`. */
+  private nearNewTerms(tab: Seen<Tab> | undefined): Term[] {
+    if (tab === undefined) return [];
+    const claimed = new Set(this.bound.values());
+    return this.newTerms.filter((t) => !claimed.has(t.item) && Math.abs(t.at - tab.at) <= PAIR_GAP_MS).map((t) => t.item);
+  }
+
+  /** New tabs that may still be paired: not bound, not orphaned. */
+  private openTabs(): Array<Seen<Tab>> {
+    return this.newTabs.filter((s) => !this.bound.has(s.item) && !this.orphaned.has(s.item));
+  }
+
+  /** Transfer: a released terminal goes to the one new tab with its label that appeared within PAIR_GAP_MS of the release. */
   private pairTransfers(tabs: Map<Tab, string>): void {
     for (const r of [...this.released]) {
       if ([...this.bound.values()].includes(r.terminal)) continue;
-      const matches = this.newTabs.filter((s) => !this.bound.has(s.item) && tabs.get(s.item) === r.label);
+      const matches = this.openTabs().filter((s) => tabs.get(s.item) === r.label && Math.abs(s.at - r.at) <= PAIR_GAP_MS);
       if (matches.length !== 1) continue;
       this.bind(matches[0].item, r.terminal);
       this.released = this.released.filter((x) => x !== r);
     }
   }
 
-  /** Creation: one new unbound tab and one new unbound terminal, appearing within PAIR_WINDOW_MS, names compatible. */
-  private pairCreation(layout: Layout<Tab, Term>): void {
+  /** Creation, decided once PAIR_GAP_MS has passed since the tab appeared; see the header for the rule. */
+  private pairCreation(layout: Layout<Tab, Term>, now: number): void {
     const claimed = new Set(this.bound.values());
-    const tabs = this.newTabs.filter((s) => !this.bound.has(s.item));
     const terms = this.newTerms.filter((s) => !claimed.has(s.item));
-    if (tabs.length !== 1 || terms.length !== 1 || Math.abs(tabs[0].at - terms[0].at) > PAIR_WINDOW_MS) return;
-    const label = this.labels.get(tabs[0].item) ?? '';
-    const name = nameOf(layout, terms[0].item) ?? '';
-    if (label !== '' && name !== '' && label !== name) return;
-    this.bind(tabs[0].item, terms[0].item);
+    for (const tab of this.openTabs()) {
+      if (now - tab.at < PAIR_GAP_MS) continue;
+      const near = terms.filter((t) => Math.abs(t.at - tab.at) <= PAIR_GAP_MS);
+      const context = terms.filter((t) => t.at >= tab.at - PAIR_CONTEXT_MS && t.at <= tab.at + PAIR_GAP_MS);
+      if (near.length !== 1 || context.length !== 1) continue;
+      const rivals = this.openTabs().filter((o) => o !== tab && Math.abs(o.at - near[0].at) <= PAIR_GAP_MS);
+      if (rivals.length > 0) continue;
+      const label = this.labels.get(tab.item) ?? '';
+      const name = nameOf(layout, near[0].item) ?? '';
+      if (label !== '' && name !== '' && label !== name) continue;
+      this.bind(tab.item, near[0].item);
+      return;
+    }
   }
 
   /**
@@ -294,9 +353,20 @@ export class TerminalLocator<Tab, Term> {
         if (terminals.has(t)) this.released.push({ terminal: t, label: this.labels.get(tab) ?? '', at: now });
       } else if (!terminals.has(t)) { this.bound.delete(tab); this.orphaned.add(tab); }
     }
-    for (const tab of [...this.labels.keys()]) if (!tabs.has(tab)) this.labels.delete(tab);
+    for (const [t, name] of [...this.names]) {
+      if (terminals.has(t)) continue;
+      this.names.delete(t);
+      for (const [tab, label] of tabs) {
+        if (!this.bound.has(tab) && !this.orphaned.has(tab) && (label === name || label === '')) this.suspect.add(tab);
+      }
+    }
+    for (const [tab, label] of [...this.labels]) {
+      if (tabs.has(tab)) continue;
+      this.labels.delete(tab);
+      this.closedTabs.push({ label, at: now });
+    }
     for (const tab of this.orphaned) if (!tabs.has(tab)) this.orphaned.delete(tab);
-    for (const t of [...this.seenTerms]) if (!terminals.has(t)) this.seenTerms.delete(t);
+    for (const tab of this.suspect) if (!tabs.has(tab) || this.bound.has(tab)) this.suspect.delete(tab);
     if (this.pending !== undefined && !tabs.has(this.pending.tab)) this.pending = undefined;
     if (this.lastActive !== undefined && !terminals.has(this.lastActive)) this.lastActive = undefined;
   }
