@@ -61,3 +61,20 @@ func TestClassify_IdlePromptAttributesWaitingTurn(t *testing.T) {
 		t.Errorf("rule = %q, want %q", v.Rule, session.SignalIdlePrompt)
 	}
 }
+
+// TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn is the #2176
+// review-F1 defect test. Without the hook, a question-ending turn that carries
+// any SessionError classifies error (classifyAgentDone checks the error first).
+// The idle_prompt rule must not turn that into waiting: it is provenance-only,
+// so it may only fire where agent_done itself would say waiting.
+func TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn(t *testing.T) {
+	v := ClassifyStateTiered(session.StateReady, &session.SessionMetrics{
+		LastEventType:     "turn_done",
+		LastAssistantText: "Which option do you want?",
+		IdlePromptPending: true,
+		SessionError:      &session.SessionError{Phase: session.ErrorPhaseRetrying, Class: "provider"},
+	})
+	if v.State != session.StateError {
+		t.Errorf("state = %q, want error — idle_prompt must not override a standing non-terminal error", v.State)
+	}
+}

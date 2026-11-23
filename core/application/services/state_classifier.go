@@ -198,12 +198,16 @@ var stateRules = []stateRule{
 		// hook adds hook-tier provenance (decided_by_rule: idle_prompt), not a
 		// state change. A plain-statement turn falls through to agent_done → ready.
 		//
-		// This notification must not mask a terminal session error (#1871). The
-		// agent stopped because the turn failed, not because it awaits user
-		// input. ErrorPhaseTerminal also says that only the next user turn can
-		// clear the failure, so idle_prompt must not mask it in the meantime.
-		// Retrying and unknown-phase errors keep the prior hook precedence: they
-		// do not carry that terminal verdict.
+		// This notification must not mask ANY standing session error (#1871,
+		// widened by #2176). The agent stopped because the turn failed, not
+		// because it awaits user input, and classifyAgentDone checks
+		// SessionError before the waiting cue and returns error. Requiring
+		// SessionError == nil makes the rule fire only where agent_done itself
+		// would say waiting, which is what keeps it provenance-only. Before
+		// #2176 only ErrorPhaseTerminal was excluded, so a retrying or
+		// unknown-phase error on a question-ending turn read waiting under the
+		// hook and error without it (pinned by
+		// TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn).
 		//
 		// Nor may it mask a live background process (#1982) — a Bash
 		// run_in_background command or a Claude Code Monitor task wakes the
@@ -221,7 +225,7 @@ var stateRules = []stateRule{
 		signal: session.SignalIdlePrompt,
 		when: func(_ string, m *session.SessionMetrics) bool {
 			return m.IdlePromptPending && m.IsWaitingForUserInput() &&
-				!hasTerminalSessionError(m) && !m.HasLiveBackgroundProcess
+				m.SessionError == nil && !m.HasLiveBackgroundProcess
 		},
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
@@ -430,13 +434,6 @@ func hasClassifiableEvidence(metrics *session.SessionMetrics, isChild bool) bool
 		return false
 	}
 	return isChild || metrics.LastEventType != ""
-}
-
-// hasTerminalSessionError reports whether the adapter said that the current
-// failure ended the turn. It uses ErrorPhase rather than an adapter-specific
-// Class value because the phase owns recovery semantics across adapters.
-func hasTerminalSessionError(metrics *session.SessionMetrics) bool {
-	return metrics.SessionError != nil && metrics.SessionError.Phase == session.ErrorPhaseTerminal
 }
 
 // transitionTo returns (target, reason) when currentState differs from
