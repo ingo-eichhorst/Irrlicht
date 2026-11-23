@@ -508,6 +508,31 @@ describe('TerminalLocator: learning from events', () => {
     expect(placeOf(places, s.e)).toEqual(PANEL);
   });
 
+  it('review 3: closing the active editor terminal does not hand the tab behind it to the panel fallback', () => {
+    const clock = new Clock();
+    const loc = new TerminalLocator<Tab, Term>(clock.now);
+    const p = term('P', '✳ Claude Code');
+    const b = term('B', '✳ Claude Code');
+    const t = term('T', 'zsh');
+    const y = tab('Y', '✳ Claude Code');
+    const tt = tab('TT', 'zsh');
+    // Restored: Y behind TT in one group, P in the panel (the panel's last active terminal), T active.
+    loc.prime(layout([{ tabs: [y, tt], front: tt, active: true }], [p, b, t], t));
+    // Ctrl+W on TT: Y comes to the front and TT closes, T closes, VS Code falls back to P, then activates B.
+    loc.observeTabs(layout([{ tabs: [y], front: y, active: true }], [p, b, t], t));
+    clock.advance(1);
+    loc.locate(layout([{ tabs: [y], front: y, active: true }], [p, b], t));
+    clock.advance(1);
+    loc.observeActiveTerminal(layout([{ tabs: [y], front: y, active: true }], [p, b], p));
+    clock.advance(4);
+    const l = layout([{ tabs: [y], front: y, active: true }], [p, b], b);
+    loc.observeActiveTerminal(l);
+    clock.advance(2000);
+    const places = loc.locate(l);
+    expect(placeOf(places, p)?.area, 'the panel terminal is never placed in the editor').not.toBe('editor');
+    expect(placeOf(places, b)?.area, 'the editor terminal is never placed in the panel').not.toBe('panel');
+  });
+
   it('review 2 F6: an orphaned tab is never paired with a new terminal', () => {
     const s = sameNameScenario();
     // E closes while its tab is still listed: X is orphaned. A new panel terminal opens right away.

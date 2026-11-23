@@ -27,7 +27,9 @@
 // the same name and an editor tab coming to the front without a learned terminal, with either the user
 // switching to the other terminal within BIND_WINDOW_MS or the extension host delivering the active-terminal
 // change later than that (the tab is then bound to the wrong one of the two); and two editor moves or
-// creations of same-named terminals within PAIR_GAP_MS of each other.
+// creations of same-named terminals within PAIR_GAP_MS of each other. Not observed, but possible for editor
+// terminals restored after a reload (third review of #2175): a renamed terminal whose tab reports the new
+// title before the terminal does would be placed by elimination under the new name until the next event.
 
 /** How long after a terminal tab comes to the front an active-terminal change still belongs to that tab. */
 export const BIND_WINDOW_MS = 300;
@@ -235,10 +237,13 @@ export class TerminalLocator<Tab, Term> {
     // A new tab with a new terminal next to it is that terminal's (creation decides); any other candidate is not.
     const near = p.isNew ? this.nearNewTerms(this.newTabs.find((s) => s.item === p.tab)) : [];
     const contradicted = near.length > 0 && !near.includes(p.candidate);
-    // An existing tab came to the front as a tab with this name closed (moveToTerminalPanel): the candidate
-    // may be the terminal that just left for the panel rather than this tab's. (For a new tab, a closing tab
-    // with its name is the same editor moving to another group, and the candidate is the right one.)
-    const justLeft = !p.isNew && name !== undefined && this.closedTabs.some((c) => c.label === name && c.at >= p.at - PAIR_GAP_MS);
+    // An existing tab came to the front because a terminal tab closed: the active-terminal changes that follow
+    // are not this tab's alone. moveToTerminalPanel then activates the terminal that just left for the panel,
+    // and closing the active editor terminal first activates the panel's last active terminal before this
+    // tab's (third review of #2175, traced in 1.147's terminalEditorService and _evaluateActiveInstance).
+    // Nothing is learned then. (For a new tab, a closing tab is the same editor moving to another group, and
+    // the candidate is the right one.)
+    const justLeft = !p.isNew && this.closedTabs.some((c) => c.at >= p.at - PAIR_GAP_MS);
     if (label === undefined || name === undefined || shownElsewhere || contradicted || justLeft) { this.pending = undefined; return; }
     if (label === '' || name === '') { if (expired) this.pending = undefined; return; }
     if (label === name) this.bind(p.tab, p.candidate);

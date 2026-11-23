@@ -284,9 +284,14 @@ const isTheActive = (terminal) => () => vscode.window.activeTerminal === termina
 // Makes the panel terminal `terminal` the active one. With an editor-area terminal focused, Terminal.show()
 // alone was seen to change nothing for 20 s (no active-terminal event at all), so the panel is focused too.
 async function activatePanelTerminal(name, terminal) {
-  terminal.show();
-  await vscode.commands.executeCommand('workbench.action.focusPanel');
-  await poll(name, isTheActive(terminal), showActiveName);
+  const focus = async () => { terminal.show(); await vscode.commands.executeCommand('workbench.action.focusPanel'); };
+  await focus();
+  let lastTry = Date.now();
+  await poll(name, async () => {
+    if (isTheActive(terminal)()) return true;
+    if (Date.now() - lastTry >= 2000) { lastTry = Date.now(); await focus(); }
+    return false;
+  }, showActiveName);
 }
 
 // The modern layout before VS Code 1.147 draws no editor tab edges, so with two or more editor groups the

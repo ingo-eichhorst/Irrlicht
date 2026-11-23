@@ -47,6 +47,8 @@ class World {
   groups: Group[] = [{ tabs: [], front: undefined }];
   activeGroup = 0;
   active: Term | undefined;
+  /** The panel's last active terminal: VS Code falls back to it when the active editor terminal goes away. */
+  lastPanelActive: Term | undefined;
   readonly log: string[] = [];
   readonly timers = new Timers(() => this.t);
   readonly loc: TerminalLocator<Tab, Term>;
@@ -97,6 +99,7 @@ class World {
   emitTabs(what: string): void { this.log.push(`${this.t} tabs: ${what}`); this.loc.observeTabs(this.layout()); this.check(what); this.tick(1 + Math.floor(this.r() * 5)); }
   emitTerms(what: string): void { this.log.push(`${this.t} terms: ${what}`); this.check(what); this.tick(1 + Math.floor(this.r() * 5)); }
   setActive(t: Term | undefined, why: string): void {
+    if (t !== undefined && !this.tabOf(t)) this.lastPanelActive = t;
     if (t === this.active) return;
     this.active = t;
     this.log.push(`${this.t} active -> ${t ? t.id : 'none'} (${why})`);
@@ -219,10 +222,30 @@ const ACTIONS: Record<string, Action> = {
     if (w.terms.length === 0) return false;
     const t = w.pick(w.terms);
     const at = w.tabOf(t);
+    const wasActive = w.active === t;
+    if (!at) {
+      w.terms = w.terms.filter((x) => x !== t);
+      w.emitTerms(`close terminal ${t.id}`);
+      if (wasActive) w.setActive(w.terms[w.terms.length - 1], 'after close');
+      return true;
+    }
+    // Closing the active terminal editor (third review of #2175, traced in the 1.147 bundle): the tab model
+    // changes first (the tab behind it comes to the front, the tab closes), the terminal closes, then the
+    // terminal editor host clears its active instance and VS Code falls back to the panel's last active
+    // terminal, and only then does the tab now in front make its own terminal active.
+    const before = w.activeFront();
+    w.removeTab(at.g, at.tab);
+    w.dropEmptyGroup(at.g);
+    const after = w.activeFront();
+    w.emitTabs(`its tab ${at.tab.id} closes`);
     w.terms = w.terms.filter((x) => x !== t);
     w.emitTerms(`close terminal ${t.id}`);
-    if (at) w.change(`its tab ${at.tab.id} closes`, () => { w.removeTab(at.g, at.tab); w.dropEmptyGroup(at.g); });
-    if (w.active === t) w.setActive(w.terms[w.terms.length - 1], 'after close');
+    if (wasActive) {
+      const fallback = w.lastPanelActive && w.terms.includes(w.lastPanelActive) && !w.tabOf(w.lastPanelActive) ? w.lastPanelActive : undefined;
+      if (fallback) w.setActive(fallback, 'panel fallback after closing the active editor terminal');
+      else if (!after?.term) w.setActive(w.terms[w.terms.length - 1], 'after close');
+    }
+    if (after !== before && after?.term) w.setActive(after.term, `front after closing ${at.tab.id}`);
     return true;
   },
 };
