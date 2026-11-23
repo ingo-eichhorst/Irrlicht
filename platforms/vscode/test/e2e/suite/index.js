@@ -137,6 +137,8 @@ async function ttyOf(pid) {
 
 const GLOBAL = vscode.ConfigurationTarget.Global;
 const COLOR = { working: '#8B5CF6', waiting: '#FF9500', ready: '#34C759' };
+// The editor-area keys the frame may write (#2175): the box (one group, or no tab edges) and the two tab edges.
+const EDITOR_KEYS = ['editor.border', 'tab.activeBorderTop', 'tab.unfocusedActiveBorderTop'];
 // The codicon the Agent Terminals row renders for a state: the macOS app's glyph.
 const ICON = { working: 'circle-large-filled', ready: 'pass-filled' };
 const USER_PANEL_BORDER = SEED['panel.border'];
@@ -147,6 +149,7 @@ const frameIs = (color) => hasAll(customizations(), { 'modernPanel.border': colo
 // The panel keys hold the user's values again: their panel.border, and none of the frame-only keys.
 const panelRestored = (c) => hasAll(c, { 'panel.border': USER_PANEL_BORDER }) && hasNone(c, ['modernPanel.border', 'terminal.border']);
 const editorFramed = (c, color) => hasAll(c, { 'editor.border': color, 'tab.activeBorderTop': color }) && panelRestored(c);
+const editorRestored = (c) => hasNone(c, EDITOR_KEYS);
 // border-and-tint: an opaque tint on both backgrounds (never the raw state colour), plus the border.
 function tinted(c, color) {
   const tint = c['terminal.background'];
@@ -178,8 +181,10 @@ async function pollHeld(name, fn, observed, timeoutMs) {
   }, observed, timeoutMs);
 }
 
-// A tab opened in front of the editor-area terminal hides it but must not move the frame back to the panel.
-async function editorFrameHoldsBehindTab() {
+// A tab opened in front of the editor-area terminal hides it: that group no longer shows an agent terminal,
+// so the editor frame goes (#2175: each area is framed by the agent terminal it is showing). This reverses
+// the pre-#2175 behaviour, where the frame held behind the tab.
+async function editorFrameLeavesWithTab() {
   const termGroup = vscode.window.tabGroups.all.find((g) => g.tabs.some(isAgentTerminalTab));
   if (!termGroup) throw new Error(`4g terminal tab not found in any group: ${show()}`);
   const readmeUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'README.md');
@@ -187,9 +192,8 @@ async function editorFrameHoldsBehindTab() {
   try {
     await poll('4g README.md is the active tab in front of the terminal', () => readmeTab()?.isActive === true,
       () => `tabs=${tabsText()}`);
-    console.log(`[e2e] 4g active terminal with README in front: ${activeName()}`);
-    // The frame is debounced, so a wrong re-frame lands ~200 ms after the tab change: the editor frame must HOLD past that.
-    await pollHeld('4g hidden editor terminal still frames the editor', () => editorFramed(customizations(), COLOR.waiting),
+    // The frame is debounced, so a wrong frame lands ~200 ms after the tab change: the restore must HOLD past that.
+    await pollHeld('4g hidden editor terminal no longer frames the editor', () => editorRestored(customizations()) && panelRestored(customizations()),
       showActive, 5000);
   } finally {
     const t = readmeTab();
@@ -201,8 +205,9 @@ async function frameInEditor({ terminal }) {
   // Editor location: the frame moves to the editor keys and the panel keys go back to the user's values.
   await vscode.commands.executeCommand('workbench.action.terminal.moveToEditor');
   await poll('4g terminal in editor frames the editor', () => editorFramed(customizations(), COLOR.waiting), showActive);
-  await editorFrameHoldsBehindTab();
+  await editorFrameLeavesWithTab();
   await poll('4g e2e-agent tab active again', agentTabActive, () => `tabs=${tabsText()}`);
+  await poll('4g terminal in front again frames the editor', () => editorFramed(customizations(), COLOR.waiting), showActive);
   await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
   await poll('4g terminal back in panel frames the panel',
     () => frameIs(COLOR.waiting) && hasNone(customizations(), ['editor.border', 'tab.activeBorderTop']), showActive);
@@ -234,9 +239,12 @@ async function frameFollowsState({ stub, api, terminal, tty }) {
   await poll('4g waiting frame', () => frameIs(COLOR.waiting), showColors);
 }
 
-async function plainTerminalRestores(plain, terminal) {
+// VS Code does not tell an extension which panel terminals are on screen, so every agent terminal in the
+// panel counts (#2175): a plain terminal brought to the front keeps the frame of the agent behind it.
+async function plainTerminalKeepsPanelFrame(plain, terminal) {
   plain.show();
-  await poll('4g plain terminal restores user values', () => panelRestored(customizations()), showActive);
+  await poll('4g plain terminal active', isActive('e2e-plain'), showActiveName);
+  await pollHeld('4g plain terminal in front keeps the panel frame', () => frameIs(COLOR.waiting), showActive, 5000);
   terminal.show();
   await poll('4g e2e-agent again waiting frame', () => frameIs(COLOR.waiting), showActive);
 }
@@ -256,17 +264,107 @@ async function frameSettingModes(cfg) {
     () => hasNone(customizations(), ['terminal.background', 'panel.background']) && frameIs(COLOR.waiting), showColors);
 }
 
+// Seq numbers must stay consecutive: a gap makes the client rehydrate from the stub's empty session list.
+const nextSeq = (ctx) => ctx.seq++;
+
+async function pairTerminal(ctx, terminal, sessionId, state) {
+  const pid = await terminal.processId;
+  if (!pid) throw new Error(`terminal for ${sessionId} has no processId`);
+  const tty = await ttyOf(pid);
+  ctx.stub.push({ type: 'session_updated', session: session(sessionId, state, tty), seq: nextSeq(ctx) });
+  await poll(`4h pairing ${sessionId} ${state}`, () => ctx.api.getPairings().some((p) => p.sessionId === sessionId && p.state === state),
+    () => `tty=${tty} pairings=${JSON.stringify(ctx.api.getPairings())}`);
+  return tty;
+}
+
+const isTheActive = (terminal) => () => vscode.window.activeTerminal === terminal;
+const panelIs = (c, color) => hasAll(c, { 'modernPanel.border': color, 'panel.border': color, 'terminal.border': color });
+
+// h. observations 2 and 4 of #2175: a terminal with the SAME name as the panel agent, in the editor area, in
+// another state. Both areas are framed at once, each by its own terminal, whichever of the two is active.
+async function twinInEditor(ctx, extra) {
+  const twin = vscode.window.createTerminal({ name: 'e2e-agent', location: vscode.TerminalLocation.Editor });
+  extra.push(twin);
+  ctx.twin = twin;
+  ctx.twinTty = await pairTerminal(ctx, twin, 'e2e-twin-session', 'ready');
+  twin.show();
+  await poll('4h twin active', isTheActive(twin), showActiveName);
+  const both = () => {
+    const c = customizations();
+    return panelIs(c, COLOR.waiting) && hasAll(c, { 'editor.border': COLOR.ready, 'tab.activeBorderTop': COLOR.ready });
+  };
+  await poll('4h editor twin active: panel waiting AND editor ready at once', both, showActive);
+  ctx.terminal.show();
+  await poll('4h panel agent active', isTheActive(ctx.terminal), showActiveName);
+  // The same-name case: a label match would put the panel agent in the editor area and paint it waiting.
+  await pollHeld('4h panel agent active: panel waiting AND editor ready at once', both, showActive, 5000);
+}
+
+// h. observation 3: with two editor groups the frame marks only the agent terminal's group (VS Code 1.147
+// draws the tab edges), never the box around every group.
+async function twoEditorGroups(ctx) {
+  const readmeUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'README.md');
+  await vscode.window.showTextDocument(readmeUri, { preview: false, viewColumn: vscode.ViewColumn.Beside, preserveFocus: false });
+  try {
+    await poll('4h README in a second group, active', () => vscode.window.tabGroups.all.length >= 2 && readmeTab()?.isActive === true
+      && vscode.window.tabGroups.activeTabGroup.tabs.includes(readmeTab()), () => `tabs=${tabsText()}`);
+    const unfocused = () => {
+      const c = customizations();
+      return hasAll(c, { 'tab.unfocusedActiveBorderTop': COLOR.ready }) && hasNone(c, ['editor.border', 'tab.activeBorderTop', 'editorGroup.border']);
+    };
+    await pollHeld('4h agent group unfocused: only its tab edge, no box', unfocused, showActive, 5000);
+    ctx.twin.show();
+    await poll('4h twin active again', isTheActive(ctx.twin), showActiveName);
+    const focused = () => {
+      const c = customizations();
+      return hasAll(c, { 'tab.activeBorderTop': COLOR.ready }) && hasNone(c, ['editor.border', 'tab.unfocusedActiveBorderTop', 'editorGroup.border']);
+    };
+    await pollHeld('4h agent group focused: only its tab edge, no box', focused, showActive, 5000);
+  } finally {
+    const t = readmeTab();
+    if (t) await vscode.window.tabGroups.close(t);
+  }
+}
+
+// h. observation 1: split panes in the panel with different states; the most urgent one wins even when the
+// less urgent pane is the active one.
+async function splitPanes(ctx, extra) {
+  ctx.stub.push({ type: 'session_updated', session: session('e2e-agent-session', 'ready', ctx.tty), seq: nextSeq(ctx) });
+  ctx.terminal.show();
+  await poll('4h panel agent active for the split', isTheActive(ctx.terminal), showActiveName);
+  await poll('4h panel ready', () => panelIs(customizations(), COLOR.ready), showActive);
+  const before = new Set(vscode.window.terminals);
+  await vscode.commands.executeCommand('workbench.action.terminal.split');
+  let split;
+  await poll('4h split pane opened', () => (split = vscode.window.terminals.find((t) => !before.has(t))) !== undefined,
+    () => `terminals=${vscode.window.terminals.map((t) => t.name)}`);
+  extra.push(split);
+  await pairTerminal(ctx, split, 'e2e-split-session', 'waiting');
+  ctx.terminal.show();
+  await poll('4h less urgent pane active', isTheActive(ctx.terminal), showActiveName);
+  await pollHeld('4h split panes: the waiting pane wins over the active ready pane', () => panelIs(customizations(), COLOR.waiting),
+    showActive, 5000);
+}
+
 async function stepTerminalFrame(ctx) {
   let plain;
+  const extra = [];
   try {
     await frameFollowsState(ctx);
     plain = vscode.window.createTerminal({ name: 'e2e-plain' });
-    await plainTerminalRestores(plain, ctx.terminal);
+    await plainTerminalKeepsPanelFrame(plain, ctx.terminal);
     await frameInEditor(ctx);
     await frameSettingModes(ctx.cfg);
   } finally {
     try { plain?.dispose(); } catch { /* ignore */ }
     try { await ctx.cfg.update('terminalFrame', undefined, GLOBAL); } catch { /* ignore */ }
+  }
+  try {
+    await twinInEditor(ctx, extra);
+    await twoEditorGroups(ctx);
+    await splitPanes(ctx, extra);
+  } finally {
+    for (const t of extra) { try { t.dispose(); } catch { /* ignore */ } }
   }
 }
 
@@ -363,11 +461,22 @@ async function cleanup({ stub, cfg, terminal }) {
   try { if (stub.server?.listening) await stub.stop(); } catch { /* ignore */ }
 }
 
+// The runner seeds irrlicht.daemonUrl with this port before VS Code starts, so the extension's startup
+// activation already reaches the stub; a missing port means the seed is gone and the default URL (the real
+// daemon) would be used, so refuse to run.
+function seededStubPort() {
+  const port = Number(process.env.IRRLICHT_E2E_STUB_PORT);
+  if (!(port > 0) || port === 7837) throw new Error(`e2e: IRRLICHT_E2E_STUB_PORT is not a usable port: ${process.env.IRRLICHT_E2E_STUB_PORT}`);
+  const seeded = vscode.workspace.getConfiguration('irrlicht').inspect('daemonUrl')?.globalValue;
+  if (seeded !== `http://127.0.0.1:${port}`) throw new Error(`e2e: irrlicht.daemonUrl is not seeded with the stub port; saw ${JSON.stringify(seeded)}`);
+  return port;
+}
+
 async function run() {
   assertSeed();
   const stub = new StubDaemon();
-  await stub.start(0);
-  const ctx = { stub, cfg: vscode.workspace.getConfiguration('irrlicht'), api: undefined, terminal: undefined, tty: undefined };
+  await stub.start(seededStubPort());
+  const ctx = { stub, cfg: vscode.workspace.getConfiguration('irrlicht'), api: undefined, terminal: undefined, tty: undefined, seq: 7 };
   try {
     ctx.api = await timed('activate', () => activateAgainst(stub, ctx.cfg));
     await timed('4a connection online', () => poll('4a connection online', () => ctx.api.getConnectionState() === 'online',
@@ -376,7 +485,8 @@ async function run() {
     await timed('4c status bar shows waiting count', () => stepStatusBar(ctx));
     await timed('4d terminal pairing follows state', () => stepPairing(ctx));
     await timed('4f focus_requested activates paired terminal', () => stepFocus(ctx));
-    // g. terminal frame: the active agent terminal's state colour is written into the workspace settings
+    // g. terminal frame: the agent terminals' state colours are written into the workspace settings
+    // h. (inside 4g) per-area frame, same-name terminals, two editor groups, split panes (#2175)
     await timed('4g terminal frame', () => stepTerminalFrame(ctx));
     await timed('4e offline detected', () => stepOffline(ctx));
     await timed('4e auto-reconnect', () => stepReconnect(ctx));

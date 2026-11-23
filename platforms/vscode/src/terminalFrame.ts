@@ -1,15 +1,12 @@
-// Terminal frame: paints the state colour of the session in the active terminal around the
-// terminal area, by writing owned keys into the workspace's workbench.colorCustomizations
-// (the approach Peacock uses for whole windows). Pure: no vscode import.
-import { isStateName } from './states';
+// Terminal frame: paints the state colour of the agent terminals each area shows around that area (the
+// panel and the editor area, independently), by writing owned keys into the workspace's
+// workbench.colorCustomizations (the approach Peacock uses for whole windows). Pure: no vscode import.
 import type { StateName } from './states';
 
 export type FrameMode = 'off' | 'border' | 'border-and-tint';
 export const FRAME_MODES: readonly FrameMode[] = ['off', 'border', 'border-and-tint'];
 export const DEFAULT_FRAME_MODE: FrameMode = 'border';
 
-/** Where the active terminal is shown: the panel, or a visible editor tab. */
-export type FrameLocation = 'panel' | 'editor';
 /** High-contrast themes map to the variant of the same brightness. */
 export type ThemeKind = 'dark' | 'light';
 
@@ -17,14 +14,57 @@ export type ThemeKind = 'dark' | 'light';
 export const PANEL_BORDER_KEYS: readonly string[] = [
   'modernPanel.border', 'panel.border', 'panelTitle.activeBorder', 'terminal.tab.activeBorder', 'terminal.border',
 ];
-/** Editor-area terminal: the modern layout's editor card outline, plus the classic layout's tab and group rules. */
-export const EDITOR_BORDER_KEYS: readonly string[] = [
-  'editor.border', 'tab.activeBorderTop', 'tab.unfocusedActiveBorderTop', 'editorGroup.border',
-];
-/** Written only in border-and-tint mode; panel.background only for a panel terminal. */
+/**
+ * The modern layout's outline around the whole editor area. It spans every editor group (spike, VS Code
+ * 1.140 and 1.147, #2175), so it is written only with one group, or where tab edges are not drawn.
+ */
+export const EDITOR_BOX_KEY = 'editor.border';
+/** The top edge of the active tab in the active editor group: paints that one tab only (spike, #2175). */
+export const TAB_ACTIVE_KEY = 'tab.activeBorderTop';
+/** The top edge of the active tab in every other editor group: paints each of those groups' front tab. */
+export const TAB_UNFOCUSED_KEY = 'tab.unfocusedActiveBorderTop';
+/** Every editor-area key the frame may write. */
+export const EDITOR_BORDER_KEYS: readonly string[] = [EDITOR_BOX_KEY, TAB_ACTIVE_KEY, TAB_UNFOCUSED_KEY];
+/**
+ * Written by the frame before #2175 and never written now (it paints every separator between editor
+ * groups). Still owned, so a value an earlier build left on disk is restored rather than kept forever.
+ */
+export const RETIRED_KEYS: readonly string[] = ['editorGroup.border'];
+/** Written only in border-and-tint mode; panel.background only while the panel is framed. */
 export const TINT_KEYS: readonly string[] = ['terminal.background', 'panel.background'];
-/** Every key this extension may write. Any other key in workbench.colorCustomizations is the user's. */
-export const OWNED_KEYS: readonly string[] = [...PANEL_BORDER_KEYS, ...EDITOR_BORDER_KEYS, ...TINT_KEYS];
+/** Every key this extension may write or once wrote. Any other key in workbench.colorCustomizations is the user's. */
+export const OWNED_KEYS: readonly string[] = [...PANEL_BORDER_KEYS, ...EDITOR_BORDER_KEYS, ...RETIRED_KEYS, ...TINT_KEYS];
+
+/**
+ * The canonical states (states.ts STATES), most urgent first: several visible agent terminals in one area
+ * show the first of these. The unit tests check it orders exactly STATES.
+ */
+export const URGENCY: readonly StateName[] = ['error', 'waiting', 'working', 'ready'];
+
+/** The most urgent canonical state among `states`; anything else is ignored. undefined when none is canonical. */
+export function mostUrgent(states: readonly unknown[]): StateName | undefined {
+  return URGENCY.find((u) => states.includes(u));
+}
+
+/** The first VS Code release whose modern layout draws tab.activeBorderTop / tab.unfocusedActiveBorderTop. */
+export const TAB_EDGES_SINCE: readonly [number, number] = [1, 147];
+
+/**
+ * Whether the editor tab edges (TAB_ACTIVE_KEY, TAB_UNFOCUSED_KEY) are drawn. The classic layout draws
+ * them; the modern layout (`workbench.experimental.modernUI`) draws them from 1.147 on. In 1.140 the
+ * connected tab style overrides them with its own border (its CSS sets
+ * --modern-ui-editor-tab-active-border-top to the connected-tab border and has no
+ * --modern-ui-editor-tab-custom-active-border-top; 1.147 has three uses of it), and a screenshot spike saw
+ * no tab edge in 1.140 and both in 1.147 (#2175). 1.141 to 1.146 were not tested and get the box.
+ * `modernUI` is the setting's value: undefined where the setting does not exist (the classic layout only).
+ */
+export function tabEdgesDrawn(version: string, modernUI: unknown): boolean {
+  if (modernUI !== true) return true;
+  const m = /^(\d+)\.(\d+)/.exec(version);
+  if (!m) return false;
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  return major > TAB_EDGES_SINCE[0] || (major === TAB_EDGES_SINCE[0] && minor >= TAB_EDGES_SINCE[1]);
+}
 
 /** The irrlicht.state.* defaults from package.json contributes.colors (dark = dark/highContrast, light = light/highContrastLight). */
 export const STATE_COLORS: Readonly<Record<StateName, Readonly<Record<ThemeKind, string>>>> = {
@@ -121,33 +161,68 @@ function fillKeys(keys: readonly string[], value: string): Record<string, string
   return Object.fromEntries(keys.map((k) => [k, value]));
 }
 
-/** The owned keys to write for one colour. 'off' gives {}. */
-export function frameColors(color: string, kind: ThemeKind, location: FrameLocation, mode: FrameMode): Record<string, string> {
-  if (mode === 'off') return {};
-  const colors = fillKeys(location === 'panel' ? PANEL_BORDER_KEYS : EDITOR_BORDER_KEYS, color);
-  if (mode === 'border-and-tint') {
-    const tint = blend(TINT_BASE[kind], color, TINT_AMOUNT[kind]);
-    colors['terminal.background'] = tint;
-    if (location === 'panel') colors['panel.background'] = tint;
-  }
-  return colors;
+/** What the editor area shows. Each state is a paired session's state of an agent terminal in front of its group. */
+export interface EditorView {
+  /** The agent terminal in front of the active editor group (zero or one state). */
+  focused: readonly unknown[];
+  /** The agent terminals in front of every other editor group. */
+  unfocused: readonly unknown[];
+  /** How many editor groups there are (at least one). */
+  groupCount: number;
+  /** tabEdgesDrawn(...) for this VS Code. */
+  tabEdges: boolean;
 }
 
 export interface FrameInput {
   mode: FrameMode;
-  /** The paired session's state, or undefined when the active terminal has no paired session. */
-  state: unknown;
   kind: ThemeKind;
-  location: FrameLocation;
+  /**
+   * The paired sessions' states of the agent terminals in the panel. VS Code does not tell an extension
+   * which panel terminals are on screen (split panes) and which hide behind another panel tab, so this is
+   * every agent terminal in the panel.
+   */
+  panel: readonly unknown[];
+  editor: EditorView;
   /** The effective workbench.colorCustomizations, read only for irrlicht.state.* overrides. */
   customizations?: unknown;
 }
 
-/** {} when the mode is off or the state is not a canonical state; otherwise frameColors(...). */
+/**
+ * The editor-area keys. One group: the box and the active-tab edge (the box is exactly that group). Two or
+ * more groups: the tab edges only, each carrying its own bucket's most urgent state, because the box spans
+ * every group; where the tab edges are not drawn, the box anyway, in the most urgent editor state.
+ */
+function editorColors(view: EditorView, color: (s: StateName) => string): Record<string, string> {
+  const any = mostUrgent([...view.focused, ...view.unfocused]);
+  if (any === undefined) return {};
+  const keys: Record<string, string> = {};
+  if (view.groupCount <= 1 || !view.tabEdges) keys[EDITOR_BOX_KEY] = color(any);
+  const focused = mostUrgent(view.focused);
+  if (focused !== undefined) keys[TAB_ACTIVE_KEY] = color(focused);
+  const unfocused = mostUrgent(view.unfocused);
+  if (unfocused !== undefined) keys[TAB_UNFOCUSED_KEY] = color(unfocused);
+  return keys;
+}
+
+/**
+ * The owned keys to write. Each area is framed by its own agent terminals: the panel by the most urgent
+ * state among them, the editor area per editorColors. 'off', or no canonical state anywhere, gives {}.
+ * border-and-tint adds one tint for the window (terminal.background is a single key for every terminal)
+ * from the most urgent framed state, and the same tint on panel.background while the panel is framed.
+ */
 export function desiredFrame(input: FrameInput): Record<string, string> {
-  if (input.mode === 'off' || !isStateName(input.state)) return {};
-  const color = resolveStateColor(input.state, input.kind, input.customizations);
-  return frameColors(color, input.kind, input.location, input.mode);
+  if (input.mode === 'off') return {};
+  const color = (s: StateName): string => resolveStateColor(s, input.kind, input.customizations);
+  const panel = mostUrgent(input.panel);
+  const out: Record<string, string> = panel === undefined ? {} : fillKeys(PANEL_BORDER_KEYS, color(panel));
+  Object.assign(out, editorColors(input.editor, color));
+  const worst = mostUrgent([...input.panel, ...input.editor.focused, ...input.editor.unfocused]);
+  if (input.mode === 'border-and-tint' && worst !== undefined) {
+    const tint = blend(TINT_BASE[input.kind], color(worst), TINT_AMOUNT[input.kind]);
+    out['terminal.background'] = tint;
+    if (panel !== undefined) out['panel.background'] = tint;
+  }
+  return out;
 }
 
 /**

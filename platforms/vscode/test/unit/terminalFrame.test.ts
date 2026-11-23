@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { STATES } from '../../src/states';
 import {
-  EDITOR_BORDER_KEYS, FRAME_DEBOUNCE_MS, FrameSync, OWNED_KEYS, PANEL_BORDER_KEYS, STATE_COLORS, TINT_AMOUNT, TINT_BASE,
-  blend, desiredFrame, frameColors, normalizeMemo, parseFrameMode, planFrame, resolveStateColor, themeKindOf,
+  EDITOR_BORDER_KEYS, FRAME_DEBOUNCE_MS, FrameSync, OWNED_KEYS, PANEL_BORDER_KEYS, STATE_COLORS, TINT_AMOUNT, TINT_BASE, URGENCY,
+  blend, desiredFrame, mostUrgent, normalizeMemo, parseFrameMode, planFrame, resolveStateColor, tabEdgesDrawn, themeKindOf,
 } from '../../src/terminalFrame';
-import type { FrameIO, FrameMemo, FramePlan, FrameTimers } from '../../src/terminalFrame';
+import type { EditorView, FrameInput, FrameIO, FrameMemo, FramePlan, FrameTimers } from '../../src/terminalFrame';
 
 const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '../../package.json'), 'utf8'));
 
@@ -148,50 +148,151 @@ describe('blend', () => {
   });
 });
 
-describe('frameColors', () => {
-  it('off gives nothing', () => {
-    expect(frameColors(PANEL_COLOR, 'dark', 'panel', 'off')).toEqual({});
-    expect(frameColors(PANEL_COLOR, 'dark', 'editor', 'off')).toEqual({});
+const C = (state: keyof typeof STATE_COLORS): string => STATE_COLORS[state].dark;
+const NO_EDITOR: EditorView = { focused: [], unfocused: [], groupCount: 1, tabEdges: true };
+const BASE: FrameInput = { mode: 'border', kind: 'dark', panel: [], editor: NO_EDITOR };
+const withEditor = (editor: Partial<EditorView>, rest: Partial<FrameInput> = {}): FrameInput =>
+  ({ ...BASE, ...rest, editor: { ...NO_EDITOR, ...editor } });
+
+/** Checker: several visible agent terminals in one area show the most urgent state. */
+type Aggregate = (states: readonly unknown[]) => unknown;
+function checkMostUrgentWins(agg: Aggregate): void {
+  expect(agg(['ready', 'waiting']), 'waiting beats ready').toBe('waiting');
+  expect(agg(['waiting', 'ready']), 'order does not matter').toBe('waiting');
+  expect(agg(['working', 'ready']), 'working beats ready').toBe('working');
+  expect(agg(['working', 'waiting']), 'waiting beats working').toBe('waiting');
+  expect(agg(['waiting', 'error', 'ready', 'working']), 'error beats all').toBe('error');
+}
+
+/** Checker: the panel and the editor area are framed at the same time, each in its own state. */
+type Desire = (input: FrameInput) => Record<string, string>;
+function checkBothAreasAtOnce(desire: Desire): void {
+  const out = desire(withEditor({ focused: ['ready'] }, { panel: ['waiting'] }));
+  for (const k of PANEL_BORDER_KEYS) expect(out[k], `panel ${k}`).toBe(C('waiting'));
+  expect(out['editor.border'], 'editor box').toBe(C('ready'));
+  expect(out['tab.activeBorderTop'], 'editor tab').toBe(C('ready'));
+}
+
+/** Checker: with two or more editor groups and tab edges drawn, nothing boxes every group. */
+function checkNoBoxAcrossGroups(desire: Desire): void {
+  const out = desire(withEditor({ focused: ['waiting'], groupCount: 2 }));
+  expect(Object.keys(out), 'editor.border spans every group').not.toContain('editor.border');
+  expect(Object.keys(out), 'editorGroup.border paints every separator').not.toContain('editorGroup.border');
+  expect(out['tab.activeBorderTop']).toBe(C('waiting'));
+}
+
+describe('mostUrgent', () => {
+  it('URGENCY is the canonical vocabulary, most urgent first', () => {
+    expect([...URGENCY].sort()).toEqual([...STATES].sort());
+    expect(URGENCY).toEqual(['error', 'waiting', 'working', 'ready']);
   });
-  it('panel border is exactly PANEL_BORDER_KEYS in the colour', () => {
-    expect(frameColors(PANEL_COLOR, 'dark', 'panel', 'border')).toEqual(panelDesired(PANEL_COLOR));
+  it('most urgent wins: error > waiting > working > ready', () => {
+    checkMostUrgentWins(mostUrgent);
   });
-  it('editor border is exactly EDITOR_BORDER_KEYS in the colour', () => {
-    expect(frameColors(PANEL_COLOR, 'dark', 'editor', 'border')).toEqual(editorDesired(PANEL_COLOR));
+  it('every permutation of the four states gives error', () => {
+    const perms = (xs: string[]): string[][] => xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+    for (const p of perms([...STATES])) expect(mostUrgent(p), p.join(',')).toBe('error');
   });
-  it('panel tint adds terminal.background and panel.background with the blend', () => {
-    const tint = blend(TINT_BASE.dark, PANEL_COLOR, TINT_AMOUNT.dark);
-    expect(frameColors(PANEL_COLOR, 'dark', 'panel', 'border-and-tint')).toEqual({
-      ...panelDesired(PANEL_COLOR), 'terminal.background': tint, 'panel.background': tint,
-    });
-  });
-  it('editor tint adds only terminal.background, using the light base for light themes', () => {
-    const tint = blend(TINT_BASE.light, '#6526F3', TINT_AMOUNT.light);
-    expect(frameColors('#6526F3', 'light', 'editor', 'border-and-tint')).toEqual({
-      ...editorDesired('#6526F3'), 'terminal.background': tint,
-    });
+  it('ignores anything that is not a canonical state; nothing left gives undefined', () => {
+    expect(mostUrgent([])).toBeUndefined();
+    expect(mostUrgent(['cancelled', undefined, 7, null])).toBeUndefined();
+    expect(mostUrgent(['cancelled', 'ready'])).toBe('ready');
   });
 });
 
-describe('desiredFrame', () => {
-  const base = { mode: 'border' as const, state: 'working', kind: 'dark' as const, location: 'panel' as const };
-  it('is {} when the mode is off', () => {
-    expect(desiredFrame({ ...base, mode: 'off' })).toEqual({});
+describe('tabEdgesDrawn', () => {
+  it('the classic layout draws tab edges in every version', () => {
+    for (const v of ['1.90.0', '1.140.0', '1.147.0']) {
+      expect(tabEdgesDrawn(v, false), v).toBe(true);
+      expect(tabEdgesDrawn(v, undefined), `${v}, setting not registered`).toBe(true);
+    }
   });
-  it('is {} for a non-canonical or missing state', () => {
-    expect(desiredFrame({ ...base, state: 'cancelled' })).toEqual({});
-    expect(desiredFrame({ ...base, state: undefined })).toEqual({});
-    expect(desiredFrame({ ...base, state: 7 })).toEqual({});
+  it('the modern layout draws them from 1.147 on (1.140 does not: spike, #2175)', () => {
+    expect(tabEdgesDrawn('1.140.0', true)).toBe(false);
+    expect(tabEdgesDrawn('1.146.9', true)).toBe(false);
+    expect(tabEdgesDrawn('1.147.0', true)).toBe(true);
+    expect(tabEdgesDrawn('1.148.0-insider', true)).toBe(true);
+    expect(tabEdgesDrawn('1.150.2', true)).toBe(true);
+    expect(tabEdgesDrawn('2.0.0', true)).toBe(true);
   });
-  it('uses the state colour, honouring an override', () => {
-    expect(desiredFrame(base)).toEqual(panelDesired(STATE_COLORS.working.dark));
-    expect(desiredFrame({ ...base, state: 'error', customizations: { 'irrlicht.state.error': '#abcdef' } }))
+  it('an unreadable version in the modern layout falls back to the box', () => {
+    expect(tabEdgesDrawn('', true)).toBe(false);
+    expect(tabEdgesDrawn('nightly', true)).toBe(false);
+  });
+});
+
+describe('desiredFrame (per area)', () => {
+  it('is {} when the mode is off, even with agents in both areas', () => {
+    expect(desiredFrame(withEditor({ focused: ['waiting'] }, { mode: 'off', panel: ['error'] }))).toEqual({});
+  });
+  it('is {} when no area shows a canonical state', () => {
+    expect(desiredFrame(BASE)).toEqual({});
+    expect(desiredFrame(withEditor({ focused: ['cancelled'] }, { panel: [undefined, 7] }))).toEqual({});
+  });
+  it('panel: the most urgent state among the panel agent terminals (split panes)', () => {
+    expect(desiredFrame({ ...BASE, panel: ['ready', 'waiting'] })).toEqual(panelDesired(C('waiting')));
+  });
+  it('panel and editor area are framed at the same time, each by its own terminals', () => {
+    checkBothAreasAtOnce(desiredFrame);
+  });
+  it('one editor group: the box and the active-tab edge, never the unfocused-tab key or the separators', () => {
+    expect(desiredFrame(withEditor({ focused: ['working'] }))).toEqual({
+      'editor.border': C('working'), 'tab.activeBorderTop': C('working'),
+    });
+  });
+  it('two or more groups with tab edges drawn: only the tab edges, each in its group bucket', () => {
+    checkNoBoxAcrossGroups(desiredFrame);
+    expect(desiredFrame(withEditor({ focused: ['ready'], unfocused: ['waiting'], groupCount: 2 }))).toEqual({
+      'tab.activeBorderTop': C('ready'), 'tab.unfocusedActiveBorderTop': C('waiting'),
+    });
+    expect(desiredFrame(withEditor({ unfocused: ['ready'], groupCount: 2 }))).toEqual({
+      'tab.unfocusedActiveBorderTop': C('ready'),
+    });
+  });
+  it('several agent terminals in unfocused groups: the most urgent wins on the unfocused key', () => {
+    const out = desiredFrame(withEditor({ unfocused: ['ready', 'error', 'working', 'waiting'], groupCount: 4 }));
+    expect(out).toEqual({ 'tab.unfocusedActiveBorderTop': C('error') });
+  });
+  it('two or more groups without tab edges (modern layout before 1.147): the box, in the most urgent editor state', () => {
+    expect(desiredFrame(withEditor({ focused: ['ready'], unfocused: ['waiting'], groupCount: 2, tabEdges: false }))).toEqual({
+      'editor.border': C('waiting'), 'tab.activeBorderTop': C('ready'), 'tab.unfocusedActiveBorderTop': C('waiting'),
+    });
+  });
+  it('never writes editorGroup.border (it paints every separator); it stays owned so an old value is restored', () => {
+    expect(OWNED_KEYS).toContain('editorGroup.border');
+    for (const groupCount of [1, 2, 3]) {
+      for (const tabEdges of [true, false]) {
+        const out = desiredFrame(withEditor({ focused: ['waiting'], unfocused: ['ready'], groupCount, tabEdges }, { mode: 'border-and-tint', panel: ['ready'] }));
+        expect(Object.keys(out)).not.toContain('editorGroup.border');
+      }
+    }
+  });
+  it('tint: one tint for the window, from the most urgent framed state; panel.background only when the panel is framed', () => {
+    const tintOf = (s: keyof typeof STATE_COLORS): string => blend(TINT_BASE.dark, C(s), TINT_AMOUNT.dark);
+    const both = desiredFrame(withEditor({ focused: ['waiting'] }, { mode: 'border-and-tint', panel: ['ready'] }));
+    expect(both['terminal.background']).toBe(tintOf('waiting'));
+    expect(both['panel.background']).toBe(tintOf('waiting'));
+    expect(both['panel.border']).toBe(C('ready'));
+    const editorOnly = desiredFrame(withEditor({ focused: ['working'] }, { mode: 'border-and-tint' }));
+    expect(editorOnly['terminal.background']).toBe(tintOf('working'));
+    expect(Object.keys(editorOnly)).not.toContain('panel.background');
+  });
+  it('the light theme blends over the light base', () => {
+    const out = desiredFrame({ ...BASE, mode: 'border-and-tint', kind: 'light', panel: ['working'] });
+    expect(out['panel.border']).toBe('#6526F3');
+    expect(out['terminal.background']).toBe(blend(TINT_BASE.light, '#6526F3', TINT_AMOUNT.light));
+  });
+  it('honours an irrlicht.state.<state> override', () => {
+    expect(desiredFrame({ ...BASE, panel: ['error'], customizations: { 'irrlicht.state.error': '#abcdef' } }))
       .toEqual(panelDesired('#ABCDEF'));
   });
   it('only returns owned keys', () => {
     for (const mode of ['border', 'border-and-tint'] as const) {
-      for (const location of ['panel', 'editor'] as const) {
-        for (const k of Object.keys(desiredFrame({ ...base, mode, location }))) expect(OWNED_KEYS).toContain(k);
+      for (const groupCount of [1, 2]) {
+        for (const tabEdges of [true, false]) {
+          const out = desiredFrame(withEditor({ focused: ['ready'], unfocused: ['error', 'working'], groupCount, tabEdges }, { mode, panel: ['waiting'] }));
+          for (const k of Object.keys(out)) expect(OWNED_KEYS).toContain(k);
+        }
       }
     }
   });
@@ -916,5 +1017,37 @@ describe('committed FrameSync mutant', () => {
   });
   it('a sync that saves the after-success memo before the write is caught', async () => {
     await expect(checkRefusedRecolourRestores((io) => new SavesMemoBeforeWrite(io))).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Committed mutants for the per-area frame (#2175): each checker passes on the real code
+// and throws on a mutant that brings back one of the reported behaviours.
+// ---------------------------------------------------------------------------
+/** Mutant: the least urgent state wins (URGENCY read backwards). */
+const leastUrgent: Aggregate = (states) => {
+  const canonical = states.filter((s): s is string => typeof s === 'string' && (URGENCY as readonly string[]).includes(s));
+  return [...URGENCY].reverse().find((u) => canonical.includes(u));
+};
+/** Mutant: one area per window, as before #2175: the panel wins and the editor area is dropped. */
+const oneAreaOnly: Desire = (input) =>
+  input.panel.length > 0 ? desiredFrame({ ...input, editor: NO_EDITOR }) : desiredFrame(input);
+/** Mutant: the editor box is written whatever the group count, as before #2175. */
+const alwaysBox: Desire = (input) => {
+  const out = desiredFrame(input);
+  const editorState = mostUrgent([...input.editor.focused, ...input.editor.unfocused]);
+  if (editorState && input.mode !== 'off') { out['editor.border'] = C(editorState); out['editorGroup.border'] = C(editorState); }
+  return out;
+};
+
+describe('committed per-area mutants', () => {
+  it('a least-urgent-wins aggregate is caught', () => {
+    expect(() => checkMostUrgentWins(leastUrgent)).toThrow();
+  });
+  it('a one-area-per-window frame is caught', () => {
+    expect(() => checkBothAreasAtOnce(oneAreaOnly)).toThrow();
+  });
+  it('a frame that boxes every editor group is caught', () => {
+    expect(() => checkNoBoxAcrossGroups(alwaysBox)).toThrow();
   });
 });

@@ -1,14 +1,20 @@
 import * as vscode from 'vscode';
-import { desiredFrame, FrameSync, parseFrameMode, themeKindOf, type FrameIO, type FrameLocation, type FrameMemo } from './terminalFrame';
+import { desiredFrame, FrameSync, parseFrameMode, tabEdgesDrawn, themeKindOf, type FrameIO, type FrameMemo } from './terminalFrame';
+import { BIND_WINDOW_MS, TerminalLocator, type Layout } from './terminalLocator';
 import type { TerminalPairing } from './terminals';
 
 const MEMO_KEY = 'irrlicht.terminalFrame.memo';
 const NO_WORKSPACE_MESSAGE = 'terminal frame: no folder or workspace is open, so there is no workspace settings file to write; the frame stays off in this window';
 
-// Feeds the active terminal's paired state into a FrameSync that owns the workspace's colour customizations.
+type VsLayout = Layout<vscode.Tab, vscode.Terminal>;
+
+// Frames the panel and the editor area independently, each by the paired agent terminals it shows, through a
+// FrameSync that owns the workspace's colour customizations. Terminals are located by TerminalLocator.
 export class TerminalFrameController implements vscode.Disposable {
   private sync: FrameSync | undefined;
   private noWorkspaceLogged = false;
+  private readonly locator = new TerminalLocator<vscode.Tab, vscode.Terminal>();
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly disposables: Array<{ dispose(): void }> = [];
 
   constructor(
@@ -19,14 +25,26 @@ export class TerminalFrameController implements vscode.Disposable {
 
   start(): void {
     const again = (): void => this.request();
+    const tabsChanged = (): void => {
+      this.guard(() => { if (this.locator.observeTabs(layout())) this.scheduleSettle(); });
+      this.request();
+    };
     try {
+      this.locator.prime(layout());
       this.disposables.push(
-        vscode.window.onDidChangeActiveTerminal(again),
+        vscode.window.onDidChangeActiveTerminal(() => {
+          this.guard(() => this.locator.observeActiveTerminal(layout()));
+          this.request();
+        }),
+        vscode.window.onDidOpenTerminal(again),
+        vscode.window.onDidCloseTerminal(again),
         this.pairing.onDidChange(again),
-        vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('irrlicht.terminalFrame')) this.request(); }),
+        vscode.workspace.onDidChangeConfiguration((e) => {
+          if (e.affectsConfiguration('irrlicht.terminalFrame') || e.affectsConfiguration('workbench.experimental.modernUI')) this.request();
+        }),
         vscode.window.onDidChangeActiveColorTheme(again),
-        vscode.window.tabGroups.onDidChangeTabs(again),
-        vscode.window.tabGroups.onDidChangeTabGroups(again),
+        vscode.window.tabGroups.onDidChangeTabs(tabsChanged),
+        vscode.window.tabGroups.onDidChangeTabGroups(tabsChanged),
       );
     } catch (e) {
       this.log(`terminal frame: could not subscribe to events: ${String(e)}`);
@@ -43,10 +61,21 @@ export class TerminalFrameController implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
     for (const d of this.disposables.splice(0)) {
       try { d.dispose(); } catch { /* ignore */ }
     }
     this.sync?.dispose();
+  }
+
+  private guard(fn: () => void): void {
+    try { fn(); } catch (e) { this.log(`terminal frame: ${String(e)}`); }
+  }
+
+  /** A binding is pending: frame again once its window has passed, so it settles even if nothing else happens. */
+  private scheduleSettle(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => { this.settleTimer = undefined; this.request(); }, BIND_WINDOW_MS + 50);
   }
 
   private hasWorkspace(): boolean {
@@ -84,22 +113,46 @@ export class TerminalFrameController implements vscode.Disposable {
   }
 
   private compute(): Record<string, string> {
-    const mode = parseFrameMode(vscode.workspace.getConfiguration('irrlicht').get('terminalFrame'));
-    const t = vscode.window.activeTerminal;
-    const state = t ? this.pairing.pairings().find((p) => p.terminal === t)?.session.state : undefined;
+    const current = layout();
+    const places = this.locator.locate(current);
+    const stateOf = new Map(this.pairing.pairings().map((p) => [p.terminal, p.session.state] as const));
+    const panel: unknown[] = [];
+    const focused: unknown[] = [];
+    const unfocused: unknown[] = [];
+    // Plain terminals have no paired state and count nowhere; unknown places count nowhere either.
+    for (const [terminal, place] of places) {
+      if (!stateOf.has(terminal)) continue;
+      const state = stateOf.get(terminal);
+      if (place.area === 'panel') panel.push(state);
+      else if (place.area === 'editor' && place.front) (current.groups[place.group].active ? focused : unfocused).push(state);
+    }
+    const workbench = vscode.workspace.getConfiguration('workbench');
     return desiredFrame({
-      mode,
-      state,
+      mode: parseFrameMode(vscode.workspace.getConfiguration('irrlicht').get('terminalFrame')),
       kind: themeKindOf(vscode.window.activeColorTheme.kind),
-      location: t ? locationOf(t) : 'panel',
-      customizations: vscode.workspace.getConfiguration('workbench').get('colorCustomizations'),
+      panel,
+      editor: {
+        focused,
+        unfocused,
+        groupCount: current.groups.length,
+        tabEdges: tabEdgesDrawn(vscode.version, workbench.get('experimental.modernUI')),
+      },
+      customizations: workbench.get('colorCustomizations'),
     });
   }
 }
 
-// The terminal is in the editor area iff any tab in any group is it; a tab in front of it hides it but does not move it.
-function locationOf(t: vscode.Terminal): FrameLocation {
-  const inEditor = vscode.window.tabGroups.all.some((g) =>
-    g.tabs.some((tab) => tab.input instanceof vscode.TabInputTerminal && tab.label === t.name));
-  return inEditor ? 'editor' : 'panel';
+const isTerminalTab = (tab: vscode.Tab): boolean => tab.input instanceof vscode.TabInputTerminal;
+
+/** The window as the locator sees it. */
+function layout(): VsLayout {
+  return {
+    groups: vscode.window.tabGroups.all.map((g) => ({
+      terminalTabs: g.tabs.filter(isTerminalTab).map((tab) => ({ tab, label: tab.label })),
+      front: g.activeTab && isTerminalTab(g.activeTab) ? g.activeTab : undefined,
+      active: g.isActive,
+    })),
+    terminals: vscode.window.terminals.map((terminal) => ({ terminal, name: terminal.name })),
+    activeTerminal: vscode.window.activeTerminal,
+  };
 }

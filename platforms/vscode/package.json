@@ -71,7 +71,7 @@
             "Paint the border and tint the terminal background with the agent's state colour."
           ],
           "default": "border",
-          "markdownDescription": "Paints the state colour of the agent in the active terminal around the terminal area. It does this by writing `workbench.colorCustomizations` into the workspace settings (`.vscode/settings.json`, or the `.code-workspace` file of a multi-root workspace), as Peacock does, and restores your previous values when the active terminal has no agent or the setting is turned off. After the window closes, the colours stay until the folder is opened again. It does nothing when no folder is open."
+          "markdownDescription": "Paints the state colour of the agent terminals around the panel and the editor area, each area in the state of the agent terminal it shows (the most urgent one when it shows several). It does this by writing `workbench.colorCustomizations` into the workspace settings (`.vscode/settings.json`, or the `.code-workspace` file of a multi-root workspace), as Peacock does, and restores your previous values when no area shows an agent terminal or the setting is turned off. After the window closes, the colours stay until the folder is opened again. It does nothing when no folder is open."
         }
       }
     },

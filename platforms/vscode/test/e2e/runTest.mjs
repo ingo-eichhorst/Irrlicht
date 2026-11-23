@@ -2,6 +2,7 @@
 // test/e2e/suite/index.js inside its extension host. Exits non-zero on failure.
 import { runTests } from '@vscode/test-electron';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,10 +33,24 @@ fs.writeFileSync(path.join(workspaceDir, '.vscode', 'settings.json'), JSON.strin
     '[Default Dark Modern]': { 'terminal.border': '#ABCDEF' },
   },
 }, null, 2));
+// The extension activates on startup, before the suite can point it anywhere, and its default URL is the
+// real daemon's (127.0.0.1:7837). Seed the URL with a free loopback port that the suite's stub then binds,
+// so no e2e run ever talks to a live daemon.
+async function freePort() {
+  const srv = net.createServer();
+  await new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(0, '127.0.0.1', resolve); });
+  const { port } = srv.address();
+  await new Promise((resolve) => srv.close(resolve));
+  return port;
+}
+const stubPort = await freePort();
+if (!(stubPort > 0) || stubPort === 7837) throw new Error(`e2e: could not reserve a stub port (got ${stubPort})`);
+process.env.IRRLICHT_E2E_STUB_PORT = String(stubPort);
 // A user-scope customization that must never be copied into the workspace.
 fs.mkdirSync(path.join(userDataDir, 'User'), { recursive: true });
 fs.writeFileSync(path.join(userDataDir, 'User', 'settings.json'), JSON.stringify({
   'workbench.colorCustomizations': { 'activityBar.background': '#0A0B0C' },
+  'irrlicht.daemonUrl': `http://127.0.0.1:${stubPort}`,
 }, null, 2));
 
 // VS Code writes ~/.vscode-shared; never let that be the real home.
