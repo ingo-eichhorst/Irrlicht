@@ -25,6 +25,13 @@
 // while 2.21.0 said nothing (its settings model ignores unknown keys). Which
 // release between those two started warning was not read.
 //
+// Live-fired in #2171 (2026-11-23), one `vibe -p` turn per version against an
+// isolated dev daemon built from this change. On 2.21.0 the post_agent hook
+// ran at turn end and the daemon logged "received post_agent", then "agent
+// finished turn → ready". On 3.1.4 the hook ran and the beacon delivered it,
+// but the receiver refused the path Vibe sent (see hooks.go), so 3.x is
+// installed without warnings yet not dispatched.
+//
 // Delivery is the beacon (core/pkg/hookbeacon), not a native http hook:
 // vibe's HookExecutor spawns hook.command via asyncio.create_subprocess_shell
 // and nothing else (source-read, vibe/core/hooks/executor.py) — there is no
@@ -81,8 +88,8 @@ var installedHookEventsCurrent = []string{hookEventPostAgent}
 // hookEventSince and hookEventSinceCurrent pin each artifact's one event to
 // the version that artifact was read against, its own floor: post_agent_turn
 // was live-fired on 2.19.1 (#1718), and post_agent is named by 2.21.0's
-// bundled hook reference (source-read, #2171). An earlier number would be a
-// claim nothing here supports.
+// bundled hook reference (source-read) and was live-fired on 2.21.0 (#2171).
+// An earlier number would be a claim nothing here supports.
 var (
 	hookEventSince        = map[string]string{hookEventPostAgentTurn: minVibeVersion}
 	hookEventSinceCurrent = map[string]string{hookEventPostAgent: minVibePostAgentVersion}
@@ -120,9 +127,10 @@ const minVibeVersion = "2.19.1"
 // respectively (source-read during triage). Started without a prompt in
 // #2171's manual check, the 2.21.0 TUI's banner counted "1 hook" for the
 // post_agent entry and none for the post_agent_turn one, so 2.21.0 loads it.
-// Not live-fired: no Vibe model credential was available on the machine this
-// ticket was executed on, so whether that hook actually runs at turn end is
-// unverified.
+// Live-fired in #2171: one 2.21.0 turn against an isolated dev daemon fired
+// the hook at turn end, and the daemon logged "received post_agent" and then
+// "agent finished turn → ready" for that session. So 2.21.0 is confirmed as a
+// working floor. 2.20.x was not tried, so the floor is not bisected.
 const minVibePostAgentVersion = "2.21.0"
 
 // HookEndpointPath is the daemon's Mistral Vibe hook route — unused for

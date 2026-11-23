@@ -293,7 +293,9 @@ func TestUninstall_RemovesTheFlagLineRatherThanWritingFalse(t *testing.T) {
 // `post_agent` body in the shape Vibe 2.21.0 sends reaches HandleStopHook
 // exactly as post_agent_turn does. The shape is source-read from 2.21.0's
 // vibe/core/agent_loop_hooks.py, whose _hook_session_context sets
-// transcript_path to the session's messages.jsonl, not live-fired. Seen red
+// transcript_path to the session's messages.jsonl. It was live-fired in #2171:
+// a real 2.21.0 turn's body reached HandleStopHook on an isolated dev daemon
+// ("received post_agent", then "agent finished turn → ready"). Seen red
 // before the fix: the receiver dropped `post_agent` as an unknown event.
 func TestPostAgentHook_DispatchesToHandleStopHook(t *testing.T) {
 	root := vibeSessionRoot(t)
@@ -320,16 +322,23 @@ func TestPostAgentHook_DispatchesToHandleStopHook(t *testing.T) {
 // does NOT make work. It passed before the change too, because the path is
 // refused before the event name is read.
 //
-// Source-read in the 3.1.4 wheel, not live-fired:
-// mistralai_vibe_local_harness/vibe/_foreign_hooks.py's _base_payload sets
-// transcript_path to the session's storage ROOT, a directory, and
-// app_server/_unified_harness_backend_adapter.py's _session_dir names it
-// <save_dir>/unified/<session_id>. The payload also carries response_text,
-// agent_name and turn_id. 3.1.4 writes no session messages.jsonl: its
-// session code only reads one, for legacy import, and the one file of that
-// name it writes is the ACP protocol log under ~/.vibe/logs/acp, outside the
-// session root. So this adapter's transcript Source does not see a 3.x
-// session either. That gap is out of this ticket's scope.
+// Measured in #2171's live-fire, one 3.1.4 turn against an isolated dev
+// daemon built from this change:
+//   - the hook fired and the beacon delivered it;
+//   - the receiver logged `rejected hook transcript_path
+//     "<VIBE_HOME>/logs/session/unified/<uuid>": wrong_suffix`;
+//   - there were 0 messages.jsonl files under VIBE_HOME, and the session lived
+//     at logs/session/unified/<uuid>/journal/*.jsonl.
+//
+// The source agrees. The 3.1.4 wheel's
+// mistralai_vibe_local_harness/vibe/_foreign_hooks.py (_base_payload) sets
+// transcript_path to the session's storage root, and
+// app_server/_unified_harness_backend_adapter.py (_session_dir) names it
+// <save_dir>/unified/<session_id>. The body also carries response_text,
+// agent_name and turn_id, which the body below reproduces. sessionIDFromPath
+// accepts only messages.jsonl, so this adapter's transcript Source does not
+// mint a 3.x session either. That gap is out of this ticket's scope and keeps
+// #2171 open.
 //
 // What it pins: 200, no dispatch, and one error log line per POST — so a
 // 3.x user's hook costs one log line per turn, not a retry storm.

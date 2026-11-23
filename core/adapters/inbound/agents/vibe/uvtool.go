@@ -43,6 +43,11 @@ const (
 // Vibe installed some other way (pipx, pip) has no folder here and gets the
 // probe. When several dist-info folders are present, the highest parseable
 // version wins.
+//
+// Live-fired in #2171. With no `vibe` on the daemon's PATH, a hooks grant on
+// an isolated dev daemon whose UV_TOOL_DIR held mistral_vibe-2.21.0.dist-info
+// wrote the current (post_agent) artifact, so the variant was chosen from this
+// folder name.
 func installedVersionFromUvTool() string {
 	dir := uvToolDir()
 	if dir == "" {

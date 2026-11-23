@@ -4,11 +4,25 @@
 // Exactly one event is installed: post_agent_turn on Vibe 2.19.1 up to
 // 2.21.0, and the same turn-end event under its newer name, post_agent, from
 // 2.21.0 on (#2171, see hookinstaller.go). Both are dispatched to
-// HandleStopHook with an empty text and a false waitingCue. The post_agent
-// payload has the same fields as post_agent_turn's in 2.21.0 (the wire
-// protocol its bundled vibe/core/skills/builtins/vibe.py documents, and its
-// agent_loop_hooks.py's _hook_session_context, both source-read; not
-// live-fired). Vibe 2.19.1's payload for post_agent_turn carries no message
+// HandleStopHook with an empty text and a false waitingCue.
+//
+// Live-fired on 2.21.0 in #2171 (one turn against an isolated dev daemon).
+// The post_agent body carried hook_event_name "post_agent" and a
+// transcript_path the receiver confined to the session's messages.jsonl, and
+// HandleStopHook ran: the daemon logged "received post_agent", then "agent
+// finished turn → ready". That its remaining fields match post_agent_turn's is
+// from 2.21.0's bundled wire-protocol doc (vibe/core/skills/builtins/vibe.py)
+// and agent_loop_hooks.py's _hook_session_context, both source-read.
+//
+// Vibe 3.1.4 is NOT served (measured in the same live-fire). Its post_agent
+// arrives with transcript_path set to the session's folder,
+// <save_dir>/unified/<session-id>, which the receiver refuses
+// ("rejected hook transcript_path …: wrong_suffix"). That Vibe wrote no
+// messages.jsonl at all: the session lives under unified/<id>/journal/*.jsonl,
+// which sessionIDFromPath does not accept either. #2171 stays open for that
+// gap.
+//
+// Vibe 2.19.1's payload for post_agent_turn carries no message
 // content at all — source-read
 // (vibe/core/hooks/models.go: PostAgentTurnInvocation adds nothing to the
 // shared HookSessionContext) AND live-fired against the installed 2.19.1
@@ -68,7 +82,8 @@ const logComponentHookReceiver = "vibe-hook-receiver"
 const transcriptExt = ".jsonl"
 
 // vibeHookPayload is the JSON body Vibe POSTs on a hook event — live-fired
-// and confirmed against the installed 2.19.1 CLI. SessionID is decoded only
+// and confirmed against the installed 2.19.1 CLI, and for post_agent on
+// 2.21.0 (#2171). SessionID is decoded only
 // to be available for logging; session identity is derived from the
 // transcript path (sessionIDFromTranscriptPath below), the same choice
 // every other JSON hook receiver in this codebase makes and for the same
