@@ -104,7 +104,7 @@
 
       <h3>GET /api/v1/sessions</h3>
 
-      <p>Returns the dashboard payload: <code>groups</code> (sessions grouped by project, with nested parent-child relationships; each group may carry trailing-window <code>costs</code> in USD keyed <code>day</code> / <code>week</code> / <code>month</code> / <code>year</code>), plus the optional <code>provider_costs</code> (provider &rarr; timeframe &rarr; USD) and <code>daemon_errors</code> (faults in the daemon&rsquo;s own machinery, each with <code>kind</code>, <code>scope</code>, <code>message</code> and an optional <code>detail</code>).</p>
+      <p>Returns the dashboard payload: <code>groups</code> (sessions grouped by project, with nested parent-child relationships; each group may carry trailing-window <code>costs</code> in USD keyed <code>day</code> / <code>week</code> / <code>month</code> / <code>year</code>, and an orchestrator&rsquo;s group may carry <code>unattached_workers</code>: its named workers that no session is attached to, such as a free pool slot &mdash; kept out of <code>agents</code> because they are not sessions and have no <code>session_id</code> or <code>state</code>. Each has <code>worker_name</code> plus the optional <code>role</code>, <code>icon</code>, <code>description</code>, <code>worker_id</code>, <code>worker_state</code> (the orchestrator&rsquo;s own state for the worker, set only when no session was matched to it), <code>stale</code> (stale heartbeat), <code>last_exit</code> (exit code of the last completed run; non-zero shows as failed) and <code>waiting</code> (painted and notified as waiting)), plus the optional <code>provider_costs</code> (provider &rarr; timeframe &rarr; USD) and <code>daemon_errors</code> (faults in the daemon&rsquo;s own machinery, each with <code>kind</code>, <code>scope</code>, <code>message</code> and an optional <code>detail</code>). With the query parameter <code>?include=finished_subagents</code> it also carries, when any exist, <code>finished_subagents</code>: the final usage of child sessions the daemon has already removed, each with <code>session_id</code>, <code>parent_session_id</code>, <code>adapter</code>, <code>first_seen</code>, <code>finished_at</code> (unix seconds) and <code>usage</code> (the model, elapsed time, cumulative tokens, cost and its provenance from the child&rsquo;s last <code>SessionMetrics</code>) &mdash; what <code>irrlicht-ls --herdr-usage</code> reads. Without the parameter it is omitted.</p>
 
       <pre><code>{
   "groups": [
@@ -204,10 +204,10 @@
 
       <h3>GET /api/v1/version</h3>
 
-      <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
+      <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the VS Code extension, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.6.9"
+  "version": "0.6.10"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -919,6 +919,26 @@ go tool pprof 'http://127.0.0.1:7837/debug/pprof/profile?seconds=10'</code></pre
             <td><code>cum_cache_creation_tokens</code></td>
             <td>int64</td>
             <td>Cumulative cache-creation tokens across all API turns</td>
+          </tr>
+          <tr>
+            <td><code>pricing_source</code></td>
+            <td>string</td>
+            <td>What <code>estimated_cost_usd</code> was priced from: <code>litellm@&lt;date&gt;</code> (the model price table, dated by its last fetch; plain <code>litellm</code> when the table carries no date), <code>provider-reported</code> (the agent reported the cost itself), or both joined by <code>+</code> when both contributed; absent when nothing was priced</td>
+          </tr>
+          <tr>
+            <td><code>unpriced_models</code></td>
+            <td>[]string</td>
+            <td>Models whose tokens are counted in the <code>cum_*</code> fields but added nothing to <code>estimated_cost_usd</code> because no price is known for them (<code>""</code> for tokens that carried no model name). Non-empty means the cost is understated; absent when every counted token was priced</td>
+          </tr>
+          <tr>
+            <td><code>tokens_unobserved</code></td>
+            <td>bool</td>
+            <td>Some turn reported a provider cost, which is taken instead of that turn&rsquo;s token counts, so the <code>cum_*</code> fields understate the session&rsquo;s tokens</td>
+          </tr>
+          <tr>
+            <td><code>usage_coverage</code></td>
+            <td>object</td>
+            <td>The adapter&rsquo;s declaration of what its usage accounting counts: <code>token_types</code> (any of <code>input</code>, <code>output</code>, <code>cache_read</code>, <code>cache_write</code> &mdash; a type missing here is never counted for this adapter, so its <code>cum_*</code> value is 0 by omission, not by measurement) and <code>excludes_subagents</code> (true when the parent&rsquo;s counts are known to exclude its child sessions). Absent when the adapter declares nothing</td>
           </tr>
           <tr>
             <td><code>completed_turns</code></td>

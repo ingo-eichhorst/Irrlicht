@@ -123,6 +123,7 @@
         <li><strong>Go 1.26+</strong> &mdash; the daemon is written in Go</li>
         <li><strong>Swift 5.9+</strong> &mdash; the menu-bar app is a native SwiftUI application</li>
         <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
+        <li><strong>Node.js with npm</strong> &mdash; <code>build-release.sh</code> also packages the VS Code extension (<code>.vsix</code>) and stops if <code>node</code> or <code>npm</code> is missing; the manual daemon and app builds below do not need it</li>
       </ul>
 
       <!-- ── Homebrew Install ── -->
@@ -351,13 +352,13 @@ cd Irrlicht
 
       <pre><code>curl -fsSL https://irrlicht.io/install.sh | sh -s -- --uninstall</code></pre>
 
-      <p>Your session history and configuration in <code>~/Library/Application Support/Irrlicht/</code> are kept. To remove those too:</p>
+      <p>Your session history and configuration in <code>~/Library/Application Support/Irrlicht/</code> and <code>~/.local/share/irrlicht/</code> are kept. To remove those too:</p>
 
-      <pre><code>rm -rf ~/Library/Application\ Support/Irrlicht/</code></pre>
+      <pre><code>rm -rf ~/Library/Application\ Support/Irrlicht/ ~/.local/share/irrlicht/</code></pre>
 
       <div class="callout callout-warning">
         <strong>Warning</strong>
-        Removing the <code>Application Support/Irrlicht/</code> directory deletes all local session history and configuration. Back up anything you want to keep before running the command above.
+        Removing these two directories deletes the daemon's local session history and state, including your permission choices. Back up anything you want to keep before running the command above.
       </div>
 
       <div class="callout callout-info">

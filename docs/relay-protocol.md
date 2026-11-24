@@ -128,10 +128,13 @@ tooltip, and anything else is a raw daemon frame. On WS connect the relay also
 so a client that connects after a daemon hydrates over the socket alone (no
 cross-origin HTTP needed).
 
-Sessions are keyed by `session_id`. The same daemon reached over both the local
-socket and a relay collapses to one row automatically. **Caveat:** two
-*different* daemons that share a `session_id` (e.g. `proc-<pid>`) would merge —
-per-source keying and row-level source badges are deferred.
+Relay-delivered sessions are keyed by the compound `(daemon_id, session_id)`
+(#537), so two *different* daemons that share a `session_id` (e.g.
+`proc-<pid>`) stay separate rows; local sessions keep the bare `session_id`. A
+session reached over both the local socket and a relay collapses to its local
+row. Each remaining relay row carries an origin glyph whose tooltip names its
+daemon (#538). On a `daemon_status` of `disconnected` the macOS app keeps that
+daemon's rows, faded, until it reconnects; the web dashboard drops them (#540).
 
 Against an auth-enabled relay a client includes its `token` in that `hello`. A
 WS close with code **4401** means the token was missing, invalid, or revoked;
@@ -308,7 +311,5 @@ connection-status tooltip lists the connected daemon(s).
   gap-free reconnection.
 - `/api/v1/tokens` REST management (POST/DELETE); token management is CLI-only.
 - Multiple relays per daemon; multi-node relays; session persistence.
-- Row-level source badges and "fade, don't delete" on daemon-offline (v0 deletes
-  a disconnected daemon's rows).
 - History re-hydration of late-joining relay clients (bars fill from live ticks;
   session state *is* replayed, history snapshots are not).

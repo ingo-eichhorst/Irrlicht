@@ -43,12 +43,12 @@ VS Code's extension API has no way to colour or outline one terminal, so the ext
 
 ## Install
 
-Marketplace publishing is not set up yet; sideload the `.vsix`:
+Marketplace publishing is not set up yet; sideload the `.vsix`. Each release since v0.6.10 attaches it as `irrlicht-vscode-<version>.vsix` on the [releases page](https://github.com/ingo-eichhorst/Irrlicht/releases/latest), listed in that release's `checksums.sha256`. Then:
 
 - `code --install-extension irrlicht-vscode-<version>.vsix`, or
 - Extensions view, then `...`, then **Install from VSIX...**
 
-Build the `.vsix` from a repository checkout with `tools/build-release.sh --vsix-only`. The file lands in `.build/`.
+To build the `.vsix` yourself from a repository checkout, run `tools/build-release.sh --vsix-only`. The file lands in `.build/`.
 
 ## Limitations
 

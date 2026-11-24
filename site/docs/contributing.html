@@ -127,7 +127,7 @@
 
       <ul>
         <li><strong>Start here.</strong> <code>/ir:triage #&lt;N&gt;</code> (where <code>&lt;N&gt;</code> is the issue number) investigates the issue and posts a plan -- high-level design, testing strategy, process -- and, when it is ready, labels it <code>ready-for-agent</code>; <code>/ir:exec &lt;N&gt;</code> then executes that approved plan end to end -- implement &rarr; review &rarr; verify &rarr; ready PR (it never merges). This is the practice rep, whether you're a maintainer or a first-time contributor. Issues labeled <code>good first issue</code> or <code>ready-for-agent</code> are low-stakes starting reps.</li>
-        <li><strong>See it work first.</strong> The repo's <code>examples/</code> directory has runnable, no-toolchain-needed demos of multiple agents operating on real sessions: <code>relay/</code>, <code>roundtrip/</code>, and <code>coding-factory/</code>.</li>
+        <li><strong>See it work first.</strong> The repo's <code>examples/</code> directory has runnable, no-toolchain-needed demos of multiple agents operating on real sessions: <code>relay/</code>, <code>roundtrip/</code>, <code>coding-factory/</code>, and <code>vm-pool/</code>.</li>
         <li><strong>You don't need to read a diff to contribute.</strong> Describing a problem clearly in an issue or Discussion is a complete contribution -- the <code>/ir:triage</code> skill turns it into something an agent can pick up.</li>
       </ul>
 
@@ -141,6 +141,7 @@
         <li>Go 1.26+</li>
         <li>Swift 5.9+</li>
         <li>Xcode Command Line Tools</li>
+        <li>Node.js with npm (<code>./tools/build-release.sh</code> also packages the VS Code extension and stops if either is missing)</li>
         <li>git</li>
       </ul>
 
@@ -178,7 +179,7 @@
 
       <pre><code>Irrlicht/
   core/             # Go daemon -- session detection, state machine, IPC
-  platforms/        # Swift macOS app + web dashboard
+  platforms/        # Swift macOS app, web dashboard, VS Code extension, Claude Code panel + Herdr.app mods
   site/             # Landing page + docs (GitHub Pages)
   tools/            # Build, release, and replay-fixture scripts</code></pre>
 

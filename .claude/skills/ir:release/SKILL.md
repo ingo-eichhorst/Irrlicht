@@ -201,7 +201,9 @@ for line in log.split('\n'):
         # skip hex colors like #34C759
         if end < len(line) and line[end].lower() in 'abcdef': continue
         n = int(n_str)
-        if not (2 <= n <= 999): continue
+        # Upper bound is generous on purpose: issue numbers passed 999 long ago, and a
+        # 999 cap silently dropped every ref of the v0.6.10 cycle (#2139–#2175).
+        if not (2 <= n <= 99999): continue
         ctx = line[max(0, m.start()-25):m.start()].lower()
         # skip natural-language uses like "sweep #2", "phase #3"
         if any(k in ctx for k in ['sweep ', 'phase-narration', 'rounds ', 'iteration ']): continue
@@ -425,7 +427,7 @@ from `gh api`, the token is missing the `security_events` scope:
 > PKG, and writes `.build/checksums.sha256`. It does **NOT** do four things —
 > do them by hand afterward:
 > 1. **ZIP**: `ditto -c -k --sequesterRsrc --keepParent .build/Irrlicht.app .build/Irrlicht-$NEW_VERSION.zip`
-> 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, and the five tarballs (three daemon + two relay).
+> 2. **Re-checksum to include the zip**: regenerate `.build/checksums.sha256` over the dmg, pkg, zip, the five tarballs (three daemon + two relay) and the VS Code `.vsix` (the script already builds and checksums it; a re-checksum that omits it drops it from the file).
 > 3. **Sparkle-sign the DMG** + add the `site/appcast.xml` `<item>` (Step 6 step 6's Sparkle block).
 > 4. **Smoke-test** the bundle (Step 6 step 7) — but see the port hazard below.
 >
@@ -1020,6 +1022,7 @@ cd .build && shasum -a 256 \
   Irrlicht-$NEW_VERSION.dmg \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
+  irrlicht-vscode-$NEW_VERSION.vsix \
   > checksums.sha256
 cd ..
 ```
@@ -1245,6 +1248,7 @@ gh release create v$NEW_VERSION \
   .build/Irrlicht-$NEW_VERSION.dmg \
   .build/Irrlicht-$NEW_VERSION-mac-installer.pkg \
   .build/Irrlicht-$NEW_VERSION.zip \
+  .build/irrlicht-vscode-$NEW_VERSION.vsix \
   .build/checksums.sha256 \
   --title "v$NEW_VERSION" \
   --notes-file /tmp/release-notes-v$NEW_VERSION.md
@@ -1305,7 +1309,7 @@ without `--push`; the verification will report a mismatch you can ignore.
 ## Step 9: Verify — including a real end-to-end install canary
 
 1. Confirm release URL is returned.
-2. Run `gh release view v$NEW_VERSION` to verify **all nine assets** are attached:
+2. Run `gh release view v$NEW_VERSION` to verify **all ten assets** are attached:
    - `irrlichd-darwin-universal.tar.gz` *(daemon + the whole web/ tree — required by curl --daemon-only)*
    - `irrlichd-linux-amd64.tar.gz` *(the Linux curl path 404s without it)*
    - `irrlichd-linux-arm64.tar.gz` *(same, on aarch64)*
@@ -1314,6 +1318,7 @@ without `--push`; the verification will report a mismatch you can ignore.
    - `Irrlicht-$NEW_VERSION.dmg`
    - `Irrlicht-$NEW_VERSION-mac-installer.pkg`
    - `Irrlicht-$NEW_VERSION.zip` *(required by the curl installer)*
+   - `irrlicht-vscode-$NEW_VERSION.vsix` *(the VS Code extension, sideloaded; built by `tools/build-release.sh` since #2169)*
    - `checksums.sha256`
 3. **Download an asset and confirm it matches the shipped checksum.**
    The pre-upload checksum file can drift from the actual uploaded bytes
