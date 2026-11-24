@@ -125,8 +125,11 @@ CI parity section (chunking, the budget, and what it makes visible).
   group; its mutation corpus is `tools/lib/site-lint_test.sh`.
 - POSIX shell scripts: `tools/posix-lint.sh` checks every file git knows
   about — tracked, plus **untracked and not gitignored** (#1611) — whose
-  **first line** is a `#!/bin/sh` shebang; today `site/install.sh`,
-  `site/relay.sh`, `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim`
+  **first line** is a `#!/bin/sh` shebang; today eight, by the
+  `posix-lint: N file(s)` line it prints on every run: `site/install.sh`,
+  `site/relay.sh`, `tools/linux-replay-entrypoint.sh`, `tools/git-hooks/shim`,
+  `platforms/herdr/irrlicht-usage/usage.sh`, and `examples/vm-pool/guest/`'s
+  `entrypoint`, `report-state` and `stub-agent`
   (#1591 brought the shim into scope, which is the whole reason that file was written in
   POSIX sh rather than bash). Line 1 only, because
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
@@ -370,10 +373,12 @@ CI parity section (chunking, the budget, and what it makes visible).
   - **No function is blind-called.** Each has a named setup+call recipe;
     expected statuses are chosen DISTINCTIVE (0, 2, 3, 124) because a documented
     1 is indistinguishable from an errexit abort, which also exits 1. Anything
-    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today two entries:
+    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today three entries:
     `swift_suite_run` on a non-Darwin host, inactive on macOS where the suite
-    actually runs, and `assert_mutation_is_red` (#1839), which drives
-    `tools/mutate.sh` against a real tracked file and needs a clean worktree.
+    actually runs; `assert_mutation_is_red` (#1839), which drives
+    `tools/mutate.sh` against a real tracked file and needs a clean worktree;
+    and `assert_swift_test_goes_red` (#2164), the same against a tracked Swift
+    file plus a full `swift test` build.
     Recipe keys and exemption keys are existence-
     checked against the walk in BOTH directions, so a library that stopped
     being walked surfaces as its recipes naming nothing rather than as silence.
@@ -812,20 +817,24 @@ CI parity section (chunking, the budget, and what it makes visible).
 
   `node_modules/` is gitignored, so a fresh clone — or any new
   `git worktree add` — starts without dependencies. No manual install step is
-  needed: each tree's `pretest` script runs `npm ci --ignore-scripts` when
-  they're missing, so `npm test` self-heals on its first run (slow once,
-  instant afterwards). To get it out of the way up front, run `npm ci` in the
-  tree yourself. **Never `npm install`** — it re-resolves the dependency graph
+  needed in four of the five trees: their `pretest` script runs
+  `npm ci --ignore-scripts` when they're missing, so `npm test` self-heals on
+  its first run (slow once, instant afterwards). `platforms/vscode/` has no
+  `pretest`, so a manual `npm test` there needs `npm ci` first; preflight's web
+  gate and web-test.yml run `npm ci --ignore-scripts` before `npm test` in
+  every tree, so neither depends on it. To get it out of the way up front, run
+  `npm ci` in the tree yourself. **Never `npm install`** — it re-resolves the dependency graph
   and rewrites `package-lock.json`; on an npm older than the one that wrote the
   lockfile it silently strips the `libc` fields from the
   `@rolldown/binding-linux-*` entries, and that churn then rides along in an
   unrelated PR. `npm ci` installs *from* the lockfile and never writes it.
 
-  Because the two trees resolve independently, they can drift onto different
+  Because the trees resolve independently, they can drift onto different
   versions of the same transitive package — which is how one ended up carrying
-  a vulnerable `postcss` while the other was patched (#1225). Both are kept
-  current by weekly dependabot updates configured in `.github/dependabot.yml`,
-  which covers the Go modules and GitHub Actions on the same schedule; a bump
+  a vulnerable `postcss` while the other was patched (#1225, when there were
+  two trees). All five are kept current by weekly dependabot updates configured
+  in `.github/dependabot.yml` (one `npm` entry listing every tree), which
+  covers the Go modules and GitHub Actions on the same schedule; a bump
   landing in only one tree is a signal something is wrong with that config, not
   normal.
 

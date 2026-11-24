@@ -253,9 +253,9 @@
             <td><strong>Desktop, local execution</strong></td>
             <td>Claude desktop app</td>
             <td>Agent loop on your machine; shell commands in a local Linux VM</td>
-            <td>A process and a small JSON session registry, yes. Hooks, not established.</td>
-            <td>Under investigation</td>
-            <td>Host-direct sessions run a real bundled Claude Code CLI and leave a registry under <code>~/Library/Application Support/Claude/claude-code-sessions/</code>. Its <code>lastActivityAt</code> is <strong>not</strong> a live heartbeat, so it cannot drive state on its own. Open in <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/971" target="_blank" rel="noopener">#971</a>.</td>
+            <td>A process and a transcript under <code>~/.claude/projects/</code>, yes. Hooks, not established.</td>
+            <td>Expected through the same local runtime, not separately verified</td>
+            <td>Host-direct sessions run the bundled Claude Code CLI and write an ordinary Claude Code transcript, so the Claude Code adapter adopts them with state, model, tokens and cost. Measured on 2026-09-11: all 146 entries of the Desktop session registry had a matching transcript, and the daemon showed no stray pre-sessions (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/971" target="_blank" rel="noopener">#971</a>, closed). No recordings were made, and no session whose agent ran inside the Cowork VM was running during the measurement, so that case is not verified.</td>
             <td>2026-09-11</td>
           </tr>
           <tr>
@@ -299,8 +299,8 @@
             <td>Claude app for iOS and Android</td>
             <td><strong>Your desktop computer</strong> &mdash; the machine must be awake with the Claude desktop app open</td>
             <td>Same as Cowork local execution</td>
-            <td>Under investigation</td>
-            <td>Dispatch is a remote trigger for a local Cowork session, so it inherits the local-execution row above and its open question. Limited beta on Pro and Max. Open in <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/971" target="_blank" rel="noopener">#971</a>.</td>
+            <td>Expected through the same local runtime, not separately verified</td>
+            <td>Dispatch is a remote trigger for a local Cowork session, so it inherits the local-execution row above. It was not measured on its own. Limited beta on Pro and Max.</td>
             <td>2026-09-11</td>
           </tr>
         </tbody>

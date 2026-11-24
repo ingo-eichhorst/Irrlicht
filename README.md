@@ -99,6 +99,8 @@ The **14 onboarded coding agents** below declare their stage in [`replaydata/age
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after the curl or PKG install; Homebrew and DMG drag-installs: Settings → Advanced Settings → Command-Line Tool → Install Command-Line Tool |
 | VS Code extension     | alpha   | sideload the `.vsix` — see [platforms/vscode/README.md](platforms/vscode/README.md) |
+| Claude Code panel     | alpha   | `/plugin install irrlicht-panel --marketplace ingo-eichhorst/Irrlicht` — see [platforms/claude-code/README.md](platforms/claude-code/README.md) |
+| Herdr.app mod         | alpha   | see [platforms/herdr/mods/irrlicht/README.md](platforms/herdr/mods/irrlicht/README.md) |
 | Linux (**daemon**-only — background service, no menu-bar UI) | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
 | iOS / iPadOS          | planned | —                         |
@@ -167,7 +169,7 @@ Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · trans
 - **Observability stacks** ([Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/)) need SDK instrumentation and a dashboard tab.
 - **Single-agent monitors** ([Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions)) lock you to one CLI or one terminal.
 
-Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent / Muse / Junie / DeepSeek Harness, plus the Gas Town orchestrator, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
+Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent / Muse / Junie / DeepSeek Harness, plus the Gas Town and worker-list orchestrators, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
 
 ## The problem (why this exists)
 

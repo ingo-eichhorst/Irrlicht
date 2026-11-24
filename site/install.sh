@@ -325,7 +325,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     ok
     say ""
     say "  ${GREEN}✓${RESET} Irrlicht uninstalled"
-    say "  ${DIM}User data in ~/Library/Application Support/Irrlicht/ was kept.${RESET}"
+    say "  ${DIM}User data in ~/Library/Application Support/Irrlicht/ and ~/.local/share/irrlicht/ was kept.${RESET}"
     say ""
     exit 0
 fi

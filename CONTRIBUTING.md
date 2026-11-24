@@ -37,14 +37,16 @@ and `/ir:exec` is the starting point for it:
   are low-stakes starting reps.
 - **See it work first.** [`examples/`](examples/) has runnable,
   no-toolchain-needed demos of multiple agents operating on real sessions:
-  `relay/`, `roundtrip/`, and `coding-factory/`.
+  `relay/`, `roundtrip/`, `coding-factory/`, and `vm-pool/`.
 - **You don't need to read a diff to contribute.** Describing a problem
   clearly in an issue or Discussion is a complete contribution — `/ir:triage`
   turns it into something an agent can pick up.
 
 ## Development setup
 
-Prerequisites: macOS 13+, Go 1.26+, Swift 5.9+, Xcode Command Line Tools.
+Prerequisites: macOS 13+, Go 1.26+, Swift 5.9+, Xcode Command Line Tools,
+Node.js with npm (`build-release.sh` stops without `node` and `npm` because it
+builds the VS Code extension, and the web suites run under `npm test`).
 
 ```bash
 git clone https://github.com/ingo-eichhorst/Irrlicht.git
@@ -68,7 +70,7 @@ Project layout:
 
 ```
 core/        Go daemon (hexagonal: domain → ports → adapters → services)
-platforms/   Swift macOS app, web frontend
+platforms/   Swift macOS app, web frontend, VS Code extension, Claude Code panel and Herdr.app mods
 site/        Landing page and docs (GitHub Pages)
 tools/       Build, release, and replay-fixture scripts
 replaydata/  Sample transcripts and recorded sessions (onboarding-factory fixture catalog)

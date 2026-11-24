@@ -65,7 +65,7 @@ In scope:
 - The Go daemon (`irrlichd`) and its HTTP/WebSocket API on port 7837
 - The Swift macOS app and its IPC with the daemon
 - Local state files under `~/Library/Application Support/Irrlicht/`
-- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness) and the Gas Town orchestrator
+- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness), the Gas Town orchestrator, and the worker-list orchestrator's status file
 - Build and release scripts in `tools/`
 
 Out of scope:

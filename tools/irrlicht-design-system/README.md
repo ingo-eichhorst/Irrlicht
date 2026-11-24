@@ -2,7 +2,7 @@
 
 > *In Goethe's Faust, an Irrlicht guides the way through the night. This one guides you through your agents — who's working, who's waiting, and where you're needed next.*
 
-**Irrlicht** (German: *will-o'-the-wisp*; IPA /eer-likht/) is an open-source macOS menu-bar telemetry app that monitors AI coding agents — Claude Code, OpenAI Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness, and the Gas Town orchestrator (a coordinator process that dispatches and supervises work across multiple agent workers) — in real time. Each session is a single colored light:
+**Irrlicht** (German: *will-o'-the-wisp*; IPA /eer-likht/) is an open-source macOS menu-bar telemetry app that monitors AI coding agents — Claude Code, OpenAI Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie, Muse, DeepSeek Harness, the Gas Town orchestrator (a coordinator process that dispatches and supervises work across multiple agent workers), and the worker-list orchestrator (any pool that writes a [status file](https://irrlicht.io/docs/worker-list.html)) — in real time. Each session is a single colored light:
 
 - 🟣 **working** — the agent is thinking, building, streaming
 - 🟠 **waiting** — it needs you; the story pauses for your judgment

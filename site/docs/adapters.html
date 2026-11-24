@@ -108,6 +108,7 @@
         <li><strong>Watches:</strong> <code>~/.claude/projects/**/*.jsonl</code></li>
         <li>Uses the shared fswatcher with recursive directory watching (two-level tree: <code>root/&lt;project&gt;/&lt;id&gt;.jsonl</code>)</li>
         <li><strong>Account identity (separate consent row, &ldquo;Claude Code account&rdquo;):</strong> so each account gets its own quota chip, the daemon reads two fields, <code>oauthAccount.accountUuid</code> and <code>oauthAccount.organizationType</code>, from Claude Code&rsquo;s identity file (<code>~/.claude.json</code>, or <code>$CLAUDE_CONFIG_DIR/.claude.json</code> when that is set), plus the first timestamp of a session&rsquo;s transcript. It never reads or keeps the email address, names, or any token. It is declared on its own <code>claude-code-account</code> pseudo-adapter under the <code>account</code> permission, not as a second permission on <code>claude-code</code>. A session is attributed to an account only if that account was already logged in when the session began and has not changed since; otherwise its quota stays unattributed</li>
+        <li><strong>Z.ai quota (separate consent row, &ldquo;Z.ai coding plan quota&rdquo;):</strong> a session whose observed route names the host <code>api.z.ai</code> gets GLM Coding Plan usage in its quota chip, from Z.ai&rsquo;s API rather than the transcript. It is declared on its own <code>zai-account-api</code> pseudo-adapter under the <code>account-api</code> permission (<code>core/adapters/outbound/zaiaccountapi/</code>). Once granted, the daemon reads the Z.ai key (<code>env.ANTHROPIC_AUTH_TOKEN</code>, else <code>env.ANTHROPIC_API_KEY</code>) only from the Claude Code settings file that set that route &mdash; <code>managed-settings.json</code> or a <code>managed-settings.d</code> drop-in, <code>.claude/settings.local.json</code>, <code>.claude/settings.json</code>, or <code>~/.claude/settings.json</code> &mdash; and only while that file still names <code>api.z.ai</code>; a key that exists only in the process environment is not read. The key is sent once per poll to <code>GET https://api.z.ai/api/monitor/usage/quota/limit</code> and is never stored, logged or shown; sessions using the same key share one poll. Revoking it stops every further key read and request to <code>api.z.ai</code> at once and discards cached readings; a reading already shown on a session is removed at the next sweep, which runs once a minute</li>
         <li><strong>Adapter name in session state:</strong> <code>"claude-code"</code></li>
       </ul>
 
@@ -339,20 +340,21 @@
 
       <h2 id="adapter-interfaces">Adapter Interfaces</h2>
 
-      <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, shared-PID-owner, released-PID, process-name, argv-exclusion, session-host, launcher-PID, known-host, subagent-count, and metrics-reader maps the rest of the daemon consumes.</p>
+      <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, shared-PID-owner, released-PID, process-name, argv-exclusion, session-host, launcher-PID, known-host, subagent-count, metrics-reader, and usage-coverage maps the rest of the daemon consumes.</p>
 
       <p>An adapter package therefore satisfies the contract by exporting a single top-level <code>Agent()</code> function that returns a fully-populated <code>agent.Agent</code>. Watching the filesystem, scanning processes, and broadcasting events are handled by the shared infrastructure (<code>core/adapters/inbound/agents/fswatcher/</code>, <code>core/adapters/inbound/agents/processlifecycle/</code>) plus the per-adapter watcher when the source needs one (e.g. OpenCode's SQLite WAL watcher).</p>
 
       <h3 id="iface-config">Adapter declaration &mdash; <code>agent.Agent</code></h3>
 
-      <p>Defined in <code>core/domain/agent/</code> as three orthogonal axes plus a permission list: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), <code>Source</code> (a sealed sum: where the conversation lives), and <code>Permissions</code> (the consent-gated capabilities the daemon may exercise).</p>
+      <p>Defined in <code>core/domain/agent/</code> as three orthogonal axes plus a permission list and an optional usage declaration: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), <code>Source</code> (a sealed sum: where the conversation lives), <code>Permissions</code> (the consent-gated capabilities the daemon may exercise), and <code>Usage</code> (which token types the adapter&rsquo;s usage accounting counts; nil means undeclared).</p>
 
-<pre><code>// Top-level declaration — Identity × Process × Source × Permissions.
+<pre><code>// Top-level declaration — Identity × Process × Source × Permissions, plus an optional Usage.
 type Agent struct {
     Identity    Identity
     Process     Process
     Source      Source
     Permissions []Permission // consent-gated capabilities the daemon may exercise
+    Usage       *session.UsageCoverage // optional: which token types the parser counts, and whether a parent's counts exclude its children (#2061)
 }
 
 type Identity struct {
@@ -443,6 +445,7 @@ type Permission struct {
     Detail          string          // expanded (i) text: exact paths/commands, how to undo
     Apply           func() error    // performs the modification on grant (nil for observe-kind)
     Remove          func() error    // undoes it on revoke (nil for observe-kind)
+    RequiresExplicitGrant bool      // grant-all never auto-grants it: only a person's answer does (issue #2012)
     Writes          *ManagedUserFile // non-nil when Apply writes a shared, user-owned file (follows $HOME, not IRRLICHT_HOME)
     Advisory        []AdvisoryWrite  // paths Apply is known to cause to be written that hold no irrlicht content (issue #1748)
 }

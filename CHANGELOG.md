@@ -12,6 +12,96 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-11-24
+
+### Irrlicht in three new places: a VS Code extension, a panel inside Claude Code, and a Herdr.app mod
+
+### Highlights
+
+#### Agent state in VS Code
+![VS Code with the Irrlicht dashboard in the side bar, an Agent Terminals list, and an orange frame around the terminal of an agent that waits for an answer](assets/releases/v0.6.10/vscode-extension.png)
+
+A new VS Code extension hosts the Irrlicht dashboard in a panel, counts sessions by state in the status bar, and frames the terminal of each agent in its state colour: purple while it works, orange while it waits for you, green when it is done. The Agent Terminals view lists every terminal that runs an agent, and a click brings that terminal to the front. Install it from this release's `irrlicht-vscode-0.6.10.vsix` with `code --install-extension`.
+
+**Why it matters:** you see which agent needs you, and in which terminal, without leaving the editor.
+
+(#2169, #350, #2175)
+
+#### An Irrlicht panel inside Claude Code
+![Illustration, not a screenshot: the Irrlicht panel beside a Claude Code chat, drawn with the sample data from the panel's README — Claude Max quota bars, sessions grouped by project with "← here" on the current one, and the trailing 24-hour spend](assets/releases/v0.6.10/claude-code-panel.png)
+
+A read-only Claude Code mod shows Irrlicht's view beside the chat: the quota of the account this session bills against, every session from every agent grouped by project with `← here` on your own, and the spend of the last 24 hours. Press a session for its state, cost and the question it waits on. Install it with `/plugin install irrlicht-panel --marketplace ingo-eichhorst/Irrlicht` and open it with `/irrlicht`.
+
+**Why it matters:** in a full-screen terminal or over SSH, where the menu bar is out of sight, you still see what your other agents are doing.
+
+(#2144, #2139)
+
+#### Context load in Herdr.app
+![The Irrlicht mod in Herdr.app: agents grouped by project, each with its state icon, model and a context bar](assets/releases/v0.6.10/herdr-mod.png)
+
+A Herdr.app mod lists Herdr's agents grouped by their Irrlicht project, each with its state icon, model and a context bar in Irrlicht's pressure colours. A click focuses the agent's pane. Irrlicht also answers Herdr's `usage` plugin action with the pane's tokens and cost, and leaves a number empty, with the reason, when it cannot vouch for it rather than reporting zero.
+
+**Why it matters:** Herdr users see which agent is close to its context limit, and Herdr's usage view gets Irrlicht's per-session numbers.
+
+(#2159, #2146, #2160, #2061)
+
+### Also in this release
+
+**Added**
+- Worker-list orchestrators: a worker pool described by one JSON status file shows next to Gas Town in the dashboard and the menu bar app, with a group per pool and team, every free and busy worker, and stale and failed tags (#2152, #2148).
+- Orchestrator workers without a session show as muted rows, and session rows show the worker's name and work item (#2150, #2140).
+- A worker can report that its agent waits for a person: the row turns orange and you get the same notification as for a waiting session (#2164, #2145).
+- A Claude Code session that runs in a container and reaches you through a relay shows in its worker's row instead of a separate project group (#2153, #2149).
+- `examples/vm-pool`: a reference kit that runs one agent per container or micro-VM and shows them through the worker list, with no transcript leaving the guest (#2168, #2145).
+- Z.ai GLM Coding Plan quota on Claude Code sessions routed to `api.z.ai`, behind a new "Read Z.ai coding plan quota" permission. Irrlicht now reads `ANTHROPIC_BASE_URL` from Claude Code's settings files, not only from the process environment (#2161, #2010).
+- Mistral Vibe plan usage in the quota chip, read from your Chrome session on macOS behind a new permission that grant-all mode never grants on your behalf (#2162, #2012).
+- Settings: choose which quota accounts are shown, in the macOS app and the web dashboard. A hidden account is still monitored (#2172, #2163).
+
+**Fixed**
+- Claude Code: a session whose turn has finished now stays ready. Before, it turned to waiting about a minute later, when Claude Code sent its idle notification (#2180, #2176).
+- Mistral Vibe 2.21.0 and later: Irrlicht installs the `post_agent` hook and removes the experimental-hooks flag those versions no longer need. Vibe 3.x keeps sessions in a new layout that Irrlicht does not read yet (#2173, #2171).
+- macOS: far fewer keychain prompts for the relay token. Opening Settings no longer rewrites the token and reconnects the relay (#2167).
+- Daemon: two sessions that have no PID yet are no longer treated as duplicates of each other, so neither gets deleted (#2158, #2157).
+- Web dashboard and onboarding viewer: a failed background request is now logged to the console instead of being dropped silently (#2151, #2147).
+
+**Security**
+- The WebSocket library (`gorilla/websocket`) now makes its frame mask keys with a cryptographic random generator. v1.5.3 used `math/rand` (GO-2026-6278) (#2181).
+- Release binaries are built with Go 1.26.11. `govulncheck` finds no Go standard-library advisory in `core` with it, against 48 with Go 1.26.0.
+
+**Changed / Docs / Distribution**
+- Releases now ship the VS Code extension as `irrlicht-vscode-<version>.vsix`, listed in `checksums.sha256` (#2169).
+- Docs: a new Worker List page, the Mistral Vibe consent row on the adapters page, and the hidden-accounts setting under tips and tricks (#2152, #2164, #2162, #2172). The Claude support page now records that the Claude Code adapter already picks up Cowork's local desktop sessions (#971).
+- Dependencies: jsdom 31.0.x and vitest in the four web suites; klauspost/compress, golang.org/x/sys, modernc.org/sqlite and golang.org/x/tools in `core` (#2141, #2142, #2143, #2154, #2155, #2156, #2165).
+
+**Contributor tooling**
+- `/ir:test-mac` signs dev builds with the Developer ID identity, so a dev build reads the relay token without a prompt and shares TCC grants with the release (#2166).
+- macOS tests run against an in-memory keychain and never reach the running daemon (#2167).
+- Swift CI and preflight resolve packages with `--force-resolved-versions` (#2151).
+
+### Technical appendix
+
+- **VS Code extension (#2169, closes #350, fixes #2175).** `platforms/vscode/` hosts the dashboard in a webview panel and an activity-bar view, shows per-state counts in the status bar (error only when non-zero) and reconnects when the daemon goes away. The terminal frame writes colour keys into `workbench.colorCustomizations` in the workspace settings, as Peacock does, because the extension API cannot colour one terminal. The panel and the editor area are framed independently; within one area the most urgent state wins (error > waiting > working > ready, `URGENCY` in `terminalFrame.ts`), since VS Code exposes no split or visibility information for panel terminals. With two or more editor groups only the tab top edges are coloured (`tab.activeBorderTop` / `tab.unfocusedActiveBorderTop`), with an `editor.border` fallback on the modern layout before 1.147. `src/terminalLocator.ts` places same-named terminals by identity (tab activation, tab and terminal appearing together, an editor moved between groups). The user's values for the touched keys are restored when no area shows an agent terminal or `irrlicht.terminalFrame` is `off`. Pairing a terminal with a session needs the daemon's Terminal focus → Capture terminal identity permission. `tools/build-release.sh` builds the `.vsix` from a staged copy (`npm ci --ignore-scripts`, version stamped from `version.json`) and adds it to `checksums.sha256`; `--vsix-only` builds just the extension. The vitest suite is in `web-test.yml`; `npm run test:e2e` is a local smoke test only.
+- **Claude Code panel (#2144, closes #2139).** A Claude Code mod in `platforms/claude-code/`, listed in a repo-root `.claude-plugin/marketplace.json`. It polls `GET /api/v1/sessions` every 3 s only while the pane is shown, with at most one request outstanding, and resolves the daemon address like `daemonaddr.ClientURL` (`IRRLICHT_BIND_ADDR`, the addr file, then `:7837`). The quota bucket rule and bar colours are ported from the dashboard and checked by `lib/quota.parity.test.js` against `platforms/web/quotaChips.js`. `← here` is drawn only on an exact session-id match. The pane opens by itself only where it docks as a sidebar; the `autoOpen` option turns that off, and `/irrlicht` opens it anywhere. New preflight gate `web: Claude Code panel`, also triggered by `platforms/web/*.js` because of the parity test.
+- **Herdr.app mod (#2159, closes #2146).** `platforms/herdr/mods/irrlicht/` is read-only: one `GET /api/v1/sessions` every 3 s, redrawing only when something drawn changed. `lib/` holds every decision and imports nothing from Herdr; `main.js` only reads Herdr, runs the timer and draws. 250 vitest tests, wired into `web-test.yml`, preflight (`web: Herdr mod`), dependabot and `security-scan.sh`. `herdr-app check` validates `main.js` locally (not in CI).
+- **Herdr usage action and cost provenance (#2160, closes #2061).** `SessionMetrics` gains `pricing_source` (`litellm@<table date>`, `provider-reported`, or both), `unpriced_models`, `tokens_unobserved` (persisted in the ledger as `provider_cost_seen`, no schema bump) and `usage_coverage`, declared beside each parser on `agent.Agent.Usage` (claudecode, pi, aider, junie, opencode 2.x store path; every other adapter is undeclared and reads null). No existing value changes. `irrlicht-ls --herdr-usage` answers herdr's `usage` action for `HERDR_PANE_ID` with a schema-1 document: one entry per root session, subagents under `subagents[]` (removed ones from `?include=finished_subagents`), and every number Irrlicht cannot vouch for set to `null` with its path under `unavailable`. Any failure gives a non-zero exit, one stderr line and empty stdout. The plugin package is `platforms/herdr/irrlicht-usage/` (herdr ≥ 0.8.0, macOS). Known gap, seen in QA: a daemon restart can drop the last Claude Code request from a session's totals.
+- **Worker-list orchestrator (#2152, closes #2148).** New `core/adapters/inbound/orchestrators/workerlist`: schema v1 decode and validation, fsnotify on the file's directory plus a 30 s re-read, and keep-last-good marked `unreadable` on a bad document. New `workerlist/state` observe permission; the file location is `IRRLICHT_WORKERLIST_FILE`. `BuildDashboard` takes several orchestrators and builds one top-level group per running one; a session goes to the first that claims it. Stale (a busy slot whose heartbeat or team update is older than three heartbeat intervals) and `failed · exit N` (the last completed run exited non-zero) tags on worker rows in both clients. Committed mutation fixture `tools/lib/workerlist-mutations_test.sh`.
+- **Free workers (#2150, closes #2140).** `AgentGroup.unattached_workers` lists named codebase workers no session is attached to, with `role`, `icon`, `description`, `worker_name`, `worker_id` and `worker_state`. They never enter `agents`, so an older macOS app still decodes the payload. A rig with only free workers keeps its sub-group, and a running Gas Town whose polecats are all free now returns its group. Crew workers qualify too (a deviation from triage, pinned by `TestBuildDashboard_UnattachedStaleCrewFollowsTheRule`). Web session rows show worker name and work item beside the role badge.
+- **Waiting workers (#2164, closes #2145).** A worker-list slot gains an optional `state`, whose only legal value is `"waiting"` and which requires `busy: true`; anything else makes the document unreadable. `OrchestratorMonitor` now broadcasts a payload-less `orchestrator_updated` when a snapshot changes what the dashboard shows; the relay forwarder drops it. Web and macOS notify on each edge into waiting ("Worker waiting for input", `team · worker`), silently on first sighting and for a worker joined by a relayed session. Phone push is excluded. On macOS every hydrate installs groups through `installLocalGroups`, and a late older response is dropped.
+- **Relayed session in its worker's row (#2153, closes #2149).** Both clients join a relayed container session to the orchestrator worker named by the forwarding daemon's label. Web: `joinRelayWorkers` in `relayRows.js` builds the displayed tree without writing it back; `adoptLocalTree` keeps relay rows across local-tree replacement; `dropSourceRows` removes a closed relay's rows. macOS: `relayWorkerJoins()` and `placingRelayJoins` in `recomposeApiGroups`.
+- **vm-pool example (#2168, part of #2145).** `examples/vm-pool/pool.sh` (bash 3.2: `run`, `answer`, `supervise`, `status`, `rm`, `down`) turns four one-line files per task into a worker-list v1 document; `guest/` carries `report-state`, `entrypoint`, a `stub-agent` that runs without credentials, and Claude Code hook settings that map permission prompts to waiting. Docker backend tested by `tools/lib/vm-pool_test.sh` through the daemon's own worker-list parser; Apple's `container` backend has not been run against the real CLI.
+- **Z.ai GLM Coding Plan (#2161, part of #2010).** `processlifecycle.ObserveClaudeCodeRoute` resolves `ANTHROPIC_BASE_URL` for claude-code sessions from Claude Code's settings layers (managed, `--settings` on argv, local, project, user honouring the session's `CLAUDE_CONFIG_DIR`, then the process env); an unreadable layer stops the walk and makes the route `unreadable`. `RouteObservation` records `Source` (`settings:<layer>`) and `SettingsFile`. `zaiaccountapi` calls `GET https://api.z.ai/api/monitor/usage/quota/limit` through the `accountquota` transport with an allowlist decode (5h and 1w windows; no `level` means no coding plan). `ZaiAccountSweeper` binds only sessions whose route host is exactly `api.z.ai`, reads the key only from that settings file (`ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`) behind the new `zai-account-api` permission, and keys the poll by an HMAC of the key under a per-daemon salt. New `ProviderZai`; `replaydata/providers/zai/` with live-verified `billing_mode` and `quota_windows`.
+- **Mistral Vibe plan usage (#2162, part of #2012).** New `core/adapters/outbound/chromecookies/` (Google Chrome on macOS only: resolves the last-used profile from `Local State`, opens `Cookies` read-only through `sqlitero`, selects only the named hosts and cookies) and `core/adapters/outbound/mistralvibe/` (CodexBar's `billing.vibeUsage` URL, `csrftoken` + `ory_session_*`, three-field allowlist parser). `AuthMethod.CompanionHeader` lets a credential carry a second secret under a reviewed header (`X-CSRFToken`). New `ProviderMistral`. The `mistral-vibe-browser-session` permission sets the new `RequiresExplicitGrant`, so `IRRLICHT_PERMISSION_MODE=grant-all` leaves it pending. Mistral names no account in its answer, so the account link is recorded as user-asserted (`AttributionEvidence: "user-asserted"`). The maintainer's live acceptance against a real Chrome profile has not run yet.
+- **Hidden quota accounts (#2172, closes #2163).** One key, `hiddenQuotaAccounts`, in macOS `UserDefaults` and web `localStorage`: a JSON object mapping each hidden bucket key (`<provider>|<ref>` or `<provider>|unconfirmed`) to the tier label shown when it was hidden. The filter runs after bucketing and, in the menu bar, before Auto picks a provider (`HiddenQuotaAccounts.visible`; web `visibleChips`). A provider whose accounts are all hidden draws no chip and no menu-bar slot. With nothing stored, both clients behave as before.
+- **Vibe 2.21.0+ hooks (#2173, refs #2171).** Two `agent.HookVariant`s on the existing managed file: legacy `[2.19.1, 2.21.0)` writes `post_agent_turn` plus `enable_experimental_hooks = true` as before; current `[2.21.0, ∞)` writes `type = "post_agent"` and deletes a top-level `enable_experimental_hooks` line. The installed version is read from the uv tool's `mistral_vibe-<v>.dist-info` folder name, running nothing. `hooktoml` gains `DeleteTopLevelKeyIfPresent` and `HasTopLevelKey`. The receiver dispatches `post_agent` like `post_agent_turn`. Live-fire: 2.21.0 delivered end to end. 3.1.4 fires the hook, but its `transcript_path` points at `logs/session/unified/<uuid>`, which the receiver rejects (`wrong_suffix`) and the transcript source cannot see; `TestPostAgentHook_A3xSessionDirectoryIsRefusedNotDispatched` locks that until #2171 lands.
+- **Keychain prompts (#2167).** `KeychainStore` forwards to a `KeychainSecrets` store on a `KeychainBackend`; under XCTest (`AppHome.isRunningTests`) it is an in-memory backend that never calls Security. Settings commits the token through `commitRelayToken`, which writes only when the trimmed draft differs from the stored token; before, loading the token into the field counted as an edit, so every open rewrote the item, reconnected the relay and re-PUT the daemon config. Under XCTest `ActivationClient.endpoint` is nil, so a Settings render test cannot reach a daemon either. The coordinator's log evidence showed every prompt that day came from `xctest`, which also PUT publish settings to the production daemon and could `pkill irrlichd` from `DaemonManager.start()`.
+- **test-mac signing (#2166).** `test-mac.sh` resolves the signing identity before touching anything: `IRRLICHT_DEV_SIGN_IDENTITY`, the first `Developer ID Application:` identity, `"Irrlicht Dev"`, then ad-hoc, with `--timestamp=none`. A bundle counts as an untouched release only with a Developer ID signature and a `CFBundleShortVersionString` other than `dev`; the `dev` stamp is now the first write into the bundle.
+- **PID-0 dedupe (#2158, closes #2157).** `isDedupDeleteCandidate` returns false for `pid <= 0`, so the periodic same-PID sweep (#1993) no longer deletes all but one of several root sessions still at PID 0. The other two same-PID paths already returned early for `pid <= 0`. Both tests were seen red on the unfixed code.
+- **Sonar (#2151, refs #2147).** Clears the 40 in-scope BUG/VULNERABILITY findings: 36 × `javascript:S9383` (every fire-and-forget promise ends in a labelled `.catch`), 1 × `githubactions:S7694` (`--force-resolved-versions` on the Swift build and test steps, mirrored in preflight) and 3 × `shell:S5332` (`# NOSONAR` on loopback fixtures).
+- **idle_prompt (#2180, closes #2176).** The `idle_prompt` rule in `stateRules` now also requires `m.IsWaitingForUserInput()`. Claude Code fires `Notification/idle_prompt` about 60 s after every turn end, so #1173's ready → waiting promotion made every idle session read waiting. The hook now only adds hook-tier provenance (`decided_by_rule: idle_prompt`) to a turn that already reads waiting; the hold, its timeout and the `hasPendingIdlePrompt` skip are unchanged. Seen red first: `TestClassify_IdlePromptDoesNotPromoteStatementTurnToWaiting` and `TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady`.
+- **gorilla/websocket (#2181).** Pinned to upstream `d67f41855da4` (`v1.5.4-0.20240701034025-d67f41855da4`) in `core`, `tools/wsload` and `tools/elfdans-drive`: no tagged release carries the fix, and GHSA-w67g-5rqw-f597 lists 1.5.3 as patched although its `newMaskKey` calls `rand.Uint32()` from `math/rand`. Also picked up from upstream: `Upgrader` answers a request without `Upgrade: websocket` with 426 instead of 400 and hijacks through `http.NewResponseController`; subprotocols are chosen in client order (Irrlicht sets none); SOCKS proxies go through `golang.org/x/net/proxy`. `tools/elfdans-drive` and `tools/wsload` move to `go 1.26.0` because `golang.org/x/net` v0.63.0 requires it.
+- **Go toolchain.** The release is built with `GOTOOLCHAIN=go1.26.11`; `go.mod` still declares `go 1.26.0`. `govulncheck -format json ./...` in `core` reports 0 standard-library findings with go1.26.11 and 48 with go1.26.0.
+- **Alias sync.** No change. Upstream codeburn still re-points five canonicals, left for maintainer review: `codex-auto-review` → `gpt-5.6-luna`, and the four GLM spellings → `z-ai/glm-5.2` / `z-ai/glm-5.3`.
+
 ## [0.6.9] — 2026-11-10
 
 ### One quota chip per subscription again
@@ -2191,7 +2281,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.9...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.10...HEAD
+[0.6.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.10
 [0.6.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.9
 [0.6.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.8
 [0.6.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.7
