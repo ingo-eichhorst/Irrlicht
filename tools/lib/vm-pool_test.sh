@@ -13,8 +13,11 @@
 #      finish time, cut to whole seconds;
 #   4. a malformed heartbeat is dropped rather than passed on;
 #   5. `--env NAME` passes only the name — the value never reaches argv — and
-#      guest/ is mounted read-only;
-#   6. `down` removes only a worker list this script wrote.
+#      guest/ is mounted read-only, on both backends;
+#   6. `down` removes only a worker list this script wrote;
+#   7. the Apple `container` backend reads the run state from where
+#      `container inspect` puts it (`.[0].status.state`), so a running task
+#      is busy and a stopped one is free with its last run.
 # tools/lib/vm-pool-mutations_test.sh holds the mutations each rule was seen
 # red under.
 
@@ -55,10 +58,31 @@ case "$1" in
 esac
 EOF
 chmod +x "$tmp/docker"
+
+# ── fake Apple container CLI ─────────────────────────────────────────────────
+# inspect prints the shape `container inspect` printed in container 1.7.1
+# (recorded on macOS 27.0.1, 2026-11-24): an array whose run state is
+# .status.state ("running" or "stopped"), with no exit code or end time. A
+# missing name exits 1, as the real CLI does. run records its argv.
+cat > "$tmp/container" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  inspect)
+    f="$FAKE_DOCKER_TABLE/$2.ct-state"
+    [ -f "$f" ] || { echo "Error: container not found: $2" >&2; exit 1; }
+    printf '[{"id":"%s","configuration":{},"status":{"networks":[],"startedDate":"2026-11-24T18:42:50Z","state":"%s"}}]\n' "$2" "$(cat "$f")"
+    ;;
+  run) printf '%s\n' "$@" > "$FAKE_DOCKER_TABLE/run-container.argv" ;;
+  stop | delete) ;;
+  *) echo "fake container: unsupported $1" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$tmp/container"
 table="$tmp/table"
 mkdir -p "$table"
 
 export VM_POOL_DIR="$tmp/pool" VM_POOL_DOCKER="$tmp/docker" FAKE_DOCKER_TABLE="$table"
+export VM_POOL_CONTAINER_CLI="$tmp/container"
 export IRRLICHT_WORKERLIST_FILE="$tmp/out/workerlist.json" VM_POOL_NAME="Test pool"
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -80,6 +104,18 @@ printf '2026-11-21T10:00:05.123456789Z 137\n' > "$table/irrlicht-pool-lead-B-t4.
 task lead-B t5 true state=busy heartbeat=garbage
 task lead-B t6 missing state=busy
 
+# ctask <team> <task> <container-state: running|stopped|missing> [file=value...]
+ctask() {
+  local team="$1" name="$2" state="$3" kv
+  shift 3
+  mkdir -p "$VM_POOL_DIR/$team/$name"
+  printf 'container\n' > "$VM_POOL_DIR/$team/$name/backend"
+  [ "$state" = missing ] || printf '%s\n' "$state" > "$table/irrlicht-pool-$team-$name.ct-state"
+  for kv in "$@"; do printf '%s\n' "${kv#*=}" > "$VM_POOL_DIR/$team/$name/${kv%%=*}"; done
+}
+ctask lead-D d1 running state=waiting "heartbeat=$now"
+ctask lead-D d2 stopped state=done "ended=$now" exit=3
+
 doc="$("$POOL" status)" || { bad "pool.sh status failed"; doc='{}'; }
 w() { jq -c --arg n "$1" '[.teams[].workers[] | select(.name == $n)][0]' <<<"$doc"; }
 
@@ -98,6 +134,12 @@ w() { jq -c --arg n "$1" '[.teams[].workers[] | select(.name == $n)][0]' <<<"$do
 [ "$(w t6 | jq -c '{busy, last_run}')" = '{"busy":false,"last_run":null}' ] \
   && ok "a task with no container is free with no last run" \
   || bad "missing container: got $(w t6)"
+[ "$(w d1 | jq -c '{busy, state}')" = '{"busy":true,"state":"waiting"}' ] \
+  && ok "a running Apple container task is busy and waiting" \
+  || bad "running Apple container task: got $(w d1)"
+[ "$(w d2 | jq -c '{busy, last_run}')" = "$(jq -nc --arg now "$now" '{busy: false, last_run: {end: $now, exit: 3}}')" ] \
+  && ok "a stopped Apple container task is free with its last run" \
+  || bad "stopped Apple container task: got $(w d2)"
 
 # ── the daemon's own parser accepts it and reads what we meant ───────────────
 scen="$tmp/scenarios/pool-status"
@@ -108,9 +150,9 @@ jq -n --arg now "$now" '{
   ticks: [{now: $now}],
   verify: {
     name: "Test pool",
-    teams: ["lead-A", "lead-B"],
-    worker_states: ["waiting", "busy", "idle", "idle", "idle", "busy", "idle"],
-    last_exit: {t3: 2, t4: 137},
+    teams: ["lead-A", "lead-B", "lead-D"],
+    worker_states: ["waiting", "busy", "idle", "idle", "idle", "busy", "idle", "waiting", "idle"],
+    last_exit: {t3: 2, t4: 137, d2: 3},
     stale_workers: []
   }}' > "$scen/scenario.json"
 out="$(cd "$REPO_ROOT/core" && WORKERLIST_FIXTURES_DIR="$tmp/scenarios" \
@@ -138,6 +180,16 @@ fi
 grep -qx -- "$REPO_ROOT/examples/vm-pool/guest:/opt/irrlicht-guest:ro" <<<"$argv" \
   && ok "guest/ is mounted read-only" \
   || bad "guest/ is not mounted read-only: $(tr '\n' ' ' <<<"$argv")"
+"$POOL" run lead-E t9 --backend container -- true >/dev/null 2>&1 \
+  || bad "pool.sh run failed against the fake container CLI"
+cargv="$(cat "$table/run-container.argv" 2>/dev/null)"
+if [ -z "$cargv" ]; then
+  bad "pool.sh run --backend container never called container run"
+else
+  grep -qx -- "$REPO_ROOT/examples/vm-pool/guest:/opt/irrlicht-guest:ro" <<<"$cargv" \
+    && ok "guest/ is mounted read-only on the Apple container backend" \
+    || bad "guest/ is not mounted read-only on the Apple container backend: $(tr '\n' ' ' <<<"$cargv")"
+fi
 
 # ── down: only our own worker list ───────────────────────────────────────────
 mkdir -p "$tmp/out"

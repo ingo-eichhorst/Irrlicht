@@ -103,6 +103,18 @@ assert_pool_test_goes_red \
   "guest/ is not mounted read-only"
 
 assert_pool_test_goes_red \
+  "reading the whole .status object of container inspect reddens the Apple container check" \
+  '[[ "$(jq -r '"'"'.[0].status.state // empty'"'"' <<<"$out")" == running ]]' \
+  '[[ "$(jq -r '"'"'.[0].status // empty'"'"' <<<"$out")" == running ]]' \
+  "running Apple container task"
+
+assert_pool_test_goes_red \
+  "mounting guest/ read-write on the Apple container backend reddens its read-only check" \
+  '[[ "$backend" == container ]] && cli="$CONTAINER"' \
+  '[[ "$backend" == container ]] && { cli="$CONTAINER"; ro=""; }' \
+  "guest/ is not mounted read-only on the Apple container backend"
+
+assert_pool_test_goes_red \
   "removing any worker list in down reddens the other-writer check" \
   'if [[ -f "$OUT" ]] && [[ "$(jq -r '"'"'.writer // empty'"'"' "$OUT" 2>/dev/null)" == "$WRITER" ]]; then' \
   'if [[ -f "$OUT" ]]; then' \
