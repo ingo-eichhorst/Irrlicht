@@ -181,44 +181,51 @@ var stateRules = []stateRule{
 		decide: toState(session.StateWaiting, "stalled edit tool → likely permission prompt → waiting"),
 	},
 	{
-		// Claude Code's Notification/idle_prompt hook reported the agent is
-		// idle at the prompt waiting for the user (#1173) → waiting.
-		// Authoritative tier above the turn-done → ready verdict below: it
-		// corrects the case where the turn ended on a plain statement with no
-		// trailing question/cue, which agent_done would otherwise route to
-		// ready. Live-only — the hold is only ever placed while the finished
-		// turn is still idle (and never under replay), so this rule is inert
-		// for every non-hook path.
+		// Claude Code's Notification/idle_prompt hook (#1173) → waiting, but
+		// only when the finished turn already reads waiting (#2176).
 		//
-		// This notification must not mask a terminal session error (#1871). The
-		// agent stopped because the turn failed, not because it awaits user
-		// input. ErrorPhaseTerminal also says that only the next user turn can
-		// clear the failure, so idle_prompt must not mask it in the meantime.
-		// Retrying and unknown-phase errors keep the prior hook precedence: they
-		// do not carry that terminal verdict.
+		// The hook fires about 60 s after EVERY turn end, whether or not the
+		// agent asked anything (measured in #2176 from the dev daemon recording
+		// ~/.local/share/irrlicht/recordings/2026-11-22T105124-063a37.jsonl with
+		// the Python counter in that issue's body: 52 idle_prompt transitions,
+		// median 60.0 s after →ready; one machine, one Claude Code version, so
+		// an observation rather than a guarantee). #1173 let it promote a statement-ending turn
+		// from ready to waiting, which made every idle session read waiting and
+		// erased the difference between "finished" and "blocked on you". The
+		// predicate now requires m.IsWaitingForUserInput() (question marker,
+		// waiting cue, or a trailing question), so when this rule fires it reaches
+		// the same waiting verdict classifyAgentDone's waiting branch would; the
+		// hook adds hook-tier provenance (decided_by_rule: idle_prompt), not a
+		// state change. A plain-statement turn falls through to agent_done → ready.
+		//
+		// This notification must not mask ANY standing session error (#1871,
+		// widened by #2176). The agent stopped because the turn failed, not
+		// because it awaits user input, and classifyAgentDone checks
+		// SessionError before the waiting cue and returns error. Requiring
+		// SessionError == nil makes the rule fire only where agent_done itself
+		// would say waiting, which is what keeps it provenance-only. Before
+		// #2176 only ErrorPhaseTerminal was excluded, so a retrying or
+		// unknown-phase error on a question-ending turn read waiting under the
+		// hook and error without it (pinned by
+		// TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn).
 		//
 		// Nor may it mask a live background process (#1982) — a Bash
 		// run_in_background command or a Claude Code Monitor task wakes the
 		// agent by itself, so "idle at the prompt" does not mean "needs a
-		// human" while one is still open. This is a deliberate behaviour
-		// change from #1173's plain rule: previously ANY idle_prompt hook
-		// promoted to waiting regardless of a live background process, which
-		// is how issue #445's own Bash processes could still read waiting
-		// once the hook armed (the same defect #1982 reports for Monitor,
-		// just without the registration gap). In the live daemon this term is
-		// belt-and-braces rather than the primary fix — applyBackgroundLiveness
-		// runs before SignalHolds.Overlay every pass, so HasLiveBackgroundProcess
-		// is already current when the idle_prompt hold's own staleness rule
-		// (`!IsAgentDone()`, session/signal_hold.go) re-evaluates it, and a
-		// live background process makes IsAgentDone() false — so the hold is
-		// usually dropped as stale before it is ever applied. This term is
-		// what makes the rule true in a context that skips the hold/Overlay
-		// machinery entirely, such as a raw ClassifyState fixture or a future
-		// caller that folds IdlePromptPending onto metrics some other way.
+		// human" while one is still open. In the live daemon this term is
+		// belt-and-braces: applyBackgroundLiveness runs before
+		// SignalHolds.Overlay every pass, so HasLiveBackgroundProcess is already
+		// current when the idle_prompt hold's own staleness rule
+		// (`!IsAgentDone()`, session/signal_hold.go) re-evaluates it, and a live
+		// background process makes IsAgentDone() false — so the hold is usually
+		// dropped as stale before it is ever applied. The term is what makes the
+		// rule true in a context that skips the hold/Overlay machinery entirely,
+		// such as a raw ClassifyState fixture.
 		id:     string(session.SignalIdlePrompt),
 		signal: session.SignalIdlePrompt,
 		when: func(_ string, m *session.SessionMetrics) bool {
-			return m.IdlePromptPending && !hasTerminalSessionError(m) && !m.HasLiveBackgroundProcess
+			return m.IdlePromptPending && m.IsWaitingForUserInput() &&
+				m.SessionError == nil && !m.HasLiveBackgroundProcess
 		},
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
@@ -427,13 +434,6 @@ func hasClassifiableEvidence(metrics *session.SessionMetrics, isChild bool) bool
 		return false
 	}
 	return isChild || metrics.LastEventType != ""
-}
-
-// hasTerminalSessionError reports whether the adapter said that the current
-// failure ended the turn. It uses ErrorPhase rather than an adapter-specific
-// Class value because the phase owns recovery semantics across adapters.
-func hasTerminalSessionError(metrics *session.SessionMetrics) bool {
-	return metrics.SessionError != nil && metrics.SessionError.Phase == session.ErrorPhaseTerminal
 }
 
 // transitionTo returns (target, reason) when currentState differs from

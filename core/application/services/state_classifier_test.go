@@ -7,13 +7,7 @@ import (
 )
 
 func TestClassifyState(t *testing.T) {
-	tests := []struct {
-		name       string
-		current    string
-		metrics    *session.SessionMetrics
-		wantState  string
-		wantReason bool // true if a transition reason is expected
-	}{
+	tests := []classifyStateCase{
 		// Nil metrics — no transition.
 		{
 			name:      "nil metrics, working stays working",
@@ -188,64 +182,6 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// the idle_prompt rule: IdlePromptPending (Notification/idle_prompt hook) → waiting.
-		{
-			name:    "ready → waiting (idle prompt hook)",
-			current: session.StateReady,
-			metrics: &session.SessionMetrics{
-				IdlePromptPending: true,
-			},
-			wantState:  session.StateWaiting,
-			wantReason: true,
-		},
-		{
-			name:    "working → waiting (idle prompt hook)",
-			current: session.StateWorking,
-			metrics: &session.SessionMetrics{
-				IdlePromptPending: true,
-			},
-			wantState:  session.StateWaiting,
-			wantReason: true,
-		},
-		{
-			name:    "waiting stays waiting (idle prompt hook, already waiting)",
-			current: session.StateWaiting,
-			metrics: &session.SessionMetrics{
-				IdlePromptPending: true,
-			},
-			wantState: session.StateWaiting,
-		},
-		{
-			// Issue #1982: a live background process (Bash run_in_background,
-			// or Claude Code's Monitor tool once registered in the same
-			// ledger) wakes the agent by itself, so an idle_prompt hook that
-			// arrives while it is still open must not promote the session to
-			// waiting — the session must keep reading working for as long as
-			// the process/task is alive. This is a deliberate behaviour
-			// change from #1173's plain idle_prompt -> waiting rule, stated
-			// in the PR body.
-			name:    "working stays working (idle prompt hook suppressed by live background process)",
-			current: session.StateWorking,
-			metrics: &session.SessionMetrics{
-				IdlePromptPending:        true,
-				HasLiveBackgroundProcess: true,
-			},
-			wantState: session.StateWorking,
-		},
-		{
-			// The core correction: a turn that ended on a plain statement (no
-			// question/cue) would route to ready via the agent_done rule, but the idle-prompt
-			// hook overrides it to waiting — the false-negative gap #1173 closes.
-			name:    "ready → waiting (idle prompt overrides turn-done ready verdict)",
-			current: session.StateReady,
-			metrics: &session.SessionMetrics{
-				IdlePromptPending: true,
-				LastEventType:     "turn_done",
-				LastAssistantText: "Done. All tests pass.",
-			},
-			wantState:  session.StateWaiting,
-			wantReason: true,
-		},
 		{
 			// Regression guard: with no idle-prompt signal, the same plain
 			// turn-done metrics still route to ready (the idle_prompt rule is inert without
@@ -576,20 +512,7 @@ func TestClassifyState(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotState, gotReason := ClassifyState(tt.current, tt.metrics)
-			if gotState != tt.wantState {
-				t.Errorf("ClassifyState(%q) state = %q, want %q", tt.current, gotState, tt.wantState)
-			}
-			if tt.wantReason && gotReason == "" {
-				t.Error("expected a transition reason, got empty")
-			}
-			if !tt.wantReason && gotReason != "" {
-				t.Errorf("expected no transition reason, got %q", gotReason)
-			}
-		})
-	}
+	runClassifyStateCases(t, tests)
 }
 
 // TestShouldSynthesizeCollapsedWaiting covers issue #150: a user-blocking

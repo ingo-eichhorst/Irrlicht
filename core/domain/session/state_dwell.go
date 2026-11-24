@@ -8,6 +8,10 @@ import (
 // waitingExitDwell is how long a proposal to LEAVE StateWaiting must survive
 // before it is published (#1366).
 //
+// NOTE (#2176): the premise below, that idle_prompt re-asserts waiting after a
+// premature ready, no longer holds; whether six seconds is still the right dwell
+// is open for the maintainer. The constant is unchanged.
+//
 // WHY SIX SECONDS. The dwell only earns its cost if it outlasts the correction
 // it exists to absorb. The slowest authoritative signal that can re-assert
 // waiting after a lower tier has already concluded the session moved on is
@@ -58,9 +62,9 @@ const waitingExitDwell = 6 * time.Second
 // so debouncing it buys nothing and costs real accuracy. Two existing
 // behaviours prove the cost is not hypothetical: ESC-cancelling a permission
 // prompt resolves waiting→ready (TestSessionDetector_Activity_Cancellation
-// FromWaiting_TransitionsToReady) and #1173's idle-prompt reconciliation
-// requires that a completed next turn reads ready rather than leaking the
-// stale waiting (TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting).
+// FromWaiting_TransitionsToReady) and #1173's idle-prompt lifecycle (since #2176
+// a lock, not a reconciliation) requires that a completed next turn reads ready
+// rather than leaking the stale waiting (TestSessionDetector_IdlePromptHook_QuestionTurnLifecycle).
 // Both are a user action or an authoritative signal, not a flap, and both
 // failed against a version of this function that debounced every waiting exit.
 //
@@ -95,9 +99,15 @@ const waitingExitDwell = 6 * time.Second
 // recording, and that measurement is what a hold should be calibrated against
 // if one is added at all.
 //
-// The residual, stated plainly rather than left to be discovered: the
-// working→ready→waiting sequence a late idle_prompt produces still reaches the
-// UI as two transitions. #1366 does not claim to remove it.
+// The residual, stated plainly rather than left to be discovered: before #2176
+// a late idle_prompt could produce working→ready→waiting for a statement-ending
+// turn, reaching the UI as two transitions. It cannot now: the idle_prompt rule
+// fires only when the turn already reads waiting (IsWaitingForUserInput) and
+// carries no SessionError, so it is provenance-only (pinned by
+// TestClassify_IdlePromptDoesNotPromoteStatementTurnToWaiting and
+// TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn). A
+// question-ending turn reads waiting on its own agent_done pass. #1366 does not
+// claim to remove any other path to that sequence.
 func graceFor(current, candidate string) time.Duration {
 	if current == StateWaiting && candidate == StateWorking {
 		return waitingExitDwell

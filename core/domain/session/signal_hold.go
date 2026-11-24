@@ -425,7 +425,7 @@ type signalPolicy struct {
 // waiting. Reverse them and idle_prompt evaluates staleness against metrics
 // that do not yet know the turn ended: on any adapter whose transcript tail is
 // not literally "turn_done", IsAgentDone reads false, the hold is dropped as
-// stale, and the correction the hook exists to deliver is thrown away one
+// stale, and the hook's verdict (provenance, since #2176) is thrown away one
 // instruction before it would have been applied.
 //
 // The order also matters for the last row: SignalOpenToolStalled's ripe rule

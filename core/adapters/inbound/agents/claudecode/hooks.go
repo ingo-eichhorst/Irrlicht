@@ -8,8 +8,9 @@
 // covers user-input overlays that block the agent before the transcript is
 // flushed (issue #307); Stop is the authoritative per-turn done signal
 // delivered at true turn end, carrying the final assistant text (issue #1161);
-// Notification/idle_prompt is the authoritative "idle at the prompt waiting for
-// the user" signal for turns that end with no prose waiting-cue (issue #1173).
+// Notification/idle_prompt reports the agent idle at the prompt about 60 s after
+// every turn end (issue #1173). Since #2176 it only attributes a turn that
+// already reads waiting to the hook tier; it never makes a finished turn waiting.
 package claudecode
 
 import (
@@ -45,15 +46,16 @@ const (
 	HookStop = session.HookStop
 	// HookNotification fires for Claude Code UI notifications, carrying a
 	// notification_type discriminator. The daemon acts on the types in
-	// notificationTypesDrivingState, each of which means a human is blocked:
-	// idle_prompt is the agent idle at the prompt after a finished turn (issue
-	// #1173), and the rest are blocking dialogs (issue #1861). Every other type
-	// is accepted and ignored.
+	// notificationTypesDrivingState: the blocking dialogs (issue #1861) mean a
+	// human is blocked, while idle_prompt is the agent idle at the prompt after
+	// a finished turn (issue #1173) and, since #2176, never changes the state
+	// on its own. Every other type is accepted and ignored.
 	HookNotification = session.HookNotification
 )
 
 // notificationTypeIdlePrompt is the Notification hook's notification_type value
-// for "the agent is idle at the prompt waiting for the user" (issue #1173).
+// for "the agent is idle at the prompt" (issue #1173); it fires ~60 s after every
+// turn end, so it does not by itself mean the user is being asked anything.
 const notificationTypeIdlePrompt = "idle_prompt"
 
 // The Notification notification_type values meaning "a human is blocked right
@@ -167,9 +169,9 @@ type HookTarget interface {
 	// beyond the display tail still routes the turn to waiting, not ready).
 	HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool)
 	// HandleIdlePromptHook records the Notification/idle_prompt signal — the
-	// agent finished its turn and is idle at the prompt waiting for the user
-	// (issue #1173). An authoritative waiting signal for the case the prose
-	// waiting-cue heuristic can't detect (a turn that ended on a plain statement).
+	// agent finished its turn and is idle at the prompt (issue #1173). Since
+	// #2176 it adds hook-tier provenance to a turn that already reads waiting
+	// and never turns a plain-statement turn into waiting.
 	HandleIdlePromptHook(sessionID, transcriptPath string)
 	// HandlePermissionPromptHook records the Notification/permission_prompt
 	// signal — a blocking dialog is on screen right now (issue #1861). The only
@@ -480,7 +482,8 @@ func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, pa
 // has never seen.
 //
 //   - idle_prompt → HandleIdlePromptHook. The agent finished its turn and is
-//     idle at the prompt waiting for the user (issue #1173).
+//     idle at the prompt (issue #1173); it does not change the state by itself
+//     (#2176).
 //   - every other type in notificationTypesDrivingState →
 //     HandlePermissionPromptHook. A dialog is open and the user is blocked on
 //     it (issue #1861). See that map for why the split is not cosmetic.

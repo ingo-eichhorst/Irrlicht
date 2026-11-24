@@ -411,7 +411,7 @@ curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
 
       <h3>POST /api/v1/hooks/claudecode</h3>
 
-      <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>PreCompact</code>, <code>Stop</code>, and <code>Notification</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays, and blocking <code>Notification</code> types such as <code>idle_prompt</code>), to force <code>working</code> during a manual <code>/compact</code>, and to take <code>Stop</code> as the authoritative turn-done signal. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>
+      <p>Receiver for Claude Code hook events (the permission-request integration). Claude Code is configured to POST here on <code>PermissionRequest</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>PreCompact</code>, <code>Stop</code>, and <code>Notification</code> events; the daemon uses them to surface user-blocking state (permission gates, <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlays, and blocking <code>Notification</code> dialog types such as <code>permission_prompt</code>), to force <code>working</code> during a manual <code>/compact</code>, and to take <code>Stop</code> as the authoritative turn-done signal. Consent-gated behind the <code>hooks</code> permission &mdash; while pending or denied the payload is dropped with <code>200</code>. The session is keyed off the <code>transcript_path</code> filename, not <code>session_id</code>.</p>
 
       <p>Request body (only the fields the daemon reads; unknown fields are ignored):</p>
 
@@ -477,7 +477,7 @@ curl -X PUT http://127.0.0.1:7837/api/v1/relay/publish \
           <tr>
             <td><code>notification_type</code></td>
             <td>string</td>
-            <td>Discriminator on <code>Notification</code> events; the blocking types (e.g. <code>idle_prompt</code>) drive state, every other type is accepted and ignored</td>
+            <td>Discriminator on <code>Notification</code> events; the blocking dialog types (e.g. <code>permission_prompt</code>) drive state; <code>idle_prompt</code> is accepted but never changes a session's state on its own, and every other type is accepted and ignored</td>
           </tr>
         </tbody>
       </table>

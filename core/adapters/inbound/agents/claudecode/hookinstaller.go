@@ -174,6 +174,7 @@ const hookMatcherPreCompact = "manual"
 // INSTALLED, because each means a human is blocked:
 //
 //   - idle_prompt: the turn ended and the agent is idle at the prompt (#1173).
+//     Since #2176 it is provenance only; it never makes a finished turn waiting.
 //   - permission_prompt: a blocking dialog is on screen (#1861). It is also the
 //     DEFAULT for any dialog notification that sets no type of its own
 //     (`GUe(n.text, n.type ?? "permission_prompt", …)`), which is what makes it

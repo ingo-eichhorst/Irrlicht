@@ -29,3 +29,52 @@ func TestClassify_TerminalUsageLimitOutranksIdlePrompt(t *testing.T) {
 		t.Errorf("rule = %q, want %q", v.Rule, session.SignalSessionError)
 	}
 }
+
+// TestClassify_IdlePromptDoesNotPromoteStatementTurnToWaiting is the #2176
+// defect test. A finished turn that ends on a plain statement classifies ready
+// whether or not the idle_prompt hook has landed: the 60 s idle notification
+// says the prompt is idle, not that the user is asked anything.
+func TestClassify_IdlePromptDoesNotPromoteStatementTurnToWaiting(t *testing.T) {
+	v := ClassifyStateTiered(session.StateReady, &session.SessionMetrics{
+		LastEventType:     "turn_done",
+		IdlePromptPending: true,
+		LastAssistantText: "Done. All tests pass.",
+	})
+	if v.State != session.StateReady {
+		t.Errorf("state = %q, want ready — idle_prompt must not promote a statement-ending turn", v.State)
+	}
+}
+
+// TestClassify_IdlePromptAttributesWaitingTurn is a lock: a turn that already
+// reads waiting (a trailing question) keeps waiting under idle_prompt, now
+// attributed to the hook rule as provenance.
+func TestClassify_IdlePromptAttributesWaitingTurn(t *testing.T) {
+	v := ClassifyStateTiered(session.StateReady, &session.SessionMetrics{
+		LastEventType:     "turn_done",
+		IdlePromptPending: true,
+		LastAssistantText: "Which option do you want?",
+	})
+	if v.State != session.StateWaiting {
+		t.Errorf("state = %q, want waiting", v.State)
+	}
+	if v.Rule != string(session.SignalIdlePrompt) {
+		t.Errorf("rule = %q, want %q", v.Rule, session.SignalIdlePrompt)
+	}
+}
+
+// TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn is the #2176
+// review-F1 defect test. Without the hook, a question-ending turn that carries
+// any SessionError classifies error (classifyAgentDone checks the error first).
+// The idle_prompt rule must not turn that into waiting: it is provenance-only,
+// so it may only fire where agent_done itself would say waiting.
+func TestClassify_IdlePromptDoesNotMaskNonTerminalErrorOnQuestionTurn(t *testing.T) {
+	v := ClassifyStateTiered(session.StateReady, &session.SessionMetrics{
+		LastEventType:     "turn_done",
+		LastAssistantText: "Which option do you want?",
+		IdlePromptPending: true,
+		SessionError:      &session.SessionError{Phase: session.ErrorPhaseRetrying, Class: "provider"},
+	})
+	if v.State != session.StateError {
+		t.Errorf("state = %q, want error — idle_prompt must not override a standing non-terminal error", v.State)
+	}
+}

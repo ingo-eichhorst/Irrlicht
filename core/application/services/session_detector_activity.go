@@ -1038,7 +1038,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// before applyBackgroundLiveness — see that call site.
 
 	// Overlay every held signal — the permission prompt (#108), the Stop hook's
-	// authoritative turn-done (#1161), the idle_prompt correction (#1173), the
+	// authoritative turn-done (#1161), the idle_prompt hold (#1173), the
 	// PreCompact force-working hold (#657) and the transcript-based
 	// stalled-edit-tool fallback (#488) — onto the metrics ClassifyState is
 	// about to read. Each signal's own lifecycle
@@ -1235,14 +1235,18 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 		return
 	}
 	// The Notification/idle_prompt hook (#1173) dispatches a synthetic activity
-	// on an already-ready session to correct it ready→waiting. Skip the bounce
-	// while that signal is pending: without this, the synthetic event would
-	// force ready→working here and then classify working→waiting, recording a
-	// spurious working blip between the two (the flap this reconcile must avoid).
-	// ClassifyState still routes correctly on its own — to waiting via the
-	// idle_prompt rule (idle case), or to working via transcript_activity should
-	// real activity have arrived in
-	// the same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
+	// on an already-ready session. Skip the bounce while that signal is
+	// pending: the intent is that the synthetic event must not force
+	// ready→working here (and then reclassify back), which would record a
+	// spurious working blip on a session the hook says nothing new about
+	// (#2176 changed the purpose from "correct ready→waiting"; the skip itself
+	// is unchanged). ClassifyState still routes on its own — to waiting via the
+	// idle_prompt rule when the turn reads waiting, to ready otherwise, or to
+	// working via transcript_activity should real activity have arrived in the
+	// same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
+	// Run by hand while writing #2176 (not a committed fixture): deleting this
+	// skip turned TestSessionDetector_IdlePromptHook_KeepsFinishedStatementTurnReady
+	// red, with ready → working → ready recorded.
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
