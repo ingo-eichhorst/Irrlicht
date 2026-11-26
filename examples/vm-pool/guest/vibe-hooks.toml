@@ -1,0 +1,25 @@
+# Mistral Vibe hook mapping for report-state (counterpart of claude-settings.json).
+# Install as ~/.vibe/hooks.toml in the guest image.
+# Hooks never read stdin; only one word leaves the VM.
+# session_end does not run after a crash or kill; the heartbeat covers that.
+
+[[hooks]]
+name = "irrlicht-busy-prompt"
+type = "pre_agent"
+command = "/opt/irrlicht-guest/report-state busy"
+
+[[hooks]]
+name = "irrlicht-busy-tool"
+type = "post_tool"
+command = "/opt/irrlicht-guest/report-state busy"
+
+[[hooks]]
+name = "irrlicht-waiting"
+type = "notification"
+match = "re:approval_requested|question_asked"
+command = "/opt/irrlicht-guest/report-state waiting"
+
+[[hooks]]
+name = "irrlicht-done"
+type = "session_end"
+command = "/opt/irrlicht-guest/report-state done"

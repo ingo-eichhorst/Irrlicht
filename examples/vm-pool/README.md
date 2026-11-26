@@ -84,6 +84,21 @@ A headless run (`claude -p`) ends the container when the task is done, so the
 slot turns free with its exit code. An interactive session that ends a turn
 stays busy, since it still holds its VM.
 
+For Mistral Vibe, `guest/vibe-hooks.toml` maps:
+
+| Vibe hook | State |
+| --- | --- |
+| `notification` (`approval_requested`, `question_asked`) | `waiting` |
+| `pre_agent`, `post_tool` | `busy` |
+| `session_end` | `done` |
+
+Copy it to `~/.vibe/hooks.toml` inside the image. A project-level
+`.vibe/hooks.toml` only loads in a trusted folder, so the user level is the
+safer place in a pool image. `post_tool` also fires when the user denies an
+approval, so the state returns to `busy` then. `session_end` does not run
+after a crash or a kill; the heartbeat marks such a task stale. A headless run
+(`vibe -p --auto-approve`) never asks, so it reports `busy` and `done` only.
+
 ## Backends
 
 | `--backend` | Isolation | Notes |
