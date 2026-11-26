@@ -127,7 +127,7 @@
     "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://github.com/ingo-eichhorst/Irrlicht/raw/HEAD/platforms/vscode --baseContentUrl https://github.com/ingo-eichhorst/Irrlicht/blob/HEAD/platforms/vscode"
   },
   "devDependencies": {
-    "@types/node": "22.20.5",
+    "@types/node": "26.6.6",
     "@types/vscode": "1.90.0",
     "@types/ws": "8.18.2",
     "@vscode/test-electron": "3.1.0",
