@@ -71,10 +71,11 @@ backend_status() {
       [[ "$out" == true ]] && echo running || echo stopped
       ;;
     container)
-      # Not yet run against Apple's container CLI: the `.[0].status` field
-      # is the intended reading of `container inspect`, unverified.
+      # `container inspect` prints an array; the run state is .status.state
+      # ("running" or "stopped"), and an unknown name exits 1. Read from
+      # container 1.7.1 on 2026-11-24.
       out=$("$CONTAINER" inspect "$2" 2>/dev/null) || { echo missing; return; }
-      [[ "$(jq -r '.[0].status // empty' <<<"$out")" == running ]] && echo running || echo stopped
+      [[ "$(jq -r '.[0].status.state // empty' <<<"$out")" == running ]] && echo running || echo stopped
       ;;
     *) die "unknown backend '$1'" ;;
   esac
@@ -83,7 +84,8 @@ backend_status() {
 # backend_last_run <backend> <name> prints "<end> <exit>" for a stopped
 # container, read from the backend itself — the fallback for a guest that was
 # killed before its entrypoint could write `ended` and `exit`. Prints nothing
-# when the backend cannot tell.
+# when the backend cannot tell: Apple's `container inspect` reports a stopped
+# container with neither an exit code nor an end time.
 backend_last_run() {
   local out
   case "$1" in
@@ -139,8 +141,8 @@ cmd_run() {
   date -u +%Y-%m-%dT%H:%M:%SZ > "$dir/heartbeat"
 
   local cli="$DOCKER" ro=":ro"
-  # Apple's container CLI takes -v host:guest; it is mounted read-write there.
-  [[ "$backend" == container ]] && { cli="$CONTAINER"; ro=""; }
+  # Apple's container CLI takes the same -e and -v host:guest[:ro] forms.
+  [[ "$backend" == container ]] && cli="$CONTAINER"
   "$cli" run -d --name "$name" \
     -e "IRRLICHT_HEARTBEAT_SECONDS=$HEARTBEAT_SECONDS" \
     ${envs[@]+"${envs[@]}"} \

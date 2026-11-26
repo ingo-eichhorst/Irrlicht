@@ -26,7 +26,7 @@ the VMs. This example shows them anyway, through the
   the mounted `/irrlicht-state` directory: a state word (`busy`, `waiting`,
   `done`), a heartbeat timestamp, an end timestamp and an exit code.
   `pool.sh` reads nothing else, so no transcript, prompt or output reaches the
-  host or Irrlicht. With Docker, `guest/` is mounted read-only.
+  host or Irrlicht. `guest/` is mounted read-only.
 
 ## Run it without credentials
 
@@ -89,7 +89,7 @@ stays busy, since it still holds its VM.
 | `--backend` | Isolation | Notes |
 | --- | --- | --- |
 | `docker` (default) | containers; on macOS they share Docker Desktop's Linux VM | `VM_POOL_DOCKER` overrides the CLI path |
-| `container` | Apple's [container](https://github.com/apple/container) CLI: one lightweight VM per task (macOS 26 or later) | **Not yet run against the real CLI** — the run/inspect/stop/delete calls are written from its documented interface. `VM_POOL_CONTAINER_CLI` overrides the CLI path. `guest/` is mounted read-write. A guest killed before it wrote its exit code shows as free with no last run (the Docker backend reads the code from the runtime instead) |
+| `container` | Apple's [container](https://github.com/apple/container) CLI: one lightweight VM per task (macOS 26 or later, Apple silicon) | Run against `container` 1.7.1 on macOS 27.0.1 on 2026-11-24: start, waiting, answer, exit codes, `--env`, read-only `guest/`, a killed guest, `rm` and `down`, with the worker list read by a live daemon. Install with `brew install container`, then start it once with `container system start`; the first task of a session takes about 25 s while the image is pulled and the VM boots. `VM_POOL_CONTAINER_CLI` overrides the CLI path. A guest killed before it wrote its exit code shows as free with no last run: `container inspect` reports a stopped container without an exit code or end time (the Docker backend reads both from the runtime instead) |
 
 ## Reference
 
